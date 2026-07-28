@@ -20,10 +20,10 @@ pub enum RecordId {
     Anon,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Register(pub String);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum Value {
     Reg(u32),
     Int(i64),
@@ -59,7 +59,7 @@ impl PartialEq for Value {
 
 impl Eq for Value {}
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum InlineIRInstructionKind {
     #[doc = "$dest = cmp $ty $lhs $op $rhs"]
     Cmp {
@@ -213,7 +213,7 @@ pub enum InlineIRInstructionKind {
     IntToByte { dest: Register, val: Value },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct InlineIRInstruction {
     #[drive(skip)]
     pub id: NodeID,

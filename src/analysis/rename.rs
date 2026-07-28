@@ -4,7 +4,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::analysis::workspace::Workspace;
 use crate::analysis::{DocumentId, TextRange, node_ids_at_offset, span_contains};
 use crate::compiling::module_path::LocalModulePaths;
-use crate::lexer::Lexer;
 use crate::name_resolution::symbol::{EffectId, Symbol};
 use crate::node_kinds::{
     decl::Decl,
@@ -37,14 +36,12 @@ pub struct TextEdit {
 }
 
 fn is_valid_identifier(name: &str) -> bool {
-    let mut lexer = Lexer::new(name);
-    let Ok(token) = lexer.next() else {
+    // The frontend's lexing surface (ADR 0043 Stage 5): valid means
+    // the whole string lexes to exactly one identifier token.
+    let Ok((tokens, complete)) = crate::compiling::frontend::lex(name) else {
         return false;
     };
-    if token.kind != TokenKind::Identifier {
-        return false;
-    }
-    matches!(lexer.next().ok().map(|t| t.kind), Some(TokenKind::EOF))
+    complete && tokens.len() == 1 && tokens[0].kind == TokenKind::Identifier
 }
 
 fn is_symbol_renamable(module: &Workspace, symbol: Symbol) -> bool {

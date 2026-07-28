@@ -18,7 +18,7 @@ use crate::types::{
 /// finished iterator/element types. The typed-tree build consumes the
 /// plan, elaborating the loop into ordinary nodes at these ids; nothing
 /// downstream of the typed tree sees it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ForPlan {
     pub iter_callee_id: NodeID,
     pub iter_call_id: NodeID,
@@ -41,12 +41,12 @@ pub struct ForPlan {
 /// Checked expansion of postfix `?` or `!`. The checker builds and checks the
 /// ordinary two-arm match once; typed-tree construction substitutes it for the
 /// surface node so downstream phases need no postfix-specific form.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PropagationPlan {
     pub lowered: crate::node_kinds::expr::Expr,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExistentialPack {
     pub existential: Ty,
     pub payload: Ty,
@@ -57,7 +57,7 @@ pub struct ExistentialPack {
 /// `Ty::Param`; the type-generic list fixes the hidden witness-block
 /// layout both sides must agree on. Lowering never reloads effect
 /// signatures.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EffectContract {
     pub params: Vec<Ty>,
     pub type_generics: Vec<Symbol>,
@@ -69,7 +69,7 @@ pub struct EffectContract {
 /// specialization, and memory-kind selection from the substituted type
 /// is lowering's representation work. Lowering only emits the
 /// corresponding MIR operation; it never interprets parser instructions.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CheckedIrKind {
     /// A scalar computation whose (type, operation) combination the
     /// checker validated.
@@ -137,7 +137,7 @@ pub enum CheckedIrKind {
 
 /// The scalar operations inline IR may perform, with their operand
 /// scalar committed — every combination here is checker-validated.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum IrScalarOp {
     IntAdd,
     IntSub,
@@ -172,7 +172,7 @@ pub enum IrScalarOp {
     PtrAdd,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum IrCmp {
     Eq,
     Ne,
@@ -185,7 +185,7 @@ pub enum IrCmp {
 /// A validated inline-IR operand: `%N` names the enclosing function's
 /// N-th parameter, `$N` the N-th bound sub-expression, immediates carry
 /// their value. Float equality is bit identity (canonical literals).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub enum IrOperand {
     Reg(u16),
     Bind(u16),
@@ -216,7 +216,7 @@ impl Eq for IrOperand {}
 /// rigid at finalization stays a requirement operation; the backend resolves
 /// it per specialization through the same catalog selector, which coherence
 /// makes a forced lookup.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MemberResolution {
     Direct(Symbol),
     ViaConformance {
@@ -234,7 +234,7 @@ pub enum MemberResolution {
 
 /// A validated signed 64-bit integer literal, or an explicit recovery for a
 /// literal outside the `i64` range (ledger row LIT-01).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CheckedIntegerLiteral {
     Value(i64),
     Invalid,
@@ -259,7 +259,7 @@ pub(crate) fn stored_field_symbol(
     (in_catalog || has_field_scheme).then_some(*property)
 }
 
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Default, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TypeOutput {
     /// The module this check ran under — tooling's member-accessibility
     /// viewer (ADR 0042) pairs it with the cursor's file.

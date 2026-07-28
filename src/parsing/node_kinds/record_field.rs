@@ -8,7 +8,7 @@ use crate::{
     parsing::span::Span,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct RecordFieldTypeAnnotation {
     #[drive(skip)]
     pub id: NodeID,
@@ -22,7 +22,7 @@ pub struct RecordFieldTypeAnnotation {
 }
 
 // Single field in a record literal
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct RecordField {
     #[drive(skip)]
     pub id: NodeID,

@@ -2,7 +2,7 @@ use derive_visitor::{Drive, DriveMut};
 
 use crate::{impl_into_node, name::Name, node::Node, node_kinds::expr::Expr};
 
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum IncompleteExpr {
     Member(Option<Box<Expr>>), // Receiver
     Func {

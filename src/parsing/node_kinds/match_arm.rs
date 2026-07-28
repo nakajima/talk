@@ -7,7 +7,7 @@ use crate::{
     parsing::span::Span,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct MatchArm {
     #[drive(skip)]
     pub id: NodeID,

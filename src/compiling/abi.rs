@@ -18,6 +18,11 @@ pub const ABI_VERSION: u32 = 1;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AbiSchema {
     pub root: String,
+    /// The artifact's own core Optional enum identity: the bridge
+    /// validates Optional-shaped values against the identity the
+    /// artifact was compiled with, never against the host's core
+    /// (which may be mid-compilation through this very bridge).
+    pub optional: AbiSymbol,
     pub types: BTreeMap<String, AbiType>,
 }
 
@@ -86,6 +91,16 @@ pub fn parse_schema(text: &str) -> Result<AbiSchema, String> {
         .ok_or_else(|| format!("malformed ABI descriptor root: `{root_line}`"))?
         .trim()
         .to_string();
+    let optional_line = lines
+        .next()
+        .ok_or("ABI descriptor missing its Optional identity")?;
+    let optional = parse_symbol(
+        optional_line
+            .strip_prefix("optional: ")
+            .ok_or_else(|| format!("malformed ABI descriptor optional: `{optional_line}`"))?
+            .trim(),
+        true,
+    )?;
 
     let mut types = BTreeMap::new();
     while let Some(line) = lines.next() {
@@ -150,7 +165,7 @@ pub fn parse_schema(text: &str) -> Result<AbiSchema, String> {
     if !types.contains_key(&root) {
         return Err(format!("ABI descriptor root `{root}` has no schema entry"));
     }
-    Ok(AbiSchema { root, types })
+    Ok(AbiSchema { root, optional, types })
 }
 
 fn parse_symbol(text: &str, is_enum: bool) -> Result<AbiSymbol, String> {
@@ -346,7 +361,23 @@ pub fn describe(program: &TypedProgram, root: &str) -> Result<String, String> {
         }
     }
 
-    let mut out = format!("abi_version: {ABI_VERSION}\nroot: {root}\n");
+    let optional = core
+        .types()
+        .catalog
+        .enums
+        .keys()
+        .find(|symbol| {
+            core.resolved_names()
+                .symbol_names
+                .get(symbol)
+                .is_some_and(|name| name == "Optional")
+        })
+        .copied()
+        .ok_or("core has no Optional enum")?;
+    let mut out = format!(
+        "abi_version: {ABI_VERSION}\nroot: {root}\noptional: {}\n",
+        symbol_id(optional)?
+    );
     for block in blocks.values() {
         out.push('\n');
         out.push_str(block);

@@ -814,6 +814,102 @@ separate frames. Constructor expressions discard their path-segment
 identifiers, whose owning nodes the reference's `Path<Args>`
 reinterpretation orphans.
 
-What remains: Stage 4's consumer cutover through `frontend::load` +
-`bridge::adapt` (the compiler driver first); then Stage 5's removal
-of the Rust lexer/parser.
+**Stage 4's driver seam is BUILT and measured; activation waits on a
+core parse cache.** `frontend::parse_source` (a per-thread session
+loading the checked-in artifact once, then `run_export` +
+`bridge::adapt` per file, with per-file `FileID` threaded through
+every minted id and span) and the driver's `frontend_parse` assembly
+(AST construction, id-generator continuation above the bridge's
+watermark, failures and recovery diagnostics as the new
+`ParserError::Frontend`) are landed and pinned by
+`frontend_parse_matches`; the strict arm is one line away from
+activation. Two findings from wiring it:
+
+- **The bridge must not consult host core.** Resolving Optional's
+  runtime identity by compiling core deadlocked the moment the driver
+  parsed *core itself* through the bridge (the lazy core compile
+  re-entered its own initializer). The ABI descriptor now carries the
+  artifact's own Optional identity (`optional: enum:M.L`, required by
+  `parse_schema`), so validation is self-contained — and identity
+  changes in future compilers regenerate cleanly, because the old
+  descriptor still names the old artifact's identity. The one-time
+  migration regenerated the artifacts with the strict arm temporarily
+  on the Rust parser.
+- **Measured cost (2026-07-27, debug build): ~450ms per file through
+  the interpreted artifact — ~13s per `talk` invocation** (28 core/
+  stdlib files parse per compile), resolved by the systemic fix
+  below.
+
+**The driver cutover is ACTIVE, carried by compiled-core and
+compiled-stdlib disk caches.** Core's and stdlib's compile products
+are pure functions of (sources, compiler), so
+`target/.talk-cache/{core,stdlib}.bin` store the serialized
+`(Module, TypedProgram)` products keyed by a SHA-256 of the source
+contents (the `TALK_CORE_PATH`/`TALK_STDLIB_PATH` overrides hash the
+on-disk files) plus this binary's identity — the running executable's
+modification stamp and length — so ANY compiler rebuild invalidates
+the cache; the historical `core.bin` trap of hashing sources only is
+designed out. The serialization sweep made `TypedProgram` (typed
+files, `ResolvedNames` minus the editor-only `scopes` and
+`diagnostics`, `TypeOutput`) and the parse-node closure serde-
+serializable; writes are atomic (process-unique temp + rename) for
+concurrent cache-cold processes. Measured: cold `talk run` pays the
+one-time ~13s interpreted core parse per compiler build; **warm runs
+are 0.32s — 4.5× faster than the 1.4s pre-cutover baseline** (core's
+whole parse/resolve/type cost is gone), and the integration suite
+dropped from ~117s to ~57s. The strict compile path now parses
+exclusively through the frontend artifact; the lenient editor path
+migrates with the LSP consumer.
+
+**Every parse consumer is cut over.** `frontend::parse_ast` (strict),
+`parse_ast_with_comments` (the formatter's entry — comments cross the
+ABI as byte ranges), and `parse_ast_lenient` (the frozen editor
+contract: a hard failure degrades to an empty AST carrying the
+failure as a diagnostic — no new export was needed, since recoverable
+problems already come back as diagnostics from the strict parse)
+serve the compiler driver's both arms, the
+package lockfile reader, the REPL's incomplete-input probe
+(`is_incomplete_input` recognizes the bridged failures by code and
+frozen message spellings), the formatter, and the highlighter's parse
+side. The wasm and C embeddings route through `format_string` and are
+covered transitively — enabled by **embedding the artifact triplet in
+the compiler binary** (`include_bytes!` of
+`bootstrap/frontend.{tbc,manifest,abi}`): the runtime session needs
+no filesystem, installed binaries and wasm are self-contained, and in
+a development checkout the embedded manifest is additionally verified
+against the on-disk frontend sources, so editing them without
+regeneration and rebuild fails closed.
+
+**Structured diagnostics cross the ABI, and the LSP is cut over.**
+`Fail` carries a source position and an optional expected token kind —
+one span plus one kind turned out to cover everything the editor
+reads: diagnostic ranges (`parser_error_range` reads the bridged span
+directly) and all three parser quick fixes (delimiter/else insertion
+keys on the expected kind; the legacy-`public` rewrite and the
+explicit-`self` removal key on the span). The parser populates them at
+the failure sites, which already hold the offending tokens; every
+other diagnostic defaults to no position, matching the reference's
+fallback range. The LSP's parser workspace now parses through
+`parse_ast_lenient` like every other consumer. One correction along
+the way: the embedded session verifies only its own manifest
+consistency — checking disk sources from the runtime session broke
+bootstrap's stage 0, whose entire point is parsing edited frontend
+sources with the old artifact; staleness lives in the harness gates.
+
+**The token-level consumers are cut over** through a new `lex_tokens`
+export: the frontend returns the token stream as `MetaToken`s (already
+in the schema), with comments merged back in as a new `line_comment`
+token kind and a sentinel marking scan failures. The highlighter's
+lexed pass, both LSP code-action delimiter scans, identifier
+validation in rename (valid = the whole string lexes to exactly one
+identifier), and the REPL's declaration probe all read
+`frontend::lex`. No production code path touches the Rust lexer or
+parser any longer.
+
+What remains for Stage 5's final slice: delete the Rust
+lexer/parser. Their remaining uses are the validation apparatus
+itself — the differential harness's reference side, the bridged
+fidelity comparison, the seam test, and the parser test suite. That
+deletion retires the reference comparisons (the dump corpus becomes
+pinned goldens) and leaves the stage-1/stage-2 fixed point as the
+permanent CI gate.

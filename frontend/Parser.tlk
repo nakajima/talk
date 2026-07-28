@@ -330,6 +330,13 @@ let blank_return_byte = 13 // "\r"
 pub struct Fail {
 	pub let code: String
 	pub let message: String
+	// The diagnostic's source position (-1 = none): the offending
+	// token or construct, feeding editor ranges and quick fixes.
+	pub let start: Int
+	pub let end: Int
+	// For unexpected-token diagnostics: the kind the parser wanted
+	// (delimiter- and else-insertion quick fixes key on it).
+	pub let expected: TokenKind?
 }
 
 pub struct ParseOutcome {
@@ -862,16 +869,29 @@ struct Parser {
 	}
 
 	mut func fail(code: String, message: String) -> Void {
+		let no_expected: TokenKind? = .none
+		self.fail_full(code: code, message: message, start: -1, end: -1, expected: no_expected)
+	}
+
+	// A positioned failure (editor ranges and quick fixes read it).
+	mut func fail_at(code: String, message: String, start: Int, end: Int) -> Void {
+		let no_expected: TokenKind? = .none
+		self.fail_full(code: code, message: message, start: start, end: end, expected: no_expected)
+	}
+
+	mut func fail_full(code: String, message: String, start: Int, end: Int, expected: TokenKind?) -> Void {
 		if self.is_failed() { return () }
-		self.failed = .some(Fail(code: code, message: message))
+		self.failed = .some(Fail(code: code, message: message, start: start, end: end, expected: expected))
 	}
 
 	mut func fail_expected(kind: TokenKind) -> Void {
-		self.fail(code: "parser.unexpected-token", message: self.expected_message(kind: kind))
+		let cur = self.current()
+		self.fail_full(code: "parser.unexpected-token", message: self.expected_message(kind: kind), start: cur.start, end: cur.end, expected: .some(kind))
 	}
 
 	mut func record_expected(kind: TokenKind) -> Void {
-		self.diags.push(Fail(code: "parser.unexpected-token", message: self.expected_message(kind: kind)))
+		let cur = self.current()
+		self.diags.push(Fail(code: "parser.unexpected-token", message: self.expected_message(kind: kind), start: cur.start, end: cur.end, expected: .some(kind)))
 	}
 
 	func expected_message(kind: TokenKind) -> String {
@@ -1401,7 +1421,9 @@ struct Parser {
 	}
 
 	mut func record_expected_identifier() -> Void {
-		self.diags.push(Fail(code: "parser.expected-identifier", message: "Expected an identifier, got " + describe_kind(kind: self.current().kind)))
+		let cur = self.current()
+		let no_expected: TokenKind? = .none
+		self.diags.push(Fail(code: "parser.expected-identifier", message: "Expected an identifier, got " + describe_kind(kind: cur.kind), start: cur.start, end: cur.end, expected: no_expected))
 	}
 
 	// MARK: Arrays and subscripts
@@ -3068,7 +3090,9 @@ struct Parser {
 		if is_static { return () }
 		if params.count == 0 { return () }
 		if params[0].name == "self" {
-			self.fail(code: "parser.explicit-self-parameter", message: "Methods do not declare `self`; use `func`, `mut func`, or `consuming func`")
+			let start = params[0].label_start
+			if start < 0 { start = params[0].name_start }
+			self.fail_at(code: "parser.explicit-self-parameter", message: "Methods do not declare `self`; use `func`, `mut func`, or `consuming func`", start: start, end: params[0].end)
 		}
 	}
 
@@ -3797,7 +3821,7 @@ struct Parser {
 			return self.pub_decl(context: context, is_static: is_static)
 		}
 		if k == .keyword_public {
-			self.fail(code: "parser.legacy-public-modifier", message: "`public` was renamed to `pub`; replace `public` with `pub`")
+			self.fail_at(code: "parser.legacy-public-modifier", message: "`public` was renamed to `pub`; replace `public` with `pub`", start: cur.start, end: cur.end)
 			return .decl_item(dummy_decl())
 		}
 		if k == .keyword_linear {
@@ -4094,7 +4118,8 @@ struct Parser {
 				masked = self.pos + 1 >= self.token_count
 			}
 			if masked {
-				failure = .some(Fail(code: "parser.lexer", message: message))
+				let no_expected: TokenKind? = .none
+				failure = .some(Fail(code: "parser.lexer", message: message, start: -1, end: -1, expected: no_expected))
 			}
 		}
 		let (lines, cols) = token_positions(source: self.source, tokens: self.tokens)
@@ -4985,4 +5010,50 @@ func meta_expr(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: 
 	if copy_from >= 0 {
 		copy_identifiers(metas: metas, to_slot: slot, from_slot: copy_from)
 	}
+}
+
+// MARK: The lexing surface (ADR 0043 Stage 5)
+//
+// Token-level editor queries (highlighting, delimiter matching,
+// identifier validation) read the token stream itself. Comments
+// re-enter here as line_comment tokens, merged by position; a scan
+// failure appends the sentinel token (start -1) after the tokens
+// produced up to the failure.
+pub func lex_tokens(source: String) -> [MetaToken] {
+	let result = scan(source: source)
+	let merged: [Token] = []
+	let ti = 0
+	let ci = 0
+	let tokens = result.tokens
+	let comments = result.comments
+	loop ti < tokens.count || ci < comments.count {
+		let take_comment = false
+		if ci < comments.count {
+			if ti >= tokens.count {
+				take_comment = true
+			} else {
+				if comments[ci].start < tokens[ti].start { take_comment = true }
+			}
+		}
+		if take_comment {
+			merged.push(Token(kind: .line_comment, start: comments[ci].start, end: comments[ci].end))
+			ci = ci + 1
+		} else {
+			let tok = tokens[ti]
+			merged.push(Token(kind: tok.kind, start: tok.start, end: tok.end))
+			ti = ti + 1
+		}
+	}
+	let (lines, cols) = token_positions(source: source, tokens: merged)
+	let out: [MetaToken] = []
+	let i = 0
+	loop i < merged.count {
+		let tok = merged[i]
+		out.push(MetaToken(kind: tok.kind, start: tok.start, end: tok.end, line: lines[i], col: cols[i]))
+		i = i + 1
+	}
+	if let .some(_) = result.error {
+		out.push(MetaToken(kind: .eof, start: -1, end: -1, line: 0, col: 0))
+	}
+	out
 }

@@ -157,12 +157,12 @@ pub fn render_bridged(
     roots: &[crate::node::Node],
     meta: &crate::node_meta_storage::NodeMetaStorage,
     comments: &[(u32, u32)],
-    failure: Option<&(String, String)>,
-    diags: &[(String, String)],
+    failure: Option<&crate::compiling::bridge::BridgedFail>,
+    diags: &[crate::compiling::bridge::BridgedFail],
 ) -> String {
     use derive_visitor::Drive;
     let mut out = String::new();
-    if let Some((code, message)) = failure {
+    if let Some(crate::compiling::bridge::BridgedFail { code, message, .. }) = failure {
         let _ = writeln!(out, "parse error: {code} {message}");
         return out;
     }
@@ -185,7 +185,7 @@ pub fn render_bridged(
     }
     if !diags.is_empty() {
         out.push_str("diagnostics:\n");
-        for (code, message) in diags {
+        for crate::compiling::bridge::BridgedFail { code, message, .. } in diags {
             let _ = writeln!(out, "  error {code} {message}");
         }
     }

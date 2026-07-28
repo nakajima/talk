@@ -2,7 +2,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use crate::{node_id::NodeID, node_meta::NodeMeta, span::Span};
 
-#[derive(Default, Debug, PartialEq, Eq, Clone)]
+#[derive(Default, Debug, PartialEq, Eq, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NodeMetaStorage {
     pub path: PathBuf,
     storage: HashMap<NodeID, NodeMeta>,

@@ -11,7 +11,7 @@ use crate::{
     span::Span,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CaptureMode {
     Copy,
     Move,
@@ -19,7 +19,7 @@ pub enum CaptureMode {
     BorrowMut,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct CaptureSpec {
     #[drive(skip)]
     pub mode: CaptureMode,
@@ -29,7 +29,7 @@ pub struct CaptureSpec {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EffectSet {
     pub names: Vec<Name>,
     pub spans: Vec<Span>,
@@ -50,7 +50,7 @@ impl Default for EffectSet {
 /// (ADR 0041). Desugaring a declaration to a function-valued `let` keeps
 /// this so the callable contract survives; a `let` whose value is a
 /// closure never gains one merely because the binder has a name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub enum FuncOrigin {
     /// A closure or `func` literal in expression position.
     #[default]
@@ -59,7 +59,7 @@ pub enum FuncOrigin {
     Decl,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Func {
     #[drive(skip)]
     pub id: NodeID,

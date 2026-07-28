@@ -37,7 +37,7 @@ use crate::{
 /// One source file in the typed compiler tree: the analogue of
 /// `AST<NameResolved>` for downstream phases. Carries the same `file_id` and the
 /// lowered roots.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TypedFile {
     pub file_id: crate::node_id::FileID,
     pub roots: Vec<Node>,
@@ -45,7 +45,7 @@ pub struct TypedFile {
 
 /// The umbrella node type for a block body (`Vec<Node>`), mirroring the AST's
 /// heterogeneous `Node` but only the variants a block body actually holds.
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum Node {
     Decl(Decl),
     Stmt(Stmt),
@@ -55,13 +55,13 @@ pub enum Node {
 // ----- Expressions ---------------------------------------------------------
 
 /// Per-expression clone facts selected by type checking.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExprOwnership {
     /// This expression contains an explicit clone coercion.
     pub auto_clone: bool,
 }
 
-#[derive(Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Expr {
     #[drive(skip)]
     pub id: NodeID,
@@ -102,7 +102,7 @@ impl std::fmt::Debug for Expr {
 
 /// A checked float literal value. Equality is bit identity — these are
 /// canonical literal values, never arithmetic results.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct FloatValue(pub f64);
 
 impl PartialEq for FloatValue {
@@ -117,7 +117,7 @@ impl Eq for FloatValue {}
 /// carrying the checked canonical value (LIT-01 integers; lexer-validated
 /// escapes). Lowering never reparses source text (ADR 0038); the source
 /// spelling stays on the parse tree for diagnostics and formatting.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Literal {
     Int(i64),
     Float(FloatValue),
@@ -126,7 +126,7 @@ pub enum Literal {
     Character(String),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum ExprKind {
     InlineIR(InlineIRInstruction),
     CallEffect {
@@ -200,7 +200,7 @@ pub enum ExprKind {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct InlineIRInstruction {
     #[drive(skip)]
     pub id: NodeID,
@@ -214,7 +214,7 @@ pub struct InlineIRInstruction {
     pub kind: crate::types::output::CheckedIrKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct CallArg {
     #[drive(skip)]
     pub id: NodeID,
@@ -227,7 +227,7 @@ pub struct CallArg {
     pub mode: Option<crate::node_kinds::call_arg::ArgMode>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct RecordField {
     #[drive(skip)]
     pub id: NodeID,
@@ -236,7 +236,7 @@ pub struct RecordField {
     pub value: Expr,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct MatchArm {
     #[drive(skip)]
     pub id: NodeID,
@@ -246,7 +246,7 @@ pub struct MatchArm {
 
 // ----- Patterns ------------------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Pattern {
     #[drive(skip)]
     pub id: NodeID,
@@ -260,7 +260,7 @@ pub struct Pattern {
     pub ty: Option<crate::types::ty::Ty>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum PatternKind {
     LiteralInt(#[drive(skip)] i64),
     LiteralFloat(#[drive(skip)] FloatValue),
@@ -312,7 +312,7 @@ pub enum PatternKind {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct RecordFieldPattern {
     #[drive(skip)]
     pub id: NodeID,
@@ -324,7 +324,7 @@ pub struct RecordFieldPattern {
     pub ty: Option<crate::types::ty::Ty>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum RecordFieldPatternKind {
     Bind(#[drive(skip)] Name),
     Equals {
@@ -406,7 +406,7 @@ impl Pattern {
 /// A function/closure parameter with its checker-assigned type baked on
 /// (`None` when the checker recorded no type for this binder). The typed tree carries
 /// the type here so downstream stages never look it up by `NodeID`.
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Parameter {
     #[drive(skip)]
     pub id: NodeID,
@@ -423,7 +423,7 @@ pub struct Parameter {
 
 // ----- Blocks and statements ----------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Block {
     #[drive(skip)]
     pub id: NodeID,
@@ -443,7 +443,7 @@ pub struct Block {
 /// consumes without re-walking the tree (ADR 0038 checked captures,
 /// structural half — modes and Copy evidence follow with the checker's
 /// capture legality).
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct FrameFacts {
     /// Free frame-local variables — used in this frame or under one of
     /// its nested function values, bound in an enclosing frame — in
@@ -458,7 +458,7 @@ pub struct FrameFacts {
     pub nested_refs: rustc_hash::FxHashSet<Symbol>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Stmt {
     #[drive(skip)]
     pub id: NodeID,
@@ -467,7 +467,7 @@ pub struct Stmt {
     pub span: Span,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum StmtKind {
     Expr(Expr),
     If(Expr, Block, Option<Block>),
@@ -492,7 +492,7 @@ pub enum StmtKind {
 
 // ----- Functions and declarations -----------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Func {
     #[drive(skip)]
     pub id: NodeID,
@@ -528,7 +528,7 @@ pub struct Func {
     pub attributes: Vec<Attribute>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Body {
     #[drive(skip)]
     pub id: NodeID,
@@ -537,7 +537,7 @@ pub struct Body {
     pub span: Span,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Decl {
     #[drive(skip)]
     pub id: NodeID,
@@ -548,7 +548,7 @@ pub struct Decl {
     pub visibility: Visibility,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum DeclKind {
     Effect {
         #[drive(skip)]

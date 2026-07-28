@@ -2,7 +2,7 @@ use derive_visitor::{Drive, DriveMut};
 
 use crate::{impl_into_node, node_id::NodeID, node_kinds::decl::Decl, span::Span};
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Body {
     #[drive(skip)]
     pub id: NodeID,

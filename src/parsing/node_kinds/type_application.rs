@@ -9,7 +9,7 @@ use crate::{
 /// extension-head shape (ADR 0036): the grammar admits a name plus ordinary
 /// `GenericArg`s and nothing else — sugar (`[T]`, `T?`) and non-nominal
 /// forms are unrepresentable, so no consumer re-derives what was typed.
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct TypeApplication {
     #[drive(skip)]
     pub id: NodeID,

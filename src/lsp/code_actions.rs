@@ -395,6 +395,104 @@ fn parser_quick_fixes(
     diag_range: Range,
 ) -> Vec<CodeActionOrCommand> {
     match error {
+        // Frontend-bridged diagnostics (ADR 0043): the same three
+        // quick fixes, keyed by code plus the structured payloads.
+        ParserError::Frontend {
+            code,
+            span,
+            expected,
+            ..
+        } => match code.as_str() {
+            "parser.unexpected-token" => {
+                let Some(expected) = expected else {
+                    return vec![];
+                };
+                let recovered_ast = workspace
+                    .asts
+                    .get(file_id.0 as usize)
+                    .and_then(|ast| ast.as_ref())
+                    .is_some_and(|ast| !ast.roots.is_empty());
+                if !recovered_ast {
+                    return vec![];
+                }
+                let (title, syntax) = match expected {
+                    crate::token_kind::TokenKind::RightParen => ("Insert ')'", ")"),
+                    crate::token_kind::TokenKind::RightBracket => ("Insert ']'", "]"),
+                    crate::token_kind::TokenKind::RightBrace => ("Insert '}'", "}"),
+                    crate::token_kind::TokenKind::Else => {
+                        let Some(edit) = insertion_before_diagnostic_line(
+                            text,
+                            diagnostic.range.start as usize,
+                            "else {}",
+                        ) else {
+                            return vec![];
+                        };
+                        return vec![quick_fix_action(
+                            uri,
+                            "Add required else branch".to_string(),
+                            vec![edit],
+                            diagnostic,
+                            diag_range,
+                            Some(true),
+                        )];
+                    }
+                    _ => return vec![],
+                };
+                let Some(edit) = insertion_before_diagnostic_line(
+                    text,
+                    diagnostic.range.start as usize,
+                    syntax,
+                ) else {
+                    return vec![];
+                };
+                vec![quick_fix_action(
+                    uri,
+                    title.to_string(),
+                    vec![edit],
+                    diagnostic,
+                    diag_range,
+                    Some(true),
+                )]
+            }
+            "parser.legacy-public-modifier" => {
+                let Some(span) = span else {
+                    return vec![];
+                };
+                let Some(range) = byte_span_to_range_utf16(text, span.start, span.end) else {
+                    return vec![];
+                };
+                vec![quick_fix_action(
+                    uri,
+                    "Replace `public` with `pub`".to_string(),
+                    vec![TextEdit::new(range, "pub".to_string())],
+                    diagnostic,
+                    diag_range,
+                    Some(true),
+                )]
+            }
+            "parser.explicit-self-parameter" => {
+                let Some(span) = span else {
+                    return vec![];
+                };
+                let Some((start, end)) =
+                    comma_list_item_removal_range(text, span.start as usize, span.end as usize)
+                else {
+                    return vec![];
+                };
+                let Some(range) = byte_span_to_range_utf16(text, start as u32, end as u32) else {
+                    return vec![];
+                };
+                vec![quick_fix_action(
+                    uri,
+                    "Remove explicit self parameter".to_string(),
+                    vec![TextEdit::new(range, String::new())],
+                    diagnostic,
+                    diag_range,
+                    Some(true),
+                )]
+            }
+            _ => vec![],
+        },
         ParserError::UnexpectedToken { expected, .. } => {
             let Some(expected) = expected.token() else {
                 return vec![];
@@ -817,10 +915,10 @@ fn call_parentheses(
 ) -> Option<(usize, usize)> {
     let search_end = content_start.min(expression_end).min(text.len());
     let open = callee_end + text.get(callee_end..search_end)?.rfind('(')?;
-    let mut lexer = crate::lexer::Lexer::new(text.get(open..expression_end.min(text.len()))?);
+    let (tokens, _) =
+        crate::compiling::frontend::lex(text.get(open..expression_end.min(text.len()))?).ok()?;
     let mut depth = 0usize;
-    loop {
-        let token = lexer.next().ok()?;
+    for token in &tokens {
         match token.kind {
             crate::token_kind::TokenKind::LeftParen => depth += 1,
             crate::token_kind::TokenKind::RightParen => {
@@ -829,10 +927,10 @@ fn call_parentheses(
                     return Some((open, open + token.start as usize));
                 }
             }
-            crate::token_kind::TokenKind::EOF => return None,
             _ => {}
         }
     }
+    None
 }
 
 /// Split a desugared trailing closure (an anonymous `#fn_trailing_*`
@@ -1107,10 +1205,10 @@ fn block_source_range(text: &str, span: crate::span::Span, limit: usize) -> Opti
     } else {
         text.get(..anchor)?.rfind('{')?
     };
-    let mut lexer = crate::lexer::Lexer::new(text.get(start..limit.min(text.len()))?);
+    let (tokens, _) =
+        crate::compiling::frontend::lex(text.get(start..limit.min(text.len()))?).ok()?;
     let mut depth = 0usize;
-    loop {
-        let token = lexer.next().ok()?;
+    for token in &tokens {
         match token.kind {
             crate::token_kind::TokenKind::LeftBrace => depth += 1,
             crate::token_kind::TokenKind::RightBrace => {
@@ -1119,10 +1217,10 @@ fn block_source_range(text: &str, span: crate::span::Span, limit: usize) -> Opti
                     return Some((start, start + token.end as usize));
                 }
             }
-            crate::token_kind::TokenKind::EOF => return None,
             _ => {}
         }
     }
+    None
 }
 
 fn unknown_member_quick_fixes(

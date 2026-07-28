@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 /// validates during migration. `parse_file_source` is the structured
 /// result op — it returns the `ParseOutcome` value the ABI descriptor
 /// describes, where the `parse` dump ops return rendered text.
-pub const EXPORTS: [&str; 9] = [
+pub const EXPORTS: [&str; 10] = [
     "lex",
     "trees",
     "parse",
@@ -25,6 +25,7 @@ pub const EXPORTS: [&str; 9] = [
     "parse_expr",
     "parse_pattern",
     "parse_type",
+    "lex_tokens",
 ];
 
 /// Effects the frontend may perform (ADR 0043 §7): deterministic
@@ -117,6 +118,219 @@ pub fn load(root: &Path) -> Result<talk_runtime::Module, String> {
     manifest.verify(&sources(root)?, &image, Some(&abi_text))?;
     talk_runtime::Module::decode_bytecode(&image)
         .map_err(|err| format!("frontend artifact failed to decode: {err:?}"))
+}
+
+/// The artifact triplet baked into this binary (ADR 0043 §2): the
+/// compiler distribution IS the artifact — no filesystem needed at
+/// runtime (wasm, installed binaries). `include_bytes!` tracks the
+/// files, so a `talk bootstrap` regeneration reaches the binary on
+/// the next cargo build.
+const EMBEDDED_ARTIFACT: &[u8] = include_bytes!("../../bootstrap/frontend.tbc");
+const EMBEDDED_MANIFEST: &str = include_str!("../../bootstrap/frontend.manifest");
+pub(crate) const EMBEDDED_ABI: &str = include_str!("../../bootstrap/frontend.abi");
+
+/// Load the embedded artifact: the manifest must tie the baked bytes,
+/// the descriptor, and the bytecode format together. Deliberately no
+/// disk-source comparison: the session parses ARBITRARY text with the
+/// checked-in artifact — including edited frontend sources, which is
+/// bootstrap's stage 0. Staleness between disk sources and checked-in
+/// artifacts is the harness gates' job
+/// (`checked_in_frontend_artifact_matches_sources` and the bootstrap
+/// fixed point). Fails closed; there is no fallback parser.
+fn load_embedded() -> Result<talk_runtime::Module, String> {
+    let manifest = ArtifactManifest::parse(EMBEDDED_MANIFEST)?;
+    manifest.verify_artifact(EMBEDDED_ARTIFACT, Some(EMBEDDED_ABI))?;
+    talk_runtime::Module::decode_bytecode(EMBEDDED_ARTIFACT)
+        .map_err(|err| format!("frontend artifact failed to decode: {err:?}"))
+}
+
+thread_local! {
+    /// The frontend session (ADR 0043 Stage 4): the checked-in
+    /// artifact loaded and its ABI schema parsed, once per thread
+    /// (the runtime module holds thread-local state).
+    static SESSION: std::cell::OnceCell<
+        Result<(talk_runtime::Module, crate::compiling::abi::AbiSchema), String>,
+    > = const { std::cell::OnceCell::new() };
+}
+
+/// Parse one source through the frontend artifact into the compiler's
+/// own parse AST (ADR 0043 Stage 4): the strict whole-file entry.
+/// Fails closed — there is no fallback parser.
+pub fn parse_source(
+    source: &str,
+    file_id: crate::node_id::FileID,
+) -> Result<crate::compiling::bridge::BridgedParse, String> {
+    SESSION.with(|cell| {
+        let session = cell
+            .get_or_init(|| {
+                let module = load_embedded()?;
+                let schema = crate::compiling::abi::parse_schema(EMBEDDED_ABI)?;
+                Ok((module, schema))
+            })
+            .as_ref()
+            .map_err(Clone::clone)?;
+        let (module, schema) = session;
+        let mut io = talk_runtime::io::CaptureIO::default();
+        let run = talk_runtime::interp::run_export(
+            module,
+            "parse_file_source",
+            &[talk_runtime::interp::HostValue::String(
+                source.as_bytes().to_vec(),
+            )],
+            crate::backend::string_shape(),
+            talk_runtime::interp::Budgets::default(),
+            &mut io,
+        )?;
+        crate::compiling::bridge::adapt(&run, schema, file_id)
+    })
+}
+
+/// Lex one source through the frontend artifact (ADR 0043 Stage 5):
+/// the token stream with comments included as LineComment tokens,
+/// plus whether the scan completed without a lex error.
+pub fn lex(source: &str) -> Result<(Vec<crate::parsing::lexing::token::Token>, bool), String> {
+    SESSION.with(|cell| {
+        let session = cell
+            .get_or_init(|| {
+                let module = load_embedded()?;
+                let schema = crate::compiling::abi::parse_schema(EMBEDDED_ABI)?;
+                Ok((module, schema))
+            })
+            .as_ref()
+            .map_err(Clone::clone)?;
+        let (module, schema) = session;
+        let mut io = talk_runtime::io::CaptureIO::default();
+        let run = talk_runtime::interp::run_export(
+            module,
+            "lex_tokens",
+            &[talk_runtime::interp::HostValue::String(
+                source.as_bytes().to_vec(),
+            )],
+            crate::backend::string_shape(),
+            talk_runtime::interp::Budgets::default(),
+            &mut io,
+        )?;
+        crate::compiling::bridge::lex_tokens(&run, schema)
+    })
+}
+
+/// One strict whole-file parse through the frontend artifact,
+/// assembled into the compiler's parse AST (ADR 0043 Stage 4). A hard
+/// parse failure or a bridge/loader error is the returned error;
+/// recovery diagnostics come back as parsing diagnostics.
+pub fn parse_ast(
+    input: &str,
+    file_id: crate::node_id::FileID,
+    path: &str,
+) -> Result<
+    (
+        crate::ast::AST<crate::ast::Parsed>,
+        Vec<crate::common::diagnostic::AnyDiagnostic>,
+    ),
+    crate::parsing::parser_error::ParserError,
+> {
+    parse_ast_with_comments(input, file_id, path).map(|(ast, diagnostics, _)| (ast, diagnostics))
+}
+
+/// `parse_ast` plus the comment byte ranges the formatter reads.
+pub fn parse_ast_with_comments(
+    input: &str,
+    file_id: crate::node_id::FileID,
+    path: &str,
+) -> Result<
+    (
+        crate::ast::AST<crate::ast::Parsed>,
+        Vec<crate::common::diagnostic::AnyDiagnostic>,
+        Vec<(u32, u32)>,
+    ),
+    crate::parsing::parser_error::ParserError,
+> {
+    use crate::parsing::parser_error::ParserError;
+    let bridged = parse_source(input, file_id).map_err(|error| ParserError::Frontend {
+        code: "parser.frontend-bridge".into(),
+        message: error,
+        span: None,
+        expected: None,
+    })?;
+    if let Some(failure) = bridged.failure {
+        return Err(ParserError::Frontend {
+            code: failure.code,
+            message: failure.message,
+            span: failure.span,
+            expected: failure.expected,
+        });
+    }
+    let diagnostics = bridged
+        .diags
+        .into_iter()
+        .map(|fail| {
+            crate::common::diagnostic::AnyDiagnostic::Parsing(crate::common::diagnostic::Diagnostic {
+                id: crate::node_id::NodeID(file_id, 0),
+                severity: crate::common::diagnostic::Severity::Error,
+                kind: ParserError::Frontend {
+                    code: fail.code,
+                    message: fail.message,
+                    span: fail.span,
+                    expected: fail.expected,
+                },
+            })
+        })
+        .collect();
+    let mut meta = bridged.meta;
+    meta.path = std::path::PathBuf::from(path);
+    let comments = bridged.comments;
+    Ok((
+        crate::ast::AST {
+            path: path.to_string(),
+            roots: bridged.roots,
+            meta,
+            phase: crate::ast::Parsed,
+            node_ids: crate::common::id_generator::IDGenerator {
+                last: bridged.next_node_id,
+            },
+            synthsized_ids: crate::common::id_generator::IDGenerator::default(),
+            file_id,
+            skip_core_prelude: false,
+        },
+        diagnostics,
+        comments,
+    ))
+}
+
+/// The lenient contract (the editor path, frozen from the reference):
+/// a hard failure degrades to an EMPTY file AST carrying the failure
+/// as a diagnostic; recoverable problems already come back as
+/// diagnostics from the strict parse.
+pub fn parse_ast_lenient(
+    input: &str,
+    file_id: crate::node_id::FileID,
+    path: &str,
+) -> (
+    crate::ast::AST<crate::ast::Parsed>,
+    Vec<crate::common::diagnostic::AnyDiagnostic>,
+) {
+    match parse_ast(input, file_id, path) {
+        Ok(parsed) => parsed,
+        Err(error) => (
+            crate::ast::AST {
+                path: path.to_string(),
+                roots: vec![],
+                meta: Default::default(),
+                phase: crate::ast::Parsed,
+                node_ids: Default::default(),
+                synthsized_ids: Default::default(),
+                file_id,
+                skip_core_prelude: false,
+            },
+            vec![crate::common::diagnostic::AnyDiagnostic::Parsing(
+                crate::common::diagnostic::Diagnostic {
+                    id: crate::node_id::NodeID(file_id, 0),
+                    severity: crate::common::diagnostic::Severity::Error,
+                    kind: error,
+                },
+            )],
+        ),
+    }
 }
 
 #[cfg(test)]

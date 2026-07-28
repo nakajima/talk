@@ -1925,6 +1925,7 @@ version = "0.1.80"
 dependencies = [
  "anyhow",
  "async-lsp",
+ "bincode",
  "clap",
  "clap_complete",
  "color-eyre",

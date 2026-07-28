@@ -1,7 +1,6 @@
 use crate::{
     ast::{AST, Parsed},
     label::Label,
-    lexer::Lexer,
     node::Node,
     node_id::FileID,
     node_kinds::{
@@ -12,7 +11,6 @@ use crate::{
         stmt::StmtKind,
         type_annotation::TypeAnnotationKind,
     },
-    parser::Parser,
     span::Span,
     token::Token,
     token_kind::TokenKind,
@@ -79,12 +77,14 @@ impl<'a> Higlighter<'a> {
     pub fn highlight(&mut self) -> Vec<HighlightToken> {
         let mut result = vec![];
 
-        let lexer = Lexer::preserving_comments(self.source);
+        // The frontend's lexing surface (ADR 0043 Stage 5): the token
+        // stream with comments included as LineComment tokens.
+        let lexed = crate::compiling::frontend::lex(self.source)
+            .map(|(tokens, _)| tokens)
+            .unwrap_or_default();
+        result.extend(self.collect_lexed_tokens(&lexed));
 
-        result.extend(self.collect_lexed_tokens(lexer.clone()));
-
-        let parser = Parser::new("-", FileID(0), lexer);
-        let Ok(ast) = parser.parse() else {
+        let Ok(ast) = crate::compiling::frontend::parse_ast(self.source, FileID(0), "-") else {
             return result;
         };
 
@@ -95,10 +95,10 @@ impl<'a> Higlighter<'a> {
         result
     }
 
-    fn collect_lexed_tokens(&mut self, mut lexer: Lexer) -> Vec<HighlightToken> {
+    fn collect_lexed_tokens(&mut self, lexed: &[crate::token::Token]) -> Vec<HighlightToken> {
         let mut tokens: Vec<HighlightToken> = vec![];
 
-        while let Ok(tok) = &lexer.next() {
+        for tok in lexed {
             match tok.kind {
                 TokenKind::Continue => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::SingleQuote => (),
@@ -200,10 +200,6 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Typealias => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Static => self.make(tok, Kind::KEYWORD, &mut tokens),
             }
-        }
-
-        for tok in lexer.comments.iter() {
-            self.make(tok, Kind::COMMENT, &mut tokens)
         }
 
         tokens

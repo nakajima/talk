@@ -189,7 +189,7 @@ impl FreshenNodeIds<'_> {
     }
 }
 
-#[derive(PartialEq, Clone, Copy, Debug, Eq, PartialOrd, Ord, Hash)]
+#[derive(PartialEq, Clone, Copy, Debug, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub enum BlockContext {
     Struct,
     Protocol,

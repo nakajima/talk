@@ -3,9 +3,7 @@ use std::path::PathBuf;
 use crate::{
     analysis::{Diagnostic, DocumentInput, Workspace, completion::complete_in_workspace},
     diagnostic::AnyDiagnostic,
-    lexer::Lexer,
     node_id::FileID,
-    parser::Parser,
     token_kind::TokenKind,
 };
 
@@ -393,9 +391,7 @@ impl<'a> ReplInput<'a> {
     }
 
     fn needs_more_input(&self) -> bool {
-        let lexer = Lexer::new(self.source);
-        let parser = Parser::new(REPL_DOCUMENT_ID, FileID(0), lexer);
-        match parser.parse() {
+        match crate::compiling::frontend::parse_ast(self.source, FileID(0), REPL_DOCUMENT_ID) {
             Err(error) => error.is_incomplete_input(),
             Ok((_, diagnostics)) => diagnostics.iter().any(|diagnostic| {
                 matches!(
@@ -407,14 +403,13 @@ impl<'a> ReplInput<'a> {
     }
 
     fn is_declaration(&self) -> bool {
-        let mut lexer = Lexer::new(self.source);
+        // The frontend's lexing surface (ADR 0043 Stage 5).
+        let Ok((tokens, _)) = crate::compiling::frontend::lex(self.source) else {
+            return false;
+        };
         let mut saw_public = false;
 
-        loop {
-            let Ok(token) = lexer.next() else {
-                return false;
-            };
-
+        for token in &tokens {
             match token.kind {
                 TokenKind::Newline | TokenKind::Semicolon => {}
                 TokenKind::Pub | TokenKind::Public => saw_public = true,
@@ -431,6 +426,7 @@ impl<'a> ReplInput<'a> {
                 _ => return false,
             }
         }
+        false
     }
 }
 

@@ -11,7 +11,7 @@ use crate::{
     parsing::span::Span,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct AnyAssocBinding {
     #[drive(skip)]
     pub id: NodeID,
@@ -24,7 +24,7 @@ pub struct AnyAssocBinding {
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum TypeAnnotationKind {
     SelfType(#[drive(skip)] Name),
     Borrow {
@@ -78,7 +78,7 @@ impl TypeAnnotation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct TypeAnnotation {
     #[drive(skip)]
     pub id: NodeID,

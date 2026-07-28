@@ -8,7 +8,7 @@ use crate::keywords;
 use super::token::Token;
 use super::token_kind::TokenKind::{self, *};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum LexerError {
     ExpectedChar { expected: char, actual: char },
     UnexpectedInput(char),

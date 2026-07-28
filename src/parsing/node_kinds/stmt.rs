@@ -8,7 +8,7 @@ use crate::{
     parsing::span::Span,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum StmtKind {
     Expr(Expr),
     If(
@@ -49,7 +49,7 @@ pub enum StmtKind {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Stmt {
     #[drive(skip)]
     pub id: NodeID,

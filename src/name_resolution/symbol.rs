@@ -224,7 +224,7 @@ impl std::fmt::Debug for Symbol {
 /// The kind of symbol to mint — a proper discriminator for
 /// `declare`/`mint` instead of dummy `Symbol` values (ADR 0038 residue
 /// cleanup; real ids only ever come from the minting counters).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SymbolKind {
     Effect,
     Struct,

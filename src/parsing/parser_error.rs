@@ -3,7 +3,7 @@ use crate::{
 };
 use std::{error::Error, fmt::Display};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ExpectedSyntax {
     Token(TokenKind),
     Description(String),
@@ -45,8 +45,18 @@ impl Display for ExpectedSyntax {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ParserError {
+    /// A failure or diagnostic that crossed the frontend ABI (ADR
+    /// 0043): the reference code plus its already-rendered message,
+    /// with the structured position and expected-token payloads the
+    /// editor's ranges and quick fixes read.
+    Frontend {
+        code: String,
+        message: String,
+        span: Option<crate::parsing::span::Span>,
+        expected: Option<TokenKind>,
+    },
     Lexer {
         error: LexerError,
         line: u32,
@@ -118,6 +128,19 @@ impl ParserError {
     pub(crate) fn is_incomplete_input(&self) -> bool {
         match self {
             Self::UnexpectedEndOfInput(_) => true,
+            // Frontend-bridged failures carry the reference renderings:
+            // the same three incomplete shapes, detected by code and
+            // the frozen message spellings.
+            Self::Frontend { code, message, .. } => match code.as_str() {
+                "parser.unexpected-end-of-input" => true,
+                "parser.unexpected-token" => message.ends_with("got end of input"),
+                "parser.lexer" => {
+                    message.contains("Unterminated string")
+                        || message.contains("Unterminated character literal")
+                        || message.contains("Unexpected EOF")
+                }
+                _ => false,
+            },
             Self::UnexpectedToken {
                 token: Some(token), ..
             } => token.kind == TokenKind::EOF,
@@ -133,6 +156,29 @@ impl ParserError {
 
     pub fn code(&self) -> &'static str {
         match self {
+            // A frontend-bridged diagnostic carries the reference's own
+            // code string; the closed set maps back to the static codes.
+            Self::Frontend { code, .. } => match code.as_str() {
+                "parser.lexer" => "parser.lexer",
+                "parser.unexpected-token" => "parser.unexpected-token",
+                "parser.import-in-block-items" => "parser.import-in-block-items",
+                "parser.unexpected-end-of-input" => "parser.unexpected-end-of-input",
+                "parser.infinite-loop" => "parser.infinite-loop",
+                "parser.expected-identifier" => "parser.expected-identifier",
+                "parser.bad-label" => "parser.bad-label",
+                "parser.integer-literal-out-of-range" => "parser.integer-literal-out-of-range",
+                "parser.cannot-assign" => "parser.cannot-assign",
+                "parser.expected-declaration" => "parser.expected-declaration",
+                "parser.let-not-allowed" => "parser.let-not-allowed",
+                "parser.init-not-allowed" => "parser.init-not-allowed",
+                "parser.explicit-self-parameter" => "parser.explicit-self-parameter",
+                "parser.param-mode-borrow-conflict" => "parser.param-mode-borrow-conflict",
+                "parser.conformance-list-not-allowed" => "parser.conformance-list-not-allowed",
+                "parser.lowercase-static-parameter" => "parser.lowercase-static-parameter",
+                "parser.macro-export-unsupported" => "parser.macro-export-unsupported",
+                "parser.incomplete-function-signature" => "parser.incomplete-function-signature",
+                _ => "parser.frontend",
+            },
             Self::Lexer { .. } => "parser.lexer",
             Self::UnexpectedToken { .. } => "parser.unexpected-token",
             Self::ImportInBlockItems => "parser.import-in-block-items",
@@ -185,6 +231,7 @@ fn describe(token: &Option<Token>) -> String {
 impl Display for ParserError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Frontend { message, .. } => write!(f, "{message}"),
             Self::ImportInBlockItems => {
                 write!(f, "imports are not allowed in block items")
             }

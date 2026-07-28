@@ -8,7 +8,7 @@ use crate::{
 /// A parameter's ownership mode (ADR 0018). `None` on `Parameter.mode`
 /// means the declaration was unadorned; what that defaults to is decided
 /// during desugaring (`Borrow` ordinarily, `Consume` in `init` position).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ParamMode {
     /// `borrow x: T` — shared borrow (the explicit spelling of the default).
     Borrow,
@@ -35,7 +35,7 @@ impl ParamMode {
 /// A parameter's external argument label (ADR 0041). `None` on
 /// `Parameter.label` means the one-token shorthand was used: the local
 /// binder name doubles as the external label.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ParamLabel {
     /// `foo fizz` — callers write `foo:`; the body reads `fizz`.
     Named(String),
@@ -43,7 +43,7 @@ pub enum ParamLabel {
     Omitted,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Parameter {
     #[drive(skip)]
     pub id: NodeID,

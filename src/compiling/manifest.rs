@@ -55,6 +55,16 @@ impl ArtifactManifest {
         }
     }
 
+    /// `verify` without the source comparison: for an embedded artifact
+    /// running outside a development checkout, where no frontend
+    /// sources exist on disk — the manifest still ties the artifact
+    /// bytes, the ABI descriptor, and the bytecode format together.
+    pub fn verify_artifact(&self, image: &[u8], abi: Option<&str>) -> Result<(), String> {
+        let mut against_own_sources = self.clone();
+        against_own_sources.source_digest = source_digest(&[]);
+        against_own_sources.verify(&[], image, abi)
+    }
+
     /// Fail-closed validation: the artifact bytes, the sources, and the
     /// ABI descriptor (when the manifest records one) must all match,
     /// and the recorded format version must be the one this compiler

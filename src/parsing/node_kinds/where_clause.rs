@@ -2,7 +2,7 @@ use derive_visitor::{Drive, DriveMut};
 
 use crate::{node_id::NodeID, node_kinds::type_annotation::TypeAnnotation, parsing::span::Span};
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct WhereClause {
     #[drive(skip)]
     pub id: NodeID,
@@ -11,7 +11,7 @@ pub struct WhereClause {
     pub predicates: Vec<WherePredicate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct WherePredicate {
     #[drive(skip)]
     pub id: NodeID,
@@ -20,7 +20,7 @@ pub struct WherePredicate {
     pub kind: WherePredicateKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum WherePredicateKind {
     TypeEq {
         lhs: crate::node_kinds::generic_arg::GenericArg,

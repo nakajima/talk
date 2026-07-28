@@ -104,6 +104,9 @@ pub enum TokenKind {
 	case single_quote
 	// Never produced by scan: the parser-side end-of-stream sentinel.
 	case eof
+	// Comments re-enter the stream only through `lex_tokens` (the
+	// highlighter's surface); the parser never sees them.
+	case line_comment
 }
 
 pub func kind_name(kind: TokenKind) -> String {
@@ -202,7 +205,8 @@ pub func kind_name(kind: TokenKind) -> String {
 		.ir_register -> "IRRegister",
 		.effect_name -> "EffectName",
 		.single_quote -> "SingleQuote",
-		.eof -> "EOF"
+		.eof -> "EOF",
+		.line_comment -> "LineComment"
 	}
 }
 
@@ -304,7 +308,8 @@ pub func kind_spelling(kind: TokenKind) -> String {
 		.ir_register -> "%<reg>",
 		.effect_name -> "'<effect>",
 		.single_quote -> "'",
-		.eof -> "EOF"
+		.eof -> "EOF",
+		.line_comment -> "//"
 	}
 }
 

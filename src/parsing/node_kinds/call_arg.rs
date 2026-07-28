@@ -6,7 +6,7 @@ use crate::{
 
 /// A call-site ownership marker on an argument (ADR 0018): an escape
 /// hatch/documentation for non-default ownership at the call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ArgMode {
     /// `borrow value` — require the parameter to borrow.
     Borrow,
@@ -22,7 +22,7 @@ pub enum ArgMode {
 /// the trailing-block label exception by origin — never by inspecting a
 /// synthesized function name or span — and compiler-generated sugar is not
 /// a source label occurrence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub enum CallArgOrigin {
     /// Written inside the call's parentheses.
     #[default]
@@ -36,7 +36,7 @@ pub enum CallArgOrigin {
     Synthesized,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct CallArg {
     #[drive(skip)]
     pub id: NodeID,

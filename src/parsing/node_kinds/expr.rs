@@ -14,7 +14,7 @@ use crate::{
     token_kind::TokenKind,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum ExprKind {
     // These first expressions only exist to assist with LSP operations
     Incomplete(IncompleteExpr),
@@ -166,7 +166,7 @@ impl ExprKind {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Expr {
     #[drive(skip)]
     pub id: NodeID,

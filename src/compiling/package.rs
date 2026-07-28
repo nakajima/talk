@@ -19,7 +19,6 @@ use tar::Archive;
 
 use crate::{
     label::Label,
-    lexer::Lexer,
     lexing::unescape,
     node::Node,
     node_id::FileID,
@@ -28,7 +27,6 @@ use crate::{
         expr::{Expr, ExprKind},
         stmt::StmtKind,
     },
-    parser::Parser,
 };
 
 use super::driver::{Driver, DriverConfig, Source};
@@ -683,8 +681,12 @@ impl PackageLock {
             context: format!("failed to read {}", path.display()),
             source,
         })?;
-        let parser = Parser::new(path.to_string_lossy(), FileID(0), Lexer::new(&source));
-        let (ast, diagnostics) = parser.parse().map_err(|error| PackageError::Lock {
+        let (ast, diagnostics) = crate::compiling::frontend::parse_ast(
+            &source,
+            FileID(0),
+            path.to_string_lossy().as_ref(),
+        )
+        .map_err(|error| PackageError::Lock {
             path: path.to_path_buf(),
             message: error.to_string(),
         })?;

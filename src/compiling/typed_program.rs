@@ -16,7 +16,7 @@ use crate::types::TypeOutput;
 /// loose `TypeOutput` plus a separately-owned compiler tree phase. The current typed tree
 /// representation is still backed by `typed_ast` nodes, but ownership of that tree is
 /// local to this module-facing product; callers go through `TypedProgram`.
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct TypedProgram {
     files: IndexMap<Source, crate::typed_ast::TypedFile>,
     resolved_names: ResolvedNames,

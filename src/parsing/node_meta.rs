@@ -1,7 +1,7 @@
 use crate::token::Token;
 use std::ops::Range;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct NodeMeta {
     pub start: Token,
     pub end: Token,

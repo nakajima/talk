@@ -670,6 +670,10 @@ fn parser_error_range(text: &str, err: &ParserError) -> TextRange {
     let eof = text.len() as u32;
 
     match err {
+        // Frontend-bridged diagnostics carry their position directly.
+        ParserError::Frontend {
+            span: Some(span), ..
+        } => TextRange::new(span.start, span.end),
         ParserError::UnexpectedToken {
             token: Some(token), ..
         } => TextRange::new(token.start, token.end),

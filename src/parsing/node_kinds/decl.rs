@@ -14,14 +14,14 @@ use crate::{
 };
 
 /// Visibility of a declaration - defaults to private (internal to file)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Drive, DriveMut)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum Visibility {
     #[default]
     Private,
     Public,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Drive, DriveMut)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum ReceiverMode {
     #[default]
     None,
@@ -30,7 +30,7 @@ pub enum ReceiverMode {
 }
 
 /// Path in an import statement
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum ImportPath {
     /// Local source module path rooted at package, self, or super.
     Local(#[drive(skip)] String),
@@ -39,7 +39,7 @@ pub enum ImportPath {
 }
 
 /// A single symbol being imported, with optional alias
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct ImportedSymbol {
     #[drive(skip)]
     pub name: String,
@@ -50,7 +50,7 @@ pub struct ImportedSymbol {
 }
 
 /// What symbols to import
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum ImportedSymbols {
     /// Named imports: { a, b, c }
     Named(Vec<ImportedSymbol>),
@@ -59,7 +59,7 @@ pub enum ImportedSymbols {
 }
 
 /// Full import statement
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Import {
     pub symbols: ImportedSymbols,
     pub path: ImportPath,
@@ -67,7 +67,7 @@ pub struct Import {
     pub path_span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum DeclKind {
     Import(Import),
     /// A module-local declarative expression macro rule (ADR 0026's first
@@ -215,13 +215,13 @@ pub enum DeclKind {
     TypeAlias(#[drive(skip)] Name, #[drive(skip)] Span, TypeAnnotation),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MacroParameter {
     pub name: String,
     pub span: Span,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Decl {
     #[drive(skip)]
     pub id: NodeID,

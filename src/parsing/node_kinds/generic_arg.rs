@@ -6,7 +6,7 @@ use crate::{node_id::NodeID, node_kinds::type_annotation::TypeAnnotation, parsin
 /// The parser distinguishes them syntactically where it can (literals,
 /// arithmetic); a bare name parses as `Type` and the checker reinterprets
 /// it against the declared parameter's kind.
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum GenericArg {
     Type(TypeAnnotation),
     Static(StaticExpr),
@@ -53,7 +53,7 @@ impl GenericArg {
 /// A static value expression (ADR 0035 §3): the restricted index language.
 /// Deliberately NOT the ordinary expression AST — the index language is a
 /// separate, total fragment.
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct StaticExpr {
     #[drive(skip)]
     pub id: NodeID,
@@ -79,7 +79,7 @@ impl StaticExpr {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum StaticExprKind {
     /// An integer literal, e.g. the `4` in `[Int; 4]`.
     Int(#[drive(skip)] String),
@@ -108,7 +108,7 @@ pub enum StaticExprKind {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StaticOpKind {
     Add,
     Sub,

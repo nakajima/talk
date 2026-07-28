@@ -5,7 +5,7 @@ use crate::{
     parsing::span::Span,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum RecordFieldPatternKind {
     Bind(#[drive(skip)] Name),
     Equals {
@@ -17,7 +17,7 @@ pub enum RecordFieldPatternKind {
     },
     Rest,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct RecordFieldPattern {
     #[drive(skip)]
     pub id: NodeID,
@@ -26,7 +26,7 @@ pub struct RecordFieldPattern {
     pub kind: RecordFieldPatternKind,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum PatternKind {
     // Literals that must match exactly
     LiteralInt(#[drive(skip)] String),
@@ -83,7 +83,7 @@ pub enum PatternKind {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub struct Pattern {
     #[drive(skip)]
     pub id: NodeID,

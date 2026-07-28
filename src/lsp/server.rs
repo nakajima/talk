@@ -1196,34 +1196,17 @@ mod tests {
         use crate::analysis::workspace::diagnostic_for_any;
         use crate::ast::{AST, NameResolved};
         use crate::compiling::module::ModuleId;
-        use crate::diagnostic::{AnyDiagnostic, Diagnostic, Severity};
-        use crate::lexer::Lexer;
-        use crate::node_id::{FileID, NodeID};
-        use crate::parser::Parser;
+        use crate::node_id::FileID;
         use rustc_hash::FxHashMap;
 
+        // The frontend artifact parses (ADR 0043 Stage 4); a hard
+        // failure degrades to the empty AST plus its diagnostic, and
+        // quick fixes read the structured payloads on the bridged
+        // diagnostics.
         let file_id = FileID(0);
-        let parser = Parser::new(uri.path(), file_id, Lexer::preserving_comments(text));
-        let (ast, diagnostics) = match parser.parse() {
-            Ok((ast, diagnostics)) => (AST::<NameResolved>::from(ast), diagnostics),
-            Err(error) => (
-                AST::<NameResolved> {
-                    path: uri.path().to_string(),
-                    roots: vec![],
-                    meta: Default::default(),
-                    phase: NameResolved,
-                    node_ids: Default::default(),
-                    synthsized_ids: Default::default(),
-                    file_id,
-                    skip_core_prelude: false,
-                },
-                vec![AnyDiagnostic::Parsing(Diagnostic {
-                    id: NodeID(file_id, 0),
-                    severity: Severity::Error,
-                    kind: error,
-                })],
-            ),
-        };
+        let (ast, diagnostics) =
+            crate::compiling::frontend::parse_ast_lenient(text, file_id, uri.path());
+        let ast = AST::<NameResolved>::from(ast);
         let document_id = super::document_id_for_uri(uri);
         let file_id_to_document = vec![document_id.clone()];
         let texts = vec![text.to_string()];

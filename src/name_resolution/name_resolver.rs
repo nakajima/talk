@@ -162,7 +162,7 @@ impl Scope {
 /// author wrote, and the visibility the compiler concluded. This table
 /// is the single visibility authority; every accessibility question
 /// reads it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DeclarationRecord {
     pub file: FileID,
     pub owner: Option<Symbol>,
@@ -171,8 +171,11 @@ pub struct DeclarationRecord {
     pub effective: Visibility,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct ResolvedNames {
+    /// Editor-analysis scaffolding: not part of a cached compile (a
+    /// cache-loaded core deserializes these empty).
+    #[serde(skip)]
     pub scopes: FxHashMap<NodeID, Scope>,
     /// Declared external label sequences for named callables (ADR 0041),
     /// used for resolution-time overload selection. Labels are syntactic,
@@ -182,6 +185,7 @@ pub struct ResolvedNames {
     pub symbol_names: FxHashMap<Symbol, String>,
     pub symbols_to_node: FxHashMap<Symbol, NodeID>,
     pub child_types: IndexMap<Symbol, IndexMap<Label, Symbol>>,
+    #[serde(skip)]
     pub diagnostics: Vec<AnyDiagnostic>,
     pub mutated_symbols: IndexSet<Symbol>,
     /// Per-symbol visibility records (ADR 0042).

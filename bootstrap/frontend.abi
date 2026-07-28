@@ -1,5 +1,6 @@
 abi_version: 1
 root: ParseOutcome
+optional: enum:1.1
 
 struct AnyAssocBinding @ struct:65535.10
 	name: String
@@ -126,6 +127,9 @@ enum ExprKind @ enum:65535.30
 struct Fail @ struct:65535.65
 	code: String
 	message: String
+	start: Int
+	end: Int
+	expected: TokenKind?
 
 struct Func @ struct:65535.22
 	name: String
@@ -451,6 +455,7 @@ enum TokenKind @ enum:65535.49
 	effect_name
 	single_quote
 	eof
+	line_comment
 
 struct TypeAnnotation @ struct:65535.12
 	kind: TypeAnnotationKind

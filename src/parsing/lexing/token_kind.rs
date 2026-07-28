@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Hash, serde::Serialize, serde::Deserialize)]
 pub enum TokenKind {
     LineComment,
 

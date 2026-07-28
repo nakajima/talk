@@ -26,7 +26,7 @@ use derive_visitor::{Drive, DriveMut};
 
 pub trait NodeType: Into<Node> + TryFrom<Node> {}
 
-#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut)]
+#[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum Node {
     Attribute(Attribute),
     Decl(Decl),

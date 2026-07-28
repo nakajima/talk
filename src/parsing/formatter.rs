@@ -3,7 +3,6 @@ use std::{cell::RefCell, collections::VecDeque, ops::Add};
 use crate::{
     ast::{AST, ASTPhase},
     label::Label,
-    lexer::Lexer,
     name::Name,
     node::Node,
     node_id::FileID,
@@ -29,8 +28,6 @@ use crate::{
     },
     node_meta::NodeMeta,
     node_meta_storage::NodeMetaStorage,
-    parser::Parser,
-    token::Token,
     token_kind::TokenKind,
 };
 
@@ -2985,19 +2982,20 @@ fn adjust_trailing_newlines(input: &str, mut output: String) -> String {
     output
 }
 
-fn comments_from_tokens(tokens: Vec<Token>, source: &str) -> Vec<Comment> {
+/// Comments from the frontend's byte ranges (ADR 0043: comments cross
+/// the ABI as extents; the line is the newline count up to the end,
+/// matching the reference token stamp).
+fn comments_from_ranges(ranges: &[(u32, u32)], source: &str) -> Vec<Comment> {
     let mut comments = Vec::new();
-    for token in tokens {
-        if token.kind != TokenKind::LineComment {
-            continue;
-        }
-
-        let start = token.start as usize;
-        let end = token.end as usize;
-        if let Some(text) = source.get(start..end) {
+    for (start, end) in ranges {
+        if let Some(text) = source.get(*start as usize..*end as usize) {
+            let line = source[..*end as usize]
+                .bytes()
+                .filter(|byte| *byte == b'\n')
+                .count() as u32;
             comments.push(Comment {
-                start: token.start,
-                line: token.line,
+                start: *start,
+                line,
                 text: text.trim_end().to_string(),
             });
         }
@@ -3016,8 +3014,7 @@ fn format_with_comments<'a, Phase: ASTPhase>(
 }
 
 pub fn format_string(string: &str) -> String {
-    let lexer = Lexer::preserving_comments(string);
-    match Parser::new("", FileID(0), lexer).parse_with_comments() {
+    match crate::compiling::frontend::parse_ast_with_comments(string, FileID(0), "") {
         Ok((ast, _diagnostics, comments)) => {
             let formatted = if ast.roots.is_empty() {
                 string.to_string()
@@ -3025,7 +3022,7 @@ pub fn format_string(string: &str) -> String {
                 format_with_comments(
                     &ast,
                     80,
-                    comments_from_tokens(comments, string),
+                    comments_from_ranges(&comments, string),
                     Some(string),
                 )
             };
@@ -3036,8 +3033,7 @@ pub fn format_string(string: &str) -> String {
 }
 
 pub fn format_string_with_width(string: &str, width: usize) -> String {
-    let lexer = Lexer::preserving_comments(string);
-    match Parser::new("", FileID(0), lexer).parse_with_comments() {
+    match crate::compiling::frontend::parse_ast_with_comments(string, FileID(0), "") {
         Ok((ast, _diagnostics, comments)) => {
             let formatted = if ast.roots.is_empty() {
                 string.to_string()
@@ -3045,7 +3041,7 @@ pub fn format_string_with_width(string: &str, width: usize) -> String {
                 format_with_comments(
                     &ast,
                     width,
-                    comments_from_tokens(comments, string),
+                    comments_from_ranges(&comments, string),
                     Some(string),
                 )
             };

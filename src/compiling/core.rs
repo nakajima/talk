@@ -118,6 +118,9 @@ fn compilation_sources() -> Vec<Source> {
 }
 
 fn _compile() -> CoreArtifacts {
+    if let Some(cached) = load_cached() {
+        return cached;
+    }
     let _s = tracing::trace_span!("compile_prelude", prelude = true).entered();
     let mut config = DriverConfig::new("Core");
     config.module_id = ModuleId::Core;
@@ -140,9 +143,99 @@ fn _compile() -> CoreArtifacts {
 
     let program = typed.phase.program.clone();
     let module = Arc::new(typed.module("Core"));
+    store_cached(&module, &program);
     CoreArtifacts {
         module,
         typed: Arc::new(program),
+    }
+}
+
+// ===== The compiled-core disk cache =====
+//
+// Core's sources are fixed per checkout, so its parse/resolve/type
+// products are a pure function of (sources, compiler). The cache key
+// hashes the sources plus this binary's identity (mtime and length of
+// the running executable), so ANY rebuild of the compiler invalidates
+// it — the historical core.bin trap was hashing sources only, which
+// kept stale caches across lowerer changes. A `TALK_CORE_PATH`
+// override hashes the on-disk sources instead of the embedded ones.
+
+/// This binary's identity (modification stamp and length): any rebuild
+/// of the compiler invalidates compile caches keyed with it.
+pub(crate) fn exe_fingerprint() -> Option<(u128, u64)> {
+    let exe = std::env::current_exe().ok()?;
+    let meta = std::fs::metadata(&exe).ok()?;
+    let stamp = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some((stamp, meta.len()))
+}
+
+fn cache_key() -> Option<[u8; 32]> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    if let Some(core_dir) = path_override() {
+        for name in CORE_SOURCE_NAMES {
+            let content = std::fs::read(core_dir.join(name)).ok()?;
+            hasher.update(name.as_bytes());
+            hasher.update(&content);
+        }
+    } else {
+        for (name, content) in core_sources() {
+            hasher.update(name.as_bytes());
+            hasher.update(content.as_bytes());
+        }
+    }
+    let (stamp, len) = exe_fingerprint()?;
+    hasher.update(stamp.to_le_bytes());
+    hasher.update(len.to_le_bytes());
+    Some(hasher.finalize().into())
+}
+
+fn cache_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/.talk-cache/core.bin")
+}
+
+fn load_cached() -> Option<CoreArtifacts> {
+    let key = cache_key()?;
+    let data = std::fs::read(cache_path()).ok()?;
+    let (stored, payload) = data.split_at_checked(32)?;
+    if stored != key {
+        return None;
+    }
+    let (module, typed): (Module, crate::compiling::typed_program::TypedProgram) =
+        bincode::deserialize(payload).ok()?;
+    Some(CoreArtifacts {
+        module: Arc::new(module),
+        typed: Arc::new(typed),
+    })
+}
+
+fn store_cached(module: &Module, typed: &crate::compiling::typed_program::TypedProgram) {
+    let Some(key) = cache_key() else { return };
+    let payload = match bincode::serialize(&(module, typed)) {
+        Ok(payload) => payload,
+        Err(error) => {
+            tracing::warn!("core cache serialize failed: {error}");
+            return;
+        }
+    };
+    let path = cache_path();
+    if let Some(parent) = path.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        return;
+    }
+    let mut bytes = key.to_vec();
+    bytes.extend_from_slice(&payload);
+    // Concurrent processes all compute identical bytes: write to a
+    // process-unique sibling and rename atomically.
+    let tmp = path.with_extension(format!("bin.{}", std::process::id()));
+    if std::fs::write(&tmp, &bytes).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
     }
 }
 
@@ -150,6 +243,25 @@ fn _compile() -> CoreArtifacts {
 mod tests {
     use super::*;
     use crate::name_resolution::symbol::Symbol;
+
+    /// The disk cache round trip: a stored core deserializes into the
+    /// same interface and typed products the compile produced.
+    #[test]
+    fn core_cache_round_trips() {
+        let artifacts = CORE.get_or_init(_compile);
+        store_cached(&artifacts.module, &artifacts.typed);
+        let cached = load_cached().expect("cache loads under the same key");
+        assert_eq!(cached.module.name, artifacts.module.name);
+        assert_eq!(cached.module.exports.len(), artifacts.module.exports.len());
+        assert_eq!(
+            cached.module.types.schemes.len(),
+            artifacts.module.types.schemes.len()
+        );
+        assert_eq!(
+            cached.typed.resolved_names().symbol_names.len(),
+            artifacts.typed.resolved_names().symbol_names.len()
+        );
+    }
 
     #[test]
     fn core_resolves_without_errors() {

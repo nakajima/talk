@@ -5,7 +5,6 @@ use crate::{
         module_path::LocalModulePaths,
     },
     diagnostic::{AnyDiagnostic, Severity},
-    lexer::Lexer,
     name::Name,
     name_resolution::{
         name_resolver::{NameResolver, ResolvedNames},
@@ -18,7 +17,6 @@ use crate::{
         expr::ExprKind,
         type_annotation::TypeAnnotationKind,
     },
-    parser::Parser,
     parser_error::ParserError,
 };
 use indexmap::IndexMap;
@@ -174,7 +172,7 @@ impl DriverConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum SourceKind {
     File(PathBuf),
     // Just a string
@@ -183,7 +181,7 @@ pub enum SourceKind {
     InMemory { path: PathBuf, text: String },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Source {
     kind: SourceKind,
 }
@@ -286,6 +284,40 @@ pub struct Driver<Phase: DriverPhase = Initial> {
 }
 
 /// Extract all module paths from imports and qualified references in a parsed AST.
+#[cfg(test)]
+mod frontend_parse_tests {
+    use super::*;
+    use crate::{lexer::Lexer, parser::Parser};
+
+    /// The Stage 4 driver seam: one source parsed through the frontend
+    /// artifact assembles into the same AST shape the Rust parser
+    /// builds (full equivalence is the bridge fidelity suite; this
+    /// pins the driver-facing assembly — ids, file identity, spans).
+    #[test]
+    fn frontend_parse_matches() {
+        let source = "struct Pair {\n\tlet a: Int\n}\n\nfunc make() -> Pair {\n\tPair(a: 4)\n}\n";
+        let file_id = FileID(3);
+        let (ast, diagnostics) = crate::compiling::frontend::parse_ast(source, file_id, "seam.tlk")
+            .expect("parses");
+        assert!(diagnostics.is_empty());
+        let reference = Parser::new("seam.tlk", file_id, Lexer::new(source))
+            .parse()
+            .expect("reference parses")
+            .0;
+        assert_eq!(ast.roots.len(), reference.roots.len());
+        assert_eq!(ast.file_id, file_id);
+        assert!(ast.node_ids.last >= reference.roots.len() as u32);
+        let first_span = match (&ast.roots[0], &reference.roots[0]) {
+            (crate::node::Node::Decl(ours), crate::node::Node::Decl(theirs)) => {
+                (ours.span, theirs.span)
+            }
+            other => panic!("unexpected root shapes: {other:?}"),
+        };
+        assert_eq!(first_span.0.start, first_span.1.start);
+        assert_eq!(first_span.0.file_id, file_id);
+    }
+}
+
 fn extract_import_paths(ast: &AST<ast::Parsed>) -> Vec<ImportPath> {
     use derive_visitor::Drive;
 
@@ -450,25 +482,31 @@ impl Driver {
 
         while let Some(file) = to_parse.pop_front() {
             let input = file.read()?;
-            let lexer = if self.config.preserve_comments {
-                Lexer::preserving_comments(&input)
-            } else {
-                Lexer::new(&input)
-            };
             tracing::info!("parsing {file:?}");
             let file_id = FileID(file_index);
             file_index += 1;
             source_texts.insert(file_id, input.clone());
-            let parser = Parser::new(file.path(), file_id, lexer);
             let result = match self.config.parse_mode {
-                ParseMode::Strict => parser.parse(),
-                // The lenient contract lives in the parser (ADR 0043):
-                // a hard failure degrades to an empty AST plus the
-                // failure as a diagnostic.
-                ParseMode::Lenient => {
-                    let (ast, ast_diagnostics, _comments) = parser.parse_lenient();
-                    Ok((ast, ast_diagnostics))
+                // The strict compile path parses through the frontend
+                // artifact (ADR 0043 Stage 4): the checked-in bytecode
+                // is the parser; there is no fallback. The lenient
+                // editor path migrates with the LSP consumer.
+                // The strict compile path parses through the frontend
+                // artifact (ADR 0043 Stage 4): the checked-in bytecode
+                // is the parser; there is no fallback. Core's compile
+                // products come from the disk cache, so the interpreted
+                // parse cost is paid once per compiler build.
+                ParseMode::Strict => {
+                    crate::compiling::frontend::parse_ast(&input, file_id, file.path().as_ref())
                 }
+                // The lenient contract (ADR 0043): a hard failure
+                // degrades to an empty AST plus the failure as a
+                // diagnostic.
+                ParseMode::Lenient => Ok(crate::compiling::frontend::parse_ast_lenient(
+                    &input,
+                    file_id,
+                    file.path().as_ref(),
+                )),
             };
             match result {
                 Ok((mut parsed, ast_diagnostics)) => {

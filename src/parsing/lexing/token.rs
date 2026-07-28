@@ -2,7 +2,7 @@ use crate::{node_id::FileID, span::Span};
 
 use super::token_kind::TokenKind;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Token {
     pub kind: TokenKind,
     pub start: u32,

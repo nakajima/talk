@@ -115,11 +115,93 @@ type CompiledStdlib = (
 );
 
 fn compile_all() -> Vec<CompiledStdlib> {
-    compilation_sources()
+    if let Some(cached) = load_cached() {
+        return cached;
+    }
+    let compiled: Vec<CompiledStdlib> = compilation_sources()
         .into_iter()
         .enumerate()
         .map(|(index, (name, source))| compile_module(name, source, module_id_for_index(index)))
-        .collect()
+        .collect();
+    store_cached(&compiled);
+    compiled
+}
+
+// ===== The compiled-stdlib disk cache =====
+//
+// The same shape as core's (src/compiling/core.rs): products are a
+// pure function of (sources, compiler), keyed by the source contents
+// plus this binary's identity.
+
+fn cache_key() -> Option<[u8; 32]> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    if let Some(stdlib_dir) = path_override() {
+        for name in STDLIB_SOURCE_NAMES {
+            let content = std::fs::read(stdlib_dir.join(name)).ok()?;
+            hasher.update(name.as_bytes());
+            hasher.update(&content);
+        }
+    } else {
+        for (name, content) in stdlib_sources() {
+            hasher.update(name.as_bytes());
+            hasher.update(content.as_bytes());
+        }
+    }
+    let (stamp, len) = super::core::exe_fingerprint()?;
+    hasher.update(stamp.to_le_bytes());
+    hasher.update(len.to_le_bytes());
+    Some(hasher.finalize().into())
+}
+
+fn cache_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/.talk-cache/stdlib.bin")
+}
+
+type CachedStdlib = Vec<(Module, crate::compiling::typed_program::TypedProgram)>;
+
+fn load_cached() -> Option<Vec<CompiledStdlib>> {
+    let key = cache_key()?;
+    let data = std::fs::read(cache_path()).ok()?;
+    let (stored, payload) = data.split_at_checked(32)?;
+    if stored != key {
+        return None;
+    }
+    let cached: CachedStdlib = bincode::deserialize(payload).ok()?;
+    let names: Vec<&'static str> = stdlib_sources().into_iter().map(|(name, _)| name).collect();
+    if cached.len() != names.len() {
+        return None;
+    }
+    Some(
+        names
+            .into_iter()
+            .zip(cached)
+            .map(|(name, (module, program))| (name, Arc::new(module), Arc::new(program)))
+            .collect(),
+    )
+}
+
+fn store_cached(compiled: &[CompiledStdlib]) {
+    let Some(key) = cache_key() else { return };
+    let payload: Vec<(&Module, &crate::compiling::typed_program::TypedProgram)> = compiled
+        .iter()
+        .map(|(_, module, program)| (module.as_ref(), program.as_ref()))
+        .collect();
+    let Ok(payload) = bincode::serialize(&payload) else {
+        return;
+    };
+    let path = cache_path();
+    if let Some(parent) = path.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        return;
+    }
+    let mut bytes = key.to_vec();
+    bytes.extend_from_slice(&payload);
+    let tmp = path.with_extension(format!("bin.{}", std::process::id()));
+    if std::fs::write(&tmp, &bytes).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
 }
 
 fn compile_module(name: &'static str, source: Source, module_id: ModuleId) -> CompiledStdlib {
