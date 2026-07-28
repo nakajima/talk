@@ -575,25 +575,54 @@ recursive-group skeleton that lost parameter borrows under mutual
 recursion, and a double release of borrowed match payloads bound through
 loop elements.
 
-Further compiler findings from the port, still open:
+Further compiler findings from the port — ALL FIXED OR RESOLVED
+(2026-07-27, per the fix-before-moving-on rule):
 
-- **`let x = f()?` loses its binding.** Propagation in a `let`
-  initializer fails resolution with "Undefined name: x"; the inline
-  form (`f()? + 1`) works. This is why the Talk parser threads an
-  explicit failure field instead of `Result` + `?`.
-- **Cross-enum variant names break leading-dot if-lets.** Once two
-  enums share a variant name (`ExprKind.tuple` / `PatternKind.tuple`),
-  `if let .tuple(…) = expr.kind` fails with "enum not yet known —
-  annotate the scrutinee" even though the scrutinee's type is fully
-  known. A qualified head (`if let ExprKind.tuple(…)`) resolves it;
-  `match` over an annotated parameter is unaffected.
-- **Borrow donation misses array literals in argument position.**
-  `f(receiver: [lhs])` with `lhs` a borrow-by-default parameter is
-  rejected ("element has type &Expr") while the same literal is
-  accepted through an annotated `let` or inside a constructor argument.
-- **Irrefutable if-let warning spans are useless.** An if-let over a
-  single-variant enum correctly warns that the implicit else-arm never
-  runs, but the diagnostic points at 1:1 of the file.
+- **`let x = f()?` loses its binding — STALE, could not reproduce.**
+  Every variant (bare, annotated, method-chained, tuple/array element
+  position) now binds correctly; the historical symptom reproduces
+  only when a leading-dot line follows the `let` and reads as member
+  continuation of the initializer (reference-faithful parsing, making
+  the binding self-referential), which is a spelling issue, not a
+  resolution bug. Pinned as `parity_propagate_in_let`. The Talk
+  parser's explicit failure field stays — it predates the fix and is
+  the clearer design for a fail-closed parser.
+- **Cross-enum variant names break leading-dot if-lets — FIXED.**
+  `check_variant_pattern`'s metavariable case only had the
+  exactly-one-owner heuristic; several owners bailed with "enum not
+  yet known" even though the scrutinee's member constraint would pin
+  the enum one solver step later. Now the ambiguous case defers: the
+  sub-patterns bind fresh payload variables and a `HasVariant`
+  constraint hands resolution to the solver — the same machinery
+  leading-dot construction and for-loop elements already used
+  (`defer_variant_pattern`, src/types/generate/pattern.rs). No GADT
+  refinement flows from the deferred path (an unknown head has no
+  givens). Pinned as `parity_cross_enum_leading_dot`.
+- **Borrow donation misses array literals in argument position —
+  STALE, could not reproduce.** Fixed by the uniform-borrow-donation
+  change (the deleted cheapness gate); call-argument, constructor,
+  and method-context shapes all accept. Pinned as
+  `parity_array_literal_borrow_donation`.
+- **Irrefutable if-let warning spans are useless — FIXED.** The
+  unreachable arm was the desugared conditional's SYNTHESIZED wildcard
+  (span = SYNTH → rendered 1:1). Synthesized unreachable arms now
+  route to a dedicated `IrrefutableConditionalPattern` warning ("This
+  pattern always matches: the implicit else branch never runs")
+  attributed to the nearest preceding written pattern
+  (src/types/generate/mod.rs check_matches). Real written arms keep
+  `UnreachableMatchArm`. Test:
+  `irrefutable_if_let_warns_at_the_written_pattern`.
+- **Same-statement double consume of one owned local — FIXED.**
+  `Pair(a: xs, b: xs)` in one call: every read precedes the first
+  consume, so use counting saw no remaining uses and BOTH consumes
+  moved (checker-accepted double release; the MIR balance verifier
+  ICE'd). Now `consume_operand` detects the re-consume of an
+  already-moved local: ordinary values share (retain + Def/Move flow
+  events — the same net shape as the sequential two-let spelling under
+  Rule 1), linear and unique values reject with "use of moved value:
+  consumed twice in one call". Fixtures:
+  `allows_owned_value_in_two_constructor_slots_in_one_call`,
+  `rejects_linear_value_consumed_twice_in_one_call` (flow corpus).
 
 **`core/` and `stdlib/` are now parse-covered whole-file**: both
 directories sit in the harness's parse-category table alongside the
@@ -683,21 +712,36 @@ an already-built AST, byte-compatible with the parser's own path), and
 pipeline: every corpus file's structured result, bridged and rendered,
 is byte-identical to what the Rust parser's own AST renders — with the
 token section excluded on both sides, since tokens do not cross the
-ABI. Sub-spans the Talk AST does not yet carry (name spans, label
-spans) and call-arg origins are fabricated as synthesized/written —
-invisible to the dump contract; they get real values in the
-field-completeness pass before consumers that need them cut over.
+ABI.
 
-**The field-completeness pass has its instrument**:
-`bridged_results_carry_full_fidelity_over_corpus` (gated behind
-`TALK_FIDELITY=1` while its worklist is open) Debug-renders the
+**The field-completeness pass is DONE and ungated**:
+`bridged_results_carry_full_fidelity_over_corpus` Debug-renders the
 bridged AST and the Rust parser's AST with node identities normalized
-away and requires them identical — every span, label, mode, and
-origin, not just what the dump shows. Its current failures enumerate
-the known worklist: name/label/mode sub-spans and the `BareString`
-call-arg origin across roughly twenty-five node kinds, each needing a
-field in `Ast.tlk`, capture in `Parser.tlk` matching the reference's
-span semantics, and adapter threading. Separately, consumer scouting
+away (including `Expr`'s inline compact-Debug ids) and requires them
+identical — every span, label, mode, and origin, not just what the
+dump shows; it runs unconditionally and is green over the whole
+corpus. The sweep added name/label/mode span Ints and the
+`bare_string` flag across ~25 node kinds in `Ast.tlk` (enum cases
+carry `Int` span pairs positionally; structs carry `*_start`/`*_end`
+fields; `-1` = none/synthesized), captured in `Parser.tlk` via an
+`identifier_token()` helper plus tuple-returning `arg_mode`/
+`param_mode`, and threaded through the adapter (`opt_span`,
+`int_array` for `[Int]` payloads — the generic `array()` reads boxed
+handles and must not touch raw-word arrays). Reference span quirks
+pinned and reproduced: a positional call argument's `label_span` is
+the argument's own span; a positional member's (`x.0`) span is the
+FOLLOWING token's; a float-split member (`x.0.1`) gets digit
+sub-spans; `use` path spans end at the START of the token after the
+path; macro `$param` spans include the sigil both lexers exclude from
+the token; `[T]` sugar's Array head has a synthesized name span while
+`T?` sugar's Optional name span is the node's own span; `consume mut`
+mode spans cover both words; effect-name token spans exclude the `'`
+sigil in both lexers. One reference cleanup (fix-not-enshrine): the
+anonymous-func fallback name was a Debug leak
+(`#fn_Some(Token { .. })`, baking token line/col into a *name*); the
+reference now mints position-keyed `#fn_<start>_<end>` (the resolver
+only depends on the `#fn_` prefix) and the frontend reproduces it.
+Separately, consumer scouting
 found what the formatter and LSP need beyond spans: per-node meta
 token positions *and lines*, and per-node identifier token lists.
 
@@ -735,8 +779,41 @@ location-stack port:
   bridged versus Rust-parsed meta rendered in tree order — holding
   meta to the same byte-identical standard as everything else.
 
-What remains: the field-completeness pass (name/label/mode sub-spans
-and `BareString` origin) and this meta work, both driven by the
-fidelity gate; then Stage 4's consumer cutover through
-`frontend::load` + `bridge::adapt`; then Stage 5's removal of the
-Rust lexer/parser.
+**Meta slices A and B are DONE**: `ParseOutcome.metas` carries one
+entry per adapter-constructed node (pre-order, children in Ast
+payload order), produced by a Talk-side deriving annotator — the
+token at `span.start`, the token ending at `span.end` (with the
+`>>`-split second-half Greater fabricated at full-`>>` ends), and
+line/col from a position pass (state at each token's END,
+character-counted columns). The adapter zips the stream at every
+adapt-function entry (fail-closed if it runs dry) and fills
+`NodeMetaStorage` for every node; the fabricated `extent_meta`
+machinery is deleted. Nodes the reference builds literally with real
+spans carry a no-meta marker: the borrow-by-default wrapper (a
+`.borrow` sharing its inner's exact span), everything below a
+desugaring-copied block (`Block.copied`, set by `copy_block`), the
+force-unwrap hidden failure expression, and all synthesized spans. A
+`TALK_META=1`-gated comparison in the fidelity test pairs nodes
+positionally across the two Debug renderings and requires start/end
+meta tokens byte-identical — green over the whole corpus.
+
+**Slice C — identifier attribution — is DONE and the gate is
+dropped**: the meta comparison (start/end tokens, line/col, and
+identifier lists) runs unconditionally in the fidelity test and is
+green over the whole corpus. Attribution derives the reference's
+top-of-stack semantics from the flat log: each node claims the
+unclaimed logged tokens inside its extent after its children claimed
+theirs, taking at most one entry per token (preferring the last — a
+rolled-back block-args probe re-consumes, and the reference leaves
+the probe's entry in the block's frame, so probe-tagged entries are
+claimable only by blocks). Wrappers that share the payload's node id
+in the reference copy its list: expression statements, the inline-IR
+chain, method declarations, and init requirements — while plain func
+declarations, signature declarations, and method requirements keep
+separate frames. Constructor expressions discard their path-segment
+identifiers, whose owning nodes the reference's `Path<Args>`
+reinterpretation orphans.
+
+What remains: Stage 4's consumer cutover through `frontend::load` +
+`bridge::adapt` (the compiler driver first); then Stage 5's removal
+of the Rust lexer/parser.

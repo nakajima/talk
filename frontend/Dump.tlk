@@ -10,6 +10,7 @@ use package::Parser::{
 	parse_file_source, parse_block_items_source, parse_expr_source, parse_pattern_source, parse_type_source
 }
 use package::Ast::{
+	NodeMeta,
 	Expr, ExprKind, CallArg, Parameter, Block, MatchArm, RecordField,
 	Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind,
 	TypeAnnotation, TypeAnnotationKind, GenericArg, StaticExpr, StaticExprKind,
@@ -49,7 +50,7 @@ func expr_label(kind: &ExprKind) -> String {
 		.binary(_, _) -> "Expr::Binary",
 		.call(_, _, _, _) -> "Expr::Call",
 		.constructor(_, _) -> "Expr::Constructor",
-		.member(_, _) -> "Expr::Member",
+		.member(_, _, _, _) -> "Expr::Member",
 		.incomplete_member(_) -> "Expr::Incomplete",
 		.tuple(_) -> "Expr::Tuple",
 		.block(_) -> "Expr::Block",
@@ -63,10 +64,10 @@ func expr_label(kind: &ExprKind) -> String {
 		.propagate(_) -> "Expr::Propagate",
 		.force_unwrap(_) -> "Expr::ForceUnwrap",
 		.unreachable_expr -> "Expr::Unreachable",
-		.call_effect(_, _, _) -> "Expr::CallEffect",
+		.call_effect(_, _, _, _, _) -> "Expr::CallEffect",
 		.record_literal(_, _) -> "Expr::RecordLiteral",
 		.inline_ir(_, _) -> "Expr::InlineIR",
-		.macro_call(_, _) -> "Expr::MacroCall"
+		.macro_call(_, _, _, _) -> "Expr::MacroCall"
 	}
 }
 
@@ -82,7 +83,7 @@ func pattern_label(kind: &PatternKind) -> String {
 		.literal_false -> "Pattern::LiteralFalse",
 		.tuple(_) -> "Pattern::Tuple",
 		.or_pattern(_) -> "Pattern::Or",
-		.variant(_, _, _, _, _) -> "Pattern::Variant",
+		.variant(_, _, _, _, _, _, _) -> "Pattern::Variant",
 		.struct_pattern(_, _, _, _, _) -> "Pattern::Struct",
 		.record(_) -> "Pattern::Record"
 	}
@@ -121,7 +122,7 @@ func render_expr(mut buf: [Byte], view: UTF8View, expr: &Expr, depth: Int) -> Vo
 			}
 		}
 	}
-	if let .member(_, receiver) = expr.kind {
+	if let .member(_, _, _, receiver) = expr.kind {
 		for target in receiver {
 			render_expr(buf: buf, view: view, expr: target, depth: depth + 1)
 		}
@@ -186,7 +187,7 @@ func render_expr(mut buf: [Byte], view: UTF8View, expr: &Expr, depth: Int) -> Vo
 			render_expr(buf: buf, view: view, expr: operand, depth: depth + 1)
 		}
 	}
-	if let .call_effect(_, type_args, args) = expr.kind {
+	if let .call_effect(_, _, _, type_args, args) = expr.kind {
 		for type_arg in type_args {
 			render_generic_arg(buf: buf, view: view, arg: type_arg, depth: depth + 1)
 		}
@@ -209,7 +210,7 @@ func render_expr(mut buf: [Byte], view: UTF8View, expr: &Expr, depth: Int) -> Vo
 			render_expr(buf: buf, view: view, expr: bind, depth: depth + 1)
 		}
 	}
-	if let .macro_call(_, args) = expr.kind {
+	if let .macro_call(_, _, _, args) = expr.kind {
 		for arg in args {
 			render_expr(buf: buf, view: view, expr: arg, depth: depth + 1)
 		}
@@ -390,8 +391,8 @@ func type_label(kind: &TypeAnnotationKind) -> String {
 		.borrow(_, _) -> "TypeAnnotation::Borrow",
 		.unique(_) -> "TypeAnnotation::Unique",
 		.func_type(_, _, _) -> "TypeAnnotation::Func",
-		.nominal_path(_, _, _) -> "TypeAnnotation::NominalPath",
-		.nominal(_, _) -> "TypeAnnotation::Nominal",
+		.nominal_path(_, _, _, _, _) -> "TypeAnnotation::NominalPath",
+		.nominal(_, _, _, _) -> "TypeAnnotation::Nominal",
 		.tuple(_) -> "TypeAnnotation::Tuple",
 		.record_type(_) -> "TypeAnnotation::Record",
 		.any_type(_, _) -> "TypeAnnotation::Any"
@@ -418,13 +419,13 @@ func render_type(mut buf: [Byte], view: UTF8View, annotation: &TypeAnnotation, d
 			render_type(buf: buf, view: view, annotation: target, depth: depth + 1)
 		}
 	}
-	if let .nominal_path(base, _, member_generics) = annotation.kind {
+	if let .nominal_path(base, _, _, _, member_generics) = annotation.kind {
 		for target in base {
 			render_type(buf: buf, view: view, annotation: target, depth: depth + 1)
 		}
 		render_generic_args(buf: buf, view: view, args: member_generics, depth: depth + 1)
 	}
-	if let TypeAnnotationKind.nominal(_, generics) = annotation.kind {
+	if let TypeAnnotationKind.nominal(_, _, _, generics) = annotation.kind {
 		render_generic_args(buf: buf, view: view, args: generics, depth: depth + 1)
 	}
 	if let TypeAnnotationKind.tuple(items) = annotation.kind {
@@ -497,7 +498,7 @@ func render_pattern(mut buf: [Byte], view: UTF8View, pattern: &Pattern, depth: I
 			render_pattern(buf: buf, view: view, pattern: alternative, depth: depth + 1)
 		}
 	}
-	if let .variant(_, segment_generics, _, fields, _) = pattern.kind {
+	if let .variant(_, segment_generics, _, _, _, fields, _) = pattern.kind {
 		for segment in segment_generics {
 			for arg in segment {
 				render_generic_arg(buf: buf, view: view, arg: arg, depth: depth + 1)
@@ -522,7 +523,7 @@ func render_pattern(mut buf: [Byte], view: UTF8View, pattern: &Pattern, depth: I
 		// colon field's value pattern renders, at the record's child
 		// depth (shorthand binds and `..` render nothing).
 		for field in fields {
-			if let .equals_field(_, value) = field.kind {
+			if let .equals_field(_, _, _, value) = field.kind {
 				render_pattern(buf: buf, view: view, pattern: value, depth: depth + 1)
 			}
 		}
@@ -535,20 +536,20 @@ func decl_label(kind: &DeclKind) -> String {
 		.import_decl(_) -> "Decl::Import",
 		.func_decl(_) -> "Decl::Func",
 		.func_signature(_) -> "Decl::FuncSignature",
-		.struct_decl(_, _, _, _, _, _) -> "Decl::Struct",
-		.enum_decl(_, _, _, _, _) -> "Decl::Enum",
-		.protocol_decl(_, _, _, _, _) -> "Decl::Protocol",
-		.enum_variant(_, _, _, _, _) -> "Decl::EnumVariant",
+		.struct_decl(_, _, _, _, _, _, _, _) -> "Decl::Struct",
+		.enum_decl(_, _, _, _, _, _, _) -> "Decl::Enum",
+		.protocol_decl(_, _, _, _, _, _, _) -> "Decl::Protocol",
+		.enum_variant(_, _, _, _, _, _, _) -> "Decl::EnumVariant",
 		.extend_decl(_, _, _, _, _) -> "Decl::Extend",
 		.init_decl(_, _) -> "Decl::Init",
-		.property(_, _, _, _) -> "Decl::Property",
+		.property(_, _, _, _, _, _) -> "Decl::Property",
 		.method(_, _, _) -> "Decl::Method",
 		.method_requirement(_, _) -> "Decl::MethodRequirement",
 		.init_requirement(_) -> "Decl::InitRequirement",
-		.typealias_decl(_, _) -> "Decl::TypeAlias",
-		.effect_decl(_, _, _, _, _) -> "Decl::Effect",
+		.typealias_decl(_, _, _, _) -> "Decl::TypeAlias",
+		.effect_decl(_, _, _, _, _, _, _) -> "Decl::Effect",
 		.associated_decl(_, _) -> "Decl::Associated",
-		.macro_decl(_, _, _) -> "Decl::Macro"
+		.macro_decl(_, _, _, _, _) -> "Decl::Macro"
 	}
 }
 
@@ -574,21 +575,21 @@ func render_decl(mut buf: [Byte], view: UTF8View, decl: &Decl, depth: Int) -> Vo
 		.import_decl(_) -> {},
 		.func_decl(f) -> render_func(buf: buf, view: view, f: f, depth: child),
 		.func_signature(sig) -> render_func_signature(buf: buf, view: view, sig: sig, depth: child),
-		.struct_decl(_, generics, wc, body, _, _) -> {
+		.struct_decl(_, _, _, generics, wc, body, _, _) -> {
 			for generic in generics {
 				render_generic_decl(buf: buf, view: view, generic: generic, depth: child)
 			}
 			render_optional_where(buf: buf, view: view, wc: wc, depth: child)
 			render_body(buf: buf, view: view, body: body, depth: child)
 		},
-		.enum_decl(_, generics, wc, body, _) -> {
+		.enum_decl(_, _, _, generics, wc, body, _) -> {
 			for generic in generics {
 				render_generic_decl(buf: buf, view: view, generic: generic, depth: child)
 			}
 			render_optional_where(buf: buf, view: view, wc: wc, depth: child)
 			render_body(buf: buf, view: view, body: body, depth: child)
 		},
-		.protocol_decl(_, generics, wc, body, conformances) -> {
+		.protocol_decl(_, _, _, generics, wc, body, conformances) -> {
 			for generic in generics {
 				render_generic_decl(buf: buf, view: view, generic: generic, depth: child)
 			}
@@ -598,7 +599,7 @@ func render_decl(mut buf: [Byte], view: UTF8View, decl: &Decl, depth: Int) -> Vo
 				render_type(buf: buf, view: view, annotation: conformance, depth: child)
 			}
 		},
-		.enum_variant(_, generics, payloads, _, result) -> {
+		.enum_variant(_, _, _, generics, payloads, _, result) -> {
 			for generic in generics {
 				render_generic_decl(buf: buf, view: view, generic: generic, depth: child)
 			}
@@ -626,7 +627,7 @@ func render_decl(mut buf: [Byte], view: UTF8View, decl: &Decl, depth: Int) -> Vo
 			}
 			render_block(buf: buf, view: view, block: body, depth: child)
 		},
-		.property(_, _, annotation, default_value) -> {
+		.property(_, _, _, _, annotation, default_value) -> {
 			if let .some(target) = annotation {
 				render_type(buf: buf, view: view, annotation: target, depth: child)
 			}
@@ -637,8 +638,8 @@ func render_decl(mut buf: [Byte], view: UTF8View, decl: &Decl, depth: Int) -> Vo
 		.method(f, _, _) -> render_func(buf: buf, view: view, f: f, depth: child),
 		.method_requirement(sig, _) -> render_func_signature(buf: buf, view: view, sig: sig, depth: child),
 		.init_requirement(sig) -> render_func_signature(buf: buf, view: view, sig: sig, depth: child),
-		.typealias_decl(_, rhs) -> render_type(buf: buf, view: view, annotation: rhs, depth: child),
-		.effect_decl(_, generics, wc, params, ret) -> {
+		.typealias_decl(_, _, _, rhs) -> render_type(buf: buf, view: view, annotation: rhs, depth: child),
+		.effect_decl(_, _, _, generics, wc, params, ret) -> {
 			for generic in generics {
 				render_generic_decl(buf: buf, view: view, generic: generic, depth: child)
 			}
@@ -652,7 +653,7 @@ func render_decl(mut buf: [Byte], view: UTF8View, decl: &Decl, depth: Int) -> Vo
 			render_generic_decl(buf: buf, view: view, generic: generic, depth: child)
 			render_optional_where(buf: buf, view: view, wc: wc, depth: child)
 		},
-		.macro_decl(_, _, template) -> render_expr(buf: buf, view: view, expr: template, depth: child)
+		.macro_decl(_, _, _, _, template) -> render_expr(buf: buf, view: view, expr: template, depth: child)
 	}
 }
 
@@ -667,7 +668,7 @@ func stmt_label(kind: &StmtKind) -> String {
 		.for_stmt(_, _, _, _) -> "Stmt::For",
 		.continue_stmt -> "Stmt::Continue",
 		.resume_stmt(_) -> "Stmt::Resume",
-		.handle_stmt(_, _) -> "Stmt::Handling"
+		.handle_stmt(_, _, _, _) -> "Stmt::Handling"
 	}
 }
 
@@ -710,7 +711,7 @@ func render_stmt(mut buf: [Byte], view: UTF8View, stmt: &Stmt, depth: Int) -> Vo
 				render_expr(buf: buf, view: view, expr: e, depth: depth + 1)
 			}
 		},
-		.handle_stmt(_, body) -> render_block(buf: buf, view: view, block: body, depth: depth + 1)
+		.handle_stmt(_, _, _, body) -> render_block(buf: buf, view: view, block: body, depth: depth + 1)
 	}
 }
 
@@ -779,7 +780,8 @@ func lenient_outcome(consume outcome: ParseOutcome) -> ParseOutcome {
 	let no_items: [Item] = []
 	let no_comments: [Comment] = []
 	let no_fail: Fail? = .none
-	ParseOutcome(items: no_items, failure: no_fail, diags: diags, comments: no_comments)
+	let no_metas: [NodeMeta] = []
+	ParseOutcome(items: no_items, failure: no_fail, diags: diags, comments: no_comments, metas: no_metas)
 }
 
 pub func parse_block_items(source: String) -> String {

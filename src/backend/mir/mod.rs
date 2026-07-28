@@ -3462,6 +3462,30 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.push(Inst::RegionAcquire { src: operand });
                 return true;
             }
+            // A same-statement re-consume: every read preceded the
+            // first consume, so use counting showed none remaining and
+            // the first consume moved. Later consumes share, exactly as
+            // sequential non-last-use consumes donate (Rule 1); linear
+            // and unique values keep move discipline — a second spend
+            // is the double consume those markers exist to reject.
+            if self.moved.contains(&local) {
+                if is_linear(self.program_builder, &ty) || self.unique_locals.contains(&local) {
+                    self.deferred_errors.push(BackendError::new(
+                        "use of moved value: consumed twice in one call".into(),
+                        Span::SYNTHESIZED,
+                    ));
+                    return true;
+                }
+                if let Err(error) = self.retain_value(operand, &ty, Span::SYNTHESIZED) {
+                    self.deferred_errors.push(error);
+                }
+                // The retain re-establishes an owned reference after
+                // the first consume released the local; this consume
+                // spends it.
+                self.record_flow(verify::FlowEvent::Def(local));
+                self.record_flow(verify::FlowEvent::Move(local));
+                return true;
+            }
             if self.consume_donates(local, &ty) {
                 if let Err(error) = self.retain_value(operand, &ty, Span::SYNTHESIZED) {
                     self.deferred_errors.push(error);

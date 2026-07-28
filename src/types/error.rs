@@ -263,6 +263,10 @@ pub enum TypeError {
     /// Everything this arm matches is already matched by an earlier arm
     /// (reported as a warning, not an error).
     UnreachableMatchArm,
+    /// A conditional pattern (`if let`) that matches every value of its
+    /// scrutinee: the implicit else branch never runs. Attributed to the
+    /// written pattern, since the unreachable arm itself is synthesized.
+    IrrefutableConditionalPattern,
     UnreachableCode,
     CannotInfer,
     /// A `Copy`/`CheapClone` conformance whose fields don't support it.
@@ -381,6 +385,7 @@ impl TypeError {
             Self::UnhandledEffect { .. } => "type.unhandled-effect",
             Self::NonExhaustiveMatch { .. } => "type.non-exhaustive-match",
             Self::UnreachableMatchArm => "type.unreachable-match-arm",
+            Self::IrrefutableConditionalPattern => "type.irrefutable-conditional-pattern",
             Self::UnreachableCode => "type.unreachable-code",
             Self::CannotInfer => "type.cannot-infer",
             Self::NonConformingField { .. } => "type.non-conforming-field",
@@ -764,6 +769,12 @@ impl Display for TypeError {
                 write!(
                     f,
                     "This arm never runs: the arms above it already match everything it could"
+                )
+            }
+            TypeError::IrrefutableConditionalPattern => {
+                write!(
+                    f,
+                    "This pattern always matches: the implicit else branch never runs"
                 )
             }
             TypeError::UnreachableCode => {

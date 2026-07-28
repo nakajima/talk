@@ -1,0 +1,54 @@
+// `?` propagation in a `let` initializer binds normally (once ledgered
+// as losing its binding; the real culprit was a following leading-dot
+// line reading as member continuation of the initializer).
+func maybe(n: Int) -> Int? {
+	if n < 10 {
+		return .some(n)
+	}
+	.none
+}
+
+struct Scanner {
+	let limit: Int
+
+	func step(n: Int) -> Int? {
+		if n < self.limit {
+			return .some(n + 1)
+		}
+		.none
+	}
+
+	func run() -> Int? {
+		let a = self.step(n: 1)?
+		let b = self.step(n: a)?
+		return .some(a + b)
+	}
+}
+
+func annotated() -> Int? {
+	let x: Int = maybe(n: 4)?
+	return .some(x + 1)
+}
+
+func compound() -> Int? {
+	let pair = (maybe(n: 2)?, maybe(n: 3)?)
+	let arr = [maybe(n: 5)?, 7]
+	return .some(pair.0 + pair.1 + arr[0] + arr[1])
+}
+
+match Scanner(limit: 10).run() {
+	.some(v) -> print(v),
+	.none -> print(0 - 1)
+}
+match annotated() {
+	.some(v) -> print(v),
+	.none -> print(0 - 1)
+}
+match compound() {
+	.some(v) -> print(v),
+	.none -> print(0 - 1)
+}
+match maybe(n: 99) {
+	.some(v) -> print(v),
+	.none -> print(0 - 1)
+}

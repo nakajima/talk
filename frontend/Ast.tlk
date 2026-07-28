@@ -12,6 +12,26 @@
 
 use package::Lexer::{ TokenKind }
 
+// A token carried in node meta (ADR 0043 option A): the reference
+// token shape with line/col stamped at the token's END (0-based line,
+// character-counted column, reset on newline).
+pub struct MetaToken {
+	pub let kind: TokenKind
+	pub let start: Int
+	pub let end: Int
+	pub let line: Int
+	pub let col: Int
+}
+
+// The reference NodeMeta: a node's first and last tokens plus the
+// identifier tokens consumed while the node's frame was open. A
+// start < 0 on `start` marks a synthesized node carrying no meta.
+pub struct NodeMeta {
+	pub let start: MetaToken
+	pub let end: MetaToken
+	pub let identifiers: [MetaToken]
+}
+
 pub enum MemberLabel {
 	case named(String)
 	case positional(Int)
@@ -21,6 +41,9 @@ pub enum MemberLabel {
 // default). Not rendered in the dump; carried for the real product.
 pub struct EffectSet {
 	pub let names: [String]
+	// Per-name token spans, parallel to `names`.
+	pub let name_starts: [Int]
+	pub let name_ends: [Int]
 	pub let open: Bool
 }
 
@@ -43,8 +66,8 @@ pub enum StaticExprKind {
 	case int_literal(String)
 	case bool_literal(Bool)
 	// A fieldless enum case whose owner is inferred from the static
-	// parameter's declared value type.
-	case unqualified_case(String)
+	// parameter's declared value type; the name and its token span.
+	case unqualified_case(String, Int, Int)
 	// A name-like operand — a static parameter reference or a fieldless
 	// enum case path — kept as an annotation so name resolution visits
 	// it like every other type reference.
@@ -63,6 +86,8 @@ pub struct StaticExpr {
 
 pub struct RecordFieldTypeAnnotation {
 	pub let label: String
+	pub let label_start: Int
+	pub let label_end: Int
 	pub let value: TypeAnnotation
 	pub let start: Int
 	pub let end: Int
@@ -70,6 +95,8 @@ pub struct RecordFieldTypeAnnotation {
 
 pub struct AnyAssocBinding {
 	pub let name: String
+	pub let name_start: Int
+	pub let name_end: Int
 	pub let value: TypeAnnotation
 	pub let start: Int
 	pub let end: Int
@@ -83,10 +110,12 @@ pub enum TypeAnnotationKind {
 	// Parameters (borrow-by-default already applied), effects, and the
 	// return type as a one-element array.
 	case func_type([TypeAnnotation], EffectSet, [TypeAnnotation])
-	// The base as a one-element array, then the member name and its
-	// explicit generic arguments.
-	case nominal_path([TypeAnnotation], String, [GenericArg])
-	case nominal(String, [GenericArg])
+	// The base as a one-element array, then the member name, its token
+	// span, and its explicit generic arguments.
+	case nominal_path([TypeAnnotation], String, Int, Int, [GenericArg])
+	// The name, its token span (-1 = implied, e.g. the `[T]` sugar's
+	// Array head), and the generic arguments.
+	case nominal(String, Int, Int, [GenericArg])
 	case tuple([TypeAnnotation])
 	case record_type([RecordFieldTypeAnnotation])
 	// The protocol head as a one-element array, then `Assoc = T` bindings.
@@ -121,10 +150,16 @@ pub enum ParamLabel {
 // name's own span rides along for the for-loop block-arg replacement.
 pub struct Parameter {
 	pub let label: ParamLabel?
+	// The label token's span (the underscore for `_ name`); -1 = no label.
+	pub let label_start: Int
+	pub let label_end: Int
 	pub let name: String
 	pub let name_start: Int
 	pub let name_end: Int
 	pub let mode: ParamMode?
+	// The mode marker's span (`consume mut` spans both words); -1 = none.
+	pub let mode_start: Int
+	pub let mode_end: Int
 	pub let annotation: TypeAnnotation?
 	pub let start: Int
 	pub let end: Int
@@ -148,6 +183,8 @@ pub struct CaptureSpec {
 // static form `static N: Int` whose declared value type is static_ty).
 pub struct GenericDecl {
 	pub let name: String
+	pub let name_start: Int
+	pub let name_end: Int
 	pub let generics: [GenericDecl]
 	pub let conformances: [TypeAnnotation]
 	pub let default_value: GenericArg?
@@ -180,6 +217,8 @@ pub struct WhereClause {
 // its body's; the whole declaration's extents render as `tokens=`.
 pub struct Func {
 	pub let name: String
+	pub let name_start: Int
+	pub let name_end: Int
 	pub let effects: EffectSet
 	pub let generics: [GenericDecl]
 	pub let captures: [CaptureSpec]
@@ -215,6 +254,9 @@ pub struct Body {
 // An extension head (`extend Name<Args>`): a name plus arguments only.
 pub struct TypeApplication {
 	pub let name: String
+	// The first path segment's token span.
+	pub let name_start: Int
+	pub let name_end: Int
 	pub let args: [GenericArg]
 	pub let start: Int
 	pub let end: Int
@@ -249,6 +291,9 @@ pub struct Block {
 	pub let body: [Item]
 	pub let start: Int
 	pub let end: Int
+	// A desugaring copy (the reference freshens node ids when a
+	// multi-clause `if` duplicates a block): carries no node meta.
+	pub let copied: Bool
 }
 
 pub enum ExprKind {
@@ -270,8 +315,11 @@ pub enum ExprKind {
 	// A specialized type reference (`Opt<Int>`, `Res<Int>.A<Bool>`):
 	// the dotted path and one generic-argument list per path segment.
 	case constructor(String, [[GenericArg]])
-	// The receiver as a zero- (leading dot) or one-element array.
-	case member(MemberLabel, [Expr])
+	// The receiver as a zero- (leading dot) or one-element array. The
+	// label span mirrors the reference: an identifier label's own token,
+	// a positional label the FOLLOWING token (quirk), a float-split
+	// member its digits' sub-span.
+	case member(MemberLabel, Int, Int, [Expr])
 	// A dot with no member name after it: LSP-supporting recovery node,
 	// receiver as a zero- or one-element array.
 	case incomplete_member([Expr])
@@ -298,17 +346,17 @@ pub enum ExprKind {
 	// `unreachable` spanning the bang until desugaring sends it to 'panic.
 	case force_unwrap([Expr])
 	case unreachable_expr
-	// `'effect(args)`: the effect name (sigil excluded), explicit
-	// generic arguments, then the arguments.
-	case call_effect(String, [GenericArg], [CallArg])
+	// `'effect(args)`: the effect name (sigil excluded) and its token
+	// span, explicit generic arguments, then the arguments.
+	case call_effect(String, Int, Int, [GenericArg], [CallArg])
 	// `{ label: value, ...spread }`: the fields, then the spread
 	// expression as a zero- or one-element array.
 	case record_literal([RecordField], [Expr])
 	// `@_ir(binds…) { %d = instr … }`: the bind expressions, then the
 	// instruction. Only the binds render in the dump.
 	case inline_ir([Expr], IRInstruction)
-	// `#name(args)`.
-	case macro_call(String, [Expr])
+	// `#name(args)`: the name and its token span.
+	case macro_call(String, Int, Int, [Expr])
 }
 
 // An inline-IR value operand.
@@ -327,6 +375,8 @@ pub enum IRValue {
 // instruction order, and the `cmp` comparator.
 pub struct IRInstruction {
 	pub let name: String
+	pub let name_start: Int
+	pub let name_end: Int
 	pub let dest: String?
 	pub let ty: TypeAnnotation?
 	pub let values: [IRValue]
@@ -335,6 +385,8 @@ pub struct IRInstruction {
 
 pub struct RecordField {
 	pub let label: String
+	pub let label_start: Int
+	pub let label_end: Int
 	pub let value: Expr
 	pub let start: Int
 	pub let end: Int
@@ -348,7 +400,15 @@ pub struct Expr {
 
 pub struct CallArg {
 	pub let label: String?
+	// The label token's span (the underscore for `_:`); -1 = positional
+	// (the reference then uses the argument's own span).
+	pub let label_start: Int
+	pub let label_end: Int
 	pub let mode: ArgMode?
+	pub let mode_start: Int
+	pub let mode_end: Int
+	// The paren-less leading string argument (`expect "..." { }`).
+	pub let bare_string: Bool
 	pub let value: Expr
 	pub let start: Int
 	pub let end: Int
@@ -366,9 +426,10 @@ pub enum PatternKind {
 	case tuple([Pattern])
 	case or_pattern([Pattern])
 	// Enum path (none for a leading dot), one explicit generic-argument
-	// list per path segment, variant name, field patterns, and one label
-	// per field (labels select fixed payload slots).
-	case variant(String?, [[GenericArg]], String, [Pattern], [String?])
+	// list per path segment, variant name and its token span, field
+	// patterns, and one label per field (labels select fixed payload
+	// slots).
+	case variant(String?, [[GenericArg]], String, Int, Int, [Pattern], [String?])
 	// Dotted struct path, per-segment generic arguments, field patterns,
 	// parallel field names, and whether a `..` rest closed the list.
 	case struct_pattern(String, [[GenericArg]], [Pattern], [String], Bool)
@@ -388,7 +449,8 @@ pub struct Pattern {
 
 pub enum RecordFieldPatternKind {
 	case bind_field(String)
-	case equals_field(String, Pattern)
+	// The field name, its token span, then the sub-pattern.
+	case equals_field(String, Int, Int, Pattern)
 	case rest_field
 }
 
@@ -398,8 +460,17 @@ pub struct RecordFieldPattern {
 	pub let end: Int
 }
 
+// A macro's `$param`; the span includes the sigil (token extents do not).
+pub struct MacroParam {
+	pub let name: String
+	pub let start: Int
+	pub let end: Int
+}
+
 pub struct ImportedSymbol {
 	pub let name: String
+	pub let name_start: Int
+	pub let name_end: Int
 	pub let alias: String?
 }
 
@@ -411,6 +482,10 @@ pub enum ImportedSymbols {
 pub struct Import {
 	pub let symbols: ImportedSymbols
 	pub let path: String
+	// The reference quirk: the span runs from the path's first token to
+	// the START of the token after the path.
+	pub let path_start: Int
+	pub let path_end: Int
 	pub let local: Bool
 }
 
@@ -419,28 +494,29 @@ pub enum DeclKind {
 	case import_decl(Import)
 	case func_decl(Func)
 	case func_signature(FuncSignature)
-	// name, generics, where, body, 'linear, 'heap.
-	case struct_decl(String, [GenericDecl], WhereClause?, Body, Bool, Bool)
-	// name, generics, where, body, 'linear.
-	case enum_decl(String, [GenericDecl], WhereClause?, Body, Bool)
-	// name, generics, where, body, conformances.
-	case protocol_decl(String, [GenericDecl], WhereClause?, Body, [TypeAnnotation])
-	// name, generics, payloads, per-payload labels, GADT result.
-	case enum_variant(String, [GenericDecl], [TypeAnnotation], [String?], TypeAnnotation?)
+	// name + its token span, generics, where, body, 'linear, 'heap.
+	case struct_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, Bool, Bool)
+	// name + its token span, generics, where, body, 'linear.
+	case enum_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, Bool)
+	// name + its token span, generics, where, body, conformances.
+	case protocol_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, [TypeAnnotation])
+	// name + its token span, generics, payloads, per-payload labels,
+	// GADT result.
+	case enum_variant(String, Int, Int, [GenericDecl], [TypeAnnotation], [String?], TypeAnnotation?)
 	// binders, head, conformances, where, body.
 	case extend_decl([GenericDecl], TypeApplication, [TypeAnnotation], WhereClause?, Body)
 	case init_decl([Parameter], Block)
-	// name, is_static, annotation, default value.
-	case property(String, Bool, TypeAnnotation?, Expr?)
+	// name + its token span, is_static, annotation, default value.
+	case property(String, Int, Int, Bool, TypeAnnotation?, Expr?)
 	case method(Func, Bool, ReceiverMode)
 	case method_requirement(FuncSignature, ReceiverMode)
 	case init_requirement(FuncSignature)
-	case typealias_decl(String, TypeAnnotation)
-	// name, generics, where, params, return type.
-	case effect_decl(String, [GenericDecl], WhereClause?, [Parameter], TypeAnnotation)
+	case typealias_decl(String, Int, Int, TypeAnnotation)
+	// name + its token span, generics, where, params, return type.
+	case effect_decl(String, Int, Int, [GenericDecl], WhereClause?, [Parameter], TypeAnnotation)
 	case associated_decl(GenericDecl, WhereClause?)
-	// name, parameter names, template.
-	case macro_decl(String, [String], Expr)
+	// name + its token span, parameters, template.
+	case macro_decl(String, Int, Int, [MacroParam], Expr)
 }
 
 pub struct Decl {
@@ -464,9 +540,9 @@ pub enum StmtKind {
 	case continue_stmt
 	// `'continue expr?` — resumes the enclosing effect handler.
 	case resume_stmt(Expr?)
-	// `@handle 'effect { body }` — the effect name (sigil excluded) and
-	// the handler block.
-	case handle_stmt(String, Block)
+	// `@handle 'effect { body }` — the effect name (sigil excluded), its
+	// token span, and the handler block.
+	case handle_stmt(String, Int, Int, Block)
 }
 
 pub struct Stmt {

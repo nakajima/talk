@@ -4997,6 +4997,20 @@ pub mod tests {
     }
 
     #[test]
+    fn irrefutable_if_let_warns_at_the_written_pattern() {
+        let t = check(
+            "// no-core\nenum Only {\n\tcase one(Int)\n}\nfunc f(x: Only) -> Int {\n\tif let .one(n) = x {\n\t\treturn n\n\t}\n\t0\n}",
+        );
+        assert_clean(&t);
+        let warnings = type_warnings(&t);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("always matches"),
+            "an irrefutable if-let should warn as such, not as a bare unreachable arm: {warnings:?}"
+        );
+    }
+
+    #[test]
     fn duplicate_arm_warns_as_unreachable() {
         let t = check("// no-core\nmatch true {\n\ttrue -> 1,\n\tfalse -> 2,\n\ttrue -> 3\n}");
         assert_clean(&t);

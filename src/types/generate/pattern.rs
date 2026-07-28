@@ -756,7 +756,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 // ride a member constraint the solver has not discharged
                 // yet): the pattern informs the scrutinee instead. A variant
                 // name carried by exactly one enum in scope pins the enum,
-                // and the Eq below flows it back into inference.
+                // and the Eq below flows it back into inference. With
+                // several carriers, resolution waits for the scrutinee's
+                // head in the solver — the same deferred machinery
+                // leading-dot construction and for-loop elements use.
                 Ty::Var(_) => {
                     let mut owners = self
                         .catalog
@@ -766,7 +769,15 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         .map(|(symbol, _)| *symbol);
                     match (owners.next(), owners.next()) {
                         (Some(symbol), None) => Some(symbol),
-                        _ => None,
+                        _ => {
+                            return self.defer_variant_pattern(
+                                pattern,
+                                variant_name,
+                                fields,
+                                field_labels,
+                                expected,
+                            );
+                        }
                     }
                 }
                 _ => None,
@@ -866,6 +877,45 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         );
         for (sub, payload) in fields.iter().zip(&instantiation.argument_types) {
             refinement.extend(self.check_pattern(sub, payload));
+        }
+        refinement
+    }
+
+    /// A leading-dot variant pattern whose enum several catalog entries
+    /// could own: bind the sub-patterns to fresh payload variables and
+    /// hand resolution to the solver's HasVariant step, which waits for
+    /// the scrutinee's head, resolves the variant, and equates the
+    /// payload types on discharge. No GADT refinement flows from this
+    /// path — an unknown head has no givens to refine.
+    fn defer_variant_pattern(
+        &mut self,
+        pattern: &Pattern,
+        variant_name: &str,
+        fields: &[Pattern],
+        field_labels: &[Option<Name>],
+        expected: &Ty,
+    ) -> PatternRefinement {
+        let payload: Vec<(Label, Ty)> = fields
+            .iter()
+            .enumerate()
+            .map(|(index, sub)| {
+                let label = match field_labels.get(index).and_then(Option::as_ref) {
+                    Some(label) => Label::Named(label.name_str()),
+                    None => Label::Positional(index),
+                };
+                (label, Ty::Var(self.store.fresh_ty(self.level, sub.id)))
+            })
+            .collect();
+        self.wanteds.push(Constraint::HasVariant {
+            enum_ty: expected.clone(),
+            label: Label::Named(variant_name.into()),
+            payload: payload.clone(),
+            ctor: None,
+            origin: CtOrigin::new(pattern.id, CtReason::Pattern),
+        });
+        let mut refinement = PatternRefinement::default();
+        for (sub, (_, payload_ty)) in fields.iter().zip(&payload) {
+            refinement.extend(self.check_pattern(sub, payload_ty));
         }
         refinement
     }

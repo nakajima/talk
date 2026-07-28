@@ -1,0 +1,17 @@
+// Rule 1 (implicit sharing): consuming the same owned value into two
+// slots of one constructor call shares, exactly like the sequential
+// two-let spelling — the reads all precede the first consume, so the
+// later consume donates rather than double-spending the one owned
+// reference.
+struct Pair {
+	let a: [Int]
+	let b: [Int]
+}
+
+func build() -> Pair {
+	let xs: [Int] = [1, 2, 3]
+	Pair(a: xs, b: xs)
+}
+
+let p = build()
+print(p.a.count + p.b.count)

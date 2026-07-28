@@ -17,7 +17,8 @@ use package::Ast::{
 	Expr, ExprKind, CallArg, MemberLabel, Parameter, Block, RecordField,
 	Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind,
 	TypeAnnotation, TypeAnnotationKind, GenericArg, EffectSet,
-	StaticExpr, StaticExprKind, StaticOpKind,
+	StaticExpr, StaticExprKind, StaticOpKind, MacroParam,
+	MetaToken, NodeMeta,
 	RecordFieldTypeAnnotation, AnyAssocBinding,
 	Decl, DeclKind, Import, ImportedSymbol, ImportedSymbols,
 	Stmt, StmtKind, Item, MatchArm, ArgMode, IRValue, IRInstruction,
@@ -132,7 +133,7 @@ func flatten_type_path(expr: &Expr) -> TypePath {
 			}
 			return .path(name, copied)
 		},
-		.member(label, receiver) -> {
+		.member(label, _, _, receiver) -> {
 			if let .named(member_name) = label {
 				if receiver.count == 0 { return .not_a_path }
 				match flatten_type_path(expr: receiver[0]) {
@@ -163,11 +164,11 @@ func prepare_closure_block(consume block: Block) -> Block {
 		let no_label: ParamLabel? = .none
 		let no_mode: ParamMode? = .none
 		let no_annotation: TypeAnnotation? = .none
-		params.push(Parameter(label: no_label, name: "$" + i.show(), name_start: -1, name_end: -1, mode: no_mode, annotation: no_annotation, start: -1, end: -1))
+		params.push(Parameter(label: no_label, label_start: -1, label_end: -1, name: "$" + i.show(), name_start: -1, name_end: -1, mode: no_mode, mode_start: -1, mode_end: -1, annotation: no_annotation, start: -1, end: -1))
 		i = i + 1
 	}
 	let body = block.body
-	Block(params: params, body: body, start: block.start, end: block.end)
+	Block(params: params, body: body, start: block.start, end: block.end, copied: block.copied)
 }
 
 // The index of a `$N` bound-variable name, or -1 for anything else.
@@ -216,7 +217,7 @@ func max_bound_var_in_item(item: &Item) -> Int {
 func max_bound_var_in_decl(decl: &Decl) -> Int {
 	match decl.kind {
 		.let_decl(_, _, rhs) -> max_bound_var_in_optional_expr(expr: rhs),
-		.property(_, _, _, value) -> max_bound_var_in_optional_expr(expr: value),
+		.property(_, _, _, _, _, value) -> max_bound_var_in_optional_expr(expr: value),
 		_ -> -1
 	}
 }
@@ -250,7 +251,7 @@ func max_bound_var_in_stmt(stmt: &Stmt) -> Int {
 		.for_stmt(iterable, _, body, _) -> max_int(a: max_bound_var_in_expr(expr: iterable), b: max_bound_var_in_block(block: body)),
 		.continue_stmt -> -1,
 		.resume_stmt(e) -> max_bound_var_in_optional_expr(expr: e),
-		.handle_stmt(_, body) -> max_bound_var_in_block(block: body)
+		.handle_stmt(_, _, _, body) -> max_bound_var_in_block(block: body)
 	}
 }
 
@@ -266,7 +267,7 @@ func max_bound_var_in_expr(expr: &Expr) -> Int {
 			}
 			best
 		},
-		.member(_, receiver) -> max_bound_var_in_exprs(exprs: receiver),
+		.member(_, _, _, receiver) -> max_bound_var_in_exprs(exprs: receiver),
 		.tuple(items) -> max_bound_var_in_exprs(exprs: items),
 		.literal_array(items) -> max_bound_var_in_exprs(exprs: items),
 		.subscript_expr(parts) -> max_bound_var_in_exprs(exprs: parts),
@@ -283,7 +284,7 @@ func max_bound_var_in_expr(expr: &Expr) -> Int {
 		.as_cast(operands, _) -> max_bound_var_in_exprs(exprs: operands),
 		.propagate(operands) -> max_bound_var_in_exprs(exprs: operands),
 		.force_unwrap(operands) -> max_bound_var_in_exprs(exprs: operands),
-		.call_effect(_, _, args) -> {
+		.call_effect(_, _, _, _, args) -> {
 			let best = -1
 			for arg in args {
 				best = max_int(a: best, b: max_bound_var_in_expr(expr: arg.value))
@@ -297,7 +298,7 @@ func max_bound_var_in_expr(expr: &Expr) -> Int {
 			}
 			best
 		},
-		.macro_call(_, args) -> max_bound_var_in_exprs(exprs: args),
+		.macro_call(_, _, _, args) -> max_bound_var_in_exprs(exprs: args),
 		_ -> -1
 	}
 }
@@ -336,6 +337,10 @@ pub struct ParseOutcome {
 	pub let failure: Fail?
 	pub let diags: [Fail]
 	pub let comments: [Comment]
+	// Per-node meta in the canonical pre-order the bridge adapter
+	// walks (ADR 0043 option A); one entry per adapter-constructed
+	// node, synthesized nodes carrying the no-meta marker.
+	pub let metas: [NodeMeta]
 }
 
 // The reference lex-error rendering: 1-based line, 0-based column,
@@ -503,7 +508,7 @@ func dummy_generic_decl() -> GenericDecl {
 	let no_conformances: [TypeAnnotation] = []
 	let no_default: GenericArg? = .none
 	let no_static_ty: TypeAnnotation? = .none
-	GenericDecl(name: "", generics: no_generics, conformances: no_conformances, default_value: no_default, static_ty: no_static_ty, start: 0, end: 0)
+	GenericDecl(name: "", name_start: -1, name_end: -1, generics: no_generics, conformances: no_conformances, default_value: no_default, static_ty: no_static_ty, start: 0, end: 0)
 }
 
 func dummy_predicate() -> WherePredicate {
@@ -530,26 +535,26 @@ func macro_param_is_identifier_shaped(name: String) -> Bool {
 }
 
 func dummy_type() -> TypeAnnotation {
-	TypeAnnotation(kind: .nominal("", []), start: 0, end: 0)
+	TypeAnnotation(kind: .nominal("", -1, -1, []), start: 0, end: 0)
 }
 
 func dummy_block() -> Block {
 	let no_params: [Parameter] = []
 	let no_body: [Item] = []
-	Block(params: no_params, body: no_body, start: 0, end: 0)
+	Block(params: no_params, body: no_body, start: 0, end: 0, copied: false)
 }
 
 // The reference span for synthesized nodes (desugared conditionals).
 func synthesized_block(consume body: [Item]) -> Block {
 	let no_params: [Parameter] = []
-	Block(params: no_params, body: body, start: 0 - 1, end: 0 - 1)
+	Block(params: no_params, body: body, start: 0 - 1, end: 0 - 1, copied: false)
 }
 
 // The reference deep-copies blocks with freshened node ids when a
 // multi-clause `if` duplicates its else block; spans are unchanged, so
 // a value copy is the same tree.
 func copy_block(block: &Block) -> Block {
-	Block(params: block.params, body: block.body, start: block.start, end: block.end)
+	Block(params: block.params, body: block.body, start: block.start, end: block.end, copied: true)
 }
 
 func copy_optional_block(block: &Block?) -> Block? {
@@ -563,10 +568,10 @@ func pattern_contains_or(pattern: &Pattern) -> Bool {
 	match pattern.kind {
 		.or_pattern(_) -> true,
 		.tuple(items) -> any_pattern_contains_or(patterns: items),
-		.variant(_, _, _, fields, _) -> any_pattern_contains_or(patterns: fields),
+		.variant(_, _, _, _, _, fields, _) -> any_pattern_contains_or(patterns: fields),
 		.record(fields) -> {
 			for field in fields {
-				if let .equals_field(_, value) = field.kind {
+				if let .equals_field(_, _, _, value) = field.kind {
 					if pattern_contains_or(pattern: value) { return true }
 				}
 			}
@@ -591,7 +596,7 @@ func collect_pattern_binders(pattern: &Pattern, mut names: [String]) -> Void {
 	match pattern.kind {
 		.bind(name) -> names.push(name),
 		.tuple(items) -> collect_all_pattern_binders(patterns: items, names: names),
-		.variant(_, _, _, fields, _) -> collect_all_pattern_binders(patterns: fields, names: names),
+		.variant(_, _, _, _, _, fields, _) -> collect_all_pattern_binders(patterns: fields, names: names),
 		.or_pattern(items) -> {
 			if items.count > 0 {
 				collect_pattern_binders(pattern: items[0], names: names)
@@ -601,7 +606,7 @@ func collect_pattern_binders(pattern: &Pattern, mut names: [String]) -> Void {
 			for field in fields {
 				match field.kind {
 					.bind_field(name) -> names.push(name),
-					.equals_field(_, value) -> collect_pattern_binders(pattern: value, names: names),
+					.equals_field(_, _, _, value) -> collect_pattern_binders(pattern: value, names: names),
 					.rest_field -> {}
 				}
 			}
@@ -720,8 +725,8 @@ func is_borrow_annotation(annotation: &TypeAnnotation) -> Bool {
 		.borrow(_, _) -> true,
 		.unique(_) -> false,
 		.func_type(_, _, _) -> false,
-		.nominal_path(_, _, _) -> false,
-		.nominal(_, _) -> false,
+		.nominal_path(_, _, _, _, _) -> false,
+		.nominal(_, _, _, _) -> false,
 		.tuple(_) -> false,
 		.record_type(_) -> false,
 		.any_type(_, _) -> false
@@ -755,6 +760,14 @@ struct Parser {
 	// truncated at the failure, and the reference reports the lex error
 	// instead of any downstream missing-token symptom.
 	let lex_error_message: String?
+	// The reference push_identifier log (ADR 0043 option A): identifier
+	// tokens in consumption order, recorded at the reference's three
+	// ports (identifier consumption and identifier-kinded consumes).
+	let id_log: [Token]
+	// Parallel to id_log: entries pushed during a rolled-back block-args
+	// probe. The reference leaves them in the BLOCK's frame (the probe
+	// runs before any statement frame opens), so only blocks claim them.
+	let id_log_probe: [Bool]
 
 	// MARK: Token stream
 
@@ -934,6 +947,10 @@ struct Parser {
 		self.skip_newlines()
 		let cur = self.current()
 		if cur.kind == kind {
+			if cur.kind == .identifier {
+				self.id_log.push(cur)
+				self.id_log_probe.push(false)
+			}
 			self.advance()
 			return cur
 		}
@@ -976,11 +993,29 @@ struct Parser {
 		self.skip_semicolons_and_newlines()
 		let cur = self.current()
 		if cur.kind == .identifier || cur.kind == .keyword_use {
+			self.id_log.push(cur)
+			self.id_log_probe.push(false)
 			self.advance()
 			return self.lexeme(token: cur)
 		}
 		self.fail(code: "parser.expected-identifier", message: "Expected an identifier, got " + describe_kind(kind: cur.kind))
 		""
+	}
+
+	// `identifier()` exposing the consumed token, for name-span capture.
+	// On failure the returned token is the offending one; callers bail
+	// on is_failed before using it.
+	mut func identifier_token() -> Token {
+		self.skip_semicolons_and_newlines()
+		let cur = self.current()
+		if cur.kind == .identifier || cur.kind == .keyword_use {
+			self.id_log.push(cur)
+			self.id_log_probe.push(false)
+			self.advance()
+			return cur
+		}
+		self.fail(code: "parser.expected-identifier", message: "Expected an identifier, got " + describe_kind(kind: cur.kind))
+		cur
 	}
 
 	// MARK: Contexts and assignment plumbing
@@ -1116,7 +1151,8 @@ struct Parser {
 	mut func macro_call() -> Expr {
 		let start_tok = self.current()
 		self.consume(kind: .hash)
-		let name = self.identifier()
+		let name_tok = self.identifier_token()
+		let name = self.lexeme(token: name_tok)
 		if self.is_failed() { return dummy_expr() }
 		self.consume(kind: .left_paren)
 		if self.is_failed() { return dummy_expr() }
@@ -1129,7 +1165,7 @@ struct Parser {
 			self.consume(kind: .comma)
 			if self.is_failed() { return dummy_expr() }
 		}
-		Expr(kind: .macro_call(name, args), start: start_tok.start, end: self.span_end())
+		Expr(kind: .macro_call(name, name_tok.start, name_tok.end, args), start: start_tok.start, end: self.span_end())
 	}
 
 	// `'effect(args)`: an effect call. The node's span starts at the
@@ -1157,7 +1193,7 @@ struct Parser {
 				self.consume_or_recover_closer_after_newline(kind: .right_paren)
 			}
 		}
-		Expr(kind: .call_effect(name, type_args, args), start: tok.start, end: self.span_end())
+		Expr(kind: .call_effect(name, tok.start, tok.end, type_args, args), start: tok.start, end: self.span_end())
 	}
 
 	// A macro-template binder (`$x`): a variable whose name keeps the
@@ -1269,8 +1305,9 @@ struct Parser {
 		let no_receiver: [Expr] = []
 		let cur = self.current()
 		if cur.kind == .identifier {
-			let name = self.identifier()
-			let member = Expr(kind: .member(.named(name), no_receiver), start: start_tok.start, end: self.span_end())
+			let name_tok = self.identifier_token()
+			let name = self.lexeme(token: name_tok)
+			let member = Expr(kind: .member(.named(name), name_tok.start, name_tok.end, no_receiver), start: start_tok.start, end: self.span_end())
 			return self.member_postfix(member: member, can_assign: can_assign)
 		}
 		if cur.kind == .int_number {
@@ -1287,8 +1324,9 @@ struct Parser {
 		self.consume(kind: .dot)
 		let cur = self.current()
 		if cur.kind == .identifier {
-			let name = self.identifier()
-			let member = Expr(kind: .member(.named(name), [lhs]), start: start, end: self.span_end())
+			let name_tok = self.identifier_token()
+			let name = self.lexeme(token: name_tok)
+			let member = Expr(kind: .member(.named(name), name_tok.start, name_tok.end, [lhs]), start: start, end: self.span_end())
 			return self.member_postfix(member: member, can_assign: can_assign)
 		}
 		if cur.kind == .int_number {
@@ -1315,8 +1353,8 @@ struct Parser {
 				let second = parse_decimal(text: self.slice_text(start: cur.start + dot_index + 1, end: cur.end))
 				if let .some(first_value) = first {
 					if let .some(second_value) = second {
-						let inner = Expr(kind: .member(.positional(first_value), [lhs]), start: start, end: self.span_end())
-						let outer = Expr(kind: .member(.positional(second_value), [inner]), start: start, end: self.span_end())
+						let inner = Expr(kind: .member(.positional(first_value), cur.start, cur.start + dot_index, [lhs]), start: start, end: self.span_end())
+						let outer = Expr(kind: .member(.positional(second_value), cur.start + dot_index + 1, cur.end, [inner]), start: start, end: self.span_end())
 						return self.member_postfix(member: outer, can_assign: can_assign)
 					}
 				}
@@ -1331,7 +1369,9 @@ struct Parser {
 	mut func positional_member(consume receiver: [Expr], start: Int, token: Token) -> Expr {
 		let index = parse_decimal(text: self.lexeme(token: token))
 		if let .some(value) = index {
-			return Expr(kind: .member(.positional(value), receiver), start: start, end: self.span_end())
+			// Reference quirk: the label span is the FOLLOWING token's.
+			let after = self.current()
+			return Expr(kind: .member(.positional(value), after.start, after.end, receiver), start: start, end: self.span_end())
 		}
 		self.fail(code: "parser.bad-label", message: "Unable to parse label: " + self.lexeme(token: token))
 		dummy_expr()
@@ -1616,7 +1656,7 @@ struct Parser {
 		self.consume(kind: .keyword_in)
 		if self.is_failed() { return dummy_stmt() }
 		self.contexts.push(.for_iterable)
-		let mode = self.arg_mode()
+		let (mode, _, _) = self.arg_mode()
 		let iterable = self.require_expr(e: self.expr())
 		let _ = self.contexts.pop()
 		if self.is_failed() { return dummy_stmt() }
@@ -1634,17 +1674,19 @@ struct Parser {
 			let b_start = body.start
 			let b_end = body.end
 			let no_params: [Parameter] = []
-			body = Block(params: no_params, body: body.body, start: b_start, end: b_end)
+			body = Block(params: no_params, body: body.body, start: b_start, end: b_end, copied: body.copied)
 		}
 		Stmt(kind: .for_stmt(iterable, pat, body, mode), start: start_tok.start, end: self.span_end())
 	}
 
 	// An ownership marker on a for-loop's iterable, only when a plain
 	// name follows (`consume` alone is an ordinary variable).
-	mut func arg_mode() -> ArgMode? {
+	mut func arg_mode() -> (ArgMode?, Int, Int) {
 		if self.peek_is(kind: .keyword_mut) {
+			let tok = self.current()
 			self.advance()
-			return .some(.mut_mode)
+			let m: ArgMode? = .some(.mut_mode)
+			return (m, tok.start, tok.end)
 		}
 		let cur = self.current()
 		if cur.kind == .identifier && self.next_kind() == .identifier {
@@ -1655,10 +1697,12 @@ struct Parser {
 			if text == "borrow" { mode = .some(.borrow_mode) }
 			if let .some(m) = mode {
 				self.advance()
-				return .some(m)
+				let found: ArgMode? = .some(m)
+				return (found, cur.start, cur.end)
 			}
 		}
-		.none
+		let none: ArgMode? = .none
+		return (none, -1, -1)
 	}
 
 	mut func return_stmt() -> Stmt {
@@ -1781,13 +1825,14 @@ struct Parser {
 				break
 			}
 			let field_tok = self.current()
-			let label = self.identifier()
+			let label_tok = self.identifier_token()
+			let label = self.lexeme(token: label_tok)
 			if self.is_failed() { return dummy_expr() }
 			self.consume(kind: .colon)
 			if self.is_failed() { return dummy_expr() }
 			let value = self.require_expr(e: self.expr_with_precedence(prec: prec_assignment))
 			if self.is_failed() { return dummy_expr() }
-			fields.push(RecordField(label: label, value: value, start: field_tok.start, end: self.span_end()))
+			fields.push(RecordField(label: label, label_start: label_tok.start, label_end: label_tok.end, value: value, start: field_tok.start, end: self.span_end()))
 			self.skip_newlines()
 			if self.peek_is(kind: .right_brace) {
 				let _ = self.did_match(kind: .comma)
@@ -1819,7 +1864,7 @@ struct Parser {
 			if self.is_failed() { return dummy_block() }
 			let no_params: [Parameter] = []
 			let body: [Item] = [.stmt_item(s)]
-			return Block(params: no_params, body: body, start: start_tok.start, end: self.span_end())
+			return Block(params: no_params, body: body, start: start_tok.start, end: self.span_end(), copied: false)
 		}
 		if consumes_left_brace {
 			if self.peek_is(kind: .left_brace) {
@@ -1829,7 +1874,7 @@ struct Parser {
 					self.record_expected(kind: .left_brace)
 					let no_params: [Parameter] = []
 					let no_body: [Item] = []
-					return Block(params: no_params, body: no_body, start: start_tok.start, end: self.span_end())
+					return Block(params: no_params, body: no_body, start: start_tok.start, end: self.span_end(), copied: false)
 				}
 				self.fail_expected(kind: .left_brace)
 				return dummy_block()
@@ -1849,7 +1894,7 @@ struct Parser {
 			if self.is_failed() { break }
 			self.skip_semicolons_and_newlines()
 		}
-		Block(params: params, body: body, start: start_tok.start, end: self.span_end())
+		Block(params: params, body: body, start: start_tok.start, end: self.span_end(), copied: false)
 	}
 
 	// Block arguments (`{ x, y in … }`): probed with rollback — anything
@@ -1861,15 +1906,17 @@ struct Parser {
 			return none
 		}
 		let checkpoint = self.pos
+		let log_mark = self.id_log.count
 		let params: [Parameter] = []
 		loop true {
-			let mode = self.param_mode()
+			let (mode, mode_start, mode_end) = self.param_mode()
 			self.skip_semicolons_and_newlines()
 			let name_tok = self.current()
 			let name = self.identifier()
 			if self.is_failed() {
 				self.pos = checkpoint
 				self.failed = .none
+				self.mark_probe(from: log_mark)
 				return none
 			}
 			let param_start = self.current().start
@@ -1881,7 +1928,7 @@ struct Parser {
 				if self.is_failed() { return params }
 			}
 			let no_label: ParamLabel? = .none
-			params.push(Parameter(label: no_label, name: name, name_start: name_tok.start, name_end: name_tok.end, mode: mode, annotation: annotation, start: param_start, end: self.span_end()))
+			params.push(Parameter(label: no_label, label_start: -1, label_end: -1, name: name, name_start: name_tok.start, name_end: name_tok.end, mode: mode, mode_start: mode_start, mode_end: mode_end, annotation: annotation, start: param_start, end: self.span_end()))
 			if self.did_match(kind: .comma) {
 				// Next parameter.
 			} else {
@@ -1889,20 +1936,32 @@ struct Parser {
 					return params
 				}
 				self.pos = checkpoint
+				self.mark_probe(from: log_mark)
 				return none
 			}
 		}
 		params
 	}
 
+	// Tag log entries appended by a rolled-back block-args probe.
+	mut func mark_probe(from: Int) -> Void {
+		let i = from
+		loop i < self.id_log_probe.count {
+			self.id_log_probe[i] = true
+			i = i + 1
+		}
+	}
+
 	// An optional ownership-mode prefix on a parameter (ADR 0018): `mut`
 	// is a hard keyword; `consume`/`borrow` are contextual and only read
 	// as modes when a parameter name follows.
-	mut func param_mode() -> ParamMode? {
+	mut func param_mode() -> (ParamMode?, Int, Int) {
 		self.skip_semicolons_and_newlines()
 		if self.peek_is(kind: .keyword_mut) {
+			let tok = self.current()
 			self.advance()
-			return .some(.mut_param)
+			let m: ParamMode? = .some(.mut_param)
+			return (m, tok.start, tok.end)
 		}
 		let cur = self.current()
 		if cur.kind == .identifier {
@@ -1910,17 +1969,23 @@ struct Parser {
 			if text == "consume" && self.next_is_parameter_name(allow_mut: true) {
 				self.advance()
 				if self.peek_is(kind: .keyword_mut) {
+					// `consume mut` spans both words.
+					let mut_tok = self.current()
 					self.advance()
-					return .some(.consume_mut_param)
+					let m: ParamMode? = .some(.consume_mut_param)
+					return (m, cur.start, mut_tok.end)
 				}
-				return .some(.consume_param)
+				let m: ParamMode? = .some(.consume_param)
+				return (m, cur.start, cur.end)
 			}
 			if text == "borrow" && self.next_is_parameter_name(allow_mut: false) {
 				self.advance()
-				return .some(.borrow_param)
+				let m: ParamMode? = .some(.borrow_param)
+				return (m, cur.start, cur.end)
 			}
 		}
-		.none
+		let none: ParamMode? = .none
+		return (none, -1, -1)
 	}
 
 	func next_is_parameter_name(allow_mut: Bool) -> Bool {
@@ -2006,7 +2071,8 @@ struct Parser {
 	// syntax, like a trailing block omits the final one).
 	mut func call_with_leading_string_arg(callee: Expr, can_assign: Bool) -> Expr {
 		let start = callee.start
-		let args: [CallArg] = [self.argument()]
+		let first = self.argument()
+		let args: [CallArg] = [CallArg(label: first.label, label_start: first.label_start, label_end: first.label_end, mode: first.mode, mode_start: first.mode_start, mode_end: first.mode_end, bare_string: true, value: first.value, start: first.start, end: first.end)]
 		loop self.did_match(kind: .comma) {
 			if self.is_failed() { return dummy_expr() }
 			args.push(self.argument())
@@ -2048,7 +2114,12 @@ struct Parser {
 			// (unlabeled) into the trailing-block slot.
 			if let .some(arg) = args.pop() {
 				let label = arg.label
+				let label_start = arg.label_start
+				let label_end = arg.label_end
 				let mode = arg.mode
+				let mode_start = arg.mode_start
+				let mode_end = arg.mode_end
+				let arg_bare = arg.bare_string
 				let value = arg.value
 				let arg_start = arg.start
 				let arg_end = arg.end
@@ -2063,11 +2134,11 @@ struct Parser {
 						other_kind -> {
 							let no_label: String? = .none
 							let no_mode: ArgMode? = .none
-							args.push(CallArg(label: no_label, mode: no_mode, value: Expr(kind: other_kind, start: v_start, end: v_end), start: arg_start, end: arg_end))
+							args.push(CallArg(label: no_label, label_start: label_start, label_end: label_end, mode: no_mode, mode_start: mode_start, mode_end: mode_end, bare_string: arg_bare, value: Expr(kind: other_kind, start: v_start, end: v_end), start: arg_start, end: arg_end))
 						}
 					}
 				} else {
-					args.push(CallArg(label: label, mode: mode, value: value, start: arg_start, end: arg_end))
+					args.push(CallArg(label: label, label_start: label_start, label_end: label_end, mode: mode, mode_start: mode_start, mode_end: mode_end, bare_string: arg_bare, value: value, start: arg_start, end: arg_end))
 				}
 			}
 		}
@@ -2103,19 +2174,24 @@ struct Parser {
 		if start_tok.kind == .underscore && self.next_kind() == .colon {
 			self.advance()
 			self.consume(kind: .colon)
-			let mode = self.arg_mode()
+			let (mode, mode_start, mode_end) = self.arg_mode()
 			let value = self.require_expr(e: self.expr_with_precedence(prec: prec_assignment))
 			let underscore_label: String? = .some("_")
-			return CallArg(label: underscore_label, mode: mode, value: value, start: start_tok.start, end: self.span_end())
+			return CallArg(label: underscore_label, label_start: start_tok.start, label_end: start_tok.end, mode: mode, mode_start: mode_start, mode_end: mode_end, bare_string: false, value: value, start: start_tok.start, end: self.span_end())
 		}
 		let label: String? = .none
+		let label_start = -1
+		let label_end = -1
 		if start_tok.kind == .identifier && self.next_kind() == .colon {
-			label = .some(self.identifier())
+			let label_tok = self.identifier_token()
+			label = .some(self.lexeme(token: label_tok))
+			label_start = label_tok.start
+			label_end = label_tok.end
 			self.consume(kind: .colon)
 		}
-		let mode = self.arg_mode()
+		let (mode, mode_start, mode_end) = self.arg_mode()
 		let value = self.require_expr(e: self.expr_with_precedence(prec: prec_assignment))
-		CallArg(label: label, mode: mode, value: value, start: start_tok.start, end: self.span_end())
+		CallArg(label: label, label_start: label_start, label_end: label_end, mode: mode, mode_start: mode_start, mode_end: mode_end, bare_string: false, value: value, start: start_tok.start, end: self.span_end())
 	}
 
 	// MARK: Patterns
@@ -2150,12 +2226,13 @@ struct Parser {
 			kind = .wildcard
 		} else if k == .dot {
 			self.advance()
-			let variant_name = self.identifier()
+			let variant_tok = self.identifier_token()
+			let variant_name = self.lexeme(token: variant_tok)
 			if self.is_failed() { return dummy_pattern() }
 			let (fields, labels) = self.pattern_fields()
 			if self.is_failed() { return dummy_pattern() }
 			let no_generics: [[GenericArg]] = []
-			kind = .variant(.none, no_generics, variant_name, fields, labels)
+			kind = .variant(.none, no_generics, variant_name, variant_tok.start, variant_tok.end, fields, labels)
 		} else if k == .left_paren {
 			self.advance()
 			let items: [Pattern] = []
@@ -2196,6 +2273,8 @@ struct Parser {
 		let head = self.lexeme(token: start_tok)
 		self.advance()
 		let segments = [head]
+		let seg_starts = [start_tok.start]
+		let seg_ends = [start_tok.end]
 		let no_args: [GenericArg] = []
 		let segment_generics: [[GenericArg]] = [no_args]
 		loop true {
@@ -2207,7 +2286,10 @@ struct Parser {
 				segment_generics.push(args)
 			}
 			if self.did_match(kind: .dot) {
-				segments.push(self.identifier())
+				let seg_tok = self.identifier_token()
+				segments.push(self.lexeme(token: seg_tok))
+				seg_starts.push(seg_tok.start)
+				seg_ends.push(seg_tok.end)
 				if self.is_failed() { return .wildcard }
 				let empty: [GenericArg] = []
 				segment_generics.push(empty)
@@ -2224,6 +2306,10 @@ struct Parser {
 			if let .some(last) = segments.pop() {
 				variant_name = last
 			}
+			let variant_start = -1
+			let variant_end = -1
+			if let .some(vs) = seg_starts.pop() { variant_start = vs }
+			if let .some(ve) = seg_ends.pop() { variant_end = ve }
 			// The final segment is the variant, which takes no generic
 			// args of its own.
 			if let .some(variant_generics) = segment_generics.pop() {
@@ -2235,7 +2321,7 @@ struct Parser {
 			let path = join_path(segments: segments)
 			let (fields, labels) = self.pattern_fields()
 			if self.is_failed() { return .wildcard }
-			return .variant(.some(path), segment_generics, variant_name, fields, labels)
+			return .variant(.some(path), segment_generics, variant_name, variant_start, variant_end, fields, labels)
 		}
 		let has_generics = false
 		if segment_generics.count > 0 {
@@ -2329,13 +2415,14 @@ struct Parser {
 				break
 			}
 			if cur.kind == .identifier {
-				let field_name = self.identifier()
+				let field_name_tok = self.identifier_token()
+				let field_name = self.lexeme(token: field_name_tok)
 				if self.is_failed() { break }
 				if self.peek_is(kind: .colon) {
 					self.did_match(kind: .colon)
 					let value = self.pattern()
 					if self.is_failed() { break }
-					fields.push(RecordFieldPattern(kind: .equals_field(field_name, value), start: cur.start, end: self.span_end()))
+					fields.push(RecordFieldPattern(kind: .equals_field(field_name, field_name_tok.start, field_name_tok.end, value), start: cur.start, end: self.span_end()))
 				} else {
 					fields.push(RecordFieldPattern(kind: .bind_field(field_name), start: cur.start, end: self.span_end()))
 				}
@@ -2394,7 +2481,8 @@ struct Parser {
 	mut func optional_sugar(consume base: TypeAnnotation) -> TypeAnnotation {
 		loop self.did_match(kind: .question_mark) {
 			let start = base.start
-			base = TypeAnnotation(kind: .nominal("Optional", [.type_arg(base)]), start: start, end: self.span_end())
+			let end = self.span_end()
+			base = TypeAnnotation(kind: .nominal("Optional", start, end, [.type_arg(base)]), start: start, end: end)
 		}
 		base
 	}
@@ -2430,7 +2518,7 @@ struct Parser {
 				if self.is_failed() { return dummy_type() }
 			}
 			self.consume(kind: .right_bracket)
-			let base = TypeAnnotation(kind: .nominal(name, generics), start: start_tok.start, end: self.span_end())
+			let base = TypeAnnotation(kind: .nominal(name, -1, -1, generics), start: start_tok.start, end: self.span_end())
 			return self.nominal_type_path(base: base)
 		}
 		if self.did_match(kind: .left_brace) {
@@ -2438,17 +2526,19 @@ struct Parser {
 			loop self.did_match(kind: .right_brace) == false {
 				if self.is_failed() { break }
 				let field_tok = self.current()
-				let label = self.identifier()
+				let label_tok = self.identifier_token()
+				let label = self.lexeme(token: label_tok)
 				if self.is_failed() { break }
 				self.consume(kind: .colon)
 				let value = self.type_annotation()
 				if self.is_failed() { break }
-				fields.push(RecordFieldTypeAnnotation(label: label, value: value, start: field_tok.start, end: self.span_end()))
+				fields.push(RecordFieldTypeAnnotation(label: label, label_start: label_tok.start, label_end: label_tok.end, value: value, start: field_tok.start, end: self.span_end()))
 				self.did_match(kind: .comma)
 			}
 			return TypeAnnotation(kind: .record_type(fields), start: start_tok.start, end: self.span_end())
 		}
-		let name = self.identifier()
+		let name_tok = self.identifier_token()
+		let name = self.lexeme(token: name_tok)
 		if self.is_failed() { return dummy_type() }
 		loop self.did_match(kind: .double_colon) {
 			name = name + "::" + self.identifier()
@@ -2459,7 +2549,7 @@ struct Parser {
 			generics = self.generic_args_list()
 			if self.is_failed() { return dummy_type() }
 		}
-		let base = TypeAnnotation(kind: .nominal(name, generics), start: start_tok.start, end: self.span_end())
+		let base = TypeAnnotation(kind: .nominal(name, name_tok.start, name_tok.end, generics), start: start_tok.start, end: self.span_end())
 		self.nominal_type_path(base: base)
 	}
 
@@ -2492,15 +2582,16 @@ struct Parser {
 	mut func nominal_type_path(consume base: TypeAnnotation) -> TypeAnnotation {
 		if self.did_match(kind: .dot) == false { return base }
 		loop true {
-			let member_tok = self.current()
-			let member = self.identifier()
+			let span_tok = self.current()
+			let member_tok = self.identifier_token()
+			let member = self.lexeme(token: member_tok)
 			if self.is_failed() { return base }
 			let member_generics: [GenericArg] = []
 			if self.angle_generic_args_allowed() && self.did_match(kind: .less) {
 				member_generics = self.generic_args_list()
 				if self.is_failed() { return base }
 			}
-			base = TypeAnnotation(kind: .nominal_path([base], member, member_generics), start: member_tok.start, end: self.span_end())
+			base = TypeAnnotation(kind: .nominal_path([base], member, member_tok.start, member_tok.end, member_generics), start: span_tok.start, end: self.span_end())
 			if self.did_match(kind: .dot) {
 				// Next path segment.
 			} else {
@@ -2595,6 +2686,8 @@ struct Parser {
 	// the open default when nothing is spelled.
 	mut func effect_set() -> EffectSet {
 		let names: [String] = []
+		let name_starts: [Int] = []
+		let name_ends: [Int] = []
 		let open = false
 		if self.peek_is(kind: .single_quote) {
 			self.advance()
@@ -2606,7 +2699,10 @@ struct Parser {
 				self.skip_semicolons_and_newlines()
 				let cur = self.current()
 				if cur.kind == .identifier || cur.kind == .keyword_use {
-					names.push(self.identifier())
+					let name_tok = self.identifier_token()
+					names.push(self.lexeme(token: name_tok))
+					name_starts.push(name_tok.start)
+					name_ends.push(name_tok.end)
 					let _ = self.did_match(kind: .comma)
 				} else if self.did_match(kind: .dot_dot) {
 					open = true
@@ -2615,42 +2711,47 @@ struct Parser {
 					break
 				}
 			}
-			return EffectSet(names: names, open: open)
+			return EffectSet(names: names, name_starts: name_starts, name_ends: name_ends, open: open)
 		}
 		if self.peek_is(kind: .effect_name) {
 			let cur = self.current()
 			self.advance()
 			names.push(self.lexeme(token: cur))
-			return EffectSet(names: names, open: false)
+			name_starts.push(cur.start)
+			name_ends.push(cur.end)
+			return EffectSet(names: names, name_starts: name_starts, name_ends: name_ends, open: false)
 		}
-		EffectSet(names: names, open: true)
+		EffectSet(names: names, name_starts: name_starts, name_ends: name_ends, open: true)
 	}
 
 	// `any P<Assoc = T>`: the `any` keyword is already consumed.
 	mut func any_type_annotation(start: Int) -> TypeAnnotation {
 		let head_tok = self.current()
-		let head_name = self.identifier()
+		let head_name_tok = self.identifier_token()
+		let head_name = self.lexeme(token: head_name_tok)
 		if self.is_failed() { return dummy_type() }
 		let no_generics: [GenericArg] = []
-		let head = TypeAnnotation(kind: .nominal(head_name, no_generics), start: head_tok.start, end: self.span_end())
+		let head = TypeAnnotation(kind: .nominal(head_name, head_name_tok.start, head_name_tok.end, no_generics), start: head_tok.start, end: self.span_end())
 		loop self.did_match(kind: .dot) {
 			let member_tok = self.current()
-			let member = self.identifier()
+			let member_name_tok = self.identifier_token()
+			let member = self.lexeme(token: member_name_tok)
 			if self.is_failed() { return dummy_type() }
 			let no_member_generics: [GenericArg] = []
-			head = TypeAnnotation(kind: .nominal_path([head], member, no_member_generics), start: member_tok.start, end: self.span_end())
+			head = TypeAnnotation(kind: .nominal_path([head], member, member_name_tok.start, member_name_tok.end, no_member_generics), start: member_tok.start, end: self.span_end())
 		}
 		let bindings: [AnyAssocBinding] = []
 		if self.did_match(kind: .less) {
 			loop self.did_match_generic_close() == false {
 				if self.is_failed() { break }
 				let binding_tok = self.current()
-				let binding_name = self.identifier()
+				let binding_name_tok = self.identifier_token()
+				let binding_name = self.lexeme(token: binding_name_tok)
 				if self.is_failed() { break }
 				self.consume(kind: .equals)
 				let value = self.type_annotation()
 				if self.is_failed() { break }
-				bindings.push(AnyAssocBinding(name: binding_name, value: value, start: binding_tok.start, end: self.span_end()))
+				bindings.push(AnyAssocBinding(name: binding_name, name_start: binding_name_tok.start, name_end: binding_name_tok.end, value: value, start: binding_tok.start, end: self.span_end()))
 				self.did_match(kind: .comma)
 			}
 		}
@@ -2733,9 +2834,10 @@ struct Parser {
 		}
 		if cur.kind == .dot {
 			self.advance()
-			let name = self.identifier()
+			let name_tok = self.identifier_token()
+			let name = self.lexeme(token: name_tok)
 			if self.is_failed() { return dummy_static_expr() }
-			return StaticExpr(kind: .unqualified_case(name), start: cur.start, end: self.span_end())
+			return StaticExpr(kind: .unqualified_case(name, name_tok.start, name_tok.end), start: cur.start, end: self.span_end())
 		}
 		// In committed static context `(` is grouping, not a tuple type.
 		if cur.kind == .left_paren {
@@ -2812,7 +2914,11 @@ struct Parser {
 	mut func import_decl() -> Decl {
 		let start_tok = self.current()
 		self.consume(kind: .keyword_use)
+		let path_start = self.current().start
 		let (path, local) = self.module_path()
+		// Reference quirk: the path span ends at the START of the token
+		// after the path.
+		let path_end = self.current().start
 		let symbols: ImportedSymbols = .all
 		if self.peek_is(kind: .double_colon) && self.next_kind() == .left_brace {
 			self.consume(kind: .double_colon)
@@ -2820,18 +2926,19 @@ struct Parser {
 			let names: [ImportedSymbol] = []
 			loop self.peek_is(kind: .right_brace) == false {
 				if self.is_failed() { break }
-				let name = self.identifier()
+				let name_tok = self.identifier_token()
+				let name = self.lexeme(token: name_tok)
 				let alias: String? = .none
 				if self.did_match(kind: .keyword_as) {
 					alias = .some(self.identifier())
 				}
-				names.push(ImportedSymbol(name: name, alias: alias))
+				names.push(ImportedSymbol(name: name, name_start: name_tok.start, name_end: name_tok.end, alias: alias))
 				if self.did_match(kind: .comma) == false { break }
 			}
 			self.consume(kind: .right_brace)
 			symbols = .named(names)
 		}
-		Decl(kind: .import_decl(Import(symbols: symbols, path: path, local: local)), is_public: false, start: start_tok.start, end: self.span_end())
+		Decl(kind: .import_decl(Import(symbols: symbols, path: path, path_start: path_start, path_end: path_end, local: local)), is_public: false, start: start_tok.start, end: self.span_end())
 	}
 
 	// The dotted module path and whether its head names a local root
@@ -2858,13 +2965,22 @@ struct Parser {
 			self.consume(kind: .keyword_func)
 			if self.is_failed() { return dummy_decl_kind() }
 		}
-		// The reference recovers a missing name with a placeholder; the
-		// name is not part of the dump contract.
-		let name = "#fn"
+		// An anonymous func gets the reference's synthetic
+		// position-keyed name (the resolver recognizes `#fn_`).
 		self.skip_semicolons_and_newlines()
 		let cur = self.current()
+		let name_start = cur.start
+		let name_end = cur.end
+		let name = ""
 		if cur.kind == .identifier || cur.kind == .keyword_use {
 			name = self.identifier()
+		} else {
+			let buf: [Byte] = []
+			append(buf: buf, text: "#fn_")
+			append_int(buf: buf, value: cur.start)
+			append(buf: buf, text: "_")
+			append_int(buf: buf, value: cur.end)
+			name = String.from_bytes(bytes: buf)
 		}
 		let generics = self.generics_list()
 		if self.is_failed() { return dummy_decl_kind() }
@@ -2892,7 +3008,7 @@ struct Parser {
 		if self.is_failed() { return dummy_decl_kind() }
 		let b_start = body.start
 		let b_end = body.end
-		return .func_decl(Func(name: name, effects: effects, generics: generics, captures: captures, where_clause: wc, params: params, body: body, ret: ret, start: b_start, end: b_end, meta_start: start_tok.start, meta_end: self.span_end()))
+		return .func_decl(Func(name: name, name_start: name_start, name_end: name_end, effects: effects, generics: generics, captures: captures, where_clause: wc, params: params, body: body, ret: ret, start: b_start, end: b_end, meta_start: start_tok.start, meta_end: self.span_end()))
 	}
 
 	mut func func_decl_parse(context: BlockContext) -> Decl {
@@ -2988,14 +3104,16 @@ struct Parser {
 		let no_wc: WhereClause? = .none
 		let no_ret: TypeAnnotation? = .none
 		let no_names: [String] = []
-		let sig = FuncSignature(name: "init", params: params, effects: EffectSet(names: no_names, open: true), generics: no_generics, where_clause: no_wc, ret: no_ret, start: start_tok.start, end: self.span_end())
+		let no_spans: [Int] = []
+		let sig = FuncSignature(name: "init", params: params, effects: EffectSet(names: no_names, name_starts: no_spans, name_ends: no_spans, open: true), generics: no_generics, where_clause: no_wc, ret: no_ret, start: start_tok.start, end: self.span_end())
 		Decl(kind: .init_requirement(sig), is_public: false, start: start_tok.start, end: self.span_end())
 	}
 
 	mut func property_decl(is_static: Bool) -> Decl {
 		let start_tok = self.current()
 		self.consume(kind: .keyword_let)
-		let name = self.identifier()
+		let name_tok = self.identifier_token()
+		let name = self.lexeme(token: name_tok)
 		if self.is_failed() { return dummy_decl() }
 		let annotation: TypeAnnotation? = .none
 		if self.did_match(kind: .colon) {
@@ -3007,7 +3125,7 @@ struct Parser {
 			default_value = .some(self.require_expr(e: self.expr()))
 			if self.is_failed() { return dummy_decl() }
 		}
-		Decl(kind: .property(name, is_static, annotation, default_value), is_public: false, start: start_tok.start, end: self.span_end())
+		Decl(kind: .property(name, name_tok.start, name_tok.end, is_static, annotation, default_value), is_public: false, start: start_tok.start, end: self.span_end())
 	}
 
 	mut func variant_decl(expect_case: Bool) -> Decl {
@@ -3015,7 +3133,8 @@ struct Parser {
 		if expect_case {
 			self.consume(kind: .keyword_case)
 		}
-		let name = self.identifier()
+		let name_tok = self.identifier_token()
+		let name = self.lexeme(token: name_tok)
 		if self.is_failed() { return dummy_decl() }
 		let generics = self.generics_list()
 		if self.is_failed() { return dummy_decl() }
@@ -3042,13 +3161,14 @@ struct Parser {
 			result = .some(self.type_annotation())
 			if self.is_failed() { return dummy_decl() }
 		}
-		Decl(kind: .enum_variant(name, generics, payloads, labels, result), is_public: false, start: start_tok.start, end: self.span_end())
+		Decl(kind: .enum_variant(name, name_tok.start, name_tok.end, generics, payloads, labels, result), is_public: false, start: start_tok.start, end: self.span_end())
 	}
 
 	mut func nominal_decl(entry: TokenKind, context: BlockContext) -> Decl {
 		let start_tok = self.current()
 		self.consume(kind: entry)
-		let name = self.identifier()
+		let name_tok = self.identifier_token()
+		let name = self.lexeme(token: name_tok)
 		if self.is_failed() { return dummy_decl() }
 		let generics = self.generics_list()
 		if self.is_failed() { return dummy_decl() }
@@ -3093,12 +3213,12 @@ struct Parser {
 		if self.is_failed() { return dummy_decl() }
 		let d_end = self.span_end()
 		if context == .enum_body {
-			return Decl(kind: .enum_decl(name, generics, wc, body, is_linear), is_public: false, start: start_tok.start, end: d_end)
+			return Decl(kind: .enum_decl(name, name_tok.start, name_tok.end, generics, wc, body, is_linear), is_public: false, start: start_tok.start, end: d_end)
 		}
 		if context == .struct_body {
-			return Decl(kind: .struct_decl(name, generics, wc, body, is_linear, is_heap), is_public: false, start: start_tok.start, end: d_end)
+			return Decl(kind: .struct_decl(name, name_tok.start, name_tok.end, generics, wc, body, is_linear, is_heap), is_public: false, start: start_tok.start, end: d_end)
 		}
-		Decl(kind: .protocol_decl(name, generics, wc, body, conformances), is_public: false, start: start_tok.start, end: d_end)
+		Decl(kind: .protocol_decl(name, name_tok.start, name_tok.end, generics, wc, body, conformances), is_public: false, start: start_tok.start, end: d_end)
 	}
 
 	mut func extend_parse() -> Decl {
@@ -3124,35 +3244,37 @@ struct Parser {
 	// sugar and non-nominal forms fail at the offending token.
 	mut func type_application() -> TypeApplication {
 		let start_tok = self.current()
-		let name = self.identifier()
+		let name_tok = self.identifier_token()
+		let name = self.lexeme(token: name_tok)
 		if self.is_failed() {
 			let no_args: [GenericArg] = []
-			return TypeApplication(name: "", args: no_args, start: 0, end: 0)
+			return TypeApplication(name: "", name_start: -1, name_end: -1, args: no_args, start: 0, end: 0)
 		}
 		loop self.did_match(kind: .double_colon) {
 			name = name + "::" + self.identifier()
 			if self.is_failed() {
 				let no_args: [GenericArg] = []
-				return TypeApplication(name: "", args: no_args, start: 0, end: 0)
+				return TypeApplication(name: "", name_start: -1, name_end: -1, args: no_args, start: 0, end: 0)
 			}
 		}
 		let args: [GenericArg] = []
 		if self.did_match(kind: .less) {
 			args = self.generic_args_list()
 		}
-		TypeApplication(name: name, args: args, start: start_tok.start, end: self.span_end())
+		TypeApplication(name: name, name_start: name_tok.start, name_end: name_tok.end, args: args, start: start_tok.start, end: self.span_end())
 	}
 
 	mut func typealias_parse() -> Decl {
 		let start_tok = self.current()
 		self.consume(kind: .keyword_typealias)
-		let name = self.identifier()
+		let name_tok = self.identifier_token()
+		let name = self.lexeme(token: name_tok)
 		if self.is_failed() { return dummy_decl() }
 		self.consume(kind: .equals)
 		if self.is_failed() { return dummy_decl() }
 		let rhs = self.type_annotation()
 		if self.is_failed() { return dummy_decl() }
-		Decl(kind: .typealias_decl(name, rhs), is_public: false, start: start_tok.start, end: self.span_end())
+		Decl(kind: .typealias_decl(name, name_tok.start, name_tok.end, rhs), is_public: false, start: start_tok.start, end: self.span_end())
 	}
 
 	mut func effect_decl_parse() -> Decl {
@@ -3178,7 +3300,7 @@ struct Parser {
 		if self.is_failed() { return dummy_decl() }
 		let wc = self.where_clause()
 		if self.is_failed() { return dummy_decl() }
-		Decl(kind: .effect_decl(name, generics, wc, params, ret), is_public: false, start: start_tok.start, end: self.span_end())
+		Decl(kind: .effect_decl(name, name_tok.start, name_tok.end, generics, wc, params, ret), is_public: false, start: start_tok.start, end: self.span_end())
 	}
 
 	mut func associated_parse() -> Decl {
@@ -3195,11 +3317,12 @@ struct Parser {
 	mut func macro_decl_parse() -> Decl {
 		let start_tok = self.current()
 		self.consume(kind: .keyword_macro)
-		let name = self.identifier()
+		let name_tok = self.identifier_token()
+		let name = self.lexeme(token: name_tok)
 		if self.is_failed() { return dummy_decl() }
 		self.consume(kind: .left_paren)
 		if self.is_failed() { return dummy_decl() }
-		let params: [String] = []
+		let params: [MacroParam] = []
 		loop self.did_match(kind: .right_paren) == false {
 			if self.is_failed() { return dummy_decl() }
 			let param_tok = self.current()
@@ -3213,7 +3336,8 @@ struct Parser {
 				return dummy_decl()
 			}
 			self.advance()
-			params.push(param_name)
+			// The span includes the `$` sigil the token extent excludes.
+			params.push(MacroParam(name: param_name, start: param_tok.start - 1, end: param_tok.end))
 			if self.did_match(kind: .right_paren) { break }
 			self.consume(kind: .comma)
 			if self.is_failed() { return dummy_decl() }
@@ -3222,7 +3346,7 @@ struct Parser {
 		if self.is_failed() { return dummy_decl() }
 		let template = self.require_expr(e: self.expr())
 		if self.is_failed() { return dummy_decl() }
-		Decl(kind: .macro_decl(name, params, template), is_public: false, start: start_tok.start, end: self.span_end())
+		Decl(kind: .macro_decl(name, name_tok.start, name_tok.end, params, template), is_public: false, start: start_tok.start, end: self.span_end())
 	}
 
 	// A nominal declaration's member list (the reference `body`): decls
@@ -3288,7 +3412,8 @@ struct Parser {
 		// the colon introduces its declared value type, not a
 		// conformance list. Static defaults (`= expr`) stay unported.
 		if self.did_match(kind: .keyword_static) {
-			let name = self.identifier()
+			let name_tok = self.identifier_token()
+			let name = self.lexeme(token: name_tok)
 			if self.is_failed() { return dummy_generic_decl() }
 			if starts_uppercase(name: name) == false {
 				self.fail(code: "parser.lowercase-static-parameter", message: "Static generic parameter `" + name + "` must begin with an uppercase letter")
@@ -3305,9 +3430,10 @@ struct Parser {
 			}
 			let no_generics: [GenericDecl] = []
 			let no_conformances: [TypeAnnotation] = []
-			return GenericDecl(name: name, generics: no_generics, conformances: no_conformances, default_value: default_value, static_ty: .some(static_ty), start: start_tok.start, end: self.span_end())
+			return GenericDecl(name: name, name_start: name_tok.start, name_end: name_tok.end, generics: no_generics, conformances: no_conformances, default_value: default_value, static_ty: .some(static_ty), start: start_tok.start, end: self.span_end())
 		}
-		let name = self.identifier()
+		let name_tok = self.identifier_token()
+		let name = self.lexeme(token: name_tok)
 		if self.is_failed() { return dummy_generic_decl() }
 		let generics = self.generics_list()
 		if self.is_failed() { return dummy_generic_decl() }
@@ -3322,7 +3448,7 @@ struct Parser {
 			if self.is_failed() { return dummy_generic_decl() }
 		}
 		let no_static_ty: TypeAnnotation? = .none
-		GenericDecl(name: name, generics: generics, conformances: conformances, default_value: default_value, static_ty: no_static_ty, start: start_tok.start, end: self.span_end())
+		GenericDecl(name: name, name_start: name_tok.start, name_end: name_tok.end, generics: generics, conformances: conformances, default_value: default_value, static_ty: no_static_ty, start: start_tok.start, end: self.span_end())
 	}
 
 	mut func conformances_list() -> [TypeAnnotation] {
@@ -3403,12 +3529,17 @@ struct Parser {
 	mut func parameters() -> [Parameter] {
 		let params: [Parameter] = []
 		loop true {
-			let mode = self.param_mode()
+			let (mode, mode_start, mode_end) = self.param_mode()
 			let label: ParamLabel? = .none
+			let label_start = -1
+			let label_end = -1
 			let name = ""
 			let name_start = 0
 			let name_end = 0
 			if self.peek_is(kind: .underscore) && self.next_kind() == .identifier {
+				let underscore_tok = self.current()
+				label_start = underscore_tok.start
+				label_end = underscore_tok.end
 				self.advance()
 				self.skip_semicolons_and_newlines()
 				let name_tok = self.current()
@@ -3440,6 +3571,8 @@ struct Parser {
 					name_start = name_tok.start
 					name_end = name_tok.end
 					label = .some(.named(first))
+					label_start = first_tok.start
+					label_end = first_tok.end
 				} else {
 					name = first
 					name_start = first_tok.start
@@ -3452,7 +3585,7 @@ struct Parser {
 				annotation = .some(self.type_annotation())
 				if self.is_failed() { return params }
 			}
-			params.push(Parameter(label: label, name: name, name_start: name_start, name_end: name_end, mode: mode, annotation: annotation, start: param_start, end: self.span_end()))
+			params.push(Parameter(label: label, label_start: label_start, label_end: label_end, name: name, name_start: name_start, name_end: name_end, mode: mode, mode_start: mode_start, mode_end: mode_end, annotation: annotation, start: param_start, end: self.span_end()))
 			if self.did_match(kind: .comma) { } else { break }
 		}
 		params
@@ -3539,7 +3672,8 @@ struct Parser {
 			self.consume(kind: .equals)
 			if self.is_failed() { return dummy_expr() }
 		}
-		let instr = self.identifier()
+		let instr_tok = self.identifier_token()
+		let instr = self.lexeme(token: instr_tok)
 		if self.is_failed() { return dummy_expr() }
 		let has_dest = false
 		if let .some(_) = dest { has_dest = true }
@@ -3597,7 +3731,7 @@ struct Parser {
 		let end = self.span_end()
 		self.consume(kind: .right_brace)
 		if self.is_failed() { return dummy_expr() }
-		let instruction = IRInstruction(name: instr, dest: dest, ty: ty, values: values, op: op)
+		let instruction = IRInstruction(name: instr, name_start: instr_tok.start, name_end: instr_tok.end, dest: dest, ty: ty, values: values, op: op)
 		Expr(kind: .inline_ir(binds, instruction), start: start, end: end)
 	}
 
@@ -3776,8 +3910,8 @@ struct Parser {
 		match kind {
 			.import_decl(_) -> self.reject_pub(what: "an import"),
 			.extend_decl(_, _, _, _, _) -> self.reject_pub(what: "an extension"),
-			.enum_variant(_, _, _, _, _) -> self.reject_pub(what: "an enum case"),
-			.macro_decl(_, _, _) -> self.fail(code: "parser.macro-export-unsupported", message: "Macros cannot be exported; remove `pub`"),
+			.enum_variant(_, _, _, _, _, _, _) -> self.reject_pub(what: "an enum case"),
+			.macro_decl(_, _, _, _, _) -> self.fail(code: "parser.macro-export-unsupported", message: "Macros cannot be exported; remove `pub`"),
 			.associated_decl(_, _) -> self.reject_pub(what: "a protocol requirement"),
 			.method_requirement(_, _) -> self.reject_pub(what: "a protocol requirement"),
 			.init_requirement(_) -> self.reject_pub(what: "a protocol requirement"),
@@ -3787,15 +3921,15 @@ struct Parser {
 					return ()
 				}
 				match kind {
-					.struct_decl(_, _, _, _, _, _) -> self.check_pub_context_nominal(context: context),
-					.enum_decl(_, _, _, _, _) -> self.check_pub_context_nominal(context: context),
-					.protocol_decl(_, _, _, _, _) -> self.check_pub_context_nominal(context: context),
-					.typealias_decl(_, _) -> self.check_pub_context_nominal(context: context),
-					.effect_decl(_, _, _, _, _) -> self.check_pub_context_nominal(context: context),
+					.struct_decl(_, _, _, _, _, _, _, _) -> self.check_pub_context_nominal(context: context),
+					.enum_decl(_, _, _, _, _, _, _) -> self.check_pub_context_nominal(context: context),
+					.protocol_decl(_, _, _, _, _, _, _) -> self.check_pub_context_nominal(context: context),
+					.typealias_decl(_, _, _, _) -> self.check_pub_context_nominal(context: context),
+					.effect_decl(_, _, _, _, _, _, _) -> self.check_pub_context_nominal(context: context),
 					.func_decl(_) -> self.check_pub_context_top(context: context),
 					.func_signature(_) -> self.check_pub_context_top(context: context),
 					.let_decl(_, _, _) -> self.check_pub_context_top(context: context),
-					.property(_, _, _, _) -> self.check_pub_context_member(context: context),
+					.property(_, _, _, _, _, _) -> self.check_pub_context_member(context: context),
 					.method(_, _, _) -> self.check_pub_context_member(context: context),
 					.init_decl(_, _) -> self.check_pub_context_member(context: context),
 					_ -> {}
@@ -3837,7 +3971,7 @@ struct Parser {
 		}
 		let body = self.block(context: .plain, consumes_left_brace: true)
 		if self.is_failed() { return dummy_stmt() }
-		Stmt(kind: .handle_stmt(self.lexeme(token: name_tok), body), start: start_tok.start, end: self.span_end())
+		Stmt(kind: .handle_stmt(self.lexeme(token: name_tok), name_tok.start, name_tok.end, body), start: start_tok.start, end: self.span_end())
 	}
 
 	mut func stmt() -> Stmt {
@@ -3963,7 +4097,17 @@ struct Parser {
 				failure = .some(Fail(code: "parser.lexer", message: message))
 			}
 		}
-		ParseOutcome(items: self.items, failure: failure, diags: self.diags, comments: comments)
+		let (lines, cols) = token_positions(source: self.source, tokens: self.tokens)
+		let ctx = MetaCtx(tokens: self.tokens, lines: lines, cols: cols, log: self.id_log, probe: self.id_log_probe)
+		let metas: [NodeMeta] = []
+		let claimed: [Bool] = []
+		let i = 0
+		loop i < ctx.log.count {
+			claimed.push(false)
+			i = i + 1
+		}
+		meta_items(ctx: ctx, metas: metas, claimed: claimed, live: true, items: self.items)
+		ParseOutcome(items: self.items, failure: failure, diags: self.diags, comments: comments, metas: metas)
 	}
 }
 
@@ -3975,7 +4119,9 @@ func make_parser(source: String, tokens: [Token], lex_error: String?) -> Parser 
 	let no_items: [Item] = []
 	let contexts: [ParseContext] = [.top_level]
 	let assign_slot: [Stmt] = []
-	Parser(tokens: tokens, token_count: token_count, source: source, source_len: source_len, pos: 0, split_greater: false, failed: no_fail, diags: no_diags, items: no_items, contexts: contexts, assign_slot: assign_slot, angle_adjacency: false, lex_error_message: lex_error)
+	let no_log: [Token] = []
+	let no_probe: [Bool] = []
+	Parser(tokens: tokens, token_count: token_count, source: source, source_len: source_len, pos: 0, split_greater: false, failed: no_fail, diags: no_diags, items: no_items, contexts: contexts, assign_slot: assign_slot, angle_adjacency: false, lex_error_message: lex_error, id_log: no_log, id_log_probe: no_probe)
 }
 
 // A scan failure pre-renders its message; the token list is truncated
@@ -4032,4 +4178,811 @@ pub func parse_type_source(source: String) -> ParseOutcome {
 	let parser = scan_parser(source: source, result: result)
 	parser.parse_type_root()
 	parser.finish(comments: comments)
+}
+
+// MARK: Node meta annotation (ADR 0043 option A)
+//
+// The reference records per-node meta through a location stack; here
+// meta is DERIVED after the parse. Spans are byte-identical to the
+// reference by construction, and the reference derives spans FROM
+// meta (span.start is meta.start.start, span.end is meta.end.end), so
+// a node's first and last tokens recover from its span and the token
+// list. Line/col come from a position pass over the source (the
+// reference stamps them at the lexer's make(): state at the token's
+// END, 0-based line, character-counted column reset on newline).
+// Emission order is the canonical pre-order the bridge adapter walks:
+// parent first, then children in Ast payload order. Synthesized nodes
+// (span start < 0) emit the no-meta marker.
+//
+// Identifiers: the parser logs identifier consumption at the
+// reference's three ports (id_log); each node claims the unclaimed
+// logged tokens inside its extent AFTER its children claimed theirs —
+// equivalent to the reference's top-of-stack attribution. Statement
+// wrappers and the inline-IR chain share one reference meta entry, so
+// their slots copy the payload's list.
+
+// The token/position context the walk reads.
+struct MetaCtx {
+	let tokens: [Token]
+	let lines: [Int]
+	let cols: [Int]
+	// The parser's identifier log, in consumption (= position) order.
+	let log: [Token]
+	// Parallel probe flags: entries only a block may claim.
+	let probe: [Bool]
+}
+
+func no_meta_token() -> MetaToken {
+	MetaToken(kind: .eof, start: -1, end: -1, line: 0, col: 0)
+}
+
+func no_meta() -> NodeMeta {
+	let no_ids: [MetaToken] = []
+	NodeMeta(start: no_meta_token(), end: no_meta_token(), identifiers: no_ids)
+}
+
+// line/col at each token's END: the count of newlines before the end
+// offset, and the count of CHARACTERS since the last newline (UTF-8
+// continuation bytes do not count).
+func token_positions(source: String, tokens: &[Token]) -> ([Int], [Int]) {
+	let lines: [Int] = []
+	let cols: [Int] = []
+	let view = source.utf8()
+	let line = 0
+	let col = 0
+	let offset = 0
+	for tok in tokens {
+		let end = tok.end
+		loop offset < end {
+			let b = view.at(index: offset)._toInt()
+			if b == 10 {
+				line = line + 1
+				col = 0
+			} else {
+				if b >= 128 && b < 192 { } else { col = col + 1 }
+			}
+			offset = offset + 1
+		}
+		lines.push(line)
+		cols.push(col)
+	}
+	(lines, cols)
+}
+
+func token_index_starting(ctx: &MetaCtx, start: Int) -> Int {
+	let lo = 0
+	let hi = ctx.tokens.count - 1
+	loop lo <= hi {
+		let mid = (lo + hi) / 2
+		let s = ctx.tokens[mid].start
+		if s == start { return mid }
+		if s < start { lo = mid + 1 } else { hi = mid - 1 }
+	}
+	0 - 1
+}
+
+// The FIRST token ending at `end` (a zero-width EOF shares its end
+// with the last real token; the reference records the real one).
+func token_index_ending(ctx: &MetaCtx, end: Int) -> Int {
+	let lo = 0
+	let hi = ctx.tokens.count - 1
+	let found = 0 - 1
+	loop lo <= hi {
+		let mid = (lo + hi) / 2
+		let e = ctx.tokens[mid].end
+		if e >= end {
+			if e == end { found = mid }
+			hi = mid - 1
+		} else {
+			lo = mid + 1
+		}
+	}
+	found
+}
+
+func meta_token_at(ctx: &MetaCtx, index: Int) -> MetaToken {
+	let tok = ctx.tokens[index]
+	MetaToken(kind: tok.kind, start: tok.start, end: tok.end, line: ctx.lines[index], col: ctx.cols[index])
+}
+
+// A node's meta from its span extents, returning the emitted slot
+// index (-1 = marker, nothing to claim). A `>>` closing nested
+// generics is split by the parser without splitting the token list: a
+// node ending at the full `>>` end was closed by the synthesized
+// second `>`, which the reference records as a Greater token over the
+// second half (col bumped past the first).
+func emit_meta(ctx: &MetaCtx, mut metas: [NodeMeta], live: Bool, start: Int, end: Int) -> Int {
+	if live == false || start < 0 {
+		metas.push(no_meta())
+		return 0 - 1
+	}
+	let si = token_index_starting(ctx: ctx, start: start)
+	let ei = token_index_ending(ctx: ctx, end: end)
+	if si < 0 || ei < 0 {
+		metas.push(no_meta())
+		return 0 - 1
+	}
+	let start_tok = meta_token_at(ctx: ctx, index: si)
+	let end_tok = meta_token_at(ctx: ctx, index: ei)
+	if end_tok.kind == .greater_greater {
+		end_tok = MetaToken(kind: .greater, start: end_tok.start + 1, end: end_tok.end, line: end_tok.line, col: end_tok.col + 1)
+	}
+	let no_ids: [MetaToken] = []
+	metas.push(NodeMeta(start: start_tok, end: end_tok, identifiers: no_ids))
+	metas.count - 1
+}
+
+// Claim the unclaimed logged identifiers inside [start, end] for the
+// node at `slot`. Children run first, so what remains is exactly what
+// the reference pushed to this node's own frame.
+func claim_slot(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], slot: Int, start: Int, end: Int) -> Void {
+	claim_slot_full(ctx: ctx, metas: metas, claimed: claimed, slot: slot, start: start, end: end, include_probe: false)
+}
+
+func claim_slot_full(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], slot: Int, start: Int, end: Int, include_probe: Bool) -> Void {
+	// slot -1 = nothing to fill; slot -2 = discard (mark claimed only).
+	if slot == 0 - 1 || start < 0 { return () }
+	let lo = 0
+	let hi = ctx.log.count - 1
+	let first = ctx.log.count
+	loop lo <= hi {
+		let mid = (lo + hi) / 2
+		if ctx.log[mid].start >= start {
+			first = mid
+			hi = mid - 1
+		} else {
+			lo = mid + 1
+		}
+	}
+	// A rollback probe re-consumes: the log then carries the same
+	// token twice, and the reference attributes the earlier (probe)
+	// entry to the enclosing frame. Take at most one entry per token,
+	// preferring the LAST, by scanning backward; earlier duplicates
+	// stay for the ancestors.
+	let last = first
+	loop last < ctx.log.count {
+		if ctx.log[last].start >= end { break }
+		last = last + 1
+	}
+	let reversed: [MetaToken] = []
+	let seen_starts: [Int] = []
+	let i = last - 1
+	loop i >= first {
+		let tok = ctx.log[i]
+		if claimed[i] == false && tok.end <= end && (include_probe || ctx.probe[i] == false) {
+			let dup = false
+			for start_taken in seen_starts {
+				if start_taken == tok.start { dup = true }
+			}
+			if dup == false {
+				claimed[i] = true
+				seen_starts.push(tok.start)
+				let ti = token_index_starting(ctx: ctx, start: tok.start)
+				if ti >= 0 {
+					reversed.push(meta_token_at(ctx: ctx, index: ti))
+				}
+			}
+		}
+		i = i - 1
+	}
+	if slot < 0 {
+		return ()
+	}
+	if reversed.count > 0 {
+		let taken: [MetaToken] = []
+		let j = reversed.count - 1
+		loop j >= 0 {
+			let t = reversed[j]
+			taken.push(MetaToken(kind: t.kind, start: t.start, end: t.end, line: t.line, col: t.col))
+			j = j - 1
+		}
+		let entry = metas[slot]
+		metas[slot] = NodeMeta(start: entry.start, end: entry.end, identifiers: taken)
+	}
+}
+
+// Wrapper slots that share the reference's single meta entry copy the
+// payload's identifier list.
+func copy_identifiers(mut metas: [NodeMeta], to_slot: Int, from_slot: Int) -> Void {
+	if to_slot < 0 || from_slot < 0 { return () }
+	let source = metas[from_slot]
+	let target = metas[to_slot]
+	metas[to_slot] = NodeMeta(start: target.start, end: target.end, identifiers: source.identifiers)
+}
+
+func meta_items(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: Bool, items: &[Item]) -> Void {
+	for item in items {
+		match item {
+			.decl_item(d) -> meta_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, decl: d),
+			.stmt_item(s) -> meta_stmt(ctx: ctx, metas: metas, claimed: claimed, live: live, stmt: s),
+			.expr_item(e) -> meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e),
+			.pattern_item(p) -> meta_pattern(ctx: ctx, metas: metas, claimed: claimed, live: live, pattern: p),
+			.type_item(t) -> meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: t)
+		}
+	}
+}
+
+func meta_decl(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: Bool, decl: &Decl) -> Void {
+	let slot = emit_meta(ctx: ctx, metas: metas, live: live, start: decl.start, end: decl.end)
+	// Function-shaped decls share the payload's reference meta entry.
+	let copy_from = 0 - 1
+	match decl.kind {
+		.let_decl(pat, annotation, value) -> {
+			meta_pattern(ctx: ctx, metas: metas, claimed: claimed, live: live, pattern: pat)
+			if let .some(target) = annotation {
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: target)
+			}
+			if let .some(rhs) = value {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: rhs)
+			}
+		},
+		.import_decl(_) -> { },
+		.func_decl(f) -> meta_func(ctx: ctx, metas: metas, claimed: claimed, live: live, f: f),
+		.func_signature(sig) -> meta_func_signature(ctx: ctx, metas: metas, claimed: claimed, live: live, sig: sig),
+		.struct_decl(_, _, _, generics, wc, body, _, _) -> {
+			for generic in generics {
+				meta_generic_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, generic: generic)
+			}
+			meta_optional_where(ctx: ctx, metas: metas, claimed: claimed, live: live, wc: wc)
+			meta_body(ctx: ctx, metas: metas, claimed: claimed, live: live, body: body)
+		},
+		.enum_decl(_, _, _, generics, wc, body, _) -> {
+			for generic in generics {
+				meta_generic_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, generic: generic)
+			}
+			meta_optional_where(ctx: ctx, metas: metas, claimed: claimed, live: live, wc: wc)
+			meta_body(ctx: ctx, metas: metas, claimed: claimed, live: live, body: body)
+		},
+		.protocol_decl(_, _, _, generics, wc, body, conformances) -> {
+			for generic in generics {
+				meta_generic_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, generic: generic)
+			}
+			meta_optional_where(ctx: ctx, metas: metas, claimed: claimed, live: live, wc: wc)
+			meta_body(ctx: ctx, metas: metas, claimed: claimed, live: live, body: body)
+			for conformance in conformances {
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: conformance)
+			}
+		},
+		.enum_variant(_, _, _, generics, payloads, _, result) -> {
+			for generic in generics {
+				meta_generic_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, generic: generic)
+			}
+			for payload in payloads {
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: payload)
+			}
+			if let .some(target) = result {
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: target)
+			}
+		},
+		.extend_decl(binders, head, conformances, wc, body) -> {
+			for binder in binders {
+				meta_generic_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, generic: binder)
+			}
+			let head_slot = emit_meta(ctx: ctx, metas: metas, live: live, start: head.start, end: head.end)
+			for arg in head.args {
+				meta_generic_arg(ctx: ctx, metas: metas, claimed: claimed, live: live, arg: arg)
+			}
+			claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: head_slot, start: head.start, end: head.end)
+			for conformance in conformances {
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: conformance)
+			}
+			meta_optional_where(ctx: ctx, metas: metas, claimed: claimed, live: live, wc: wc)
+			meta_body(ctx: ctx, metas: metas, claimed: claimed, live: live, body: body)
+		},
+		.init_decl(params, body) -> {
+			for param in params {
+				meta_parameter(ctx: ctx, metas: metas, claimed: claimed, live: live, param: param)
+			}
+			meta_block(ctx: ctx, metas: metas, claimed: claimed, live: live, block: body)
+		},
+		.property(_, _, _, _, annotation, default_value) -> {
+			if let .some(target) = annotation {
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: target)
+			}
+			if let .some(value) = default_value {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: value)
+			}
+		},
+		.method(f, _, _) -> {
+			copy_from = metas.count
+			meta_func(ctx: ctx, metas: metas, claimed: claimed, live: live, f: f)
+		},
+		.method_requirement(sig, _) -> meta_func_signature(ctx: ctx, metas: metas, claimed: claimed, live: live, sig: sig),
+		.init_requirement(sig) -> {
+			copy_from = metas.count
+			meta_func_signature(ctx: ctx, metas: metas, claimed: claimed, live: live, sig: sig)
+		},
+		.typealias_decl(_, _, _, rhs) -> meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: rhs),
+		.effect_decl(_, _, _, generics, wc, params, ret) -> {
+			for generic in generics {
+				meta_generic_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, generic: generic)
+			}
+			meta_optional_where(ctx: ctx, metas: metas, claimed: claimed, live: live, wc: wc)
+			for param in params {
+				meta_parameter(ctx: ctx, metas: metas, claimed: claimed, live: live, param: param)
+			}
+			meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: ret)
+		},
+		.associated_decl(generic, wc) -> {
+			meta_generic_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, generic: generic)
+			meta_optional_where(ctx: ctx, metas: metas, claimed: claimed, live: live, wc: wc)
+		},
+		.macro_decl(_, _, _, _, template) -> meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: template)
+	}
+	claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: slot, start: decl.start, end: decl.end)
+	if copy_from >= 0 {
+		copy_identifiers(metas: metas, to_slot: slot, from_slot: copy_from)
+	}
+}
+
+// The Func node's meta covers the whole declaration (its span is the
+// body's; the reference records the declaration extents).
+func meta_func(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: Bool, f: &Func) -> Void {
+	let slot = emit_meta(ctx: ctx, metas: metas, live: live, start: f.meta_start, end: f.meta_end)
+	for generic in f.generics {
+		meta_generic_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, generic: generic)
+	}
+	meta_optional_where(ctx: ctx, metas: metas, claimed: claimed, live: live, wc: f.where_clause)
+	for param in f.params {
+		meta_parameter(ctx: ctx, metas: metas, claimed: claimed, live: live, param: param)
+	}
+	meta_block(ctx: ctx, metas: metas, claimed: claimed, live: live, block: f.body)
+	if let .some(ret) = f.ret {
+		meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: ret)
+	}
+	claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: slot, start: f.meta_start, end: f.meta_end)
+}
+
+func meta_func_signature(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: Bool, sig: &FuncSignature) -> Void {
+	let slot = emit_meta(ctx: ctx, metas: metas, live: live, start: sig.start, end: sig.end)
+	for param in sig.params {
+		meta_parameter(ctx: ctx, metas: metas, claimed: claimed, live: live, param: param)
+	}
+	for generic in sig.generics {
+		meta_generic_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, generic: generic)
+	}
+	meta_optional_where(ctx: ctx, metas: metas, claimed: claimed, live: live, wc: sig.where_clause)
+	if let .some(ret) = sig.ret {
+		meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: ret)
+	}
+	claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: slot, start: sig.start, end: sig.end)
+}
+
+func meta_body(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: Bool, body: &Body) -> Void {
+	let slot = emit_meta(ctx: ctx, metas: metas, live: live, start: body.start, end: body.end)
+	for decl in body.decls {
+		meta_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, decl: decl)
+	}
+	claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: slot, start: body.start, end: body.end)
+}
+
+func meta_block(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: Bool, block: &Block) -> Void {
+	// A desugaring copy carries source spans but freshened ids in the
+	// reference: no node below it has meta.
+	let live = live && block.copied == false
+	let slot = emit_meta(ctx: ctx, metas: metas, live: live, start: block.start, end: block.end)
+	for param in block.params {
+		meta_parameter(ctx: ctx, metas: metas, claimed: claimed, live: live, param: param)
+	}
+	meta_items(ctx: ctx, metas: metas, claimed: claimed, live: live, items: block.body)
+	claim_slot_full(ctx: ctx, metas: metas, claimed: claimed, slot: slot, start: block.start, end: block.end, include_probe: true)
+}
+
+func meta_parameter(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: Bool, param: &Parameter) -> Void {
+	let slot = emit_meta(ctx: ctx, metas: metas, live: live, start: param.start, end: param.end)
+	if let .some(target) = param.annotation {
+		meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: target)
+	}
+	claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: slot, start: param.start, end: param.end)
+}
+
+func meta_optional_where(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: Bool, wc: &WhereClause?) -> Void {
+	if let .some(clause) = wc {
+		let clause_slot = emit_meta(ctx: ctx, metas: metas, live: live, start: clause.start, end: clause.end)
+		for predicate in clause.predicates {
+			let slot = emit_meta(ctx: ctx, metas: metas, live: live, start: predicate.start, end: predicate.end)
+			match predicate.kind {
+				.type_eq(a, b) -> {
+					meta_generic_arg(ctx: ctx, metas: metas, claimed: claimed, live: live, arg: a)
+					meta_generic_arg(ctx: ctx, metas: metas, claimed: claimed, live: live, arg: b)
+				},
+				.static_cmp(_, a, b) -> {
+					meta_generic_arg(ctx: ctx, metas: metas, claimed: claimed, live: live, arg: a)
+					meta_generic_arg(ctx: ctx, metas: metas, claimed: claimed, live: live, arg: b)
+				},
+				.conforms(ty, protocols) -> {
+					meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: ty)
+					for proto in protocols {
+						meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: proto)
+					}
+				}
+			}
+			claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: slot, start: predicate.start, end: predicate.end)
+		}
+		claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: clause_slot, start: clause.start, end: clause.end)
+	}
+}
+
+func meta_generic_decl(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: Bool, generic: &GenericDecl) -> Void {
+	let slot = emit_meta(ctx: ctx, metas: metas, live: live, start: generic.start, end: generic.end)
+	for nested in generic.generics {
+		meta_generic_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, generic: nested)
+	}
+	for conformance in generic.conformances {
+		meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: conformance)
+	}
+	if let .some(value) = generic.default_value {
+		meta_generic_arg(ctx: ctx, metas: metas, claimed: claimed, live: live, arg: value)
+	}
+	if let .some(ty) = generic.static_ty {
+		meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: ty)
+	}
+	claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: slot, start: generic.start, end: generic.end)
+}
+
+func meta_generic_arg(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: Bool, arg: &GenericArg) -> Void {
+	match arg {
+		.type_arg(t) -> meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: t),
+		.static_arg(s) -> meta_static_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: s)
+	}
+}
+
+func meta_static_expr(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: Bool, expr: &StaticExpr) -> Void {
+	let slot = emit_meta(ctx: ctx, metas: metas, live: live, start: expr.start, end: expr.end)
+	match expr.kind {
+		.static_path(t) -> meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: t),
+		.static_group(inner) -> {
+			for e in inner {
+				meta_static_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		.static_op(_, operands) -> {
+			for e in operands {
+				meta_static_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		_ -> { }
+	}
+	claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: slot, start: expr.start, end: expr.end)
+}
+
+func meta_type(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: Bool, annotation: &TypeAnnotation) -> Void {
+	// A borrow wrapper sharing its inner type's exact span is the
+	// synthesized borrow-by-default wrapper (a written `&T` starts at
+	// the amp): the reference builds it without meta.
+	let synthesized_wrapper = false
+	if let .borrow(_, inner) = annotation.kind {
+		for t in inner {
+			if t.start == annotation.start && t.end == annotation.end {
+				synthesized_wrapper = true
+			}
+		}
+	}
+	let slot = 0 - 1
+	if synthesized_wrapper {
+		metas.push(no_meta())
+	} else {
+		slot = emit_meta(ctx: ctx, metas: metas, live: live, start: annotation.start, end: annotation.end)
+	}
+	match annotation.kind {
+		.borrow(_, inner) -> {
+			for t in inner {
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: t)
+			}
+		},
+		.unique(inner) -> {
+			for t in inner {
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: t)
+			}
+		},
+		.func_type(params, _, ret) -> {
+			for t in params {
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: t)
+			}
+			for t in ret {
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: t)
+			}
+		},
+		.nominal_path(base, _, _, _, member_generics) -> {
+			for t in base {
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: t)
+			}
+			for arg in member_generics {
+				meta_generic_arg(ctx: ctx, metas: metas, claimed: claimed, live: live, arg: arg)
+			}
+		},
+		.nominal(_, _, _, generics) -> {
+			for arg in generics {
+				meta_generic_arg(ctx: ctx, metas: metas, claimed: claimed, live: live, arg: arg)
+			}
+		},
+		.tuple(items) -> {
+			for t in items {
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: t)
+			}
+		},
+		.record_type(fields) -> {
+			for field in fields {
+				let field_slot = emit_meta(ctx: ctx, metas: metas, live: live, start: field.start, end: field.end)
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: field.value)
+				claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: field_slot, start: field.start, end: field.end)
+			}
+		},
+		.any_type(head, bindings) -> {
+			for t in head {
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: t)
+			}
+			for binding in bindings {
+				let binding_slot = emit_meta(ctx: ctx, metas: metas, live: live, start: binding.start, end: binding.end)
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: binding.value)
+				claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: binding_slot, start: binding.start, end: binding.end)
+			}
+		}
+	}
+	claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: slot, start: annotation.start, end: annotation.end)
+}
+
+func meta_stmt(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: Bool, stmt: &Stmt) -> Void {
+	let slot = emit_meta(ctx: ctx, metas: metas, live: live, start: stmt.start, end: stmt.end)
+	// Expression statements share the payload's reference meta entry.
+	let copy_from = 0 - 1
+	match stmt.kind {
+		.expr_stmt(e) -> {
+			copy_from = metas.count
+			meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+		},
+		.if_stmt(cond, then_block, else_block) -> {
+			meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: cond)
+			meta_block(ctx: ctx, metas: metas, claimed: claimed, live: live, block: then_block)
+			if let .some(alt) = else_block {
+				meta_block(ctx: ctx, metas: metas, claimed: claimed, live: live, block: alt)
+			}
+		},
+		.return_stmt(value) -> {
+			if let .some(e) = value {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		.break_stmt -> { },
+		.assignment(parts) -> {
+			for e in parts {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		.loop_stmt(cond, body) -> {
+			if let .some(e) = cond {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+			meta_block(ctx: ctx, metas: metas, claimed: claimed, live: live, block: body)
+		},
+		.for_stmt(iterable, pat, body, _) -> {
+			meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: iterable)
+			meta_pattern(ctx: ctx, metas: metas, claimed: claimed, live: live, pattern: pat)
+			meta_block(ctx: ctx, metas: metas, claimed: claimed, live: live, block: body)
+		},
+		.continue_stmt -> { },
+		.resume_stmt(value) -> {
+			if let .some(e) = value {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		.handle_stmt(_, _, _, body) -> meta_block(ctx: ctx, metas: metas, claimed: claimed, live: live, block: body)
+	}
+	claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: slot, start: stmt.start, end: stmt.end)
+	if copy_from >= 0 {
+		copy_identifiers(metas: metas, to_slot: slot, from_slot: copy_from)
+	}
+}
+
+func meta_pattern(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: Bool, pattern: &Pattern) -> Void {
+	// The for-loop block-arg replacement carries meta extents that
+	// diverge from the span (the Parameter's after-name extents).
+	let m_start = pattern.start
+	let m_end = pattern.end
+	if pattern.meta_start >= 0 {
+		m_start = pattern.meta_start
+		m_end = pattern.meta_end
+	}
+	let slot = emit_meta(ctx: ctx, metas: metas, live: live, start: m_start, end: m_end)
+	match pattern.kind {
+		.tuple(items) -> {
+			for p in items {
+				meta_pattern(ctx: ctx, metas: metas, claimed: claimed, live: live, pattern: p)
+			}
+		},
+		.or_pattern(items) -> {
+			for p in items {
+				meta_pattern(ctx: ctx, metas: metas, claimed: claimed, live: live, pattern: p)
+			}
+		},
+		.variant(_, segment_generics, _, _, _, fields, _) -> {
+			for segment in segment_generics {
+				for arg in segment {
+					meta_generic_arg(ctx: ctx, metas: metas, claimed: claimed, live: live, arg: arg)
+				}
+			}
+			for p in fields {
+				meta_pattern(ctx: ctx, metas: metas, claimed: claimed, live: live, pattern: p)
+			}
+		},
+		.struct_pattern(_, segment_generics, fields, _, _) -> {
+			for segment in segment_generics {
+				for arg in segment {
+					meta_generic_arg(ctx: ctx, metas: metas, claimed: claimed, live: live, arg: arg)
+				}
+			}
+			for p in fields {
+				meta_pattern(ctx: ctx, metas: metas, claimed: claimed, live: live, pattern: p)
+			}
+		},
+		.record(fields) -> {
+			for field in fields {
+				let field_slot = emit_meta(ctx: ctx, metas: metas, live: live, start: field.start, end: field.end)
+				if let .equals_field(_, _, _, value) = field.kind {
+					meta_pattern(ctx: ctx, metas: metas, claimed: claimed, live: live, pattern: value)
+				}
+				claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: field_slot, start: field.start, end: field.end)
+			}
+		},
+		_ -> { }
+	}
+	claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: slot, start: m_start, end: m_end)
+}
+
+func meta_expr(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: Bool, expr: &Expr) -> Void {
+	let slot = emit_meta(ctx: ctx, metas: metas, live: live, start: expr.start, end: expr.end)
+	// The inline-IR chain shares one reference meta entry.
+	let copy_from = 0 - 1
+	match expr.kind {
+		.unary(_, operands) -> {
+			for e in operands {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		.binary(_, operands) -> {
+			for e in operands {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		.call(callee, type_args, args, blocks) -> {
+			for e in callee {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+			for arg in type_args {
+				meta_generic_arg(ctx: ctx, metas: metas, claimed: claimed, live: live, arg: arg)
+			}
+			for arg in args {
+				let arg_slot = emit_meta(ctx: ctx, metas: metas, live: live, start: arg.start, end: arg.end)
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: arg.value)
+				claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: arg_slot, start: arg.start, end: arg.end)
+			}
+			for block in blocks {
+				meta_block(ctx: ctx, metas: metas, claimed: claimed, live: live, block: block)
+			}
+		},
+		.constructor(_, segments) -> {
+			for segment in segments {
+				for arg in segment {
+					meta_generic_arg(ctx: ctx, metas: metas, claimed: claimed, live: live, arg: arg)
+				}
+			}
+			// The reference reinterprets `Path<Args>` in place: the
+			// path's variable/member nodes are replaced, orphaning
+			// their meta — the path identifiers belong to no node.
+			claim_slot_full(ctx: ctx, metas: metas, claimed: claimed, slot: 0 - 2, start: expr.start, end: expr.end, include_probe: false)
+		},
+		.member(_, _, _, receiver) -> {
+			for e in receiver {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		.incomplete_member(receiver) -> {
+			for e in receiver {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		.tuple(items) -> {
+			for e in items {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		.block(block) -> meta_block(ctx: ctx, metas: metas, claimed: claimed, live: live, block: block),
+		.literal_array(items) -> {
+			for e in items {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		.subscript_expr(operands) -> {
+			for e in operands {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		.func_expr(f) -> meta_func(ctx: ctx, metas: metas, claimed: claimed, live: live, f: f),
+		.unsafe_expr(block) -> meta_block(ctx: ctx, metas: metas, claimed: claimed, live: live, block: block),
+		.if_expr(cond, then_block, else_block) -> {
+			for e in cond {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+			meta_block(ctx: ctx, metas: metas, claimed: claimed, live: live, block: then_block)
+			meta_block(ctx: ctx, metas: metas, claimed: claimed, live: live, block: else_block)
+		},
+		.match_expr(scrutinee, arms) -> {
+			for e in scrutinee {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+			for arm in arms {
+				let arm_slot = emit_meta(ctx: ctx, metas: metas, live: live, start: arm.start, end: arm.end)
+				meta_pattern(ctx: ctx, metas: metas, claimed: claimed, live: live, pattern: arm.pattern)
+				meta_block(ctx: ctx, metas: metas, claimed: claimed, live: live, block: arm.body)
+				claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: arm_slot, start: arm.start, end: arm.end)
+			}
+		},
+		.as_cast(operands, annotation) -> {
+			for e in operands {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+			meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: annotation)
+		},
+		.propagate(operands) -> {
+			for e in operands {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		.force_unwrap(operands) -> {
+			// The second operand is the hidden failure expression the
+			// parser fabricates over the bang: real span, no meta.
+			let index = 0
+			for e in operands {
+				if index == 0 {
+					meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+				} else {
+					meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: false, expr: e)
+				}
+				index = index + 1
+			}
+		},
+		.call_effect(_, _, _, type_args, args) -> {
+			for arg in type_args {
+				meta_generic_arg(ctx: ctx, metas: metas, claimed: claimed, live: live, arg: arg)
+			}
+			for arg in args {
+				let arg_slot = emit_meta(ctx: ctx, metas: metas, live: live, start: arg.start, end: arg.end)
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: arg.value)
+				claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: arg_slot, start: arg.start, end: arg.end)
+			}
+		},
+		.record_literal(fields, spread) -> {
+			for field in fields {
+				let field_slot = emit_meta(ctx: ctx, metas: metas, live: live, start: field.start, end: field.end)
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: field.value)
+				claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: field_slot, start: field.start, end: field.end)
+			}
+			for e in spread {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		.inline_ir(binds, instruction) -> {
+			for e in binds {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+			// The instruction node shares the enclosing expression's
+			// extents (it carries no span of its own).
+			let ir_slot = emit_meta(ctx: ctx, metas: metas, live: live, start: expr.start, end: expr.end)
+			if let .some(ty) = instruction.ty {
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: ty)
+			}
+			claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: ir_slot, start: expr.start, end: expr.end)
+			copy_from = ir_slot
+		},
+		.macro_call(_, _, _, args) -> {
+			for e in args {
+				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		_ -> { }
+	}
+	claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: slot, start: expr.start, end: expr.end)
+	if copy_from >= 0 {
+		copy_identifiers(metas: metas, to_slot: slot, from_slot: copy_from)
+	}
 }

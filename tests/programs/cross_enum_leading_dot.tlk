@@ -1,0 +1,42 @@
+// Two enums sharing a variant name: a leading-dot if-let over a
+// member-read scrutinee resolves through the solver once the member
+// constraint discharges (once ledgered as "enum not yet known").
+enum AKind {
+	case tuple(Int)
+	case leaf
+}
+
+enum BKind {
+	case tuple(Bool)
+	case leaf
+}
+
+struct ANode {
+	let kind: AKind
+}
+
+struct BNode {
+	let kind: BKind
+}
+
+func read_a(node: ANode) -> Int {
+	if let .tuple(n) = node.kind {
+		return n
+	}
+	0
+}
+
+func read_b(node: BNode) -> Int {
+	if let .tuple(flag) = node.kind {
+		if flag {
+			return 1
+		}
+		return 2
+	}
+	3
+}
+
+print(read_a(node: ANode(kind: .tuple(7))))
+print(read_a(node: ANode(kind: .leaf)))
+print(read_b(node: BNode(kind: .tuple(true))))
+print(read_b(node: BNode(kind: .leaf)))

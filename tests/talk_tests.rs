@@ -2170,6 +2170,21 @@ fn parity_tuple_access() {
 }
 
 #[test]
+fn parity_propagate_in_let() {
+    assert_parity_program("propagate_in_let");
+}
+
+#[test]
+fn parity_cross_enum_leading_dot() {
+    assert_parity_program("cross_enum_leading_dot");
+}
+
+#[test]
+fn parity_array_literal_borrow_donation() {
+    assert_parity_program("array_literal_borrow_donation");
+}
+
+#[test]
 fn parity_conditional_moves() {
     assert_parity_program("conditional_moves");
 }

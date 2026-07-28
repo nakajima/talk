@@ -582,9 +582,28 @@ impl<'a> TypecheckSession<'a> {
                 ));
             }
             for arm in report.unreachable_arms {
-                self.diagnostics
-                    .warnings
-                    .push((TypeError::UnreachableMatchArm, arm));
+                // A synthesized unreachable arm is a desugared
+                // conditional's implicit else: the useful position is
+                // the written pattern that swallowed it, and the useful
+                // message is that the pattern is irrefutable.
+                let index = arms.iter().position(|pattern| pattern.id == arm);
+                let synthesized = index
+                    .is_some_and(|index| arms[index].span == crate::parsing::span::Span::SYNTHESIZED);
+                if synthesized {
+                    let written = index
+                        .and_then(|index| arms[..index].iter().rev().find(|pattern| {
+                            pattern.span != crate::parsing::span::Span::SYNTHESIZED
+                        }))
+                        .map(|pattern| pattern.id)
+                        .unwrap_or(scrutinee);
+                    self.diagnostics
+                        .warnings
+                        .push((TypeError::IrrefutableConditionalPattern, written));
+                } else {
+                    self.diagnostics
+                        .warnings
+                        .push((TypeError::UnreachableMatchArm, arm));
+                }
             }
         }
     }

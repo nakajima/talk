@@ -1341,15 +1341,16 @@ impl<'a> Parser<'a> {
             self.consume(TokenKind::Func)?;
         }
 
+        // An anonymous func gets a synthetic position-keyed name; the
+        // resolver recognizes the `#fn_` prefix.
         let (name, name_span) = self.identifier().unwrap_or_else(|_| {
-            (
-                format!("#fn_{:?}", self.current),
-                #[allow(clippy::panic)]
-                self.current
-                    .as_ref()
-                    .unwrap_or_else(|| unreachable!("no current token"))
-                    .span(self.file_id),
-            )
+            #[allow(clippy::panic)]
+            let span = self
+                .current
+                .as_ref()
+                .unwrap_or_else(|| unreachable!("no current token"))
+                .span(self.file_id);
+            (format!("#fn_{}_{}", span.start, span.end), span)
         });
 
         let generics = self.generics()?;

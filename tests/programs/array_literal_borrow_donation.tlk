@@ -1,0 +1,29 @@
+// A borrowed parameter donates into an array-literal call argument
+// (once ledgered as rejected with "element has type &Expr"; fixed by
+// uniform borrow donation).
+enum Tree {
+	case node([Tree])
+	case leaf(Int)
+}
+
+func weigh(trees: [Tree]) -> Int {
+	let n = 0
+	for tree in trees {
+		match tree {
+			.node(children) -> { n = n + weigh(trees: children) },
+			.leaf(v) -> { n = n + v }
+		}
+	}
+	n
+}
+
+struct Builder {
+	let seed: Int
+
+	func combine(lhs: Tree) -> Int {
+		weigh(trees: [lhs])
+	}
+}
+
+let b = Builder(seed: 1)
+print(b.combine(lhs: .node([.leaf(2), .leaf(3)])))

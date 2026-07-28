@@ -289,10 +289,10 @@ fn element_addr(base: u32, index: usize, stride: u64) -> Result<u32, String> {
 // data: the same `parsing` AST the Rust parser builds, with node ids
 // minted here and node meta recorded only where token extents diverge
 // from spans (`Func` declaration extents, the for-loop pattern
-// replacement). Sub-spans the Talk AST does not yet carry (name spans,
-// label spans) and call-arg origins are fabricated as synthesized /
-// written for now — they are invisible to the dump round trip and get
-// real values as consumers demand them.
+// replacement). Every sub-span (name, label, mode, member) and the
+// call-arg origin cross the ABI from the frontend's own captures; a
+// positional call argument's label span is its own span, matching the
+// reference.
 
 use crate::common::id_generator::IDGenerator;
 use crate::node::Node;
@@ -347,8 +347,14 @@ pub fn adapt(run: &RunOutcome, schema: &AbiSchema) -> Result<BridgedParse, Strin
         boxed: AbiTy::Named("boxed".into()),
         ids: IDGenerator::default(),
         meta: NodeMetaStorage::default(),
+        metas: Vec::new(),
+        meta_cursor: 0,
     };
     let mut outcome = adapter.record(&run.value.clone(), "ParseOutcome")?;
+    for meta in adapter.array(&take(&mut outcome, "metas")?)? {
+        let decoded = adapter.node_meta(&meta)?;
+        adapter.metas.push(decoded);
+    }
     let failure = adapter
         .opt(&take(&mut outcome, "failure")?)?
         .map(|fail| adapter.fail(&fail))
@@ -385,6 +391,10 @@ struct ResultAdapter<'a, 'io> {
     boxed: AbiTy,
     ids: IDGenerator,
     meta: NodeMetaStorage,
+    /// The frontend's per-node meta stream, in the same pre-order this
+    /// adapter constructs nodes; None marks a synthesized node.
+    metas: Vec<Option<NodeMeta>>,
+    meta_cursor: usize,
 }
 
 fn take(map: &mut std::collections::HashMap<String, Value>, key: &str) -> Result<Value, String> {
@@ -411,6 +421,13 @@ fn position(value: &Value) -> Result<u32, String> {
     u32::try_from(int(value)?).map_err(|_| "byte position out of range".to_string())
 }
 
+fn opt_span(start: i64, end: i64) -> Result<Option<Span>, String> {
+    if start < 0 {
+        return Ok(None);
+    }
+    Ok(Some(span_from(start, end)?))
+}
+
 fn span_from(start: i64, end: i64) -> Result<Span, String> {
     if start < 0 {
         return Ok(Span::SYNTHESIZED);
@@ -420,23 +437,6 @@ fn span_from(start: i64, end: i64) -> Result<Span, String> {
         start: u32::try_from(start).map_err(|_| "span start out of range")?,
         end: u32::try_from(end).map_err(|_| "span end out of range")?,
     })
-}
-
-/// A fabricated token pair carrying nothing but extents, for the two
-/// places the dump renders `tokens=` (node meta wider than the span).
-fn extent_meta(start: u32, end: u32) -> NodeMeta {
-    let token = |at: u32| Token {
-        kind: TokenKind::Generated,
-        start: at,
-        end: at,
-        line: 0,
-        col: 0,
-    };
-    NodeMeta {
-        start: token(start),
-        end: token(end),
-        identifiers: vec![],
-    }
 }
 
 fn token_kind(name: &str) -> Result<TokenKind, String> {
@@ -463,6 +463,78 @@ fn token_kind(name: &str) -> Result<TokenKind, String> {
         "bang_equals" => TokenKind::BangEquals,
         "dot_dot" => TokenKind::DotDot,
         "dot_dot_less" => TokenKind::DotDotLess,
+        "identifier" => TokenKind::Identifier,
+        "int_number" => TokenKind::Int,
+        "float_number" => TokenKind::Float,
+        "string_literal" => TokenKind::StringLiteral,
+        "character_literal" => TokenKind::CharacterLiteral,
+        "keyword_let" => TokenKind::Let,
+        "keyword_true" => TokenKind::True,
+        "keyword_false" => TokenKind::False,
+        "equals" => TokenKind::Equals,
+        "comma" => TokenKind::Comma,
+        "dot" => TokenKind::Dot,
+        "dot_dot_dot" => TokenKind::DotDotDot,
+        "left_paren" => TokenKind::LeftParen,
+        "right_paren" => TokenKind::RightParen,
+        "left_bracket" => TokenKind::LeftBracket,
+        "right_bracket" => TokenKind::RightBracket,
+        "left_brace" => TokenKind::LeftBrace,
+        "right_brace" => TokenKind::RightBrace,
+        "newline" => TokenKind::Newline,
+        "underscore" => TokenKind::Underscore,
+        "keyword_any" => TokenKind::Any,
+        "keyword_as" => TokenKind::As,
+        "keyword_func" => TokenKind::Func,
+        "keyword_if" => TokenKind::If,
+        "keyword_else" => TokenKind::Else,
+        "keyword_loop" => TokenKind::Loop,
+        "keyword_enum" => TokenKind::Enum,
+        "keyword_case" => TokenKind::Case,
+        "keyword_match" => TokenKind::Match,
+        "keyword_return" => TokenKind::Return,
+        "keyword_struct" => TokenKind::Struct,
+        "keyword_extend" => TokenKind::Extend,
+        "keyword_break" => TokenKind::Break,
+        "keyword_init" => TokenKind::Init,
+        "keyword_protocol" => TokenKind::Protocol,
+        "keyword_import" => TokenKind::Import,
+        "keyword_use" => TokenKind::Use,
+        "keyword_pub" => TokenKind::Pub,
+        "keyword_public" => TokenKind::Public,
+        "keyword_linear" => TokenKind::Linear,
+        "keyword_macro" => TokenKind::Macro,
+        "keyword_static" => TokenKind::Static,
+        "keyword_associated" => TokenKind::Associated,
+        "keyword_typealias" => TokenKind::Typealias,
+        "keyword_effect" => TokenKind::Effect,
+        "keyword_handling" => TokenKind::Handling,
+        "keyword_in" => TokenKind::In,
+        "keyword_continue" => TokenKind::Continue,
+        "keyword_unreachable" => TokenKind::Unreachable,
+        "keyword_mut" => TokenKind::Mut,
+        "keyword_consuming" => TokenKind::Consuming,
+        "keyword_for" => TokenKind::For,
+        "plus_equals" => TokenKind::PlusEquals,
+        "minus_equals" => TokenKind::MinusEquals,
+        "arrow" => TokenKind::Arrow,
+        "star_equals" => TokenKind::StarEquals,
+        "slash_equals" => TokenKind::SlashEquals,
+        "colon" => TokenKind::Colon,
+        "double_colon" => TokenKind::DoubleColon,
+        "question_mark" => TokenKind::QuestionMark,
+        "semicolon" => TokenKind::Semicolon,
+        "at_sign" => TokenKind::At,
+        "tilde_equals" => TokenKind::TildeEquals,
+        "caret_equals" => TokenKind::CaretEquals,
+        "attribute" => TokenKind::Attribute,
+        "dollar" => TokenKind::Dollar,
+        "bound_var" => TokenKind::BoundVar,
+        "hash" => TokenKind::Hash,
+        "ir_register" => TokenKind::IRRegister,
+        "effect_name" => TokenKind::EffectName,
+        "single_quote" => TokenKind::SingleQuote,
+        "eof" => TokenKind::EOF,
         other => return Err(format!("no operator mapping for token kind `{other}`")),
     })
 }
@@ -470,6 +542,62 @@ fn token_kind(name: &str) -> Result<TokenKind, String> {
 impl ResultAdapter<'_, '_> {
     fn id(&mut self) -> NodeID {
         NodeID(FileID(0), self.ids.next_id())
+    }
+
+    fn meta_token(&self, value: &Value) -> Result<Token, String> {
+        let mut fields = self.record(value, "MetaToken")?;
+        let (kind, _) = self.variant(&take(&mut fields, "kind")?, "TokenKind")?;
+        let coord = |value: Value| -> Result<u32, String> {
+            u32::try_from(int(&value)?).map_err(|_| "meta token coordinate out of range".into())
+        };
+        Ok(Token {
+            kind: token_kind(&kind)?,
+            start: coord(take(&mut fields, "start")?)?,
+            end: coord(take(&mut fields, "end")?)?,
+            line: coord(take(&mut fields, "line")?)?,
+            col: coord(take(&mut fields, "col")?)?,
+        })
+    }
+
+    /// One frontend NodeMeta; a negative start marks a synthesized
+    /// node carrying no meta.
+    fn node_meta(&self, value: &Value) -> Result<Option<NodeMeta>, String> {
+        let mut fields = self.record(value, "NodeMeta")?;
+        let start_value = take(&mut fields, "start")?;
+        let start_fields = self.record(&start_value, "MetaToken")?;
+        if int(&start_fields["start"])? < 0 {
+            return Ok(None);
+        }
+        let start = self.meta_token(&start_value)?;
+        let end = self.meta_token(&take(&mut fields, "end")?)?;
+        let mut identifiers = Vec::new();
+        for identifier in self.array(&take(&mut fields, "identifiers")?)? {
+            identifiers.push(self.meta_token(&identifier)?);
+        }
+        Ok(Some(NodeMeta {
+            start,
+            end,
+            identifiers,
+        }))
+    }
+
+    /// The next entry of the frontend's pre-order meta stream. The
+    /// stream and this adapter's construction order are the same walk;
+    /// running dry means they diverged — fail closed.
+    fn take_meta(&mut self) -> Result<Option<NodeMeta>, String> {
+        let meta = self
+            .metas
+            .get(self.meta_cursor)
+            .cloned()
+            .ok_or("meta stream exhausted: adapter walk diverged from the frontend's")?;
+        self.meta_cursor += 1;
+        Ok(meta)
+    }
+
+    fn put_meta(&mut self, id: NodeID, meta: Option<NodeMeta>) {
+        if let Some(meta) = meta {
+            self.meta.insert(id, meta);
+        }
     }
 
     /// A record's fields keyed by their schema names, identity-checked.
@@ -554,6 +682,15 @@ impl ResultAdapter<'_, '_> {
 
     fn array(&self, value: &Value) -> Result<Vec<Value>, String> {
         self.v.array_elements(value, &self.boxed)
+    }
+
+    /// An `[Int]` array: elements are raw words, not boxed handles.
+    fn int_array(&self, value: &Value) -> Result<Vec<i64>, String> {
+        self.v
+            .array_elements(value, &AbiTy::Named("Int".into()))?
+            .iter()
+            .map(int)
+            .collect()
     }
 
     fn string(&self, value: &Value) -> Result<String, String> {
@@ -642,10 +779,12 @@ impl ResultAdapter<'_, '_> {
     }
 
     fn expr(&mut self, value: &Value) -> Result<Expr, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "Expr")?;
         let kind_value = take(&mut fields, "kind")?;
         let span = self.node_span(&mut fields)?;
         let id = self.id();
+        self.put_meta(id, meta);
         let (variant, p) = self.variant(&kind_value, "ExprKind")?;
         let kind = match variant.as_str() {
             "literal_int" => ExprKind::LiteralInt(self.string(&p[0])?),
@@ -688,7 +827,11 @@ impl ResultAdapter<'_, '_> {
                     ),
                     other => return Err(format!("unknown MemberLabel variant `{other}`")),
                 };
-                ExprKind::Member(self.receiver(&p[1])?, label, Span::SYNTHESIZED)
+                ExprKind::Member(
+                    self.receiver(&p[3])?,
+                    label,
+                    span_from(int(&p[1])?, int(&p[2])?)?,
+                )
             }
             "incomplete_member" => {
                 ExprKind::Incomplete(IncompleteExpr::Member(self.receiver(&p[0])?))
@@ -708,11 +851,12 @@ impl ResultAdapter<'_, '_> {
                 self.block(&p[2])?,
             ),
             "match_expr" => {
+                let scrutinee = Box::new(self.one_expr(&p[0])?);
                 let mut arms = Vec::new();
                 for arm in self.array(&p[1])? {
                     arms.push(self.match_arm(&arm)?);
                 }
-                ExprKind::Match(Box::new(self.one_expr(&p[0])?), arms)
+                ExprKind::Match(scrutinee, arms)
             }
             "as_cast" => ExprKind::As(
                 Box::new(self.one_expr(&p[0])?),
@@ -726,9 +870,9 @@ impl ResultAdapter<'_, '_> {
             "unreachable_expr" => ExprKind::Unreachable,
             "call_effect" => ExprKind::CallEffect {
                 effect_name: self.name(&p[0])?,
-                effect_name_span: Span::SYNTHESIZED,
-                type_args: self.generic_args(&p[1])?,
-                args: self.call_args(&p[2])?,
+                effect_name_span: span_from(int(&p[1])?, int(&p[2])?)?,
+                type_args: self.generic_args(&p[3])?,
+                args: self.call_args(&p[4])?,
             },
             "record_literal" => {
                 let mut record_fields = Vec::new();
@@ -752,8 +896,8 @@ impl ResultAdapter<'_, '_> {
             }
             "macro_call" => ExprKind::MacroCall {
                 name: self.string(&p[0])?,
-                name_span: Span::SYNTHESIZED,
-                args: self.exprs(&p[1])?,
+                name_span: span_from(int(&p[1])?, int(&p[2])?)?,
+                args: self.exprs(&p[3])?,
             },
             other => return Err(format!("unknown ExprKind variant `{other}`")),
         };
@@ -772,6 +916,7 @@ impl ResultAdapter<'_, '_> {
     fn call_args(&mut self, value: &Value) -> Result<Vec<CallArg>, String> {
         let mut args = Vec::new();
         for (index, arg) in self.array(value)?.iter().enumerate() {
+            let meta = self.take_meta()?;
             let mut fields = self.record(arg, "CallArg")?;
             let label = match self.opt(&take(&mut fields, "label")?)? {
                 Some(name) => crate::label::Label::Named(self.string(&name)?),
@@ -781,17 +926,31 @@ impl ResultAdapter<'_, '_> {
                 .opt(&take(&mut fields, "mode")?)?
                 .map(|mode| self.arg_mode(&mode))
                 .transpose()?;
+            let label_span = opt_span(
+                int(&take(&mut fields, "label_start")?)?,
+                int(&take(&mut fields, "label_end")?)?,
+            )?;
+            let mode_span = opt_span(
+                int(&take(&mut fields, "mode_start")?)?,
+                int(&take(&mut fields, "mode_end")?)?,
+            )?;
+            let origin = if boolean(&take(&mut fields, "bare_string")?)? {
+                CallArgOrigin::BareString
+            } else {
+                CallArgOrigin::Written
+            };
             let arg_value = self.expr(&take(&mut fields, "value")?)?;
             let span = self.node_span(&mut fields)?;
             args.push(CallArg {
-                id: self.id(),
+                id: { let id = self.id(); self.put_meta(id, meta); id },
                 label,
-                label_span: Span::SYNTHESIZED,
-                origin: CallArgOrigin::Written,
+                // A positional argument's label span is its own span.
+                label_span: label_span.unwrap_or(span),
+                origin,
                 value: arg_value,
                 span,
                 mode,
-                mode_span: None,
+                mode_span,
             });
         }
         Ok(args)
@@ -809,7 +968,9 @@ impl ResultAdapter<'_, '_> {
     }
 
     fn block(&mut self, value: &Value) -> Result<Block, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "Block")?;
+        take(&mut fields, "copied")?;
         let mut args = Vec::new();
         for parameter in self.array(&take(&mut fields, "params")?)? {
             args.push(self.parameter(&parameter)?);
@@ -820,7 +981,7 @@ impl ResultAdapter<'_, '_> {
         }
         let span = self.node_span(&mut fields)?;
         Ok(Block {
-            id: self.id(),
+            id: { let id = self.id(); self.put_meta(id, meta); id },
             args,
             body,
             span,
@@ -828,6 +989,7 @@ impl ResultAdapter<'_, '_> {
     }
 
     fn parameter(&mut self, value: &Value) -> Result<Parameter, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "Parameter")?;
         let label = self
             .opt(&take(&mut fields, "label")?)?
@@ -858,28 +1020,37 @@ impl ResultAdapter<'_, '_> {
                 })
             })
             .transpose()?;
+        let label_span = opt_span(
+            int(&take(&mut fields, "label_start")?)?,
+            int(&take(&mut fields, "label_end")?)?,
+        )?;
+        let mode_span = opt_span(
+            int(&take(&mut fields, "mode_start")?)?,
+            int(&take(&mut fields, "mode_end")?)?,
+        )?;
         let type_annotation = self.opt_type(&take(&mut fields, "annotation")?)?;
         let span = self.node_span(&mut fields)?;
         Ok(Parameter {
-            id: self.id(),
+            id: { let id = self.id(); self.put_meta(id, meta); id },
             label,
-            label_span: None,
+            label_span,
             name,
             name_span,
             type_annotation,
             span,
             mode,
-            mode_span: None,
+            mode_span,
         })
     }
 
     fn match_arm(&mut self, value: &Value) -> Result<MatchArm, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "MatchArm")?;
         let pattern = self.pattern(&take(&mut fields, "pattern")?)?;
         let body = self.block(&take(&mut fields, "body")?)?;
         let span = self.node_span(&mut fields)?;
         Ok(MatchArm {
-            id: self.id(),
+            id: { let id = self.id(); self.put_meta(id, meta); id },
             pattern,
             body,
             span,
@@ -887,14 +1058,19 @@ impl ResultAdapter<'_, '_> {
     }
 
     fn record_field(&mut self, value: &Value) -> Result<RecordField, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "RecordField")?;
         let label = self.name(&take(&mut fields, "label")?)?;
+        let label_span = span_from(
+            int(&take(&mut fields, "label_start")?)?,
+            int(&take(&mut fields, "label_end")?)?,
+        )?;
         let field_value = self.expr(&take(&mut fields, "value")?)?;
         let span = self.node_span(&mut fields)?;
         Ok(RecordField {
-            id: self.id(),
+            id: { let id = self.id(); self.put_meta(id, meta); id },
             label,
-            label_span: Span::SYNTHESIZED,
+            label_span,
             value: field_value,
             span,
         })
@@ -906,8 +1082,13 @@ impl ResultAdapter<'_, '_> {
         binds: Vec<Expr>,
         span: Span,
     ) -> Result<InlineIRInstruction, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "IRInstruction")?;
         let name = self.string(&take(&mut fields, "name")?)?;
+        let instr_name_span = span_from(
+            int(&take(&mut fields, "name_start")?)?,
+            int(&take(&mut fields, "name_end")?)?,
+        )?;
         let dest = self
             .opt(&take(&mut fields, "dest")?)?
             .map(|dest| Ok::<_, String>(Register(self.string(&dest)?)))
@@ -987,10 +1168,10 @@ impl ResultAdapter<'_, '_> {
             other => return Err(format!("unknown @_ir instruction `{other}`")),
         };
         Ok(InlineIRInstruction {
-            id: self.id(),
+            id: { let id = self.id(); self.put_meta(id, meta); id },
             span,
             binds,
-            instr_name_span: Span::SYNTHESIZED,
+            instr_name_span,
             kind,
         })
     }
@@ -1017,10 +1198,12 @@ impl ResultAdapter<'_, '_> {
     }
 
     fn stmt(&mut self, value: &Value) -> Result<Stmt, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "Stmt")?;
         let kind_value = take(&mut fields, "kind")?;
         let span = self.node_span(&mut fields)?;
         let id = self.id();
+        self.put_meta(id, meta);
         let (variant, p) = self.variant(&kind_value, "StmtKind")?;
         let kind = match variant.as_str() {
             "expr_stmt" => StmtKind::Expr(self.expr(&p[0])?),
@@ -1054,8 +1237,8 @@ impl ResultAdapter<'_, '_> {
             "resume_stmt" => StmtKind::Resume(self.opt_expr(&p[0])?),
             "handle_stmt" => StmtKind::Handling {
                 effect_name: self.name(&p[0])?,
-                effect_name_span: Span::SYNTHESIZED,
-                body: self.block(&p[1])?,
+                effect_name_span: span_from(int(&p[1])?, int(&p[2])?)?,
+                body: self.block(&p[3])?,
             },
             other => return Err(format!("unknown StmtKind variant `{other}`")),
         };
@@ -1063,21 +1246,14 @@ impl ResultAdapter<'_, '_> {
     }
 
     fn pattern(&mut self, value: &Value) -> Result<Pattern, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "Pattern")?;
         let kind_value = take(&mut fields, "kind")?;
-        let meta_start = int(&take(&mut fields, "meta_start")?)?;
-        let meta_end = int(&take(&mut fields, "meta_end")?)?;
+        take(&mut fields, "meta_start")?;
+        take(&mut fields, "meta_end")?;
         let span = self.node_span(&mut fields)?;
         let id = self.id();
-        if meta_start >= 0 {
-            self.meta.insert(
-                id,
-                extent_meta(
-                    u32::try_from(meta_start).map_err(|_| "pattern extent out of range")?,
-                    u32::try_from(meta_end).map_err(|_| "pattern extent out of range")?,
-                ),
-            );
-        }
+        self.put_meta(id, meta);
         let (variant, p) = self.variant(&kind_value, "PatternKind")?;
         let kind = match variant.as_str() {
             "bind" => PatternKind::Bind(self.name(&p[0])?),
@@ -1100,15 +1276,15 @@ impl ResultAdapter<'_, '_> {
                     enum_generics.push(self.generic_args(&segment)?);
                 }
                 let mut field_labels = Vec::new();
-                for label in self.array(&p[4])? {
+                for label in self.array(&p[6])? {
                     field_labels.push(self.opt(&label)?.map(|name| self.name(&name)).transpose()?);
                 }
                 PatternKind::Variant {
                     enum_name,
                     enum_generics,
                     variant_name: self.string(&p[2])?,
-                    variant_name_span: Span::SYNTHESIZED,
-                    fields: self.patterns(&p[3])?,
+                    variant_name_span: span_from(int(&p[3])?, int(&p[4])?)?,
+                    fields: self.patterns(&p[5])?,
                     field_labels,
                 }
             }
@@ -1155,6 +1331,7 @@ impl ResultAdapter<'_, '_> {
     }
 
     fn record_field_pattern(&mut self, value: &Value) -> Result<RecordFieldPattern, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "RecordFieldPattern")?;
         let kind_value = take(&mut fields, "kind")?;
         let span = self.node_span(&mut fields)?;
@@ -1163,20 +1340,21 @@ impl ResultAdapter<'_, '_> {
             "bind_field" => RecordFieldPatternKind::Bind(self.name(&p[0])?),
             "equals_field" => RecordFieldPatternKind::Equals {
                 name: self.name(&p[0])?,
-                name_span: Span::SYNTHESIZED,
-                value: self.pattern(&p[1])?,
+                name_span: span_from(int(&p[1])?, int(&p[2])?)?,
+                value: self.pattern(&p[3])?,
             },
             "rest_field" => RecordFieldPatternKind::Rest,
             other => return Err(format!("unknown RecordFieldPatternKind variant `{other}`")),
         };
         Ok(RecordFieldPattern {
-            id: self.id(),
+            id: { let id = self.id(); self.put_meta(id, meta); id },
             span,
             kind,
         })
     }
 
     fn type_annotation(&mut self, value: &Value) -> Result<TypeAnnotation, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "TypeAnnotation")?;
         let kind_value = take(&mut fields, "kind")?;
         let span = self.node_span(&mut fields)?;
@@ -1197,26 +1375,31 @@ impl ResultAdapter<'_, '_> {
             "nominal_path" => TypeAnnotationKind::NominalPath {
                 base: Box::new(self.one_type(&p[0])?),
                 member: crate::label::Label::Named(self.string(&p[1])?),
-                member_span: Span::SYNTHESIZED,
-                member_generics: self.generic_args(&p[2])?,
+                member_span: span_from(int(&p[2])?, int(&p[3])?)?,
+                member_generics: self.generic_args(&p[4])?,
             },
             "nominal" => TypeAnnotationKind::Nominal {
                 name: self.name(&p[0])?,
-                name_span: Span::SYNTHESIZED,
-                generics: self.generic_args(&p[1])?,
+                name_span: span_from(int(&p[1])?, int(&p[2])?)?,
+                generics: self.generic_args(&p[3])?,
             },
             "tuple" => TypeAnnotationKind::Tuple(self.types(&p[0])?),
             "record_type" => {
                 let mut record_fields = Vec::new();
                 for field in self.array(&p[0])? {
+                    let field_meta = self.take_meta()?;
                     let mut inner = self.record(&field, "RecordFieldTypeAnnotation")?;
                     let label = self.name(&take(&mut inner, "label")?)?;
+                    let label_span = span_from(
+                        int(&take(&mut inner, "label_start")?)?,
+                        int(&take(&mut inner, "label_end")?)?,
+                    )?;
                     let field_value = self.type_annotation(&take(&mut inner, "value")?)?;
                     let field_span = self.node_span(&mut inner)?;
                     record_fields.push(RecordFieldTypeAnnotation {
-                        id: self.id(),
+                        id: { let id = self.id(); self.put_meta(id, field_meta); id },
                         label,
-                        label_span: Span::SYNTHESIZED,
+                        label_span,
                         value: field_value,
                         span: field_span,
                     });
@@ -1228,14 +1411,19 @@ impl ResultAdapter<'_, '_> {
             "any_type" => {
                 let mut bindings = Vec::new();
                 for binding in self.array(&p[1])? {
+                    let binding_meta = self.take_meta()?;
                     let mut inner = self.record(&binding, "AnyAssocBinding")?;
                     let name = self.name(&take(&mut inner, "name")?)?;
+                    let name_span = span_from(
+                        int(&take(&mut inner, "name_start")?)?,
+                        int(&take(&mut inner, "name_end")?)?,
+                    )?;
                     let binding_value = self.type_annotation(&take(&mut inner, "value")?)?;
                     let binding_span = self.node_span(&mut inner)?;
                     bindings.push(AnyAssocBinding {
-                        id: self.id(),
+                        id: { let id = self.id(); self.put_meta(id, binding_meta); id },
                         name,
-                        name_span: Span::SYNTHESIZED,
+                        name_span,
                         value: binding_value,
                         span: binding_span,
                     });
@@ -1248,7 +1436,7 @@ impl ResultAdapter<'_, '_> {
             other => return Err(format!("unknown TypeAnnotationKind variant `{other}`")),
         };
         Ok(TypeAnnotation {
-            id: self.id(),
+            id: { let id = self.id(); self.put_meta(id, meta); id },
             kind,
             span,
         })
@@ -1275,7 +1463,15 @@ impl ResultAdapter<'_, '_> {
         for name in self.array(&take(&mut fields, "names")?)? {
             names.push(self.name(&name)?);
         }
-        let spans = vec![Span::SYNTHESIZED; names.len()];
+        let starts = self.int_array(&take(&mut fields, "name_starts")?)?;
+        let ends = self.int_array(&take(&mut fields, "name_ends")?)?;
+        if starts.len() != names.len() || ends.len() != names.len() {
+            return Err("effect-name spans out of step with names".into());
+        }
+        let mut spans = Vec::new();
+        for (start, end) in starts.iter().zip(&ends) {
+            spans.push(span_from(*start, *end)?);
+        }
         Ok(EffectSet {
             names,
             spans,
@@ -1301,6 +1497,7 @@ impl ResultAdapter<'_, '_> {
     }
 
     fn static_expr(&mut self, value: &Value) -> Result<StaticExpr, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "StaticExpr")?;
         let kind_value = take(&mut fields, "kind")?;
         let span = self.node_span(&mut fields)?;
@@ -1310,7 +1507,7 @@ impl ResultAdapter<'_, '_> {
             "bool_literal" => StaticExprKind::Bool(boolean(&p[0])?),
             "unqualified_case" => StaticExprKind::UnqualifiedCase {
                 name: self.string(&p[0])?,
-                name_span: Span::SYNTHESIZED,
+                name_span: span_from(int(&p[1])?, int(&p[2])?)?,
             },
             "static_path" => StaticExprKind::Path(self.type_annotation(&p[0])?),
             "static_group" => {
@@ -1342,7 +1539,7 @@ impl ResultAdapter<'_, '_> {
             other => return Err(format!("unknown StaticExprKind variant `{other}`")),
         };
         Ok(StaticExpr {
-            id: self.id(),
+            id: { let id = self.id(); self.put_meta(id, meta); id },
             kind,
             span,
         })
@@ -1363,8 +1560,13 @@ impl ResultAdapter<'_, '_> {
     }
 
     fn generic_decl(&mut self, value: &Value) -> Result<GenericDecl, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "GenericDecl")?;
         let name = self.name(&take(&mut fields, "name")?)?;
+        let name_span = span_from(
+            int(&take(&mut fields, "name_start")?)?,
+            int(&take(&mut fields, "name_end")?)?,
+        )?;
         let generics = self.generic_decls(&take(&mut fields, "generics")?)?;
         let conformances = self.types(&take(&mut fields, "conformances")?)?;
         let default = self
@@ -1374,9 +1576,9 @@ impl ResultAdapter<'_, '_> {
         let static_ty = self.opt_type(&take(&mut fields, "static_ty")?)?;
         let span = self.node_span(&mut fields)?;
         Ok(GenericDecl {
-            id: self.id(),
+            id: { let id = self.id(); self.put_meta(id, meta); id },
             name,
-            name_span: Span::SYNTHESIZED,
+            name_span,
             generics,
             conformances,
             default,
@@ -1389,9 +1591,11 @@ impl ResultAdapter<'_, '_> {
         let Some(clause) = self.opt(value)? else {
             return Ok(None);
         };
+        let clause_meta = self.take_meta()?;
         let mut fields = self.record(&clause, "WhereClause")?;
         let mut predicates = Vec::new();
         for predicate in self.array(&take(&mut fields, "predicates")?)? {
+            let predicate_meta = self.take_meta()?;
             let mut inner = self.record(&predicate, "WherePredicate")?;
             let kind_value = take(&mut inner, "kind")?;
             let span = self.node_span(&mut inner)?;
@@ -1413,22 +1617,27 @@ impl ResultAdapter<'_, '_> {
                 other => return Err(format!("unknown WherePredicateKind variant `{other}`")),
             };
             predicates.push(WherePredicate {
-                id: self.id(),
+                id: { let id = self.id(); self.put_meta(id, predicate_meta); id },
                 span,
                 kind,
             });
         }
         let span = self.node_span(&mut fields)?;
         Ok(Some(WhereClause {
-            id: self.id(),
+            id: { let id = self.id(); self.put_meta(id, clause_meta); id },
             span,
             predicates,
         }))
     }
 
     fn func(&mut self, value: &Value, origin: FuncOrigin) -> Result<Func, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "Func")?;
         let name = self.name(&take(&mut fields, "name")?)?;
+        let name_span = span_from(
+            int(&take(&mut fields, "name_start")?)?,
+            int(&take(&mut fields, "name_end")?)?,
+        )?;
         let effects = self.effect_set(&take(&mut fields, "effects")?)?;
         let generics = self.generic_decls(&take(&mut fields, "generics")?)?;
         let mut captures = Vec::new();
@@ -1442,24 +1651,16 @@ impl ResultAdapter<'_, '_> {
         }
         let body = self.block(&take(&mut fields, "body")?)?;
         let ret = self.opt_type(&take(&mut fields, "ret")?)?;
-        let meta_start = int(&take(&mut fields, "meta_start")?)?;
-        let meta_end = int(&take(&mut fields, "meta_end")?)?;
-        let start = int(&take(&mut fields, "start")?)?;
-        let end = int(&take(&mut fields, "end")?)?;
+        take(&mut fields, "meta_start")?;
+        take(&mut fields, "meta_end")?;
+        take(&mut fields, "start")?;
+        take(&mut fields, "end")?;
         let id = self.id();
-        if meta_start >= 0 && (meta_start != start || meta_end != end) {
-            self.meta.insert(
-                id,
-                extent_meta(
-                    u32::try_from(meta_start).map_err(|_| "func extent out of range")?,
-                    u32::try_from(meta_end).map_err(|_| "func extent out of range")?,
-                ),
-            );
-        }
+        self.put_meta(id, meta);
         Ok(Func {
             id,
             name,
-            name_span: Span::SYNTHESIZED,
+            name_span,
             origin,
             effects,
             generics,
@@ -1488,6 +1689,7 @@ impl ResultAdapter<'_, '_> {
     }
 
     fn func_signature(&mut self, value: &Value) -> Result<FuncSignature, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "FuncSignature")?;
         let name = self.name(&take(&mut fields, "name")?)?;
         let mut params = Vec::new();
@@ -1500,7 +1702,7 @@ impl ResultAdapter<'_, '_> {
         let ret = self.opt_type(&take(&mut fields, "ret")?)?.map(Box::new);
         let span = self.node_span(&mut fields)?;
         Ok(FuncSignature {
-            id: self.id(),
+            id: { let id = self.id(); self.put_meta(id, meta); id },
             span,
             name,
             params,
@@ -1512,6 +1714,7 @@ impl ResultAdapter<'_, '_> {
     }
 
     fn body(&mut self, value: &Value) -> Result<Body, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "Body")?;
         let mut decls = Vec::new();
         for decl in self.array(&take(&mut fields, "decls")?)? {
@@ -1519,7 +1722,7 @@ impl ResultAdapter<'_, '_> {
         }
         let span = self.node_span(&mut fields)?;
         Ok(Body {
-            id: self.id(),
+            id: { let id = self.id(); self.put_meta(id, meta); id },
             decls,
             span,
         })
@@ -1536,6 +1739,7 @@ impl ResultAdapter<'_, '_> {
     }
 
     fn decl(&mut self, value: &Value) -> Result<Decl, String> {
+        let meta = self.take_meta()?;
         let mut fields = self.record(value, "Decl")?;
         let kind_value = take(&mut fields, "kind")?;
         let visibility = if boolean(&take(&mut fields, "is_public")?)? {
@@ -1545,6 +1749,7 @@ impl ResultAdapter<'_, '_> {
         };
         let span = self.node_span(&mut fields)?;
         let id = self.id();
+        self.put_meta(id, meta);
         let (variant, p) = self.variant(&kind_value, "DeclKind")?;
         let kind = match variant.as_str() {
             "let_decl" => DeclKind::Let {
@@ -1564,11 +1769,14 @@ impl ResultAdapter<'_, '_> {
                             let mut inner = self.record(&symbol, "ImportedSymbol")?;
                             named.push(ImportedSymbol {
                                 name: self.string(&take(&mut inner, "name")?)?,
+                                span: span_from(
+                                    int(&take(&mut inner, "name_start")?)?,
+                                    int(&take(&mut inner, "name_end")?)?,
+                                )?,
                                 alias: self
                                     .opt(&take(&mut inner, "alias")?)?
                                     .map(|alias| self.string(&alias))
                                     .transpose()?,
-                                span: Span::SYNTHESIZED,
                             });
                         }
                         ImportedSymbols::Named(named)
@@ -1584,63 +1792,72 @@ impl ResultAdapter<'_, '_> {
                 DeclKind::Import(Import {
                     symbols,
                     path,
-                    path_span: Span::SYNTHESIZED,
+                    path_span: span_from(
+                        int(&take(&mut import, "path_start")?)?,
+                        int(&take(&mut import, "path_end")?)?,
+                    )?,
                 })
             }
             "func_decl" => DeclKind::Func(self.func(&p[0], FuncOrigin::Decl)?),
             "func_signature" => DeclKind::FuncSignature(self.func_signature(&p[0])?),
             "struct_decl" => DeclKind::Struct {
                 name: self.name(&p[0])?,
-                name_span: Span::SYNTHESIZED,
-                generics: self.generic_decls(&p[1])?,
-                where_clause: self.where_clause(&p[2])?,
-                body: self.body(&p[3])?,
-                linear: boolean(&p[4])?,
-                heap: boolean(&p[5])?,
+                name_span: span_from(int(&p[1])?, int(&p[2])?)?,
+                generics: self.generic_decls(&p[3])?,
+                where_clause: self.where_clause(&p[4])?,
+                body: self.body(&p[5])?,
+                linear: boolean(&p[6])?,
+                heap: boolean(&p[7])?,
             },
             "enum_decl" => DeclKind::Enum {
                 name: self.name(&p[0])?,
-                name_span: Span::SYNTHESIZED,
-                generics: self.generic_decls(&p[1])?,
-                where_clause: self.where_clause(&p[2])?,
-                body: self.body(&p[3])?,
-                linear: boolean(&p[4])?,
+                name_span: span_from(int(&p[1])?, int(&p[2])?)?,
+                generics: self.generic_decls(&p[3])?,
+                where_clause: self.where_clause(&p[4])?,
+                body: self.body(&p[5])?,
+                linear: boolean(&p[6])?,
             },
             "protocol_decl" => DeclKind::Protocol {
                 name: self.name(&p[0])?,
-                name_span: Span::SYNTHESIZED,
-                generics: self.generic_decls(&p[1])?,
-                where_clause: self.where_clause(&p[2])?,
-                body: self.body(&p[3])?,
-                conformances: self.types(&p[4])?,
+                name_span: span_from(int(&p[1])?, int(&p[2])?)?,
+                generics: self.generic_decls(&p[3])?,
+                where_clause: self.where_clause(&p[4])?,
+                body: self.body(&p[5])?,
+                conformances: self.types(&p[6])?,
             },
             "enum_variant" => {
                 let mut payload_labels = Vec::new();
-                for label in self.array(&p[3])? {
+                for label in self.array(&p[5])? {
                     payload_labels
                         .push(self.opt(&label)?.map(|name| self.name(&name)).transpose()?);
                 }
                 DeclKind::EnumVariant {
                     name: self.name(&p[0])?,
-                    name_span: Span::SYNTHESIZED,
-                    generics: self.generic_decls(&p[1])?,
-                    payloads: self.types(&p[2])?,
+                    name_span: span_from(int(&p[1])?, int(&p[2])?)?,
+                    generics: self.generic_decls(&p[3])?,
+                    payloads: self.types(&p[4])?,
                     payload_labels,
-                    result: self.opt_type(&p[4])?,
+                    result: self.opt_type(&p[6])?,
                 }
             }
             "extend_decl" => {
+                let binders = self.generic_decls(&p[0])?;
+                let head_meta = self.take_meta()?;
                 let mut application = self.record(&p[1], "TypeApplication")?;
                 let head_name = self.name(&take(&mut application, "name")?)?;
+                let head_name_span = span_from(
+                    int(&take(&mut application, "name_start")?)?,
+                    int(&take(&mut application, "name_end")?)?,
+                )?;
                 let head_args = self.generic_args(&take(&mut application, "args")?)?;
                 let head_span = self.node_span(&mut application)?;
                 DeclKind::Extend {
-                    binders: self.generic_decls(&p[0])?,
+                    binders,
                     head: TypeApplication {
-                        id: self.id(),
+                        id: { let id = self.id(); self.put_meta(id, head_meta); id },
                         span: head_span,
                         name: head_name,
-                        name_span: Span::SYNTHESIZED,
+                        name_span: head_name_span,
                         args: head_args,
                     },
                     conformances: self.types(&p[2])?,
@@ -1661,10 +1878,10 @@ impl ResultAdapter<'_, '_> {
             }
             "property" => DeclKind::Property {
                 name: self.name(&p[0])?,
-                name_span: Span::SYNTHESIZED,
-                is_static: boolean(&p[1])?,
-                type_annotation: self.opt_type(&p[2])?,
-                default_value: self.opt_expr(&p[3])?,
+                name_span: span_from(int(&p[1])?, int(&p[2])?)?,
+                is_static: boolean(&p[3])?,
+                type_annotation: self.opt_type(&p[4])?,
+                default_value: self.opt_expr(&p[5])?,
             },
             "method" => DeclKind::Method {
                 func: Box::new(self.func(&p[0], FuncOrigin::Decl)?),
@@ -1680,22 +1897,22 @@ impl ResultAdapter<'_, '_> {
             },
             "typealias_decl" => DeclKind::TypeAlias(
                 self.name(&p[0])?,
-                Span::SYNTHESIZED,
-                self.type_annotation(&p[1])?,
+                span_from(int(&p[1])?, int(&p[2])?)?,
+                self.type_annotation(&p[3])?,
             ),
             "effect_decl" => DeclKind::Effect {
                 name: self.name(&p[0])?,
-                name_span: Span::SYNTHESIZED,
-                generics: self.generic_decls(&p[1])?,
-                where_clause: self.where_clause(&p[2])?,
+                name_span: span_from(int(&p[1])?, int(&p[2])?)?,
+                generics: self.generic_decls(&p[3])?,
+                where_clause: self.where_clause(&p[4])?,
                 params: {
                     let mut params = Vec::new();
-                    for parameter in self.array(&p[3])? {
+                    for parameter in self.array(&p[5])? {
                         params.push(self.parameter(&parameter)?);
                     }
                     params
                 },
-                ret: self.type_annotation(&p[4])?,
+                ret: self.type_annotation(&p[6])?,
             },
             "associated_decl" => DeclKind::Associated {
                 generic: self.generic_decl(&p[0])?,
@@ -1703,17 +1920,20 @@ impl ResultAdapter<'_, '_> {
             },
             "macro_decl" => {
                 let mut params = Vec::new();
-                for name in self.array(&p[1])? {
-                    params.push(MacroParameter {
-                        name: self.string(&name)?,
-                        span: Span::SYNTHESIZED,
-                    });
+                for param in self.array(&p[3])? {
+                    let mut inner = self.record(&param, "MacroParam")?;
+                    let name = self.string(&take(&mut inner, "name")?)?;
+                    let span = span_from(
+                        int(&take(&mut inner, "start")?)?,
+                        int(&take(&mut inner, "end")?)?,
+                    )?;
+                    params.push(MacroParameter { name, span });
                 }
                 DeclKind::Macro {
                     name: self.string(&p[0])?,
-                    name_span: Span::SYNTHESIZED,
+                    name_span: span_from(int(&p[1])?, int(&p[2])?)?,
                     params,
-                    template: self.expr(&p[2])?,
+                    template: self.expr(&p[4])?,
                 }
             }
             other => return Err(format!("unknown DeclKind variant `{other}`")),
@@ -1871,6 +2091,8 @@ mod tests {
             if trimmed.starts_with("id: NodeID(") {
                 continue;
             }
+            // Expr's compact Debug prints its id inline.
+            let line = strip_inline_ids(line);
             let line = if let Some(index) = line.find("__for_src_") {
                 format!("{}__for_src_N\",", &line[..index])
             } else if let Some(index) = line.find("__for_iter_") {
@@ -1884,19 +2106,29 @@ mod tests {
         normalized
     }
 
-    /// The field-completeness gate (ADR 0043 §4/§5): beyond the dump
-    /// contract, the bridged AST must carry every field the Rust
-    /// parser's AST carries — name spans, label spans, modes, origins.
-    /// Failures here are the worklist of fields the Talk AST does not
-    /// yet carry. Gated behind TALK_FIDELITY=1 while that worklist is
-    /// open (known: name/label/mode sub-spans and the BareString
-    /// call-arg origin, fabricated by the adapter today); the gate
-    /// comes off when the pass completes.
+    /// Remove `id: NodeID(f, n), ` occurrences embedded in compact
+    /// single-line Debug renderings (Expr prints its id inline).
+    fn strip_inline_ids(line: &str) -> String {
+        let mut out = String::new();
+        let mut rest = line;
+        while let Some(index) = rest.find("id: NodeID(") {
+            out.push_str(&rest[..index]);
+            let after = &rest[index..];
+            let close = after.find(')').expect("NodeID closes on the same line");
+            let tail = &after[close + 1..];
+            rest = tail.strip_prefix(", ").unwrap_or(tail);
+        }
+        out.push_str(rest);
+        out
+    }
+
+    /// Field completeness (ADR 0043 §4/§5): beyond the dump contract,
+    /// the bridged AST carries every field the Rust parser's AST
+    /// carries — name spans, label spans, mode spans, call-arg origins
+    /// — byte-identical over the whole corpus. Only node ids and the
+    /// id-embedding for-loop hidden names are normalized away.
     #[test]
     fn bridged_results_carry_full_fidelity_over_corpus() {
-        if std::env::var("TALK_FIDELITY").is_err() {
-            return;
-        }
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let module = crate::compiling::frontend::load(root).expect("frontend artifact loads");
         let abi_text = std::fs::read_to_string(crate::compiling::frontend::abi_path(root))
@@ -1955,6 +2187,74 @@ mod tests {
                 "fidelity divergence on {}",
                 path.display()
             );
+            // Meta fidelity: the trees are identical, so ids extracted
+            // positionally from the Debug renderings pair the same
+            // nodes; each pair's meta — start/end tokens with line/col
+            // and the identifier list — must match byte-for-byte.
+            let bridged_ids = debug_ids(&bridged.roots);
+            let reference_ids = debug_ids(&reference.roots);
+            assert_eq!(
+                bridged_ids.len(),
+                reference_ids.len(),
+                "id count divergence on {}",
+                path.display()
+            );
+            for (index, (bid, rid)) in bridged_ids.iter().zip(&reference_ids).enumerate() {
+                let ours = render_meta(bridged.meta.get(bid));
+                let theirs = render_meta(reference.meta.get(rid));
+                assert_eq!(
+                    ours,
+                    theirs,
+                    "meta divergence on {} at node {index}",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    /// Every node id in Debug-rendering order: both renderings share
+    /// one tree shape, so positions pair the same nodes across sides.
+    fn debug_ids(roots: &[Node]) -> Vec<NodeID> {
+        let mut out = Vec::new();
+        for root in roots {
+            let rendered = format!("{root:#?}");
+            let mut rest = rendered.as_str();
+            while let Some(index) = rest.find("NodeID(") {
+                let tail = &rest[index + "NodeID(".len()..];
+                let close = tail.find(')').expect("NodeID closes");
+                let inner = &tail[..close];
+                let (file, node) = inner.split_once(", ").expect("NodeID has two fields");
+                out.push(NodeID(
+                    FileID(file.parse().expect("file id parses")),
+                    node.parse().expect("node id parses"),
+                ));
+                rest = &tail[close..];
+            }
+        }
+        out
+    }
+
+    /// A comparable rendering of one node's meta: the start and end
+    /// tokens with their kinds and positions, then the identifier
+    /// list ("-" for no entry).
+    fn render_meta(meta: Option<&NodeMeta>) -> String {
+        match meta {
+            None => "-".into(),
+            Some(meta) => {
+                let token = |token: &Token| {
+                    format!(
+                        "{:?} {}..{} l{} c{}",
+                        token.kind, token.start, token.end, token.line, token.col
+                    )
+                };
+                let identifiers: Vec<String> = meta.identifiers.iter().map(token).collect();
+                format!(
+                    "{} | {} | ids: {}",
+                    token(&meta.start),
+                    token(&meta.end),
+                    identifiers.join(", ")
+                )
+            }
         }
     }
 

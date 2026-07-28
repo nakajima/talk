@@ -1,88 +1,98 @@
 abi_version: 1
 root: ParseOutcome
 
-struct AnyAssocBinding @ struct:65535.8
+struct AnyAssocBinding @ struct:65535.10
 	name: String
+	name_start: Int
+	name_end: Int
 	value: TypeAnnotation
 	start: Int
 	end: Int
 
-enum ArgMode @ enum:65535.25
+enum ArgMode @ enum:65535.27
 	mut_mode
 	consume_mode
 	copy_mode
 	borrow_mode
 
-struct Block @ struct:65535.27
+struct Block @ struct:65535.29
 	params: [Parameter]
 	body: [Item]
 	start: Int
 	end: Int
+	copied: Bool
 
-struct Body @ struct:65535.22
+struct Body @ struct:65535.24
 	decls: [Decl]
 	start: Int
 	end: Int
 
-struct CallArg @ struct:65535.33
+struct CallArg @ struct:65535.35
 	label: String?
+	label_start: Int
+	label_end: Int
 	mode: ArgMode?
+	mode_start: Int
+	mode_end: Int
+	bare_string: Bool
 	value: Expr
 	start: Int
 	end: Int
 
-enum CaptureMode @ enum:65535.14
+enum CaptureMode @ enum:65535.16
 	copy_capture
 	move_capture
 	borrow_shared
 	borrow_mut
 
-struct CaptureSpec @ struct:65535.15
+struct CaptureSpec @ struct:65535.17
 	mode: CaptureMode
 	name: String
 	start: Int
 	end: Int
 
-struct Comment @ struct:65535.48
+struct Comment @ struct:65535.51
 	start: Int
 	end: Int
 
-struct Decl @ struct:65535.42
+struct Decl @ struct:65535.45
 	kind: DeclKind
 	is_public: Bool
 	start: Int
 	end: Int
 
-enum DeclKind @ enum:65535.41
+enum DeclKind @ enum:65535.44
 	let_decl(Pattern, TypeAnnotation?, Expr?)
 	import_decl(Import)
 	func_decl(Func)
 	func_signature(FuncSignature)
-	struct_decl(String, [GenericDecl], WhereClause?, Body, Bool, Bool)
-	enum_decl(String, [GenericDecl], WhereClause?, Body, Bool)
-	protocol_decl(String, [GenericDecl], WhereClause?, Body, [TypeAnnotation])
-	enum_variant(String, [GenericDecl], [TypeAnnotation], [String?], TypeAnnotation?)
+	struct_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, Bool, Bool)
+	enum_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, Bool)
+	protocol_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, [TypeAnnotation])
+	enum_variant(String, Int, Int, [GenericDecl], [TypeAnnotation], [String?], TypeAnnotation?)
 	extend_decl([GenericDecl], TypeApplication, [TypeAnnotation], WhereClause?, Body)
 	init_decl([Parameter], Block)
-	property(String, Bool, TypeAnnotation?, Expr?)
+	property(String, Int, Int, Bool, TypeAnnotation?, Expr?)
 	method(Func, Bool, ReceiverMode)
 	method_requirement(FuncSignature, ReceiverMode)
 	init_requirement(FuncSignature)
-	typealias_decl(String, TypeAnnotation)
-	effect_decl(String, [GenericDecl], WhereClause?, [Parameter], TypeAnnotation)
+	typealias_decl(String, Int, Int, TypeAnnotation)
+	effect_decl(String, Int, Int, [GenericDecl], WhereClause?, [Parameter], TypeAnnotation)
 	associated_decl(GenericDecl, WhereClause?)
-	macro_decl(String, [String], Expr)
+	macro_decl(String, Int, Int, [MacroParam], Expr)
 
-struct EffectSet @ struct:65535.2
+struct EffectSet @ struct:65535.4
 	names: [String]
+	name_starts: [Int]
+	name_ends: [Int]
 	open: Bool
 
-struct Expr @ struct:65535.32
+struct Expr @ struct:65535.34
 	kind: ExprKind
 	start: Int
 	end: Int
 
-enum ExprKind @ enum:65535.28
+enum ExprKind @ enum:65535.30
 	literal_int(String)
 	literal_float(String)
 	literal_true
@@ -94,7 +104,7 @@ enum ExprKind @ enum:65535.28
 	binary(TokenKind, [Expr])
 	call([Expr], [GenericArg], [CallArg], [Block])
 	constructor(String, [[GenericArg]])
-	member(MemberLabel, [Expr])
+	member(MemberLabel, Int, Int, [Expr])
 	incomplete_member([Expr])
 	tuple([Expr])
 	block(Block)
@@ -108,17 +118,19 @@ enum ExprKind @ enum:65535.28
 	propagate([Expr])
 	force_unwrap([Expr])
 	unreachable_expr
-	call_effect(String, [GenericArg], [CallArg])
+	call_effect(String, Int, Int, [GenericArg], [CallArg])
 	record_literal([RecordField], [Expr])
 	inline_ir([Expr], IRInstruction)
-	macro_call(String, [Expr])
+	macro_call(String, Int, Int, [Expr])
 
-struct Fail @ struct:65535.62
+struct Fail @ struct:65535.65
 	code: String
 	message: String
 
-struct Func @ struct:65535.20
+struct Func @ struct:65535.22
 	name: String
+	name_start: Int
+	name_end: Int
 	effects: EffectSet
 	generics: [GenericDecl]
 	captures: [CaptureSpec]
@@ -131,7 +143,7 @@ struct Func @ struct:65535.20
 	meta_start: Int
 	meta_end: Int
 
-struct FuncSignature @ struct:65535.21
+struct FuncSignature @ struct:65535.23
 	name: String
 	params: [Parameter]
 	effects: EffectSet
@@ -141,12 +153,14 @@ struct FuncSignature @ struct:65535.21
 	start: Int
 	end: Int
 
-enum GenericArg @ enum:65535.3
+enum GenericArg @ enum:65535.5
 	type_arg(TypeAnnotation)
 	static_arg(StaticExpr)
 
-struct GenericDecl @ struct:65535.16
+struct GenericDecl @ struct:65535.18
 	name: String
+	name_start: Int
+	name_end: Int
 	generics: [GenericDecl]
 	conformances: [TypeAnnotation]
 	default_value: GenericArg?
@@ -154,14 +168,16 @@ struct GenericDecl @ struct:65535.16
 	start: Int
 	end: Int
 
-struct IRInstruction @ struct:65535.30
+struct IRInstruction @ struct:65535.32
 	name: String
+	name_start: Int
+	name_end: Int
 	dest: String?
 	ty: TypeAnnotation?
 	values: [IRValue]
 	op: TokenKind?
 
-enum IRValue @ enum:65535.29
+enum IRValue @ enum:65535.31
 	reg(Int)
 	int_value(Int)
 	float_value(String)
@@ -169,70 +185,96 @@ enum IRValue @ enum:65535.29
 	void_value
 	bind(Int)
 
-struct Import @ struct:65535.40
+struct Import @ struct:65535.43
 	symbols: ImportedSymbols
 	path: String
+	path_start: Int
+	path_end: Int
 	local: Bool
 
-struct ImportedSymbol @ struct:65535.38
+struct ImportedSymbol @ struct:65535.41
 	name: String
+	name_start: Int
+	name_end: Int
 	alias: String?
 
-enum ImportedSymbols @ enum:65535.39
+enum ImportedSymbols @ enum:65535.42
 	all
 	named([ImportedSymbol])
 
-enum Item @ enum:65535.45
+enum Item @ enum:65535.48
 	decl_item(Decl)
 	stmt_item(Stmt)
 	expr_item(Expr)
 	pattern_item(Pattern)
 	type_item(TypeAnnotation)
 
-struct MatchArm @ struct:65535.26
+struct MacroParam @ struct:65535.40
+	name: String
+	start: Int
+	end: Int
+
+struct MatchArm @ struct:65535.28
 	pattern: Pattern
 	body: Block
 	start: Int
 	end: Int
 
-enum MemberLabel @ enum:65535.1
+enum MemberLabel @ enum:65535.3
 	named(String)
 	positional(Int)
 
-enum ParamLabel @ enum:65535.12
+struct MetaToken @ struct:65535.1
+	kind: TokenKind
+	start: Int
+	end: Int
+	line: Int
+	col: Int
+
+struct NodeMeta @ struct:65535.2
+	start: MetaToken
+	end: MetaToken
+	identifiers: [MetaToken]
+
+enum ParamLabel @ enum:65535.14
 	named(String)
 	omitted
 
-enum ParamMode @ enum:65535.11
+enum ParamMode @ enum:65535.13
 	borrow_param
 	mut_param
 	consume_param
 	consume_mut_param
 
-struct Parameter @ struct:65535.13
+struct Parameter @ struct:65535.15
 	label: ParamLabel?
+	label_start: Int
+	label_end: Int
 	name: String
 	name_start: Int
 	name_end: Int
 	mode: ParamMode?
+	mode_start: Int
+	mode_end: Int
 	annotation: TypeAnnotation?
 	start: Int
 	end: Int
 
-struct ParseOutcome @ struct:65535.63
+struct ParseOutcome @ struct:65535.66
 	items: [Item]
 	failure: Fail?
 	diags: [Fail]
 	comments: [Comment]
+	metas: [NodeMeta]
 
-struct Pattern @ struct:65535.35
+struct Pattern @ struct:65535.37
 	kind: PatternKind
 	start: Int
 	end: Int
 	meta_start: Int
 	meta_end: Int
 
-enum PatternKind @ enum:65535.34
+enum PatternKind @ enum:65535.36
 	bind(String)
 	wildcard
 	literal_int(String)
@@ -243,61 +285,65 @@ enum PatternKind @ enum:65535.34
 	literal_false
 	tuple([Pattern])
 	or_pattern([Pattern])
-	variant(String?, [[GenericArg]], String, [Pattern], [String?])
+	variant(String?, [[GenericArg]], String, Int, Int, [Pattern], [String?])
 	struct_pattern(String, [[GenericArg]], [Pattern], [String], Bool)
 	record([RecordFieldPattern])
 
-enum ReceiverMode @ enum:65535.24
+enum ReceiverMode @ enum:65535.26
 	none_receiver
 	ref_receiver
 	consuming_receiver
 
-struct RecordField @ struct:65535.31
+struct RecordField @ struct:65535.33
 	label: String
+	label_start: Int
+	label_end: Int
 	value: Expr
 	start: Int
 	end: Int
 
-struct RecordFieldPattern @ struct:65535.37
+struct RecordFieldPattern @ struct:65535.39
 	kind: RecordFieldPatternKind
 	start: Int
 	end: Int
 
-enum RecordFieldPatternKind @ enum:65535.36
+enum RecordFieldPatternKind @ enum:65535.38
 	bind_field(String)
-	equals_field(String, Pattern)
+	equals_field(String, Int, Int, Pattern)
 	rest_field
 
-struct RecordFieldTypeAnnotation @ struct:65535.7
+struct RecordFieldTypeAnnotation @ struct:65535.9
 	label: String
+	label_start: Int
+	label_end: Int
 	value: TypeAnnotation
 	start: Int
 	end: Int
 
-struct StaticExpr @ struct:65535.6
+struct StaticExpr @ struct:65535.8
 	kind: StaticExprKind
 	start: Int
 	end: Int
 
-enum StaticExprKind @ enum:65535.5
+enum StaticExprKind @ enum:65535.7
 	int_literal(String)
 	bool_literal(Bool)
-	unqualified_case(String)
+	unqualified_case(String, Int, Int)
 	static_path(TypeAnnotation)
 	static_group([StaticExpr])
 	static_op(StaticOpKind, [StaticExpr])
 
-enum StaticOpKind @ enum:65535.4
+enum StaticOpKind @ enum:65535.6
 	add
 	sub
 	mul
 
-struct Stmt @ struct:65535.44
+struct Stmt @ struct:65535.47
 	kind: StmtKind
 	start: Int
 	end: Int
 
-enum StmtKind @ enum:65535.43
+enum StmtKind @ enum:65535.46
 	expr_stmt(Expr)
 	if_stmt(Expr, Block, Block?)
 	return_stmt(Expr?)
@@ -307,9 +353,9 @@ enum StmtKind @ enum:65535.43
 	for_stmt(Expr, Pattern, Block, ArgMode?)
 	continue_stmt
 	resume_stmt(Expr?)
-	handle_stmt(String, Block)
+	handle_stmt(String, Int, Int, Block)
 
-enum TokenKind @ enum:65535.46
+enum TokenKind @ enum:65535.49
 	identifier
 	int_number
 	float_number
@@ -406,38 +452,40 @@ enum TokenKind @ enum:65535.46
 	single_quote
 	eof
 
-struct TypeAnnotation @ struct:65535.10
+struct TypeAnnotation @ struct:65535.12
 	kind: TypeAnnotationKind
 	start: Int
 	end: Int
 
-enum TypeAnnotationKind @ enum:65535.9
+enum TypeAnnotationKind @ enum:65535.11
 	borrow(Bool, [TypeAnnotation])
 	unique([TypeAnnotation])
 	func_type([TypeAnnotation], EffectSet, [TypeAnnotation])
-	nominal_path([TypeAnnotation], String, [GenericArg])
-	nominal(String, [GenericArg])
+	nominal_path([TypeAnnotation], String, Int, Int, [GenericArg])
+	nominal(String, Int, Int, [GenericArg])
 	tuple([TypeAnnotation])
 	record_type([RecordFieldTypeAnnotation])
 	any_type([TypeAnnotation], [AnyAssocBinding])
 
-struct TypeApplication @ struct:65535.23
+struct TypeApplication @ struct:65535.25
 	name: String
+	name_start: Int
+	name_end: Int
 	args: [GenericArg]
 	start: Int
 	end: Int
 
-struct WhereClause @ struct:65535.19
+struct WhereClause @ struct:65535.21
 	predicates: [WherePredicate]
 	start: Int
 	end: Int
 
-struct WherePredicate @ struct:65535.18
+struct WherePredicate @ struct:65535.20
 	kind: WherePredicateKind
 	start: Int
 	end: Int
 
-enum WherePredicateKind @ enum:65535.17
+enum WherePredicateKind @ enum:65535.19
 	type_eq(GenericArg, GenericArg)
 	static_cmp(Bool, GenericArg, GenericArg)
 	conforms(TypeAnnotation, [TypeAnnotation])

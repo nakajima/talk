@@ -1,0 +1,18 @@
+// A linear value keeps move discipline: consuming it into two slots of
+// one call is a double spend, rejected — not silently duplicated.
+struct Token 'linear {
+	let id: Int
+}
+
+struct Pair {
+	let a: Token
+	let b: Token
+}
+
+func build() -> Pair {
+	let t = Token(id: 1)
+	Pair(a: t, b: t)
+}
+
+let p = build()
+print(p.a.id + p.b.id)
