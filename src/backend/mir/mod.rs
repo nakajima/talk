@@ -15,6 +15,9 @@ mod entries;
 mod glue;
 mod release;
 mod verify;
+mod visit;
+
+pub(crate) use visit::{Slot, visit_inst, visit_term};
 
 /// The rigid-generic witnesses a closure environment carries: for each
 /// inherited type parameter, its `(drop, retain)` witness locals.

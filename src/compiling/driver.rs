@@ -433,6 +433,8 @@ impl Driver {
     }
 
     pub fn parse(mut self) -> Result<Driver<Parsed>, CompileError> {
+        crate::profile::init();
+        profiling::scope!("compiler.parse");
         if self.config.source_root.is_none() {
             self.config.source_root = LocalModulePaths::infer_source_root(
                 self.files
@@ -475,6 +477,7 @@ impl Driver {
         let mut file_index = 0u32;
 
         while let Some(file) = to_parse.pop_front() {
+            profiling::scope!("compiler.parse_file");
             let input = file.read()?;
             tracing::info!("parsing {file:?}");
             let file_id = FileID(file_index);
@@ -544,6 +547,8 @@ impl Driver {
 
 impl Driver<Parsed> {
     pub fn resolve_names(mut self) -> Result<Driver<NameResolved>, CompileError> {
+        crate::profile::init();
+        profiling::scope!("compiler.resolve_names");
         let mut resolver = NameResolver::with_source_root(
             self.config.modules.clone(),
             self.config.module_id,
@@ -577,7 +582,9 @@ impl Driver<Parsed> {
 
 /// The compiled program handed between `compile_executable` and
 /// `execute_module`.
-pub use crate::backend::Executable;
+pub use crate::backend::{
+    Executable, ExecutableStats, OptimizationPassStats, OptimizationStats,
+};
 
 /// Validate and execute a serialized bytecode image (TOOL-14). Images are
 /// untrusted bytes: decoding validates every index, register, and opcode
@@ -591,6 +598,7 @@ pub fn execute_image(
     let executable = crate::backend::Executable {
         module,
         names: Default::default(),
+        optimizations: Default::default(),
     };
     crate::backend::execute(&executable, io)
 }
@@ -661,6 +669,8 @@ impl Driver<NameResolved> {
     /// Type check: generate constraints and solve them per SCC binding group
     /// (see src/types). Infallible — failures surface as diagnostics.
     pub fn type_check(self) -> Driver<Typed> {
+        crate::profile::init();
+        profiling::scope!("compiler.type_check");
         let NameResolved {
             asts,
             mut symbols,
@@ -731,6 +741,8 @@ impl Driver<Typed> {
         exports: &[String],
         allowed_effects: &[String],
     ) -> Result<Executable, String> {
+        crate::profile::init();
+        profiling::scope!("compiler.compile_service");
         let entry = crate::backend::Entry::Exports {
             names: exports,
             allowed_effects,
@@ -939,6 +951,43 @@ pub mod tests {
                 "export call leaked allocations"
             );
         }
+    }
+
+    #[test]
+    fn executable_stats_include_optimizations_and_vm_execution() {
+        let exe = service_executable(
+            "pub func answer() -> Int { 20 + 22 }\n",
+            &["answer"],
+        )
+        .expect("service compiles");
+        let mut stats = exe.stats();
+        assert_eq!(stats.vm.runs(), 0);
+        assert_eq!(stats.optimizations.passes.len(), 6);
+        assert!(
+            stats
+                .optimizations
+                .passes
+                .iter()
+                .any(|pass| pass.name == "inline_small" && pass.applied > 0),
+            "expected inlining in {:?}",
+            stats.optimizations
+        );
+
+        let mut io = CaptureIO::default();
+        let outcome = exe
+            .run_export_with_stats(
+                "answer",
+                &[],
+                Budgets::default(),
+                &mut io,
+                &mut stats,
+            )
+            .expect("answer runs");
+        assert_eq!(outcome.value, Value::I64(42));
+        assert_eq!(stats.vm.runs(), 1);
+        let rendered = stats.render();
+        assert!(rendered.contains("Optimization statistics"), "{rendered}");
+        assert!(rendered.contains("VM instruction statistics"), "{rendered}");
     }
 
     #[test]

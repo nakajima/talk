@@ -9,6 +9,7 @@ use crate::io::IO;
 use crate::memory::{Allocations, MemoryError};
 use crate::objects::{ObjectError, Objects};
 use crate::symbol::Symbol;
+use crate::VmStats;
 use crate::{Chunk, Insn, MemKind, Module};
 use std::rc::Rc;
 
@@ -254,6 +255,74 @@ pub fn run_export<'io>(
     budgets: Budgets,
     io: &'io mut dyn IO,
 ) -> Result<RunOutcome<'io>, String> {
+    let mut stats = NoStats;
+    run_export_inner(module, name, args, strings, budgets, io, &mut stats)
+}
+
+/// [`run_export`] with exact per-opcode and per-instruction execution counts.
+/// The caller-owned collector remains available when the VM traps and can
+/// aggregate multiple exports from the same module.
+pub fn run_export_with_stats<'io>(
+    module: &Module,
+    name: &str,
+    args: &[HostValue],
+    strings: StringShape,
+    budgets: Budgets,
+    io: &'io mut dyn IO,
+    stats: &mut VmStats,
+) -> Result<RunOutcome<'io>, String> {
+    run_export_inner(module, name, args, strings, budgets, io, stats)
+}
+
+trait StatsSink {
+    fn begin_run(&mut self, module: &Module) -> Result<(), String>;
+    fn record(&mut self, chunk: usize, pc: usize);
+    fn finish_run(&mut self);
+}
+
+struct NoStats;
+
+impl StatsSink for NoStats {
+    #[inline(always)]
+    fn begin_run(&mut self, _module: &Module) -> Result<(), String> {
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn record(&mut self, _chunk: usize, _pc: usize) {}
+
+    #[inline(always)]
+    fn finish_run(&mut self) {}
+}
+
+impl StatsSink for VmStats {
+    #[inline(always)]
+    fn begin_run(&mut self, module: &Module) -> Result<(), String> {
+        VmStats::begin_run(self, module)
+    }
+
+    #[inline(always)]
+    fn record(&mut self, chunk: usize, pc: usize) {
+        VmStats::record(self, chunk, pc);
+    }
+
+    #[inline(always)]
+    fn finish_run(&mut self) {
+        VmStats::finish_run(self);
+    }
+}
+
+fn run_export_inner<'io, S: StatsSink>(
+    module: &Module,
+    name: &str,
+    args: &[HostValue],
+    strings: StringShape,
+    budgets: Budgets,
+    io: &'io mut dyn IO,
+    stats: &mut S,
+) -> Result<RunOutcome<'io>, String> {
+    crate::profile::init();
+    profiling::scope!("vm.run_export", name);
     let Some(&(_, chunk_index)) = module.exports.iter().find(|(export, _)| export == name) else {
         return Err(format!("vm: no exported function named `{name}`"));
     };
@@ -302,7 +371,10 @@ pub fn run_export<'io>(
         objects: Objects::default(),
         io,
     };
-    match run_loop(module, &mut machine, chunk_index, values, &budgets) {
+    stats.begin_run(module)?;
+    let result = run_loop(module, &mut machine, chunk_index, values, &budgets, stats);
+    stats.finish_run();
+    match result {
         Ok(value) => Ok(RunOutcome { value, machine }),
         Err(err) => Err(format!(
             "{err} [balance at trap: {} live allocations, {} live 'heap objects]",
@@ -324,7 +396,15 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
         objects: Objects::default(),
         io,
     };
-    match run_loop(module, &mut machine, module.entry, vec![], &Budgets::default()) {
+    let mut stats = NoStats;
+    match run_loop(
+        module,
+        &mut machine,
+        module.entry,
+        vec![],
+        &Budgets::default(),
+        &mut stats,
+    ) {
         Ok(value) => Ok((value, machine)),
         // Balance-at-trap: a runtime trap (double free, use-after-free, …)
         // reports the allocation-balance state alongside the message — the
@@ -337,13 +417,16 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
     }
 }
 
-fn run_loop(
+fn run_loop<S: StatsSink>(
     module: &Module,
     machine: &mut Machine,
     entry_index: u32,
     args: Vec<Value>,
     budgets: &Budgets,
+    stats: &mut S,
 ) -> Result<Value, String> {
+    crate::profile::init();
+    profiling::scope!("vm.run_loop");
     let mut fuel = budgets.instructions;
     let entry = chunk(module, entry_index)?;
     let empty_env: Rc<Vec<Value>> = Rc::new(vec![]);
@@ -433,6 +516,7 @@ fn run_loop(
                 chunk(module, current_chunk)?.name
             ));
         };
+        stats.record(current_chunk as usize, pc);
         frames[frame_index].pc = pc + 1;
 
         match insn {
@@ -2323,6 +2407,91 @@ mod tests {
         )
         .expect("run");
         assert_eq!(outcome.value, Value::I64(42));
+    }
+
+    #[test]
+    fn run_export_with_stats_reports_emitted_and_executed_instructions() {
+        let module = export_module(
+            Chunk {
+                name: "add".into(),
+                code: vec![
+                    Insn::Add {
+                        dest: 2,
+                        a: 0,
+                        b: 1,
+                    },
+                    Insn::Ret { src: 2 },
+                ],
+                arity: 2,
+                n_regs: 3,
+                unwind: vec![],
+            },
+            "add",
+        );
+        let mut io = CaptureIO::default();
+        let mut stats = VmStats::for_module(&module);
+        let outcome = run_export_with_stats(
+            &module,
+            "add",
+            &[HostValue::Int(40), HostValue::Int(2)],
+            export_shape(),
+            Budgets::default(),
+            &mut io,
+            &mut stats,
+        )
+        .expect("run");
+
+        assert_eq!(outcome.value, Value::I64(42));
+        assert_eq!(stats.runs(), 1);
+        assert_eq!(stats.emitted_instructions(), 2);
+        assert_eq!(stats.executed_instructions(), 2);
+        assert_eq!(stats.chunks()[0].instruction_executions(), &[1, 1]);
+        assert_eq!(
+            stats
+                .opcode_stats()
+                .into_iter()
+                .map(|opcode| (opcode.opcode, opcode.emitted, opcode.executed))
+                .collect::<Vec<_>>(),
+            vec![("Add", 1, 1), ("Ret", 1, 1)]
+        );
+        assert!(stats.render().contains("hottest instruction sites"));
+    }
+
+    #[test]
+    fn run_export_with_stats_keeps_counts_after_a_trap() {
+        let module = export_module(
+            Chunk {
+                name: "spin".into(),
+                code: vec![Insn::Jump { target: 0 }],
+                arity: 0,
+                n_regs: 1,
+                unwind: vec![],
+            },
+            "spin",
+        );
+        let mut io = CaptureIO::default();
+        let mut stats = VmStats::default();
+        let budgets = Budgets {
+            instructions: 10,
+            ..Budgets::default()
+        };
+        let err = run_export_with_stats(
+            &module,
+            "spin",
+            &[],
+            export_shape(),
+            budgets,
+            &mut io,
+            &mut stats,
+        )
+        .err()
+        .expect("the loop must exhaust its budget");
+
+        assert!(err.contains("instruction budget"), "{err}");
+        assert_eq!(stats.runs(), 1);
+        assert_eq!(stats.emitted_instructions(), 1);
+        assert_eq!(stats.executed_instructions(), 10);
+        assert_eq!(stats.chunks()[0].instruction_executions(), &[10]);
     }
 
     #[test]

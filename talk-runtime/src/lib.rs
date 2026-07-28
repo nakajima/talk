@@ -9,7 +9,11 @@ pub mod interp;
 pub mod io;
 pub mod memory;
 pub mod objects;
+mod profile;
+pub mod stats;
 pub mod symbol;
+
+pub use stats::{VmChunkStats, VmInstructionStats, VmOpcodeStats, VmStats};
 
 /// VM-owned comparison operation. The compiler translates lambda-G
 /// comparison primops into this runtime opcode during scheduling.

@@ -11,8 +11,8 @@
 //! placement of bytecode verification — Leroy 2003, "Java Bytecode
 //! Verification: Algorithms and Formalizations").
 
-mod inline;
 mod lower;
+mod optimize;
 
 /// The compiler-to-runtime symbol mapping, for the frontend result
 /// bridge (ADR 0043 §5): the identities in a returned value graph are
@@ -26,13 +26,58 @@ pub(crate) use mir::{Entry, ProgramInput};
 use crate::parsing::span::Span;
 use talk_runtime::interp::{StringShape, ValueNames, run_displayed_counted};
 
+pub use talk_runtime::VmStats;
 pub use talk_runtime::interp::{Budgets, HostValue, RunOutcome};
+
+/// The number of concrete rewrites performed by one optimization pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OptimizationPassStats {
+    pub name: &'static str,
+    pub applied: u64,
+}
+
+/// Optimization counts accumulated while compiling one executable.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct OptimizationStats {
+    pub passes: Vec<OptimizationPassStats>,
+}
+
+/// Compiler and VM statistics for one executable.
+#[derive(Debug)]
+pub struct ExecutableStats {
+    pub optimizations: OptimizationStats,
+    pub vm: VmStats,
+}
+
+impl ExecutableStats {
+    pub fn render(&self) -> String {
+        use std::fmt::Write as _;
+
+        let mut out = String::new();
+        let _ = writeln!(out, "Optimization statistics");
+        let _ = writeln!(out, "  {:<28} {:>12}", "pass", "applied");
+        for pass in &self.optimizations.passes {
+            let _ = writeln!(out, "  {:<28} {:>12}", pass.name, pass.applied);
+        }
+        let total: u64 = self
+            .optimizations
+            .passes
+            .iter()
+            .map(|pass| pass.applied)
+            .sum();
+        let _ = writeln!(out, "  {:<28} {:>12}", "total", total);
+        let _ = writeln!(out);
+        out.push_str(&self.vm.render());
+        out
+    }
+}
 
 /// A compiled program: the runtime module plus the display metadata that
 /// renders results Talk-style (enum case names, struct fields).
 pub struct Executable {
     pub(crate) module: talk_runtime::Module,
     pub(crate) names: ValueNames,
+    pub(crate) optimizations: OptimizationStats,
 }
 
 impl Executable {
@@ -47,6 +92,20 @@ impl Executable {
         self.module.render()
     }
 
+    /// Optimization counts recorded while compiling this executable.
+    pub fn optimization_stats(&self) -> &OptimizationStats {
+        &self.optimizations
+    }
+
+    /// Create a statistics collector for this executable. Optimization
+    /// counts are fixed at compilation; VM counts accumulate across runs.
+    pub fn stats(&self) -> ExecutableStats {
+        ExecutableStats {
+            optimizations: self.optimizations.clone(),
+            vm: VmStats::for_module(&self.module),
+        }
+    }
+
     /// Call an exported service function on a fresh machine (ADR 0043
     /// call ABI). Only executables from `compile_service` have exports.
     pub fn run_export<'io>(
@@ -57,6 +116,29 @@ impl Executable {
         io: &'io mut dyn talk_runtime::io::IO,
     ) -> Result<RunOutcome<'io>, String> {
         talk_runtime::interp::run_export(&self.module, name, args, string_shape(), budgets, io)
+    }
+
+    /// Run an export while collecting exact VM instruction counts.
+    pub fn run_export_with_stats<'io>(
+        &self,
+        name: &str,
+        args: &[HostValue],
+        budgets: Budgets,
+        io: &'io mut dyn talk_runtime::io::IO,
+        stats: &mut ExecutableStats,
+    ) -> Result<RunOutcome<'io>, String> {
+        if stats.optimizations != self.optimizations {
+            return Err("statistics collector belongs to a different executable".into());
+        }
+        talk_runtime::interp::run_export_with_stats(
+            &self.module,
+            name,
+            args,
+            string_shape(),
+            budgets,
+            io,
+            &mut stats.vm,
+        )
     }
 }
 
@@ -96,15 +178,30 @@ pub(crate) fn compile(
     programs: &[ProgramInput<'_>],
     entry: Entry,
 ) -> Result<Executable, BackendError> {
-    let mut program = mir::build(programs, entry, false)?;
-    inline::inline_small(&mut program);
-    for function in &mut program.functions {
-        regalloc::reuse_locals(function);
+    crate::profile::init();
+    profiling::scope!("backend.compile");
+    let mut program = {
+        profiling::scope!("backend.mir_build");
+        mir::build(programs, entry, false)?
+    };
+    let optimizations = {
+        profiling::scope!("backend.optimize");
+        optimize::run(&mut program)
+    };
+    {
+        profiling::scope!("backend.regalloc");
+        for function in &mut program.functions {
+            regalloc::reuse_locals(function);
+        }
     }
-    let module = lower::lower(&program)?;
+    let module = {
+        profiling::scope!("backend.lower");
+        lower::lower(&program)?
+    };
     Ok(Executable {
         module,
         names: display_names(programs),
+        optimizations,
     })
 }
 
@@ -166,6 +263,8 @@ pub(crate) fn execute(
     executable: &Executable,
     io: &mut dyn talk_runtime::io::IO,
 ) -> Result<Option<String>, String> {
+    crate::profile::init();
+    profiling::scope!("backend.execute");
     if std::env::var_os("TALK_BACKEND_DEBUG").is_some() {
         eprintln!("{}", executable.module.render());
     }

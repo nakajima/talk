@@ -103,6 +103,23 @@ remove it.
    baseline compilation (copy-and-patch, Xu & Kjolstad OOPSLA 2021)
    removes the interpretation tax.
 
+## Capturing a Tracy profile
+
+The compiler and runtime use the `profiling` facade. Instrumentation is a
+no-op in normal builds; the `profile-tracy` feature enables the Tracy backend
+for both crates:
+
+```text
+cargo run --features profile-tracy -- run path/to/program.tlk
+cargo test --lib --features profile-tracy TEST_FILTER
+```
+
+Start the Tracy viewer before the profiled operation, then connect to the
+process. The current scopes cover compiler parsing, name resolution, type
+checking, service compilation, bootstrap stages, frontend artifact loading and
+execution, bridge adaptation, and VM export execution. Tracy's timer fallback
+is enabled for machines without invariant TSC support.
+
 ## Infrastructure
 
 - `bench/` — eight archetype programs with pinned outputs

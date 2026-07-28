@@ -21,7 +21,9 @@
 
 use rustc_hash::FxHashMap;
 
-use super::mir::{FuncId, Function, Inst, LocalId, Operand, Program, Term};
+use crate::backend::mir::{FuncId, Function, Inst, LocalId, Operand, Program, Term};
+
+use super::PassResult;
 
 /// Upper bounds on a candidate body. Small enough that the splice
 /// always beats the call it replaces.
@@ -31,7 +33,7 @@ const MAX_INLINE_BLOCKS: usize = 4;
 struct Candidate {
     arity: u16,
     n_locals: u16,
-    blocks: Vec<super::mir::BlockData>,
+    blocks: Vec<crate::backend::mir::BlockData>,
 }
 
 /// Whether an instruction may appear in an inlined body: primitive,
@@ -166,15 +168,19 @@ fn remap(op: Operand, args: &[Operand], base: u16, arity: u16) -> Operand {
 /// `_load` into `get` makes `get` itself call-free and a candidate for
 /// the next round. Rounds are bounded — each strictly shrinks the set
 /// of call edges into candidates, and the chains are shallow.
-pub(crate) fn inline_small(program: &mut Program) {
+pub(super) fn run(program: &mut Program) -> PassResult {
+    let mut result = PassResult::default();
     for _ in 0..4 {
-        if !inline_round(program) {
+        let applied = inline_round(program);
+        if applied == 0 {
             break;
         }
+        result.include(PassResult::applied(applied));
     }
+    result
 }
 
-fn inline_round(program: &mut Program) -> bool {
+fn inline_round(program: &mut Program) -> u64 {
     let candidates: FxHashMap<FuncId, Candidate> = program
         .functions
         .iter()
@@ -182,9 +188,9 @@ fn inline_round(program: &mut Program) -> bool {
         .filter_map(|(id, function)| candidate(function).map(|c| (id, c)))
         .collect();
     if candidates.is_empty() {
-        return false;
+        return 0;
     }
-    let mut changed = false;
+    let mut applied = 0;
     for function in &mut program.functions {
         // Iterate by index: splicing appends callee and join blocks,
         // and the join block (holding the call's tail) is scanned in a
@@ -233,7 +239,7 @@ fn inline_round(program: &mut Program) -> bool {
                     src: remap(*value, &args, base, body.arity),
                 });
                 function.blocks[b].insts.splice(position..=position, splice);
-                changed = true;
+                applied += 1;
                 // Rescan the same block: later insts may hold more
                 // candidate calls, and the spliced body holds none.
                 continue;
@@ -250,7 +256,7 @@ fn inline_round(program: &mut Program) -> bool {
                 .term
                 .replace(Term::Goto(block_base, Vec::new()));
             for body_block in &body.blocks {
-                let params: Vec<super::mir::LocalId> = body_block
+                let params: Vec<LocalId> = body_block
                     .params
                     .iter()
                     .map(|param| base + (*param - body.arity))
@@ -294,24 +300,24 @@ fn inline_round(program: &mut Program) -> bool {
                     Some(Term::Trap(message)) => Some(Term::Trap(message)),
                     other => other.clone(),
                 };
-                function.blocks.push(super::mir::BlockData {
+                function.blocks.push(crate::backend::mir::BlockData {
                     params,
                     insts,
                     term,
                 });
             }
-            function.blocks.push(super::mir::BlockData {
+            function.blocks.push(crate::backend::mir::BlockData {
                 params: Vec::new(),
                 insts: tail,
                 term,
             });
-            changed = true;
+            applied += 1;
             // Rescan this block: nothing before `position` was a
             // candidate call, so move on; the join block comes later.
             b += 1;
         }
     }
-    changed
+    applied
 }
 
 #[cfg(test)]
@@ -378,7 +384,7 @@ mod tests {
             global_slots: 0,
             exports: Vec::new(),
         };
-        inline_small(&mut program);
+        assert_eq!(run(&mut program).applied, 1);
         let insts = &program.functions[1].blocks[0].insts;
         assert!(
             !insts.iter().any(|inst| matches!(inst, Inst::Call { .. })),
@@ -462,7 +468,7 @@ mod tests {
             global_slots: 0,
             exports: Vec::new(),
         };
-        inline_small(&mut program);
+        assert_eq!(run(&mut program).applied, 1);
         let function = &program.functions[1];
         assert!(
             !function
@@ -521,7 +527,7 @@ mod tests {
             global_slots: 0,
             exports: Vec::new(),
         };
-        inline_small(&mut program);
+        assert_eq!(run(&mut program).applied, 0);
         assert!(
             program.functions[1].blocks[0]
                 .insts
@@ -558,7 +564,7 @@ mod tests {
             global_slots: 0,
             exports: Vec::new(),
         };
-        inline_small(&mut program);
+        assert_eq!(run(&mut program).applied, 1);
         let function = &program.functions[1];
         let insts = &function.blocks[0].insts;
         let Some(Inst::Scalar { dest, .. }) = insts

@@ -138,6 +138,8 @@ pub(crate) const EMBEDDED_ABI: &str = include_str!("../../bootstrap/frontend.abi
 /// (`checked_in_frontend_artifact_matches_sources` and the bootstrap
 /// fixed point). Fails closed; there is no fallback parser.
 fn load_embedded() -> Result<talk_runtime::Module, String> {
+    crate::profile::init();
+    profiling::scope!("frontend.load_embedded");
     let manifest = ArtifactManifest::parse(EMBEDDED_MANIFEST)?;
     manifest.verify_artifact(EMBEDDED_ARTIFACT, Some(EMBEDDED_ABI))?;
     talk_runtime::Module::decode_bytecode(EMBEDDED_ARTIFACT)
@@ -160,9 +162,12 @@ pub fn parse_source(
     source: &str,
     file_id: crate::node_id::FileID,
 ) -> Result<crate::compiling::bridge::BridgedParse, String> {
+    crate::profile::init();
+    profiling::scope!("frontend.parse_source");
     SESSION.with(|cell| {
         let session = cell
             .get_or_init(|| {
+                profiling::scope!("frontend.initialize_session");
                 let module = load_embedded()?;
                 let schema = crate::compiling::abi::parse_schema(EMBEDDED_ABI)?;
                 Ok((module, schema))
@@ -171,16 +176,19 @@ pub fn parse_source(
             .map_err(Clone::clone)?;
         let (module, schema) = session;
         let mut io = talk_runtime::io::CaptureIO::default();
-        let run = talk_runtime::interp::run_export(
-            module,
-            "parse_file_source",
-            &[talk_runtime::interp::HostValue::String(
-                source.as_bytes().to_vec(),
-            )],
-            crate::backend::string_shape(),
-            talk_runtime::interp::Budgets::default(),
-            &mut io,
-        )?;
+        let run = {
+            profiling::scope!("frontend.execute");
+            talk_runtime::interp::run_export(
+                module,
+                "parse_file_source",
+                &[talk_runtime::interp::HostValue::String(
+                    source.as_bytes().to_vec(),
+                )],
+                crate::backend::string_shape(),
+                talk_runtime::interp::Budgets::default(),
+                &mut io,
+            )?
+        };
         crate::compiling::bridge::adapt(&run, schema, file_id)
     })
 }
@@ -188,9 +196,12 @@ pub fn parse_source(
 /// Run one of the frontend's `String -> String` validation exports
 /// (the dump surface) through the embedded session.
 pub fn dump_export(name: &str, source: &str) -> Result<String, String> {
+    crate::profile::init();
+    profiling::scope!("frontend.dump_export");
     SESSION.with(|cell| {
         let session = cell
             .get_or_init(|| {
+                profiling::scope!("frontend.initialize_session");
                 let module = load_embedded()?;
                 let schema = crate::compiling::abi::parse_schema(EMBEDDED_ABI)?;
                 Ok((module, schema))
@@ -199,16 +210,19 @@ pub fn dump_export(name: &str, source: &str) -> Result<String, String> {
             .map_err(Clone::clone)?;
         let (module, _) = session;
         let mut io = talk_runtime::io::CaptureIO::default();
-        let run = talk_runtime::interp::run_export(
-            module,
-            name,
-            &[talk_runtime::interp::HostValue::String(
-                source.as_bytes().to_vec(),
-            )],
-            crate::backend::string_shape(),
-            talk_runtime::interp::Budgets::default(),
-            &mut io,
-        )?;
+        let run = {
+            profiling::scope!("frontend.execute");
+            talk_runtime::interp::run_export(
+                module,
+                name,
+                &[talk_runtime::interp::HostValue::String(
+                    source.as_bytes().to_vec(),
+                )],
+                crate::backend::string_shape(),
+                talk_runtime::interp::Budgets::default(),
+                &mut io,
+            )?
+        };
         let bytes = run
             .string_bytes(&run.value)
             .map_err(|error| format!("{name} did not return a string: {error}"))?;
@@ -220,9 +234,12 @@ pub fn dump_export(name: &str, source: &str) -> Result<String, String> {
 /// the token stream with comments included as LineComment tokens,
 /// plus whether the scan completed without a lex error.
 pub fn lex(source: &str) -> Result<(Vec<crate::parsing::lexing::token::Token>, bool), String> {
+    crate::profile::init();
+    profiling::scope!("frontend.lex");
     SESSION.with(|cell| {
         let session = cell
             .get_or_init(|| {
+                profiling::scope!("frontend.initialize_session");
                 let module = load_embedded()?;
                 let schema = crate::compiling::abi::parse_schema(EMBEDDED_ABI)?;
                 Ok((module, schema))
@@ -231,16 +248,19 @@ pub fn lex(source: &str) -> Result<(Vec<crate::parsing::lexing::token::Token>, b
             .map_err(Clone::clone)?;
         let (module, schema) = session;
         let mut io = talk_runtime::io::CaptureIO::default();
-        let run = talk_runtime::interp::run_export(
-            module,
-            "lex_tokens",
-            &[talk_runtime::interp::HostValue::String(
-                source.as_bytes().to_vec(),
-            )],
-            crate::backend::string_shape(),
-            talk_runtime::interp::Budgets::default(),
-            &mut io,
-        )?;
+        let run = {
+            profiling::scope!("frontend.execute");
+            talk_runtime::interp::run_export(
+                module,
+                "lex_tokens",
+                &[talk_runtime::interp::HostValue::String(
+                    source.as_bytes().to_vec(),
+                )],
+                crate::backend::string_shape(),
+                talk_runtime::interp::Budgets::default(),
+                &mut io,
+            )?
+        };
         crate::compiling::bridge::lex_tokens(&run, schema)
     })
 }
@@ -370,6 +390,66 @@ mod tests {
 
     fn repo_root() -> &'static Path {
         Path::new(env!("CARGO_MANIFEST_DIR"))
+    }
+
+    #[test]
+    #[ignore = "run by scripts/frontend-vm-stats.sh"]
+    fn write_vm_stats_profile() {
+        use std::fmt::Write as _;
+
+        let output = std::env::var_os("TALK_FRONTEND_VM_STATS_OUTPUT")
+            .map(std::path::PathBuf::from)
+            .expect("TALK_FRONTEND_VM_STATS_OUTPUT must name the report file");
+        let root = repo_root();
+        let corpus = sources(root).expect("frontend sources load");
+        let bootstrap = regenerate(root).expect("frontend bootstraps");
+        let module = talk_runtime::Module::decode_bytecode(&bootstrap.image)
+            .expect("generated frontend artifact decodes");
+        let mut stats = talk_runtime::VmStats::for_module(&module);
+
+        for (name, source) in &corpus {
+            let mut io = talk_runtime::io::CaptureIO::default();
+            talk_runtime::interp::run_export_with_stats(
+                &module,
+                "parse_file_source",
+                &[talk_runtime::interp::HostValue::String(
+                    source.as_bytes().to_vec(),
+                )],
+                crate::backend::string_shape(),
+                talk_runtime::interp::Budgets::default(),
+                &mut io,
+                &mut stats,
+            )
+            .unwrap_or_else(|error| panic!("frontend failed to parse {name}: {error}"));
+        }
+
+        let source_bytes: usize = corpus.iter().map(|(_, source)| source.len()).sum();
+        let mut report = String::new();
+        let _ = writeln!(
+            report,
+            "artifact_sha256: {}",
+            bootstrap.manifest.artifact_digest
+        );
+        let _ = writeln!(report, "artifact_bytes: {}", bootstrap.image.len());
+        let _ = writeln!(report, "workload: frontend/*.tlk, sorted by filename");
+        let _ = writeln!(report, "source_files: {}", corpus.len());
+        let _ = writeln!(report, "source_bytes: {source_bytes}");
+        for (name, source) in &corpus {
+            let _ = writeln!(report, "source: {name} {}", source.len());
+        }
+        for (index, optimizations) in bootstrap.stage_optimizations.iter().enumerate() {
+            let _ = writeln!(report, "\noptimization_stage_{}:", index + 1);
+            let mut total = 0u64;
+            for pass in &optimizations.passes {
+                total += pass.applied;
+                let _ = writeln!(report, "  {:<28} {}", pass.name, pass.applied);
+            }
+            let _ = writeln!(report, "  {:<28} {total}", "total");
+        }
+        let _ = writeln!(report);
+        report.push_str(&stats.render());
+        std::fs::write(&output, report)
+            .unwrap_or_else(|error| panic!("failed to write {}: {error}", output.display()));
     }
 
     /// The fast staleness gate: the checked-in manifest must tie the

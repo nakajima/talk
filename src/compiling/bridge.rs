@@ -342,6 +342,8 @@ pub struct BridgedParse {
 /// sentinel (start -1) marks a lex failure after the tokens produced
 /// up to it.
 pub fn lex_tokens(run: &RunOutcome, schema: &AbiSchema) -> Result<(Vec<Token>, bool), String> {
+    crate::profile::init();
+    profiling::scope!("frontend.bridge_lex");
     let validator = ResultValidator::new(run, schema)?;
     let elements = validator.array_elements(&run.value, &AbiTy::Named("MetaToken".into()))?;
     let mut tokens = Vec::new();
@@ -390,6 +392,8 @@ pub fn adapt(
     schema: &AbiSchema,
     file_id: FileID,
 ) -> Result<BridgedParse, String> {
+    crate::profile::init();
+    profiling::scope!("frontend.bridge_parse");
     let mut adapter = ResultAdapter {
         v: ResultValidator::new(run, schema)?,
         boxed: AbiTy::Named("boxed".into()),

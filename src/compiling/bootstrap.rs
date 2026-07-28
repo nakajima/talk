@@ -10,7 +10,7 @@
 //! with the candidate — the check's meaning strengthens without the
 //! command changing shape.
 
-use crate::compiling::driver::{Driver, DriverConfig, Source};
+use crate::compiling::driver::{Driver, DriverConfig, OptimizationStats, Source};
 use crate::compiling::manifest::ArtifactManifest;
 
 pub struct BootstrapOutcome {
@@ -19,16 +19,26 @@ pub struct BootstrapOutcome {
     /// The ABI descriptor (ADR 0043 §5), when the service declares a
     /// schema root.
     pub abi: Option<String>,
+    /// Optimization rewrites performed by each side of the fixed point.
+    pub stage_optimizations: [OptimizationStats; 2],
+}
+
+struct CompiledStage {
+    image: Vec<u8>,
+    abi: Option<String>,
+    optimizations: OptimizationStats,
 }
 
 /// One compile of the source set to an encoded service image, plus the
-/// ABI descriptor when a schema root is named.
+/// ABI descriptor and optimization counts.
 fn compile_stage(
     sources: &[(String, String)],
     exports: &[String],
     allowed_effects: &[String],
     schema_root: Option<&str>,
-) -> Result<(Vec<u8>, Option<String>), String> {
+) -> Result<CompiledStage, String> {
+    crate::profile::init();
+    profiling::scope!("bootstrap.compile_stage");
     let inputs: Vec<Source> = sources
         .iter()
         .map(|(name, text)| Source::in_memory(name.into(), text.clone()))
@@ -51,14 +61,28 @@ fn compile_stage(
             messages.join("\n")
         ));
     }
-    let abi = schema_root
-        .map(|root| crate::compiling::abi::describe(&typed.phase.program, root))
-        .transpose()?;
-    let executable = typed.compile_service(exports, allowed_effects)?;
-    let image = executable
-        .encode_bytecode()
-        .map_err(|error| format!("bootstrap encode failed: {error:?}"))?;
-    Ok((image, abi))
+    let abi = {
+        profiling::scope!("bootstrap.describe_abi");
+        schema_root
+            .map(|root| crate::compiling::abi::describe(&typed.phase.program, root))
+            .transpose()?
+    };
+    let executable = {
+        profiling::scope!("bootstrap.compile_service");
+        typed.compile_service(exports, allowed_effects)?
+    };
+    let optimizations = executable.optimization_stats().clone();
+    let image = {
+        profiling::scope!("bootstrap.encode");
+        executable
+            .encode_bytecode()
+            .map_err(|error| format!("bootstrap encode failed: {error:?}"))?
+    };
+    Ok(CompiledStage {
+        image,
+        abi,
+        optimizations,
+    })
 }
 
 /// Regenerate the artifact, manifest, and ABI descriptor for a source
@@ -71,18 +95,27 @@ pub fn bootstrap(
     allowed_effects: &[String],
     schema_root: Option<&str>,
 ) -> Result<BootstrapOutcome, String> {
-    let (stage1, abi1) = compile_stage(sources, exports, allowed_effects, schema_root)?;
-    let (stage2, abi2) = compile_stage(sources, exports, allowed_effects, schema_root)?;
-    if stage1 != stage2 || abi1 != abi2 {
+    crate::profile::init();
+    profiling::scope!("bootstrap");
+    let stage1 = {
+        profiling::scope!("bootstrap.stage_1");
+        compile_stage(sources, exports, allowed_effects, schema_root)?
+    };
+    let stage2 = {
+        profiling::scope!("bootstrap.stage_2");
+        compile_stage(sources, exports, allowed_effects, schema_root)?
+    };
+    if stage1.image != stage2.image || stage1.abi != stage2.abi {
         return Err(
             "bootstrap did not reach a fixed point: stage-1 and stage-2 artifacts differ".into(),
         );
     }
-    let manifest = ArtifactManifest::compute(sources, &stage1, abi1.as_deref());
+    let manifest = ArtifactManifest::compute(sources, &stage1.image, stage1.abi.as_deref());
     Ok(BootstrapOutcome {
-        image: stage1,
+        image: stage1.image,
         manifest,
-        abi: abi1,
+        abi: stage1.abi,
+        stage_optimizations: [stage1.optimizations, stage2.optimizations],
     })
 }
 
@@ -115,6 +148,12 @@ mod tests {
             .manifest
             .verify(&sources, &outcome.image, None)
             .expect("manifest verifies its own output");
+        assert_eq!(outcome.stage_optimizations[0].passes.len(), 6);
+        assert_eq!(
+            outcome.stage_optimizations[0],
+            outcome.stage_optimizations[1],
+            "fixed-point stages should perform the same rewrites"
+        );
 
         let module = talk_runtime::Module::decode_bytecode(&outcome.image).expect("image decodes");
         let mut io = CaptureIO::default();

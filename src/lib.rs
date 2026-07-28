@@ -17,6 +17,7 @@
 #![cfg_attr(not(test), deny(clippy::todo))]
 // #![cfg_attr(not(test), warn(clippy::unimplemented))]
 
+mod profile;
 pub mod parsing;
 pub use parsing::*;
 pub mod analysis;
