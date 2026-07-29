@@ -1,8 +1,8 @@
 # 0037 - Eliminate backend capability rejections
 
-Status: proposed; rewritten after ADR 0038
+Status: accepted; implementation in progress
 
-Companion inventory: [0037 unsupported inventory](0037-unsupported-inventory.md)
+Historical planning inventory: [backend unsupported inventory](../backend-unsupported-inventory.md)
 
 ## Context
 
@@ -237,7 +237,7 @@ initialization or invalid path joins.
 A projection spine addresses a portion of storage for reading or writing. It
 does not by itself reintroduce source-visible partial moves or field-granular
 initialization. Root-level ownership and initialization remain consistent with
-the implicit-sharing decision in `docs/ownership-rethink-plan.md`; consuming
+the implicit-sharing decision in `docs/ownership.md`; consuming
 destructure accounts for every payload explicitly.
 
 ## 3. Runtime value operations and evidence transport
@@ -519,7 +519,7 @@ MIR does not become a second type checker.
 
 It preserves the ownership, deterministic-cleanup, generic-evidence, and
 one-shot-effect semantics retained by ADRs 0032 and 0034, as amended by the
-implicit-sharing decision in `docs/ownership-rethink-plan.md`.
+implicit-sharing decision in `docs/ownership.md`.
 
 It supersedes blanket implementation restrictions in the parity ledger only
 where this ADR supplies executable behavior: owning captures, generic capturing

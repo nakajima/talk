@@ -683,7 +683,7 @@ and every test in the suite now asserts exact allocation balance.
   so returning a struct that stores an effectful closure — even across
   a module boundary — still demands the handler at the call site.
   A struct cannot launder an effect. Design and trade-offs:
-  docs/effect-params-on-structs-plan.md.
+  docs/effects.md.
 
 ### Leak-free ownership, no exceptions
 
@@ -1068,7 +1068,7 @@ core-IR plan, C1–C6):
   Effect rows carry instantiations as inert entries (duplicate labels
   allowed, arguments never unified across entries); `@handle` is a
   label-scoped elimination constraint processed at solve quiescence
-  (docs/generic-effects-plan.md).
+  (docs/effects.md).
 - **`lower/` is decomposed by concern** (demand/monomorphization,
   functions, matches, values, closures, calls, effects, splices, θ).
 

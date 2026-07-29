@@ -1,6 +1,6 @@
 # 0032 - Single-artifact ownership and lowering pipeline
 
-Status: accepted; implementation in progress
+Status: accepted semantic record; implementation-shape requirements superseded by ADR 0034 (2026-07-16)
 
 ## Context
 
@@ -1214,8 +1214,8 @@ only through these gates, in order:
 1. **G0 - Contract gate**
    - Amend this ADR for any new semantic fact, identity, recovery state, or
      cross-artifact relationship.
-   - Update `docs/stage-0-contract-types.md`, Rust contract types, validators,
-     printers, and `docs/backend-status.md` in the same stack.
+   - Update the Rust contract types, validators, printers, and implementation
+     evidence in the same stack.
    - Add a negative validator or verifier test for every new invariant.
 2. **G1 - Producer gate**
    - The real producer emits the fact without consulting a downstream phase.
@@ -1245,9 +1245,10 @@ only through these gates, in order:
    - Once a backend exists, the same source fixture executes through every
      backend claiming the row and produces the same observable result.
 
-A row in `docs/backend-status.md` may move to `Integrated` only after G0 through
-G4 pass. Before a backend exists, G5 is marked not connected rather than
-waived.
+Historically, a row moved to `Integrated` only after G0 through G4 passed.
+Before a backend existed, G5 was marked not connected rather than waived. ADR
+0034 replaced this multi-artifact gate structure with black-box validation
+through the public backend seam.
 
 Changes have mandatory impact suites:
 

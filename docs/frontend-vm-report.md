@@ -1,5 +1,8 @@
 # Self-hosted frontend VM report
 
+Status: historical optimization snapshot at commit `0b633a91`; later backend
+and artifact changes are not reflected in these measurements.
+
 ## Workload
 
 This capture ran:

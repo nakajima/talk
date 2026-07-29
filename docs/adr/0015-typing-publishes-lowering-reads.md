@@ -106,7 +106,7 @@ their closure rows instead of sharing one module-wide row var.
 ## Decided / deferred (the ledger — nothing is "known" without a home)
 
 - **Effect-generic closure storage — DONE (day 3)**: effect parameters
-  on struct types (docs/effect-params-on-structs-plan.md). Closure
+  on struct types (docs/effects.md). Closure
   fields' free row tails quantify as implicit effect params at
   collection; constructions instantiate them (fresh open rows carried as
   `Ty::Eff` args on the nominal head — Koka-style kinded type

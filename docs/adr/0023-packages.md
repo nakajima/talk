@@ -1,6 +1,6 @@
 # 0023 - Packages
 
-Status: proposed
+Status: accepted; implemented
 
 Date: 2026-07-09
 

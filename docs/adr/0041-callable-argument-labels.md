@@ -1,6 +1,6 @@
 # 0041 - Callable argument labels and label-based overloading
 
-Status: proposed
+Status: accepted; implemented (2026-07-25)
 
 ## Context
 

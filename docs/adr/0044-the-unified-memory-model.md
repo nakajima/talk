@@ -1,4 +1,4 @@
-# 0041 - The unified memory model
+# 0044 - The unified memory model
 
 Status: proposed; on acceptance supersedes ADR 0033 (managed storage, heap
 regions, and FFI lifetimes) and ADR 0040 (frame-or-region closure environments)

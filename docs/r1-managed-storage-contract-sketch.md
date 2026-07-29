@@ -1,6 +1,6 @@
 # R1 managed-storage contract sketch
 
-Status: accepted design sketch for [ADR 0033](adr/0033-managed-storage-heap-regions-and-ffi-lifetimes.md); not yet a production Rust contract (2026-07-15)
+Status: historical accepted sketch for [ADR 0033](adr/0033-managed-storage-heap-regions-and-ffi-lifetimes.md); consolidated by proposed ADR 0044 and not a production Rust contract (2026-07-15)
 
 Semantic authority is ADR 0032 together with the accepted decisions in ADR
 0033. The shapes below identify the current contract gaps and the smallest
@@ -646,16 +646,14 @@ unimplemented.
 
 ## G0 implementation order after acceptance
 
-1. Amend ADR 0032's use-mode and Talk IR sections with Alias, managed types,
-   generated glue roles, region operations, and erasure points.
-2. Update `docs/stage-0-contract-types.md` with accepted concrete shapes.
-3. Add Rust contract types only; keep production managed forms rejected.
-4. Update TypedProgram validation, MIR verification, Talk IR verification, and
-   deterministic printers with malformed negative fixtures.
-5. Update `docs/backend-status.md` and `docs/backend-parity-ledger.md` to mark
-   the contract gate only; G1-G5 remain pending.
-6. Audit the old runtime modules against the accepted target boundary before
-   reusing any implementation.
+1. Decide whether to accept ADR 0044 as the consolidated memory model.
+2. Encode accepted concrete shapes directly in the current Rust contracts.
+3. Keep production managed forms rejected until their complete runtime path is
+   present.
+4. Update frontend validation, MIR verification, backend validation, and
+   deterministic renderers with malformed negative fixtures.
+5. Record implementation evidence in ADR 0044 and executable tests.
+6. Audit old runtime code against ADR 0034's backend seam before reuse.
 
 No R1 producer, lowerer, runtime, or backend support should land in the Lane D
 review stack.

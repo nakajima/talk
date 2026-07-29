@@ -1,9 +1,13 @@
 # Profiling findings
 
-Current state as of commit `7bc48b90` (2026-07-18), measured on the
-talk-syntax suite (225 tests) and the benchmark corpus (`bench/`).
-Full history and method live in the published profile report; this
-file records where things stand and what each finding rests on.
+Status: performance numbers are historical snapshots; the Tracy capture and
+infrastructure instructions are current as of commit `443edcef`.
+
+Historical snapshot at commit `7bc48b90` (2026-07-18), measured on the
+talk-syntax suite (225 tests) and the benchmark corpus (`bench/`). These
+numbers predate the self-hosted frontend and compiled core/stdlib caches and
+must not be treated as the current baseline. Full history and method live in
+the published profile report; this file records what that snapshot found.
 Instruction counts are the load-bearing metric throughout — the
 measurement machine throttles under sustained benchmarking, and wall
 clocks drifted up to 20% across batches at identical instruction

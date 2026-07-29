@@ -895,7 +895,7 @@ impl<'s> Solver<'s> {
     /// rest are each side's leftovers. Entries never unify their
     /// instantiation arguments against each other — occurrences are inert
     /// until a handler's label filter discharges them or a closed row
-    /// rejects them (docs/generic-effects-plan.md).
+    /// rejects them (docs/effects.md).
     fn diff_effect_entries(
         &mut self,
         ea: Vec<EffectEntry>,

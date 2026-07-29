@@ -2,8 +2,7 @@
 
 Status: superseded by ADR 0031 (2026-07-13)
 
-Stage checklist (see "Stages" below; the open stages are tracked by
-`docs/ownership-soundness-plan.md`):
+Historical stage checklist (all stages landed before the backend reset):
 
 - Stage 1 (repro tests): bug A's shapes landed with stage 3; bug B's
   shape is now a running both-engine test

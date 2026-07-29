@@ -1,7 +1,10 @@
-# Ownership rethink: implicit sharing, one dataflow layer
+# Ownership: implicit sharing and MIR dataflow
 
-Status: language decision approved 2026-07-18. Design ready for
-implementation; waves and exit criteria below.
+Status: current semantics; language decision approved 2026-07-18 and
+implementation waves completed 2026-07-19.
+
+This document is the authority for Talk's implicit-sharing rules and records
+the MIR dataflow implementation that replaced hand-threaded ownership state.
 
 ## Why a rethink and not patches
 
@@ -31,11 +34,9 @@ The causes are structural, not local:
    double free is cause 2 expressed as codegen: match payload
    ownership decided by pattern shape, not by scrutinee provenance.
 
-This failure mode is not new to this branch. The previous system's
-five-track review (`docs/ownership-soundness-plan.md`) confirmed six
-memory-safety holes in the *frontend* flow pass and named the same
-systemic cause: invariants held by a trust chain with no verifier
-behind it. Two independent implementations grew the same class of
+This failure mode was not new to this branch. An earlier five-track review
+confirmed six memory-safety holes in the frontend flow pass and named the same
+systemic cause: invariants held by a trust chain with no verifier behind it. Two independent implementations grew the same class of
 holes because both hand-maintain flow state instead of computing it.
 Rust's borrow checker went through exactly this history: the AST-era
 checker accumulated soundness bugs and ergonomic rejections until

@@ -73,7 +73,7 @@ frame above the delimiter wholesale (`talk-runtime/src/interp.rs:273-281`).
 ADR 0011's consequences section already named the debt: "Aborts still skip
 frame cleanups (drops, region write-backs) between the perform and the
 delimiter." The ownership-soundness review (finding B1,
-`docs/ownership-soundness-plan.md`) confirmed every shape of that debt
+`docs/ownership.md`) confirmed every shape of that debt
 with running repros:
 
 **Shape 1 — the performer's frame.** Every owned local in the frame that

@@ -2,7 +2,7 @@
 //! replacing the per-construct bookkeeping (scope stacks, arm-merge
 //! divergence, cleanup-chain healing) that each construct had to
 //! re-implement and could get wrong — the completion of wave C in
-//! docs/ownership-rethink-plan.md. The model is Rust's MIR drop
+//! docs/ownership.md. The model is Rust's MIR drop
 //! elaboration: drops derived from an initialization fixpoint, here the
 //! same forward replay the balance verifier runs.
 //!

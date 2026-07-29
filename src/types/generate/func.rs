@@ -460,7 +460,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     /// fresh ambient row, connected to the current one by a label filter
     /// (`HandleEffect`) — the `@handle` discharges every occurrence of its
     /// effect, whatever the instantiation (label-scoped elimination —
-    /// docs/generic-effects-plan.md).
+    /// docs/effects.md).
     fn enter_handler_extent(&mut self, ctx: &Ctx, effect: Symbol, node: NodeID) -> Ctx {
         self.enter_effect_mask(ctx, effect, node)
     }

@@ -11,7 +11,7 @@
 //! predicates. Effect rows follow Leijen, *Koka: Programming with
 //! Row-Polymorphic Effect Types* (MSR-TR-2013-79): entries carry the
 //! effect label plus its instantiation arguments (duplicates allowed and
-//! inert — see docs/generic-effects-plan.md); an effect's operation
+//! inert — see docs/effects.md); an effect's operation
 //! signature lives in the catalog, never in the row.
 
 use std::ops::ControlFlow;

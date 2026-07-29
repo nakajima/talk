@@ -62,7 +62,7 @@ pub(crate) enum CmpKind {
     Ge,
 }
 
-/// The E1 scalar operation vocabulary (`docs/e1-scalar-execution-plan.md`).
+/// The E1 scalar operation vocabulary (`docs/backend-parity-ledger.md`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ScalarOp {
     IntAdd,
@@ -679,7 +679,7 @@ const BUFFER_WALK: ContainsWalk = ContainsWalk {
     leaf: |_, symbol| (symbol == Symbol::RawPtr).then_some(true),
     param_counts: true,
     // Stored views own their referents (owning stored views —
-    // docs/ownership-rethink-plan.md, wave E's second half): a borrowed
+    // docs/ownership.md, wave E's second half): a borrowed
     // payload counts like any other stored reference.
     skip_borrowed_payloads: false,
 };
@@ -2583,7 +2583,7 @@ struct FunctionBuilder<'p, 'a> {
     /// surfaced when the function finishes.
     deferred_errors: Vec<BackendError>,
     /// The ownership event log the balance verifier replays (wave B of
-    /// docs/ownership-rethink-plan.md): one record per Def/Use/Move/Drop
+    /// docs/ownership.md): one record per Def/Use/Move/Drop
     /// decision, at the block position where it was made.
     flow_events: Vec<verify::FlowRecord>,
     /// Names the function in balance-verifier reports.
@@ -3382,7 +3382,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// Whether a live view (a `Borrowed`-classified value whose symbol
     /// still has uses) roots at this local. Consuming or reassigning
     /// such an owner must keep the referent alive — snapshot semantics
-    /// (docs/ownership-rethink-plan.md, rule 2's frame-local half).
+    /// (docs/ownership.md, rule 2's frame-local half).
     fn has_live_view(&self, root: LocalId) -> bool {
         self.borrow_roots.iter().any(|(view, candidate_root)| {
             *candidate_root == root
@@ -3419,7 +3419,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         self.invalidated_views.extend(views);
     }
 
-    /// Rule 1 (docs/ownership-rethink-plan.md): a consume that is not
+    /// Rule 1 (docs/ownership.md): a consume that is not
     /// the value's last use donates a reference instead of moving —
     /// ownership is an optimization the compiler discovers at the true
     /// last use (Perceus: Reinking, Xie, de Moura & Leijen, PLDI 2021),
@@ -3608,7 +3608,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // reference like any other place read: under implicit
                 // sharing every clone at this boundary is a retain, so
                 // the old Copy/CheapClone cheapness gate has nothing
-                // left to police (docs/ownership-rethink-plan.md,
+                // left to police (docs/ownership.md,
                 // cheap-clone-at-use adjudication).
                 self.retain_value(operand, &owned, span)?;
             }
@@ -5276,7 +5276,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // `consume` of a borrowed source drains a retained copy:
                 // the owner is always protected by the reference the
                 // donation takes here (rule 3 of
-                // docs/ownership-rethink-plan.md — the old rejection
+                // docs/ownership.md — the old rejection
                 // guarded an implementation detail that no longer
                 // exists). The donation happens in consume_binding
                 // below, which sees the owned destination type.
@@ -5990,7 +5990,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // borrowed parameter, a view) donates a reference here
                 // instead of slipping in unretained and double-freeing
                 // when the container is decomposed (rule 2 of
-                // docs/ownership-rethink-plan.md).
+                // docs/ownership.md).
                 let element_tys = tuple_element_tys(&ty, items.len());
                 for ((arg, item), element_ty) in args.iter().zip(items).zip(&element_tys) {
                     let dest_ty = if matches!(element_ty, Ty::Error) {
@@ -6892,7 +6892,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     // A bind reached through a borrow-typed layer shares
                     // the view's interior: the arm owns the binding (it
                     // drops below), so it donates a reference on the way
-                    // in (rule 1 of docs/ownership-rethink-plan.md).
+                    // in (rule 1 of docs/ownership.md).
                     // Without the retain the arm's drop releases the
                     // lender's reference — the tuple-match double free.
                     if through_borrow {

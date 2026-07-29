@@ -1,6 +1,6 @@
 # 0033 - Managed storage, heap regions, and FFI lifetimes
 
-Status: accepted at P7 as the R1 design contract; implementation requires the coordinated G0 contract stack (2026-07-15). Consolidated into ADR 0041 (proposed); this ADR remains the accepted contract until 0041 is accepted.
+Status: accepted at P7 as the R1 design contract; implementation requires the coordinated G0 contract stack (2026-07-15). Consolidated into ADR 0044 (proposed); this ADR remains the accepted contract until ADR 0044 is accepted.
 
 ## Context
 

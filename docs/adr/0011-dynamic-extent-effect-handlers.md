@@ -119,7 +119,7 @@ splitter (`try_mir_effect_split`, `rest_mir_closure`), `HandlerCap` /
   (the HOF pattern); the principled reconciliation is tunneling (Zhang &
   Myers, POPL 2019) — out of scope.
 - **Generic-effect handlers are implemented**
-  (docs/generic-effects-plan.md, same day): effect rows carry
+  (docs/effects.md, same day): effect rows carry
   instantiations as inert entries (`EffectEntry { effect, args }`,
   duplicate labels allowed, no cross-entry argument unification);
   `@handle` is a label-scoped elimination constraint (`HandleEffect`,

@@ -1,8 +1,13 @@
-# ADR 0037 — `BackendError::unsupported` inventory
+# Backend unsupported inventory
 
-Companion to `0037-eliminate-backend-unsupported-behavior.md` (step 0). Every one
-of the 65 sites is listed with its trigger, disposition, and support path.
-Dispositions use the ADR's vocabulary:
+Status: historical ADR 0037 planning snapshot from 2026-07-22. The source has
+moved and now contains 53 `BackendError::unsupported` calls; the line numbers
+and site count below are not a current work queue.
+
+This is the step-0 companion to
+[ADR 0037](adr/0037-eliminate-backend-unsupported-behavior.md). It records the
+original 65-site classification and the implementation mechanisms derived from
+it. Dispositions use the ADR's vocabulary:
 
 - **VALID** — behavior gets implemented; the site disappears into a mechanism.
 - **DUP** — duplicate guard for a gap owned by another site; closes with it.
@@ -13,7 +18,8 @@ Dispositions use the ADR's vocabulary:
   compiler error (requires a test proving frontend erasure/rejection first, per
   the admission rule).
 
-All bare `:line` references are `src/backend/mir/mod.rs`.
+All bare `:line` references name the historical
+`src/backend/mir/mod.rs` positions from the snapshot.
 
 ## Summary
 
@@ -136,7 +142,7 @@ mode + value operations; generated env retain/drop glue (modeled on
 `glue_closure`, glue:468) plugs into `retain_value`/`drop_value` via a new
 closure arm; the last closure reference releases every owning capture exactly
 once. Managed captures retain a snapshot per the implicit-sharing decision
-(`docs/ownership-rethink-plan.md`).
+(`docs/ownership.md`).
 
 | Site | Case | Disposition |
 |---|---|---|

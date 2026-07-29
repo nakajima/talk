@@ -1,7 +1,7 @@
 //! The ownership-balance verifier: the checker behind the trust chain
 //! that the previous system's soundness review found missing (ADR 0017
-//! stage 2; docs/ownership-soundness-plan.md) and the rethink's wave B
-//! delivers (docs/ownership-rethink-plan.md).
+//! stage 2; docs/ownership.md) and the rethink's wave B
+//! delivers (docs/ownership.md).
 //!
 //! While building a function, the builder logs one event at every point
 //! it decides ownership: Def when a local becomes a tracked owned value,

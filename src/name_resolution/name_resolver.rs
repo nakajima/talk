@@ -1438,7 +1438,7 @@ impl NameResolver {
     /// name string) without making it visible in any scope. Local `let`
     /// binders go through this at their declaration point and only insert
     /// into scope once their initializer has resolved (rule 1 of
-    /// docs/sequential-scoping-plan.md).
+    /// docs/adr/0013-sequential-scoping-for-locals.md).
     pub(super) fn mint(
         &mut self,
         name: &Name,
@@ -1852,7 +1852,7 @@ impl NameResolver {
     // Every block gets a fresh scope on entry: locals insert here
     // sequentially, at their point of declaration, so a binding is
     // visible from just after its initializer to the end of the block
-    // (docs/sequential-scoping-plan.md). Blocks synthesized between the
+    // (docs/adr/0013-sequential-scoping-for-locals.md). Blocks synthesized between the
     // passes (e.g. generated inits) need no special case — the scope is
     // always built here.
     fn enter_block(&mut self, block: &mut Block) {

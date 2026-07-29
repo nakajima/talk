@@ -56,9 +56,10 @@ Notable decisions and departures made while landing:
   payload as owned (the pack path bypasses the borrowed-return check) —
   confirmed 2026-07-11 to be worse than written: the pack also defeats
   linearity (a `'linear` payload packs from a borrow into an owned
-  `any P` and stays consumable). Still open; fix in flight per
-  `docs/ownership-soundness-plan.md` track 3.2. Also: call-site markers
-  are not yet enforced on `perform` arguments; the tooling pass (hovers,
+  `any P` and stays consumable). This was an implementation gap at the
+  time; current ownership semantics are documented in `docs/ownership.md`.
+  Also: call-site markers are not yet enforced on `perform` arguments;
+  the tooling pass (hovers,
   semantic tokens, a copies report) has not been done.
 
 ## Context

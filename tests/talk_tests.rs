@@ -2091,7 +2091,7 @@ fn assert_flow_corpus(
         if is_error {
             if pending_rejection.contains(&name.as_str()) {
                 // Adjudicated must-reject whose enforcement has not
-                // landed yet (docs/ownership-rethink-plan.md). The
+                // landed yet (docs/ownership.md). The
                 // assert keeps the list current: when the enforcing
                 // wave lands, this fires and the case must be promoted
                 // to an enforced rejection.
@@ -2149,7 +2149,7 @@ fn assert_flow_corpus(
 }
 
 /// The flow/ownership rule corpus, adjudicated under the implicit-
-/// sharing decision (docs/ownership-rethink-plan.md): reject pins are
+/// sharing decision (docs/ownership.md): reject pins are
 /// the four surviving error categories and can never be skipped —
 /// every one must exit nonzero with its fragment. Accept pins must
 /// compile and run clean. Two self-cleaning lists park divergences:
@@ -2966,7 +2966,7 @@ fn run_drops_a_payload_binding_on_the_break_path_after_a_sibling_arm_consumed_it
 #[test]
 fn run_retains_borrowed_sources_stored_into_owning_containers() {
     // A borrowed parameter packed into a tuple (an owning container)
-    // donates a reference (rule 2 of docs/ownership-rethink-plan.md).
+    // donates a reference (rule 2 of docs/ownership.md).
     // Consuming with the source's borrow type skipped the retain, so
     // the match decomposition freed the caller's payload — twice by
     // the second call.
@@ -2979,7 +2979,7 @@ fn run_retains_borrowed_sources_stored_into_owning_containers() {
 
 #[test]
 fn run_retains_a_consumed_value_that_has_later_uses() {
-    // Rule 1 (docs/ownership-rethink-plan.md): a consume that is not
+    // Rule 1 (docs/ownership.md): a consume that is not
     // the value's last use donates a reference instead of moving, so
     // use-after-move stops being an error for shareable types.
     assert_runs(
@@ -2998,7 +2998,7 @@ fn run_retains_a_consumed_value_that_has_later_uses() {
 
 #[test]
 fn run_snapshots_a_live_view_across_owner_move_and_reassignment() {
-    // Snapshot semantics (docs/ownership-rethink-plan.md): consuming
+    // Snapshot semantics (docs/ownership.md): consuming
     // an owner with a live view retains it, and reassigning one
     // displaces the old value to scope exit, so the view stays valid.
     assert_runs(
@@ -3150,7 +3150,7 @@ fn check_accepts_uncalled_static_generic_bodies() {
 #[test]
 fn check_reports_ownership_errors_like_run_does() {
     // `talk check` runs the ownership analysis (wave F of
-    // docs/ownership-rethink-plan.md): a program `talk run` rejects
+    // docs/ownership.md): a program `talk run` rejects
     // must fail `talk check` with the same diagnostic, not pass
     // silently.
     let output = Command::new(env!("CARGO_BIN_EXE_talk"))

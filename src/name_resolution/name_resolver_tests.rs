@@ -327,7 +327,7 @@ pub mod tests {
 
     ///////////////////////////////////////////////////////////////////////
     // Sequential-scoping characterization matrix
-    // (docs/sequential-scoping-plan.md). Each test locks today's
+    // (docs/adr/0013-sequential-scoping-for-locals.md). Each test locks today's
     // behavior; the ones marked "flips at step N" record the current
     // locals-hoisting semantics that sequential scoping replaces.
     ///////////////////////////////////////////////////////////////////////

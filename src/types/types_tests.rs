@@ -499,10 +499,9 @@ pub mod tests {
         );
     }
 
-    /// The previous type checker's suite, replayed against this one
-    /// (every case dispositioned in docs/parity-test-audit.md; the
-    /// handful tied to changed semantics or known gaps are listed
-    /// there instead of here).
+    /// The previous type checker's suite, replayed against this one.
+    /// Historical dispositions are recorded in
+    /// docs/backend-parity-ledger.md.
     #[test]
     fn previous_checker_suite_behaviors_hold() {
         // (name, source, expect_clean, with_core_prelude)
@@ -645,8 +644,8 @@ pub mod tests {
                 true,
                 false,
             ),
-            // types::types_nested_func moved to docs/parity-test-audit.md's
-            // deliberate-design-changes list: inferred params are borrows
+            // types::types_nested_func is a deliberate design change recorded
+            // in docs/backend-parity-ledger.md: inferred params are borrows
             // (ownership plan 3.3(b)), and implicit closure captures of
             // borrowed params are rejected until a capture mode is explicit
             // — exactly like the annotated twin `func fizz<T>(x: T)`.
@@ -3599,7 +3598,7 @@ pub mod tests {
     #[test]
     fn generic_effect_row_carries_instantiation() {
         // Effect rows carry the instantiation, not just the label
-        // (docs/generic-effects-plan.md): a perform of a generic effect
+        // (docs/effects.md): a perform of a generic effect
         // puts the concrete arguments in the row entry.
         let t = check(
             "// no-core\neffect 'state<T>(value: T) -> T\nfunc f() {\n\t'state(value: 42)\n\t()\n}",
@@ -6056,7 +6055,7 @@ mod with_core {
 
     #[test]
     fn struct_closure_fields_are_effect_polymorphic_per_construction() {
-        // Effect params on structs (docs/effect-params-on-structs-plan.md):
+        // Effect params on structs (docs/effects.md):
         // a closure field's row is quantified per construction (implicit
         // effect params on the nominal head, instantiated at the
         // constructor, recovered at reads) — storing an effectful closure

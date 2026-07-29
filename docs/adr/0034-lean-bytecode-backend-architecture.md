@@ -1,14 +1,12 @@
 # 0034 - Lean bytecode backend architecture
 
-Status: proposed for review (2026-07-16)
+Status: accepted; implemented (2026-07-16)
 
 Supersedes the implementation-shape requirements of ADR 0019 and ADR 0032.
 Semantic decisions in those ADRs remain in force; see "What this ADR does not
 change" below.
 
-Plan: [Lean backend rebuild plan](../lean-backend-rebuild-plan.md)
-
-Behavior inventory: [Backend parity ledger](../backend-parity-ledger.md)
+Historical behavior inventory: [Backend parity ledger](../backend-parity-ledger.md)
 
 ## Context
 

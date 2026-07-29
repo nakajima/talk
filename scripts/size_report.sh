@@ -3,7 +3,7 @@
 #
 # Counts non-blank, non-comment Rust lines in three categories, reported
 # separately so reductions cannot be manufactured by moving lines between
-# them (lean-backend-rebuild-plan.md, "What success means"):
+# them (docs/adr/0034-lean-bytecode-backend-architecture.md):
 #   1. backend modules (src/backend);
 #   2. reused runtime (talk-runtime/src);
 #   3. seam additions since the frontend-only base a1d20d27 (driver, CLI,

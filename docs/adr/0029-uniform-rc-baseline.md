@@ -42,7 +42,7 @@ because the migration cost (point 2) applies to it equally.
 
 ## Context
 
-The ownership-soundness campaign (docs/ownership-soundness-plan.md) landed
+The ownership-soundness campaign (docs/ownership.md) landed
 all eight tracks on 2026-07-12: six checker-accepted memory-safety holes
 fixed, the ADR 0017 free-balance verifier on by default in test builds,
 the shadow drop authority and ambient-boolean passes deleted, a
@@ -361,7 +361,7 @@ negative.
 ## Citations
 
 Per-decision prior art, verified 2026-07-12 (entries marked * were
-verified 2026-07-11 for docs/ownership-soundness-plan.md and are reused):
+verified 2026-07-11 for docs/ownership.md and are reused):
 
 - **Decision 1 (naive schedule + separate optimizer)**: Swift's compiler
   pipeline — SILGen emits reference-counting operations mechanically;

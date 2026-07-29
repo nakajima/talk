@@ -1,6 +1,6 @@
 # 0040 - Frame-or-region closure environments without an escape pass
 
-Status: folded into ADR 0041 (proposed)
+Status: folded into ADR 0044 (proposed)
 
 ## Context
 

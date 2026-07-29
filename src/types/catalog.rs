@@ -1893,6 +1893,9 @@ impl TypeCatalog {
         } else {
             false
         };
+        if !self_matches {
+            return None;
+        }
         let protocol_matches = self
             .protocol_and_supers(candidate_protocol)
             .into_iter()

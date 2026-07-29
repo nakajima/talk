@@ -206,7 +206,7 @@ pub(crate) fn compile(
 }
 
 /// Run the ownership analysis without lowering or executing: `talk
-/// check`'s second half (wave F of docs/ownership-rethink-plan.md).
+/// check`'s second half (wave F of docs/ownership.md).
 /// Everything `compile` would reject at the MIR stage — ownership,
 /// exclusivity, the unsafe gate — reports here.
 pub(crate) fn check(programs: &[ProgramInput<'_>], entry: Entry) -> Result<(), BackendError> {

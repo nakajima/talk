@@ -1,10 +1,10 @@
- Outlining unified target architecture
+# 0038 - MIR semantic-authority cleanup
 
- Defining comprehensive design target
+Status: accepted; implemented (2026-07-23)
 
- MIR semantic-authority cleanup: current problems and desired end state
+## Context
 
- Current problems
+### Current problems
 
  ### 1. TypedProgram is not a complete semantic interface
 
@@ -870,7 +870,7 @@
 
 ────────────────────────────────────────────────────────────────────────────────
 
-Implementation status (2026-07-22)
+## Implementation status (completed 2026-07-23)
 
 Eight stage-1 slices are implemented, full suite green after each. Line numbers in the deletion inventory above predate these changes.
 

@@ -1,6 +1,6 @@
 # 0043 - Self-host the source frontend before procedural macros
 
-Status: accepted (implementation in progress)
+Status: accepted; implemented (2026-07-27)
 
 Date: 2026-07-26
 
@@ -372,7 +372,9 @@ The self-hosting project is complete when:
 
 ## Status
 
-2026-07-26: accepted; in progress on branch `self-hosted-frontend`.
+Accepted 2026-07-26 and implemented 2026-07-27 on branch
+`self-hosted-frontend`. Stages 0 through 5 are complete; the implementation
+record below is retained for validation and migration context.
 
 ### Stage 0 — done
 

@@ -1,6 +1,11 @@
-# 0024 Labeled Enum Values
+# 0024 - Labeled enum payloads
 
-Let's add the ability to name enum values. I don't think (?) they need to partipate in the row system or anything like that yet. This is the syntax I have in mind:
+Status: accepted; implemented (2026-07-09)
+
+## Decision
+
+Enum payload fields may have labels. Payload labels do not participate in the
+row system. The source syntax is:
 
 ```
 enum Foo {
@@ -15,7 +20,7 @@ Construction:
 Foo.bar(fizz: 123, buzz: "sup")
 ```
 
-It should work with pattern matching:
+The same labels are used in pattern matching:
 
 ```
 match some_foo {

@@ -1,6 +1,6 @@
 # 0042 - Symbol visibility and public module interfaces
 
-Status: proposed
+Status: accepted; implemented (2026-07-26)
 
 ## Context
 

@@ -1,88 +1,25 @@
 # Backend parity ledger
 
-Status: living parity inventory (2026-07-16: lean rebuild parity pass)
+Status: historical parity accounting; the lean rebuild reached the frozen baseline on 2026-07-16.
 
-## Lean rebuild status (2026-07-16)
+## Scope
 
-The backend was rebuilt per
-[the lean backend rebuild plan](lean-backend-rebuild-plan.md) and
-[ADR 0034](adr/0034-lean-bytecode-backend-architecture.md). The per-phase
-gate columns below (TypedProgram / CheckedMir / Talk IR / Bytecode, G0–G5)
-describe the removed implementation and are superseded: phases are private
-inside one `compile`/`execute` seam, and every row's evidence is a
-black-box test through `talk run`, `talk test`, or the embeddings
-(`tests/talk_tests.rs`, `src/testing.rs`, crate suites).
+This ledger records the behavior restored after the frontend-only reset. It is
+kept because `tests/parity/baseline-test-disposition.tsv` maps the removed
+backend's tests to these capability rows. It is not an active implementation
+plan and does not define current language semantics.
 
-- **Complete-program corpus: all 16 rows at parity.** Byte-exact stdout
-  against the frozen baseline (`handlers` against the reviewed TOOL-06
-  rendering in `tests/parity/reviewed-programs`), empty stderr, exit 0,
-  and counted execution balanced to the result footprint on every run.
-- **Capability rows**: EXE-01..06, INTR-01, LIT-01, GEN-01, WIT-01/02,
-  AGG-01..03, PAT-01, OWN-01..04, BOR-01/02, MEM-01..05, HEAP-01/02,
-  CLO-01/02, DYN-01/02, EFF-01..04, CORE-01..03, IO-01/02 restored
-  through the one backend as exercised by the corpus and tool tests:
-  existentials pack/dispatch/tear down through fixed-slot witness tables;
-  strict-linear values must be consumed exactly once on every path;
-  host IO (`'io` requests: files, sockets, poll, sleep, environment)
-  dispatches from perform sites to the runtime's implicit handler.
-  BOR-03's rejected side lands as MIR diagnostics (escaping borrowed
-  returns, use-after-move, linear accounting); UNSAFE-01's trusted
-  inline-IR surface executes for compiled source. Character literals,
-  or-pattern bindings, `mut` arguments (exclusive-borrow writeback,
-  direct calls), recursive capture-free nested functions, and CHG-01
-  clause-perform routing all execute with pinned tests; user handlers
-  over ambient core effects and assignments to captured values fail
-  closed (both silently misbehaved before). Owned payloads through
-  generic effects execute in full — direct AND nested positions
-  (EFF-03): payloads travel in native layout and the perform site
-  appends one `[drop, retain]` witness pair per effect generic
-  (value-witness-table passing: Swift's unspecialized-generics ABI;
-  Go's generics dictionaries, Griesemer et al. OOPSLA 2022; dictionary
-  passing, Wadler & Blott POPL 1989). Instances whose substitution
-  mentions a rigid generic take the witnesses as hidden trailing
-  parameters, so a clause can hand its value to generic functions,
-  through Array/enum teardown glue, and to re-performs. `mut`
-  parameters on function values follow the direct-call writeback
-  convention (CLO-02). Two rejections formerly listed here as
-  principled were falsified by the 2026-07-17 reference test audit
-  and are open work under the reopened wave 5 of the rebuild plan:
-  owned/mutable captures in function values and assignment to
-  captured values (cells) are pinned reference behavior. The
-  remaining rejections stand: user handlers over ambient core effects
-  (the runtime is their implicit handler), linear globals
-  (exactly-once consumption cannot be proven
-  across every reader plus teardown), and uninitialized `let` bindings
-  (typing accepts use-before-assignment, so the rejection is
-  load-bearing until definite-assignment analysis lands in the
-  checker). Constrained effect generics carry conformance dictionaries
-  (requirement closures after `[drop, retain]`); closures inherit
-  witnesses through their environments; record rows, nested place
-  assignment, `mut` projections, enum retains, named-entry global
-  slots, and global function values all execute with pinned tests.
-- **Tools**: every Required tool row executes through the same
-  compile/execute pair — `run` (script/entry/package), `test`
-  (standalone and package-aware, filters, JSON events),
-  `build`/`run-image`/`bytecode`/`mir` (TOOL-10; the separate Talk IR of
-  TOOL-11 has no successor artifact under ADR 0034's private phases),
-  REPL, talk-c program/package execution plus its test, lowered-render,
-  bytecode-render, and bytecode-compile entry points, Swift via talk-c
-  (`talk-swift` now carries a Package.swift and its XCTest suite runs
-  run/test/inspection through the C ABI), wasm via the shared program
-  path, talk-static over validated images.
-- **Sizes** (`scripts/size_report.sh`): backend 5,020 production lines,
-  runtime 5,270 (reused; +129 for the handler stack), seam additions
-  ≤1,100 — total ≤11,390 against the 13,400 budget (archived baseline
-  26,798).
+The implemented backend follows
+[ADR 0034](adr/0034-lean-bytecode-backend-architecture.md): private phases behind
+one `compile`/`execute` seam, with black-box evidence through `talk run`,
+`talk test`, and the embeddings. The complete-program corpus reached byte-exact
+parity for all 16 frozen programs, and the required source, tool, and embedding
+rows were restored. Later language and architecture decisions may supersede
+individual baseline behaviors.
 
-Execution plan: [Backend feature-parity plan](backend-parity-plan.md)
-
-Semantic authority: [ADR 0032](adr/0032-single-artifact-ownership-and-lowering-pipeline.md)
-
-Implementation status: [Lean rebuild wave reports](lean-rebuild-wave-reports.md)
-
-E1 design: [E1 scalar execution plan](e1-scalar-execution-plan.md)
-
-E1 runtime audit: [E1 talk-runtime reuse audit](e1-talk-runtime-reuse-audit.md)
+Current semantic authority lives in the accepted ADRs. Current executable
+evidence lives in `tests/talk_tests.rs`, `tests/parity/`, `src/testing.rs`, and
+the embedding crate suites.
 
 Historical baseline: `pre-backend-reset-2026-07-13` at `96249e71`
 
@@ -401,21 +338,9 @@ observations:
 There are no anonymous resource-test exemptions. A temporary expected failure is
 named in this ledger with an owner and removal condition.
 
-## Next ledger actions
+## Maintenance policy
 
-Follow the detailed lane ownership and checkpoints in the
-[parallel implementation plan](backend-parity-plan.md#parallel-implementation-plan-after-e2-scalar-globals).
-
-1. Lane A scalar package graphs, Lane B local L1 specialization, their P3
-   coexistence handshake, and audited imported scalar implementation recipes are
-   integrated. Keep arbitrary cross-module generic bodies fail-closed until a
-   real module-ABI slice defines their supply.
-2. Lane C Prov-1 fixture-backed provenance is integrated, but source production
-   stays pending until Prov-2/P5 lands against the merged MIR generator.
-3. The P6 immutable Unit/Bool/Int/Float source-dependency read slice is
-   integrated through generated callable suppliers. Keep mutable globals,
-   writes, aggregates, managed storage, and precompiled-only reader supply
-   fail-closed. P7 accepted ADR 0033; managed-storage implementation remains
-   blocked on the coordinated R1 G0 contract stack.
-4. Split newly discovered user behavior into its own capability row and advance
-   rows only in the same commit that integrates their support.
+This ledger is frozen historical accounting. New behavior belongs in tests and
+in the ADR that owns its semantics; do not append implementation lanes or
+project status here. If a historical row is corrected, update its mapped parity
+evidence in the same change.

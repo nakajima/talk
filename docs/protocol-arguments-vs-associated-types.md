@@ -1,5 +1,7 @@
 # Protocol arguments vs associated types in TalkTalk
 
+Status: current explanatory note; ADR 0016 owns conformance-key semantics.
+
 This note explains the distinction between protocol arguments and associated
 types in the TalkTalk type system.
 
