@@ -52,6 +52,34 @@ impl MatchSwitch<'_> {
         })
     }
 
+    /// Comparison blocks reached as the failure continuation of another
+    /// comparison in the same chain. Rewriting only blocks outside this set
+    /// forms one switch per chain instead of one switch for every suffix.
+    fn chain_continuations(&self) -> FxHashSet<BlockId> {
+        let mut continuations = FxHashSet::default();
+        for block in 0..self.blocks.len() {
+            let Some(comparison) = self.comparison(block) else {
+                continue;
+            };
+            if comparison.value >= usize::from(u16::MAX) - 1 {
+                continue;
+            }
+            let Some(failed) = self.blocks.get(comparison.failed) else {
+                continue;
+            };
+            if !failed.params.is_empty() || failed.insts.len() != 1 {
+                continue;
+            }
+            if self
+                .comparison(comparison.failed)
+                .is_some_and(|next| next.tag == comparison.tag)
+            {
+                continuations.insert(comparison.failed);
+            }
+        }
+        continuations
+    }
+
     fn replacement(&self, start: BlockId) -> Option<Term> {
         let first = self.comparison(start)?;
         let tag = first.tag;
@@ -111,8 +139,15 @@ pub(super) fn run(function: &mut Function) -> PassResult {
         blocks: &function.blocks,
         tag_locals: &tag_locals,
     };
+    let continuations = matcher.chain_continuations();
     let replacements: Vec<Option<Term>> = (0..function.blocks.len())
-        .map(|block| matcher.replacement(block))
+        .map(|block| {
+            if continuations.contains(&block) {
+                None
+            } else {
+                matcher.replacement(block)
+            }
+        })
         .collect();
     let mut applied = 0;
     for (block, replacement) in function.blocks.iter_mut().zip(replacements) {
@@ -182,12 +217,13 @@ mod tests {
             ],
         };
 
-        assert_eq!(run(&mut function).applied, 2);
+        assert_eq!(run(&mut function).applied, 1);
         assert!(matches!(
             &function.blocks[0].term,
             Some(Term::Switch { tag: Operand::Local(0), targets, default: 2 })
                 if targets == &[3, 2, 4]
         ));
+        assert!(matches!(function.blocks[1].term, Some(Term::Branch { .. })));
     }
 
     #[test]

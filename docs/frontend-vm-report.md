@@ -5,7 +5,7 @@
 This capture ran:
 
 ```text
-cargo test --lib compiling::bootstrap::tests::checked_in_frontend_artifacts_are_a_fixed_point -- --exact
+cargo test --lib compiling::bootstrap::tests::checked_in_frontend_artifacts_are_a_fixed_point -- --ignored --exact
 ```
 
 The test rebuilds the checked-in self-hosted frontend twice and checks that the

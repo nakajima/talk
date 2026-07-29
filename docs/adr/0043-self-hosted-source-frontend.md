@@ -658,14 +658,14 @@ exports, the `alloc`/`panic` capability list, the schema root, and the
 artifact paths — the CLI, the differential harness, and the loader all
 go through it). Regeneration requires the stage-1/stage-2 fixed point,
 and a fresh process reproduces the artifact byte-for-byte (the first
-cross-process determinism check — it held). Three gates reject
-staleness: a fast digest test (`checked_in_frontend_artifact_matches_
-sources` — manifest vs sources, bytes, ABI text, and bytecode format),
-the differential harness's tail (which compares its freshly
-bootstrapped image against the checked-in bytes, so compiler codegen
-drift is also caught at zero extra compile cost), and
-`talk bootstrap --check`. `compiling::frontend::load` is the fail-
-closed loading seam Stage 4 consumers will call: manifest verification
+cross-process determinism check — it held). Default tests reject inconsistent
+checked-in state with a fast digest test
+(`checked_in_frontend_artifact_matches_sources` — manifest vs sources, bytes,
+ABI text, and bytecode format), and they verify that the artifact loads and
+runs. Compiler codegen drift does not fail `cargo test`; the explicit
+`talk bootstrap --check` workflow owns that repository-staleness gate.
+`compiling::frontend::load` is the fail-closed loading seam Stage 4 consumers
+will call: manifest verification
 against sources, image, ABI descriptor, and format version, then
 decode — no fallback.
 
@@ -909,9 +909,9 @@ parser any longer.
 **Stage 5 is COMPLETE: the Rust lexer and parser are deleted**
 (−14,654 lines net in the final slice). The golden corpus now runs
 the frontend's own dump exports against the pinned `expected/` files;
-the differential harness's reference side is retired, with the
-regeneration and fixed-point gates kept
-(`checked_in_frontend_artifacts_are_a_fixed_point`); the bridged
+the differential harness's reference side is retired, with regeneration and
+fixed-point validation kept in the explicit `talk bootstrap --check` workflow;
+the bridged
 fidelity and round-trip comparisons — migration instruments whose
 job was done — are deleted with their reference; and the parser test
 suite went with its subject, leaving a slim assertion-DSL module

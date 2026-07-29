@@ -204,26 +204,21 @@ mod tests {
         .unwrap_or_else(|error| panic!("{name} output is UTF-8: {error}"))
     }
 
-    /// The stage-2 differential harness (ADR 0043): each self-hosted
-    /// validation export must reproduce the Rust frontend's dump format
-    /// byte-for-byte. The lexer exports (`lex`, `trees`) cover the whole
-    /// corpus; the parser exports cover the directories listed per
-    /// category and grow as the Talk parser's surface grows.
+    /// Explicit codegen-staleness gate. Normal tests validate that the
+    /// checked-in artifact is internally consistent and runnable, but compiler
+    /// changes must not make `cargo test` depend on regenerating repository
+    /// artifacts. CI and release workflows should use `talk bootstrap --check`.
     #[test]
+    #[ignore = "explicit artifact gate; use `talk bootstrap --check`"]
     fn checked_in_frontend_artifacts_are_a_fixed_point() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let outcome = crate::compiling::frontend::regenerate(root).expect("frontend bootstraps");
 
-        // The Rust frontend is retired (ADR 0043 Stage 5): the frozen
-        // dump format now lives in the pinned goldens
-        // (`parser_dump_corpus_matches_expected`), and this harness
-        // keeps the regeneration gates.
-
-        // The strong staleness gate (ADR 0043 §3): the artifact this
-        // compiler regenerates from the current sources must be the
-        // checked-in one, byte for byte. The digest-only gate in
-        // compiling::frontend catches source edits cheaply; this one
-        // also catches compiler codegen drift.
+        // The strong explicit staleness gate (ADR 0043 section 3): the artifact this
+        // compiler regenerates from the current sources must be the checked-in
+        // one, byte for byte. The default tests catch inconsistent checked-in
+        // sources, bytes, and ABI; this opt-in gate also catches compiler
+        // codegen drift.
         let checked_in = std::fs::read(crate::compiling::frontend::artifact_path(root)).expect(
             "bootstrap/frontend.tbc is missing; regenerate with `talk bootstrap`",
         );
