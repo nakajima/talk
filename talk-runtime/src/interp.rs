@@ -5,11 +5,11 @@
 //! plain `match` over the decoded instruction (Ertl & Gregg, JILP 2003).
 
 use crate::CmpOp;
+use crate::VmStats;
 use crate::io::IO;
 use crate::memory::{Allocations, MemoryError};
 use crate::objects::{ObjectError, Objects};
 use crate::symbol::Symbol;
-use crate::VmStats;
 use crate::{Chunk, Constant, Insn, MemKind, Module};
 use std::rc::Rc;
 
@@ -532,6 +532,8 @@ fn run_loop<S: StatsSink>(
     // and the value to deliver once every frame above it has run its
     // unwind entry and popped.
     let mut unwinding: Option<(usize, Value)> = None;
+
+    let trace_mem = trace_mem();
     loop {
         if fuel == 0 {
             return Err("vm: instruction budget exhausted".into());
@@ -811,7 +813,7 @@ fn run_loop<S: StatsSink>(
                 }
             }
             local => {
-                if trace_mem() {
+                if trace_mem {
                     let traced = match local {
                         Insn::Free { ptr, .. } => Some(("free-site", ptr)),
                         Insn::Retain { ptr, .. } => Some(("retain-site", ptr)),
@@ -847,23 +849,23 @@ fn run_loop<S: StatsSink>(
                         }
                     }
                 }
-                exec_local(module, &mut frames[frame_index], machine, local, budgets).map_err(|error| {
-                    if trace_mem()
-                        && let Ok(target) = chunk(module, current_chunk)
-                    {
-                        let start = pc.saturating_sub(8);
-                        let end = (pc + 4).min(target.code.len());
-                        for (offset, insn) in target.code[start..end].iter().enumerate() {
-                            eprintln!("  [{}] {insn:?}", start + offset);
+                exec_local(module, &mut frames[frame_index], machine, local, budgets).map_err(
+                    |error| {
+                        if trace_mem && let Ok(target) = chunk(module, current_chunk) {
+                            let start = pc.saturating_sub(8);
+                            let end = (pc + 4).min(target.code.len());
+                            for (offset, insn) in target.code[start..end].iter().enumerate() {
+                                eprintln!("  [{}] {insn:?}", start + offset);
+                            }
                         }
-                    }
-                    format!(
-                        "{error} [in {} (chunk {current_chunk}) at {pc}]",
-                        chunk(module, current_chunk)
-                            .map(|target| target.name.as_str())
-                            .unwrap_or("?")
-                    )
-                })?
+                        format!(
+                            "{error} [in {} (chunk {current_chunk}) at {pc}]",
+                            chunk(module, current_chunk)
+                                .map(|target| target.name.as_str())
+                                .unwrap_or("?")
+                        )
+                    },
+                )?
             }
         }
     }
@@ -2460,7 +2462,14 @@ mod tests {
         let module = export_module(
             Chunk {
                 name: "add".into(),
-                code: vec![Insn::Add { dest: 2, a: 0, b: 1 }, Insn::Ret { src: 2 }],
+                code: vec![
+                    Insn::Add {
+                        dest: 2,
+                        a: 0,
+                        b: 1,
+                    },
+                    Insn::Ret { src: 2 },
+                ],
                 arity: 2,
                 n_regs: 3,
                 unwind: vec![],
@@ -2606,22 +2615,37 @@ mod tests {
             "id",
         );
         let mut io = CaptureIO::default();
-        let unknown = run_export(&module, "nope", &[], export_shape(), Budgets::default(), &mut io)
-            .err()
-            .expect("unknown export should error");
+        let unknown = run_export(
+            &module,
+            "nope",
+            &[],
+            export_shape(),
+            Budgets::default(),
+            &mut io,
+        )
+        .err()
+        .expect("unknown export should error");
         assert!(unknown.contains("no exported function"), "{unknown}");
 
         let mut io = CaptureIO::default();
-        let arity = run_export(&module, "id", &[], export_shape(), Budgets::default(), &mut io)
-            .err()
-            .expect("arity mismatch should error");
+        let arity = run_export(
+            &module,
+            "id",
+            &[],
+            export_shape(),
+            Budgets::default(),
+            &mut io,
+        )
+        .err()
+        .expect("arity mismatch should error");
         assert!(arity.contains("takes 1 arguments"), "{arity}");
     }
 
     #[test]
     fn itob_converts_in_range_int() {
         let mut io = CaptureIO::default();
-        let (value, _machine) = run_machine(&itob_module(Constant::I64(65)), &mut io).expect("vm run");
+        let (value, _machine) =
+            run_machine(&itob_module(Constant::I64(65)), &mut io).expect("vm run");
         assert_eq!(value, Value::Byte(65));
     }
 
