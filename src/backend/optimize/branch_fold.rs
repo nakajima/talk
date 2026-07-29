@@ -1,6 +1,7 @@
-//! Fold known branches and canonicalize Boolean comparisons feeding branches.
+//! Fold known branches, canonicalize Boolean comparisons feeding branches,
+//! and thread edges whose branch outcome is already known.
 
-use crate::backend::mir::{CmpKind, Constant, Function, Inst, Operand, ScalarOp, Term};
+use crate::backend::mir::{BlockId, CmpKind, Constant, Function, Inst, Operand, ScalarOp, Term};
 
 use super::PassResult;
 
@@ -65,6 +66,71 @@ pub(super) fn run(function: &mut Function) -> PassResult {
             applied += 1;
         }
     }
+
+    // Entering an empty branch block through an edge controlled by the same
+    // operand makes that block's outcome known. Redirect only that incoming
+    // edge, so other predecessors can continue to use the repeated test.
+    let threaded: Vec<Option<(BlockId, BlockId, u64)>> = function
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(source, block)| {
+            let Some(Term::Branch {
+                cond,
+                then_block,
+                else_block,
+            }) = block.term.as_ref()
+            else {
+                return None;
+            };
+            let thread = |target: BlockId, value: bool| {
+                if target == source {
+                    return None;
+                }
+                let target_block = function.blocks.get(target)?;
+                if !target_block.params.is_empty() || !target_block.insts.is_empty() {
+                    return None;
+                }
+                let Some(Term::Branch {
+                    cond: repeated,
+                    then_block,
+                    else_block,
+                }) = target_block.term.as_ref()
+                else {
+                    return None;
+                };
+                if repeated != cond {
+                    return None;
+                }
+                let threaded = if value { *then_block } else { *else_block };
+                if threaded == source || threaded == target {
+                    return None;
+                }
+                Some(threaded)
+            };
+            let new_then = thread(*then_block, true).unwrap_or(*then_block);
+            let new_else = thread(*else_block, false).unwrap_or(*else_block);
+            let changes = u64::from(new_then != *then_block) + u64::from(new_else != *else_block);
+            (changes > 0).then_some((new_then, new_else, changes))
+        })
+        .collect();
+    for (block, replacement) in function.blocks.iter_mut().zip(threaded) {
+        let Some((then_block, else_block, changes)) = replacement else {
+            continue;
+        };
+        let Some(Term::Branch {
+            then_block: current_then,
+            else_block: current_else,
+            ..
+        }) = block.term.as_mut()
+        else {
+            continue;
+        };
+        *current_then = then_block;
+        *current_else = else_block;
+        applied += changes;
+    }
+
     PassResult::applied(applied)
 }
 
@@ -163,6 +229,238 @@ mod tests {
                 }) if actual_then == then_block && actual_else == else_block
             ));
         }
+    }
+
+    #[test]
+    fn threads_true_and_false_edges_through_repeated_tests() {
+        let terminal = || BlockData {
+            params: Vec::new(),
+            insts: Vec::new(),
+            term: Some(Term::Return(Operand::Const(Constant::Unit))),
+        };
+        let repeated = |then_block, else_block| BlockData {
+            params: Vec::new(),
+            insts: Vec::new(),
+            term: Some(Term::Branch {
+                cond: Operand::Local(0),
+                then_block,
+                else_block,
+            }),
+        };
+        let mut function = Function {
+            name: "thread_branches".into(),
+            arity: 1,
+            n_locals: 1,
+            blocks: vec![
+                repeated(1, 2),
+                repeated(3, 4),
+                repeated(5, 6),
+                terminal(),
+                terminal(),
+                terminal(),
+                terminal(),
+            ],
+        };
+
+        assert_eq!(run(&mut function).applied, 2);
+        assert!(matches!(
+            function.blocks[0].term,
+            Some(Term::Branch {
+                then_block: 3,
+                else_block: 6,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn threading_one_incoming_edge_preserves_other_predecessors() {
+        let mut function = Function {
+            name: "shared_branch".into(),
+            arity: 1,
+            n_locals: 1,
+            blocks: vec![
+                BlockData {
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: Some(Term::Branch {
+                        cond: Operand::Local(0),
+                        then_block: 3,
+                        else_block: 2,
+                    }),
+                },
+                BlockData {
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: Some(Term::Goto(2, Vec::new())),
+                },
+                BlockData {
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: Some(Term::Branch {
+                        cond: Operand::Local(0),
+                        then_block: 3,
+                        else_block: 4,
+                    }),
+                },
+                BlockData {
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: Some(Term::Return(Operand::Const(Constant::Unit))),
+                },
+                BlockData {
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: Some(Term::Return(Operand::Const(Constant::Unit))),
+                },
+            ],
+        };
+
+        assert_eq!(run(&mut function).applied, 1);
+        assert!(matches!(
+            function.blocks[0].term,
+            Some(Term::Branch { else_block: 4, .. })
+        ));
+        assert!(matches!(function.blocks[1].term, Some(Term::Goto(2, _))));
+        assert!(matches!(function.blocks[2].term, Some(Term::Branch { .. })));
+    }
+
+    #[test]
+    fn does_not_thread_instructionful_parameterized_or_cyclic_blocks() {
+        let mut function = Function {
+            name: "unsafe_threads".into(),
+            arity: 1,
+            n_locals: 2,
+            blocks: vec![
+                BlockData {
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: Some(Term::Branch {
+                        cond: Operand::Local(0),
+                        then_block: 1,
+                        else_block: 2,
+                    }),
+                },
+                BlockData {
+                    params: Vec::new(),
+                    insts: vec![Inst::Copy {
+                        dest: 1,
+                        src: Operand::Const(Constant::Unit),
+                    }],
+                    term: Some(Term::Branch {
+                        cond: Operand::Local(0),
+                        then_block: 3,
+                        else_block: 4,
+                    }),
+                },
+                BlockData {
+                    params: vec![1],
+                    insts: Vec::new(),
+                    term: Some(Term::Branch {
+                        cond: Operand::Local(0),
+                        then_block: 3,
+                        else_block: 4,
+                    }),
+                },
+                BlockData {
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: Some(Term::Return(Operand::Const(Constant::Unit))),
+                },
+                BlockData {
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: Some(Term::Return(Operand::Const(Constant::Unit))),
+                },
+            ],
+        };
+
+        assert_eq!(run(&mut function).applied, 0);
+
+        function.blocks[0].term = Some(Term::Branch {
+            cond: Operand::Local(0),
+            then_block: 1,
+            else_block: 3,
+        });
+        function.blocks[1].insts.clear();
+        function.blocks[1].term = Some(Term::Branch {
+            cond: Operand::Local(1),
+            then_block: 3,
+            else_block: 4,
+        });
+        assert_eq!(run(&mut function).applied, 0);
+
+        function.blocks[0].term = Some(Term::Branch {
+            cond: Operand::Local(0),
+            then_block: 3,
+            else_block: 2,
+        });
+        function.blocks[2].params.clear();
+        function.blocks[2].term = Some(Term::Branch {
+            cond: Operand::Local(0),
+            then_block: 3,
+            else_block: 0,
+        });
+        assert_eq!(run(&mut function).applied, 0);
+    }
+
+    #[test]
+    fn threads_after_boolean_comparison_target_inversion() {
+        let mut function = Function {
+            name: "inverted_thread".into(),
+            arity: 1,
+            n_locals: 2,
+            blocks: vec![
+                BlockData {
+                    params: Vec::new(),
+                    insts: vec![Inst::Scalar {
+                        dest: 1,
+                        op: ScalarOp::BoolCmp(CmpKind::Eq),
+                        a: Operand::Local(0),
+                        b: Some(Operand::Const(Constant::Bool(false))),
+                    }],
+                    term: Some(Term::Branch {
+                        cond: Operand::Local(1),
+                        then_block: 1,
+                        else_block: 2,
+                    }),
+                },
+                BlockData {
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: Some(Term::Return(Operand::Const(Constant::Unit))),
+                },
+                BlockData {
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: Some(Term::Branch {
+                        cond: Operand::Local(0),
+                        then_block: 3,
+                        else_block: 4,
+                    }),
+                },
+                BlockData {
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: Some(Term::Return(Operand::Const(Constant::Unit))),
+                },
+                BlockData {
+                    params: Vec::new(),
+                    insts: Vec::new(),
+                    term: Some(Term::Return(Operand::Const(Constant::Unit))),
+                },
+            ],
+        };
+
+        assert_eq!(run(&mut function).applied, 2);
+        assert!(matches!(
+            function.blocks[0].term,
+            Some(Term::Branch {
+                cond: Operand::Local(0),
+                then_block: 3,
+                else_block: 1,
+            })
+        ));
     }
 
     #[test]
