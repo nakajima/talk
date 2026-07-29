@@ -573,9 +573,12 @@ fn run_loop<S: StatsSink>(
             finalizer_frames += 1;
             continue;
         }
-        let frame_index = frames.len() - 1;
-        let current_chunk = frames[frame_index].chunk;
-        let pc = frames[frame_index].pc;
+
+        let frame_count = frames.len();
+        let frame_index = frame_count - 1;
+        let frame = &mut frames[frame_index];
+        let current_chunk = frame.chunk;
+        let pc = frame.pc;
         let code = &chunk(module, current_chunk)?.code;
         let Some(&insn) = code.get(pc) else {
             return Err(format!(
@@ -584,7 +587,7 @@ fn run_loop<S: StatsSink>(
             ));
         };
         stats.record(current_chunk as usize, pc);
-        frames[frame_index].pc = pc + 1;
+        frame.pc = pc + 1;
 
         match insn {
             Insn::Call {
@@ -593,14 +596,14 @@ fn run_loop<S: StatsSink>(
                 args_start,
                 args_len,
             } => {
-                if frames.len() >= budgets.frames {
+                if frame_count >= budgets.frames {
                     return Err("vm: call stack overflow".into());
                 }
                 let target = chunk(module, callee)?;
                 check_call_shape(target, args_len)?;
                 let regs = call_regs(
                     module,
-                    &frames[frame_index],
+                    frame,
                     args_start,
                     args_len,
                     target.n_regs,
@@ -625,11 +628,10 @@ fn run_loop<S: StatsSink>(
                 args_start,
                 args_len,
             } => {
-                if frames.len() >= budgets.frames {
+                if frame_count >= budgets.frames {
                     return Err("vm: call stack overflow".into());
                 }
-                let Some(callee_value) = frames[frame_index].regs.get(callee as usize).cloned()
-                else {
+                let Some(callee_value) = frame.regs.get(callee as usize).cloned() else {
                     return Err("vm: callee register out of range".into());
                 };
                 let Value::Closure(target, env) = callee_value else {
@@ -639,7 +641,7 @@ fn run_loop<S: StatsSink>(
                 check_call_shape(target_chunk, args_len)?;
                 let regs = call_regs(
                     module,
-                    &frames[frame_index],
+                    frame,
                     args_start,
                     args_len,
                     target_chunk.n_regs,
@@ -659,7 +661,7 @@ fn run_loop<S: StatsSink>(
                 });
             }
             Insn::Ret { src } => {
-                let value = frames[frame_index].regs[src as usize].clone();
+                let value = frame.regs[src as usize].clone();
                 if let Some(value) =
                     deliver_return(&mut frames, &mut finalizer_frames, &mut regs_pool, value)
                 {
@@ -674,8 +676,7 @@ fn run_loop<S: StatsSink>(
                     .unwrap_or_else(|| "vm: trap".into()));
             }
             Insn::MakeCont { dest } => {
-                let id = frames[frame_index].id;
-                frames[frame_index].regs[dest as usize] = Value::Cont(frame_index as u32, id);
+                frame.regs[dest as usize] = Value::Cont(frame_index as u32, frame.id);
             }
             Insn::PushHandler {
                 effect,
@@ -726,10 +727,10 @@ fn run_loop<S: StatsSink>(
             }
             Insn::GetFloor { dest } => {
                 let floor = i64::try_from(handler_floor).unwrap_or(i64::MAX);
-                frames[frame_index].regs[dest as usize] = Value::I64(floor);
+                frame.regs[dest as usize] = Value::I64(floor);
             }
             Insn::SetFloor { src } => {
-                let Value::I64(floor) = frames[frame_index].regs[src as usize] else {
+                let Value::I64(floor) = frame.regs[src as usize] else {
                     return Err("vm: handler floor must be an Int".into());
                 };
                 handler_floor = usize::try_from(floor).unwrap_or(usize::MAX);
@@ -738,8 +739,8 @@ fn run_loop<S: StatsSink>(
                 if unwinding.is_some() {
                     return Err("vm: abort during abort unwinding".into());
                 }
-                let cont = frames[frame_index].regs[callee as usize].clone();
-                let value = frames[frame_index].regs[src as usize].clone();
+                let cont = frame.regs[callee as usize].clone();
+                let value = frame.regs[src as usize].clone();
                 let Value::Cont(target, id) = cont else {
                     return Err("vm: continuation call on a non-continuation".into());
                 };
@@ -827,7 +828,7 @@ fn run_loop<S: StatsSink>(
                         eprintln!("MEM alloc-site in {} at {pc}", target.name.as_str());
                     }
                     if let Some((kind, ptr)) = traced
-                        && let Value::Ptr(address) = frames[frame_index].regs[ptr as usize]
+                        && let Value::Ptr(address) = frame.regs[ptr as usize]
                     {
                         eprintln!(
                             "MEM {kind} ptr={address} in {} at {pc}",
@@ -849,7 +850,7 @@ fn run_loop<S: StatsSink>(
                         }
                     }
                 }
-                exec_local(module, &mut frames[frame_index], machine, local, budgets).map_err(
+                exec_local(module, frame, machine, local, budgets).map_err(
                     |error| {
                         if trace_mem && let Ok(target) = chunk(module, current_chunk) {
                             let start = pc.saturating_sub(8);
