@@ -424,7 +424,7 @@ being pinned in the goldens.
 
 ### Stage 2 (the Talk frontend) — in progress
 
-`frontend/Lexer.tlk` implements the lexer and token trees. The `lex`
+`stdlib/syntax/Lexer.tlk` implements the lexer and token trees. The `lex`
 and `trees` validation exports reproduce the reference dumps
 byte-for-byte over the whole corpus — `tests/parser/**` (including
 unicode identifiers and lexer errors), `core/`, `stdlib/`, and both
@@ -815,10 +815,10 @@ identifiers, whose owning nodes the reference's `Path<Args>`
 reinterpretation orphans.
 
 **Stage 4's driver seam is BUILT and measured; activation waits on a
-core parse cache.** `frontend::parse_source` (a per-thread session
-loading the checked-in artifact once, then `run_export` +
-`bridge::adapt` per file, with per-file `FileID` threaded through
-every minted id and span) and the driver's `frontend_parse` assembly
+core parse cache.** `frontend::parse_source` (a process-wide session
+verifying and decoding the checked-in artifact and parsing its ABI
+once, then `run_export` + `bridge::adapt` per file, with per-file
+`FileID` threaded through every minted id and span) and the driver's `frontend_parse` assembly
 (AST construction, id-generator continuation above the bridge's
 watermark, failures and recovery diagnostics as the new
 `ParserError::Frontend`) are landed and pinned by
@@ -874,9 +874,12 @@ frozen message spellings), the formatter, and the highlighter's parse
 side. The wasm and C embeddings route through `format_string` and are
 covered transitively — enabled by **embedding the artifact triplet in
 the compiler binary** (`include_bytes!` of
-`bootstrap/frontend.{tbc,manifest,abi}`): the runtime session needs
-no filesystem, installed binaries and wasm are self-contained, and in
-a development checkout the embedded manifest is additionally verified
+`bootstrap/frontend.{tbc,manifest,abi}`): the immutable decoded module and
+ABI are shared by every compiler thread. Bytecode constant pools use a
+scalar-only runtime type, rather than local `Rc`-backed `Value`s, so the
+module is `Send + Sync` without adding synchronization to VM values.
+The runtime session needs no filesystem, installed binaries and wasm
+are self-contained, and in a development checkout the embedded manifest is additionally verified
 against the on-disk frontend sources, so editing them without
 regeneration and rebuild fails closed.
 
@@ -921,3 +924,12 @@ keyword table (the formatter reads it), `LexerError` and
 and the node/meta/span data model. Talk is now the single owner of
 the source grammar, end to end — the precondition this ADR set for
 the procedural-macro project.
+
+**The canonical sources are also the public `syntax` stdlib module.**
+`stdlib/syntax/{Lexer,Ast,Parser,Dump}.tlk` is the one source set used
+both by bootstrap regeneration and by ordinary Talk imports. On first import,
+the stdlib compiles and separately caches the four files as one module, so
+consumers can import the typed
+parser API directly with `use syntax::{ parse_expr_source, Item }`; the
+checked-in `bootstrap/frontend.*` artifacts continue to break the compiler's
+bootstrap cycle.

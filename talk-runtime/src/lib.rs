@@ -419,10 +419,26 @@ pub struct Chunk {
     pub unwind: Vec<(u32, u32)>,
 }
 
+/// Scalar value stored in a module's immutable constant pool.
+///
+/// Runtime aggregates use `Rc` for cheap local copies, but bytecode constants
+/// are scalar-only. Keeping that invariant in the type makes [`Module`]
+/// shareable across threads without imposing atomic reference counting on VM
+/// values.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Constant {
+    I64(i64),
+    F64(f64),
+    Bool(bool),
+    Byte(u8),
+    Void,
+    Ptr(u32),
+}
+
 #[derive(Debug, Default)]
 pub struct Module {
     pub chunks: Vec<Chunk>,
-    pub consts: Vec<interp::Value>,
+    pub consts: Vec<Constant>,
     pub arg_pool: Vec<u16>,
     pub switch_pool: Vec<u32>,
     pub traps: Vec<String>,

@@ -1,5 +1,5 @@
 //! The frozen parse-dump golden corpus (ADR 0043). The dump format is
-//! owned by the self-hosted frontend (frontend/Dump.tlk); the goldens
+//! owned by the self-hosted frontend (stdlib/syntax/Dump.tlk); the goldens
 //! under `tests/parser/**/expected/` pin it byte-for-byte. The Rust
 //! renderer that originally defined the format is deleted (Stage 5) —
 //! the migration harness proved the frontend reproduces it exactly.

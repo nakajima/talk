@@ -1,7 +1,6 @@
 use crate::CmpOp;
-use crate::interp::Value;
 use crate::symbol::{LocalSymbolId, ModuleId, ModuleSymbolId, Symbol};
-use crate::{Chunk, Insn, IoOp, MemKind, Module};
+use crate::{Chunk, Constant, Insn, IoOp, MemKind, Module};
 
 const MAGIC: &[u8; 7] = b"TALKBC\0";
 /// The wire-format version, embedded in every image header and recorded
@@ -10,7 +9,6 @@ pub const FORMAT_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EncodeError {
-    UnsupportedConstant(&'static str),
     TooManyItems(&'static str),
     StringTooLong,
 }
@@ -18,9 +16,6 @@ pub enum EncodeError {
 impl std::fmt::Display for EncodeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::UnsupportedConstant(kind) => {
-                write!(f, "unsupported bytecode constant: {kind}")
-            }
             Self::TooManyItems(section) => {
                 write!(f, "too many items in bytecode section: {section}")
             }
@@ -130,47 +125,38 @@ impl Encoder {
         Ok(())
     }
 
-    fn consts(&mut self, consts: &[Value]) -> Result<(), EncodeError> {
+    fn consts(&mut self, consts: &[Constant]) -> Result<(), EncodeError> {
         self.len("consts", consts.len())?;
         for value in consts {
-            self.value(value)?;
+            self.constant(*value);
         }
         Ok(())
     }
 
-    fn value(&mut self, value: &Value) -> Result<(), EncodeError> {
+    fn constant(&mut self, value: Constant) {
         match value {
-            Value::I64(v) => {
+            Constant::I64(v) => {
                 self.u8(0);
-                self.i64(*v);
+                self.i64(v);
             }
-            Value::F64(v) => {
+            Constant::F64(v) => {
                 self.u8(1);
                 self.u64(v.to_bits());
             }
-            Value::Bool(v) => {
+            Constant::Bool(v) => {
                 self.u8(2);
-                self.u8(u8::from(*v));
+                self.u8(u8::from(v));
             }
-            Value::Byte(v) => {
+            Constant::Byte(v) => {
                 self.u8(3);
-                self.u8(*v);
+                self.u8(v);
             }
-            Value::Void => self.u8(4),
-            Value::Ptr(v) => {
+            Constant::Void => self.u8(4),
+            Constant::Ptr(v) => {
                 self.u8(5);
-                self.u32(*v);
+                self.u32(v);
             }
-            Value::Record(..) => return Err(EncodeError::UnsupportedConstant("record")),
-            Value::Tuple(..) => return Err(EncodeError::UnsupportedConstant("tuple")),
-            Value::Variant(..) => return Err(EncodeError::UnsupportedConstant("variant")),
-            Value::Existential(..) => return Err(EncodeError::UnsupportedConstant("existential")),
-            Value::Closure(..) => return Err(EncodeError::UnsupportedConstant("closure")),
-            Value::Cell(..) => return Err(EncodeError::UnsupportedConstant("cell")),
-            Value::Object(..) => return Err(EncodeError::UnsupportedConstant("object")),
-            Value::Cont(..) => return Err(EncodeError::UnsupportedConstant("continuation")),
         }
-        Ok(())
     }
 
     fn insn(&mut self, insn: Insn) {
@@ -692,24 +678,24 @@ impl<'a> Decoder<'a> {
         Ok(chunks)
     }
 
-    fn consts(&mut self) -> Result<Vec<Value>, DecodeError> {
+    fn consts(&mut self) -> Result<Vec<Constant>, DecodeError> {
         let len = self.len()?;
         let mut values = Vec::with_capacity(len);
         for _ in 0..len {
-            values.push(self.value()?);
+            values.push(self.constant()?);
         }
         Ok(values)
     }
 
-    fn value(&mut self) -> Result<Value, DecodeError> {
+    fn constant(&mut self) -> Result<Constant, DecodeError> {
         let tag = self.u8()?;
         match tag {
-            0 => Ok(Value::I64(self.i64()?)),
-            1 => Ok(Value::F64(f64::from_bits(self.u64()?))),
-            2 => Ok(Value::Bool(self.bool()?)),
-            3 => Ok(Value::Byte(self.u8()?)),
-            4 => Ok(Value::Void),
-            5 => Ok(Value::Ptr(self.u32()?)),
+            0 => Ok(Constant::I64(self.i64()?)),
+            1 => Ok(Constant::F64(f64::from_bits(self.u64()?))),
+            2 => Ok(Constant::Bool(self.bool()?)),
+            3 => Ok(Constant::Byte(self.u8()?)),
+            4 => Ok(Constant::Void),
+            5 => Ok(Constant::Ptr(self.u32()?)),
             _ => Err(DecodeError::InvalidTag("constant", tag)),
         }
     }
@@ -1546,7 +1532,7 @@ mod tests {
                 n_regs: 1,
                 unwind: vec![],
             }],
-            consts: vec![Value::I64(0)],
+            consts: vec![Constant::I64(0)],
             arg_pool: vec![],
             switch_pool: vec![],
             traps: vec![],
@@ -1571,7 +1557,7 @@ mod tests {
                 n_regs: 1,
                 unwind: vec![],
             }],
-            consts: vec![Value::I64(42)],
+            consts: vec![Constant::I64(42)],
             arg_pool: vec![],
             switch_pool: vec![],
             traps: vec![],
@@ -1631,7 +1617,7 @@ mod tests {
                 n_regs: 1,
                 unwind: vec![],
             }],
-            consts: vec![Value::I64(0)],
+            consts: vec![Constant::I64(0)],
             arg_pool: vec![],
             switch_pool: vec![77],
             traps: vec![],
@@ -1653,7 +1639,7 @@ mod tests {
                 n_regs: 1,
                 unwind: vec![],
             }],
-            consts: vec![Value::I64(42)],
+            consts: vec![Constant::I64(42)],
             arg_pool: vec![],
             switch_pool: vec![],
             traps: vec![],
@@ -1688,7 +1674,7 @@ mod tests {
                 n_regs: 1,
                 unwind: vec![(2, 2)],
             }],
-            consts: vec![Value::I64(42)],
+            consts: vec![Constant::I64(42)],
             arg_pool: vec![],
             switch_pool: vec![],
             traps: vec![],
@@ -1781,7 +1767,7 @@ mod tests {
                 n_regs: 2,
                 unwind: vec![],
             }],
-            consts: vec![Value::Bool(true)],
+            consts: vec![Constant::Bool(true)],
             arg_pool: vec![],
             switch_pool: vec![],
             traps: vec![],
@@ -1849,7 +1835,7 @@ mod tests {
                 n_regs: 2,
                 unwind: vec![],
             }],
-            consts: vec![Value::I64(65)],
+            consts: vec![Constant::I64(65)],
             arg_pool: vec![],
             switch_pool: vec![],
             traps: vec![],
@@ -1925,7 +1911,7 @@ mod tests {
                 n_regs: 3,
                 unwind: vec![],
             }],
-            consts: vec![Value::I64(7)],
+            consts: vec![Constant::I64(7)],
             arg_pool: vec![0],
             switch_pool: vec![],
             traps: vec![],
@@ -2047,11 +2033,11 @@ mod tests {
                 },
             ],
             consts: vec![
-                Value::I64(42),
-                Value::Bool(true),
-                Value::Ptr(8),
-                Value::Byte(3),
-                Value::Void,
+                Constant::I64(42),
+                Constant::Bool(true),
+                Constant::Ptr(8),
+                Constant::Byte(3),
+                Constant::Void,
             ],
             arg_pool: vec![0, 1, 2, 0],
             switch_pool: vec![11, 12, 13],
@@ -2227,7 +2213,7 @@ mod tests {
                     unwind: vec![],
                 },
             ],
-            consts: vec![Value::I64(7)],
+            consts: vec![Constant::I64(7)],
             arg_pool: vec![1, 1],
             switch_pool: vec![],
             traps: vec![],

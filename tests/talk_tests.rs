@@ -128,6 +128,15 @@ fn run_renders_a_scalar_script_result_in_talk_syntax() {
 }
 
 #[test]
+fn syntax_stdlib_exposes_the_self_hosted_parser() {
+    assert_runs(
+        b"use syntax::{ parse_expr_source, Item }\nlet outcome = parse_expr_source(source: \"1 + 2\")\nif let .some(failure) = outcome.failure {\n\tprint(failure.code + \": \" + failure.message)\n} else {\n\tlet first: Item = outcome.items[0]\n\tmatch first {\n\t\t.expr_item(_) -> print(\"parsed\"),\n\t\t_ -> print(\"wrong root\")\n\t}\n}\n",
+        &[],
+        b"parsed\n",
+    );
+}
+
+#[test]
 fn conditional_deinit_row_requires_its_context() {
     // ADR 0036: a conditional Deinit row is evidence only where its context
     // holds. Box<S> (S: Marker false) must NOT run the destructor; Box<M>

@@ -510,10 +510,28 @@ impl Workspace {
         Self::stdlib_module(package, module_id)
     }
 
+    pub(crate) fn exported_symbol(&self, name: &str) -> Option<Symbol> {
+        self.resolved_names.exports().get(name)?.first().copied()
+    }
+
     fn stdlib_module(name: &str, module_id: ModuleId) -> Option<Self> {
-        let (path, text) = crate::compiling::stdlib::source_document(name)?;
-        let document_id = path.to_string_lossy().into_owned();
-        let source_root = path.parent()?.to_path_buf();
+        let documents = crate::compiling::stdlib::source_documents(name)?;
+        let source_root =
+            LocalModulePaths::infer_source_root(documents.iter().map(|(path, _)| path.clone()))?;
+        let file_id_to_document: Vec<DocumentId> = documents
+            .iter()
+            .map(|(path, _)| path.to_string_lossy().into_owned())
+            .collect();
+        let document_to_file_id = file_id_to_document
+            .iter()
+            .enumerate()
+            .map(|(index, document)| (document.clone(), FileID(index as u32)))
+            .collect();
+        let texts: Vec<String> = documents.iter().map(|(_, text)| text.clone()).collect();
+        let sources: Vec<Source> = documents
+            .into_iter()
+            .map(|(path, text)| Source::in_memory(path, text))
+            .collect();
 
         let mut modules = ModuleEnvironment::default();
         modules.import_core(crate::compiling::core::compile());
@@ -525,14 +543,12 @@ impl Workspace {
         config.mode = CompilationMode::Library;
         config.modules = Rc::new(modules);
 
-        let driver = Driver::new_bare(vec![Source::in_memory(path, text.clone())], config);
+        let driver = Driver::new_bare(sources, config);
         let resolved = driver.parse().ok()?.resolve_names().ok()?;
         let resolved_names = resolved.phase.resolved_names;
         let asts_by_source = resolved.phase.asts;
 
-        let file_id_to_document = vec![document_id.clone()];
-        let document_to_file_id = [(document_id, FileID(0))].into_iter().collect();
-        let mut asts: Vec<Option<AST<NameResolved>>> = vec![None];
+        let mut asts: Vec<Option<AST<NameResolved>>> = vec![None; file_id_to_document.len()];
         for ast in asts_by_source.values() {
             let idx = ast.file_id.0 as usize;
             if idx < asts.len() {
@@ -546,7 +562,7 @@ impl Workspace {
             versions: FxHashMap::default(),
             file_id_to_document,
             document_to_file_id,
-            texts: vec![text],
+            texts,
             asts,
             resolved_names,
             types: Default::default(),

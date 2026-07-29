@@ -38,7 +38,7 @@ pub const ALLOWED_EFFECTS: [&str; 2] = ["alloc", "panic"];
 pub const SCHEMA_ROOT: &str = "ParseOutcome";
 
 pub fn source_dir(root: &Path) -> PathBuf {
-    root.join("frontend")
+    root.join("stdlib").join("syntax")
 }
 
 pub fn artifact_path(root: &Path) -> PathBuf {
@@ -53,7 +53,7 @@ pub fn abi_path(root: &Path) -> PathBuf {
     root.join("bootstrap").join("frontend.abi")
 }
 
-/// The canonical frontend source set: every `.tlk` file in `frontend/`,
+/// The canonical frontend source set: every `.tlk` file in `stdlib/syntax/`,
 /// sorted by name. Names participate in the manifest digest, so renames
 /// invalidate the artifact exactly like edits.
 pub fn sources(root: &Path) -> Result<Vec<(String, String)>, String> {
@@ -146,13 +146,27 @@ fn load_embedded() -> Result<talk_runtime::Module, String> {
         .map_err(|err| format!("frontend artifact failed to decode: {err:?}"))
 }
 
-thread_local! {
-    /// The frontend session (ADR 0043 Stage 4): the checked-in
-    /// artifact loaded and its ABI schema parsed, once per thread
-    /// (the runtime module holds thread-local state).
-    static SESSION: std::cell::OnceCell<
-        Result<(talk_runtime::Module, crate::compiling::abi::AbiSchema), String>,
-    > = const { std::cell::OnceCell::new() };
+/// The immutable frontend program and ABI shared by every compiler thread.
+struct FrontendSession {
+    module: talk_runtime::Module,
+    schema: crate::compiling::abi::AbiSchema,
+}
+
+impl FrontendSession {
+    fn shared() -> Result<&'static Self, String> {
+        static SESSION: std::sync::OnceLock<Result<FrontendSession, String>> =
+            std::sync::OnceLock::new();
+        SESSION
+            .get_or_init(|| {
+                profiling::scope!("frontend.initialize_session");
+                Ok(Self {
+                    module: load_embedded()?,
+                    schema: crate::compiling::abi::parse_schema(EMBEDDED_ABI)?,
+                })
+            })
+            .as_ref()
+            .map_err(Clone::clone)
+    }
 }
 
 /// Parse one source through the frontend artifact into the compiler's
@@ -164,33 +178,22 @@ pub fn parse_source(
 ) -> Result<crate::compiling::bridge::BridgedParse, String> {
     crate::profile::init();
     profiling::scope!("frontend.parse_source");
-    SESSION.with(|cell| {
-        let session = cell
-            .get_or_init(|| {
-                profiling::scope!("frontend.initialize_session");
-                let module = load_embedded()?;
-                let schema = crate::compiling::abi::parse_schema(EMBEDDED_ABI)?;
-                Ok((module, schema))
-            })
-            .as_ref()
-            .map_err(Clone::clone)?;
-        let (module, schema) = session;
-        let mut io = talk_runtime::io::CaptureIO::default();
-        let run = {
-            profiling::scope!("frontend.execute");
-            talk_runtime::interp::run_export(
-                module,
-                "parse_file_source",
-                &[talk_runtime::interp::HostValue::String(
-                    source.as_bytes().to_vec(),
-                )],
-                crate::backend::string_shape(),
-                talk_runtime::interp::Budgets::default(),
-                &mut io,
-            )?
-        };
-        crate::compiling::bridge::adapt(&run, schema, file_id)
-    })
+    let session = FrontendSession::shared()?;
+    let mut io = talk_runtime::io::CaptureIO::default();
+    let run = {
+        profiling::scope!("frontend.execute");
+        talk_runtime::interp::run_export(
+            &session.module,
+            "parse_file_source",
+            &[talk_runtime::interp::HostValue::String(
+                source.as_bytes().to_vec(),
+            )],
+            crate::backend::string_shape(),
+            talk_runtime::interp::Budgets::default(),
+            &mut io,
+        )?
+    };
+    crate::compiling::bridge::adapt(&run, &session.schema, file_id)
 }
 
 /// Run one of the frontend's `String -> String` validation exports
@@ -198,36 +201,26 @@ pub fn parse_source(
 pub fn dump_export(name: &str, source: &str) -> Result<String, String> {
     crate::profile::init();
     profiling::scope!("frontend.dump_export");
-    SESSION.with(|cell| {
-        let session = cell
-            .get_or_init(|| {
-                profiling::scope!("frontend.initialize_session");
-                let module = load_embedded()?;
-                let schema = crate::compiling::abi::parse_schema(EMBEDDED_ABI)?;
-                Ok((module, schema))
-            })
-            .as_ref()
-            .map_err(Clone::clone)?;
-        let (module, _) = session;
-        let mut io = talk_runtime::io::CaptureIO::default();
-        let run = {
-            profiling::scope!("frontend.execute");
-            talk_runtime::interp::run_export(
-                module,
-                name,
-                &[talk_runtime::interp::HostValue::String(
-                    source.as_bytes().to_vec(),
-                )],
-                crate::backend::string_shape(),
-                talk_runtime::interp::Budgets::default(),
-                &mut io,
-            )?
-        };
-        let bytes = run
-            .string_bytes(&run.value)
-            .map_err(|error| format!("{name} did not return a string: {error}"))?;
-        String::from_utf8(bytes.to_vec()).map_err(|error| format!("{name} output is not UTF-8: {error}"))
-    })
+    let session = FrontendSession::shared()?;
+    let mut io = talk_runtime::io::CaptureIO::default();
+    let run = {
+        profiling::scope!("frontend.execute");
+        talk_runtime::interp::run_export(
+            &session.module,
+            name,
+            &[talk_runtime::interp::HostValue::String(
+                source.as_bytes().to_vec(),
+            )],
+            crate::backend::string_shape(),
+            talk_runtime::interp::Budgets::default(),
+            &mut io,
+        )?
+    };
+    let bytes = run
+        .string_bytes(&run.value)
+        .map_err(|error| format!("{name} did not return a string: {error}"))?;
+    String::from_utf8(bytes.to_vec())
+        .map_err(|error| format!("{name} output is not UTF-8: {error}"))
 }
 
 /// Lex one source through the frontend artifact (ADR 0043 Stage 5):
@@ -236,33 +229,22 @@ pub fn dump_export(name: &str, source: &str) -> Result<String, String> {
 pub fn lex(source: &str) -> Result<(Vec<crate::parsing::lexing::token::Token>, bool), String> {
     crate::profile::init();
     profiling::scope!("frontend.lex");
-    SESSION.with(|cell| {
-        let session = cell
-            .get_or_init(|| {
-                profiling::scope!("frontend.initialize_session");
-                let module = load_embedded()?;
-                let schema = crate::compiling::abi::parse_schema(EMBEDDED_ABI)?;
-                Ok((module, schema))
-            })
-            .as_ref()
-            .map_err(Clone::clone)?;
-        let (module, schema) = session;
-        let mut io = talk_runtime::io::CaptureIO::default();
-        let run = {
-            profiling::scope!("frontend.execute");
-            talk_runtime::interp::run_export(
-                module,
-                "lex_tokens",
-                &[talk_runtime::interp::HostValue::String(
-                    source.as_bytes().to_vec(),
-                )],
-                crate::backend::string_shape(),
-                talk_runtime::interp::Budgets::default(),
-                &mut io,
-            )?
-        };
-        crate::compiling::bridge::lex_tokens(&run, schema)
-    })
+    let session = FrontendSession::shared()?;
+    let mut io = talk_runtime::io::CaptureIO::default();
+    let run = {
+        profiling::scope!("frontend.execute");
+        talk_runtime::interp::run_export(
+            &session.module,
+            "lex_tokens",
+            &[talk_runtime::interp::HostValue::String(
+                source.as_bytes().to_vec(),
+            )],
+            crate::backend::string_shape(),
+            talk_runtime::interp::Budgets::default(),
+            &mut io,
+        )?
+    };
+    crate::compiling::bridge::lex_tokens(&run, &session.schema)
 }
 
 /// One strict whole-file parse through the frontend artifact,
@@ -393,6 +375,24 @@ mod tests {
     }
 
     #[test]
+    fn embedded_session_is_shared_across_threads() {
+        fn assert_shareable<T: Send + Sync>() {}
+        assert_shareable::<talk_runtime::Module>();
+
+        let expected = FrontendSession::shared().expect("frontend session") as *const _ as usize;
+        let threads: Vec<_> = (0..8)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    FrontendSession::shared().expect("frontend session") as *const _ as usize
+                })
+            })
+            .collect();
+        for thread in threads {
+            assert_eq!(thread.join().expect("session thread"), expected);
+        }
+    }
+
+    #[test]
     #[ignore = "run by scripts/frontend-vm-stats.sh"]
     fn write_vm_stats_profile() {
         use std::fmt::Write as _;
@@ -431,7 +431,7 @@ mod tests {
             bootstrap.manifest.artifact_digest
         );
         let _ = writeln!(report, "artifact_bytes: {}", bootstrap.image.len());
-        let _ = writeln!(report, "workload: frontend/*.tlk, sorted by filename");
+        let _ = writeln!(report, "workload: stdlib/syntax/*.tlk, sorted by filename");
         let _ = writeln!(report, "source_files: {}", corpus.len());
         let _ = writeln!(report, "source_bytes: {source_bytes}");
         for (name, source) in &corpus {

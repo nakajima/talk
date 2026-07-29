@@ -7,7 +7,7 @@ scripts/frontend-vm-stats.sh
 ```
 
 The script builds the frontend candidate twice to verify its fixed point,
-records optimization counts for both stages, parses every `frontend/*.tlk`
+records optimization counts for both stages, parses every `stdlib/syntax/*.tlk`
 source through the candidate's `parse_file_source` export, and writes a report
 here. It does not overwrite the checked-in artifact. Clean runs use
 `<short-commit>.txt`; dirty runs add a fingerprint of the working tree so

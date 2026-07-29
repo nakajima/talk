@@ -104,8 +104,8 @@ async fn main() {
         /// Regenerate a service artifact and its manifest from a source
         /// directory, requiring the stage-1/stage-2 fixed point (ADR
         /// 0043). With no directory, regenerates the self-hosted
-        /// frontend artifact (bootstrap/frontend.tbc) from frontend/ in
-        /// the current directory. With --check, verifies the on-disk
+        /// frontend artifact (bootstrap/frontend.tbc) from stdlib/syntax/
+        /// in the current directory. With --check, verifies the on-disk
         /// artifact and manifest are current instead of writing.
         Bootstrap {
             /// Directory of .tlk sources (non-recursive); omit for the

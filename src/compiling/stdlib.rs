@@ -9,9 +9,61 @@ use crate::compiling::{
 
 const TALK_STDLIB_PATH_ENV: &str = "TALK_STDLIB_PATH";
 
-pub const STDLIB_SOURCE_NAMES: &[&str] = &["fs.tlk", "ansi.tlk", "testing.tlk", "Package.tlk"];
+pub const STDLIB_SOURCE_NAMES: &[&str] = &[
+    "fs.tlk",
+    "ansi.tlk",
+    "testing.tlk",
+    "Package.tlk",
+    "syntax/Dump.tlk",
+];
+
+const STDLIB_MODULES: &[(&str, &str, &str)] = &[
+    ("fs", "fs.tlk", include_str!("../../stdlib/fs.tlk")),
+    ("ansi", "ansi.tlk", include_str!("../../stdlib/ansi.tlk")),
+    (
+        "testing",
+        "testing.tlk",
+        include_str!("../../stdlib/testing.tlk"),
+    ),
+    (
+        "Package",
+        "Package.tlk",
+        include_str!("../../stdlib/Package.tlk"),
+    ),
+    (
+        "syntax",
+        "syntax/Dump.tlk",
+        include_str!("../../stdlib/syntax/Dump.tlk"),
+    ),
+];
+
+const STDLIB_FILES: &[(&str, &str)] = &[
+    ("fs.tlk", include_str!("../../stdlib/fs.tlk")),
+    ("ansi.tlk", include_str!("../../stdlib/ansi.tlk")),
+    ("testing.tlk", include_str!("../../stdlib/testing.tlk")),
+    ("Package.tlk", include_str!("../../stdlib/Package.tlk")),
+    (
+        "syntax/Ast.tlk",
+        include_str!("../../stdlib/syntax/Ast.tlk"),
+    ),
+    (
+        "syntax/Dump.tlk",
+        include_str!("../../stdlib/syntax/Dump.tlk"),
+    ),
+    (
+        "syntax/Lexer.tlk",
+        include_str!("../../stdlib/syntax/Lexer.tlk"),
+    ),
+    (
+        "syntax/Parser.tlk",
+        include_str!("../../stdlib/syntax/Parser.tlk"),
+    ),
+];
 
 static STDLIB: OnceLock<Vec<CompiledStdlib>> = OnceLock::new();
+// The parser is much larger than the other stdlib modules. Compile it only
+// when source imports `syntax`, so ordinary compiler startup stays unchanged.
+static SYNTAX: OnceLock<CompiledStdlib> = OnceLock::new();
 
 pub fn path_override() -> Option<PathBuf> {
     std::env::var_os(TALK_STDLIB_PATH_ENV)
@@ -22,59 +74,84 @@ pub fn path_override() -> Option<PathBuf> {
         })
 }
 
-/// All bundled stdlib source strings, in a fixed order.
+/// All bundled stdlib module roots, in a fixed order.
 pub fn stdlib_sources() -> Vec<(&'static str, &'static str)> {
-    vec![
-        ("fs", include_str!("../../stdlib/fs.tlk")),
-        ("ansi", include_str!("../../stdlib/ansi.tlk")),
-        ("testing", include_str!("../../stdlib/testing.tlk")),
-        ("Package", include_str!("../../stdlib/Package.tlk")),
-    ]
+    STDLIB_MODULES
+        .iter()
+        .map(|(name, _, text)| (*name, *text))
+        .collect()
 }
 
 pub fn module_name_for_path(path: &Path) -> Option<&'static str> {
     let source_path = path.canonicalize().ok()?;
     let stdlib_dir = active_stdlib_dir().canonicalize().ok()?;
-    if source_path.parent()? != stdlib_dir.as_path() {
-        return None;
-    }
-    let file_name = source_path.file_name()?.to_str()?;
-    module_name_for_file_name(file_name)
-}
+    let relative = source_path.strip_prefix(stdlib_dir).ok()?;
 
-pub fn source_document(name: &str) -> Option<(PathBuf, String)> {
-    let filename = source_file_name(name)?;
-
-    if let Some(stdlib_dir) = path_override() {
-        let path = stdlib_dir.join(filename);
-        let text = std::fs::read_to_string(&path).ok()?;
-        let path = path.canonicalize().unwrap_or(path);
-        return Some((path, text));
-    }
-
-    let bundled_text = stdlib_sources()
-        .into_iter()
-        .find_map(|(source_name, text)| (source_name == name).then_some(text))?;
-
-    let candidates = [
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("stdlib")
-            .join(filename),
-        PathBuf::from("stdlib").join(filename),
-    ];
-    for candidate in candidates {
-        if candidate.is_file()
-            && let Ok(path) = candidate.canonicalize()
-        {
-            let text = std::fs::read_to_string(&path).unwrap_or_else(|_| bundled_text.to_string());
-            return Some((path, text));
+    for (name, source, _) in STDLIB_MODULES {
+        if relative == Path::new(source) {
+            return Some(name);
         }
     }
+    if relative.starts_with("syntax")
+        && relative
+            .extension()
+            .is_some_and(|extension| extension == "tlk")
+    {
+        return Some("syntax");
+    }
+    None
+}
 
-    let dir = bundled_compilation_dir();
-    let path = dir.join(filename);
-    let text = std::fs::read_to_string(&path).unwrap_or_else(|_| bundled_text.to_string());
-    Some((path, text))
+pub fn source_documents(name: &str) -> Option<Vec<(PathBuf, String)>> {
+    let (_, root_source, _) = STDLIB_MODULES
+        .iter()
+        .find(|(module_name, _, _)| *module_name == name)?;
+    let files: Vec<(&str, &str)> = if name == "syntax" {
+        STDLIB_FILES
+            .iter()
+            .filter(|(path, _)| Path::new(path).starts_with("syntax"))
+            .copied()
+            .collect()
+    } else {
+        STDLIB_FILES
+            .iter()
+            .filter(|(path, _)| path == root_source)
+            .copied()
+            .collect()
+    };
+
+    if let Some(stdlib_dir) = path_override() {
+        return files
+            .into_iter()
+            .map(|(filename, _)| {
+                let path = stdlib_dir.join(filename);
+                let text = std::fs::read_to_string(&path).ok()?;
+                let path = path.canonicalize().unwrap_or(path);
+                Some((path, text))
+            })
+            .collect();
+    }
+
+    let repository_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib");
+    let relative_dir = PathBuf::from("stdlib");
+    let bundled_dir = bundled_compilation_dir();
+    files
+        .into_iter()
+        .map(|(filename, bundled_text)| {
+            for candidate in [repository_dir.join(filename), relative_dir.join(filename)] {
+                if candidate.is_file()
+                    && let Ok(path) = candidate.canonicalize()
+                {
+                    let text =
+                        std::fs::read_to_string(&path).unwrap_or_else(|_| bundled_text.to_string());
+                    return Some((path, text));
+                }
+            }
+            let path = bundled_dir.join(filename);
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|_| bundled_text.to_string());
+            Some((path, text))
+        })
+        .collect()
 }
 
 /// The fixed id of a stdlib module: `WellKnown(index)` in
@@ -89,9 +166,31 @@ pub fn modules_with_ids() -> Vec<(ModuleId, Arc<Module>)> {
     STDLIB
         .get_or_init(compile_all)
         .iter()
-        .enumerate()
-        .map(|(index, (_, module, _))| (module_id_for_index(index), module.clone()))
+        .map(|(name, module, _)| {
+            let index = STDLIB_MODULES
+                .iter()
+                .position(|(candidate, _, _)| candidate == name)
+                .expect("compiled stdlib module is registered");
+            (module_id_for_index(index), module.clone())
+        })
         .collect()
+}
+
+/// Load one stdlib module by its public import name. The driver uses this
+/// after parsing imports to activate modules that are intentionally lazy.
+pub fn module_with_id(name: &str) -> Option<(ModuleId, Arc<Module>)> {
+    let index = STDLIB_MODULES
+        .iter()
+        .position(|(candidate, _, _)| *candidate == name)?;
+    if name == "syntax" {
+        let (_, module, _) = SYNTAX.get_or_init(compile_syntax);
+        return Some((module_id_for_index(index), module.clone()));
+    }
+    STDLIB
+        .get_or_init(compile_all)
+        .iter()
+        .find(|(candidate, _, _)| *candidate == name)
+        .map(|(_, module, _)| (module_id_for_index(index), module.clone()))
 }
 
 /// The typed bodies behind every stdlib module interface, by module name.
@@ -101,11 +200,15 @@ pub(crate) fn typed_programs() -> Vec<(
     &'static str,
     Arc<crate::compiling::typed_program::TypedProgram>,
 )> {
-    STDLIB
+    let mut programs: Vec<_> = STDLIB
         .get_or_init(compile_all)
         .iter()
         .map(|(name, _, program)| (*name, program.clone()))
-        .collect()
+        .collect();
+    if let Some((name, _, program)) = SYNTAX.get() {
+        programs.push((*name, program.clone()));
+    }
+    programs
 }
 
 type CompiledStdlib = (
@@ -120,8 +223,14 @@ fn compile_all() -> Vec<CompiledStdlib> {
     }
     let compiled: Vec<CompiledStdlib> = compilation_sources()
         .into_iter()
-        .enumerate()
-        .map(|(index, (name, source))| compile_module(name, source, module_id_for_index(index)))
+        .filter(|(name, _)| *name != "syntax")
+        .map(|(name, sources)| {
+            let index = STDLIB_MODULES
+                .iter()
+                .position(|(candidate, _, _)| *candidate == name)
+                .expect("stdlib module is registered");
+            compile_module(name, sources, module_id_for_index(index))
+        })
         .collect();
     store_cached(&compiled);
     compiled
@@ -137,14 +246,20 @@ fn cache_key() -> Option<[u8; 32]> {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     if let Some(stdlib_dir) = path_override() {
-        for name in STDLIB_SOURCE_NAMES {
-            let content = std::fs::read(stdlib_dir.join(name)).ok()?;
-            hasher.update(name.as_bytes());
+        for (path, _) in STDLIB_FILES
+            .iter()
+            .filter(|(path, _)| !Path::new(path).starts_with("syntax"))
+        {
+            let content = std::fs::read(stdlib_dir.join(path)).ok()?;
+            hasher.update(path.as_bytes());
             hasher.update(&content);
         }
     } else {
-        for (name, content) in stdlib_sources() {
-            hasher.update(name.as_bytes());
+        for (path, content) in STDLIB_FILES
+            .iter()
+            .filter(|(path, _)| !Path::new(path).starts_with("syntax"))
+        {
+            hasher.update(path.as_bytes());
             hasher.update(content.as_bytes());
         }
     }
@@ -168,7 +283,11 @@ fn load_cached() -> Option<Vec<CompiledStdlib>> {
         return None;
     }
     let cached: CachedStdlib = bincode::deserialize(payload).ok()?;
-    let names: Vec<&'static str> = stdlib_sources().into_iter().map(|(name, _)| name).collect();
+    let names: Vec<&'static str> = stdlib_sources()
+        .into_iter()
+        .map(|(name, _)| name)
+        .filter(|name| *name != "syntax")
+        .collect();
     if cached.len() != names.len() {
         return None;
     }
@@ -204,8 +323,91 @@ fn store_cached(compiled: &[CompiledStdlib]) {
     }
 }
 
-fn compile_module(name: &'static str, source: Source, module_id: ModuleId) -> CompiledStdlib {
-    let typed = compile_driver(name, source, module_id);
+fn compile_syntax() -> CompiledStdlib {
+    if let Some(cached) = load_syntax_cached() {
+        return cached;
+    }
+    let (_, sources) = compilation_sources()
+        .into_iter()
+        .find(|(name, _)| *name == "syntax")
+        .expect("syntax stdlib sources are registered");
+    let index = STDLIB_MODULES
+        .iter()
+        .position(|(name, _, _)| *name == "syntax")
+        .expect("syntax stdlib module is registered");
+    let compiled = compile_module("syntax", sources, module_id_for_index(index));
+    store_syntax_cached(&compiled);
+    compiled
+}
+
+// Syntax has a separate cache because populating the ordinary stdlib cache
+// must not force the parser module to compile.
+fn syntax_cache_key() -> Option<[u8; 32]> {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    if let Some(stdlib_dir) = path_override() {
+        for (path, _) in STDLIB_FILES
+            .iter()
+            .filter(|(path, _)| Path::new(path).starts_with("syntax"))
+        {
+            let content = std::fs::read(stdlib_dir.join(path)).ok()?;
+            hasher.update(path.as_bytes());
+            hasher.update(&content);
+        }
+    } else {
+        for (path, content) in STDLIB_FILES
+            .iter()
+            .filter(|(path, _)| Path::new(path).starts_with("syntax"))
+        {
+            hasher.update(path.as_bytes());
+            hasher.update(content.as_bytes());
+        }
+    }
+    let (stamp, len) = super::core::exe_fingerprint()?;
+    hasher.update(stamp.to_le_bytes());
+    hasher.update(len.to_le_bytes());
+    Some(hasher.finalize().into())
+}
+
+fn syntax_cache_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/.talk-cache/syntax.bin")
+}
+
+fn load_syntax_cached() -> Option<CompiledStdlib> {
+    let key = syntax_cache_key()?;
+    let data = std::fs::read(syntax_cache_path()).ok()?;
+    let (stored, payload) = data.split_at_checked(32)?;
+    if stored != key {
+        return None;
+    }
+    let (module, program): (Module, crate::compiling::typed_program::TypedProgram) =
+        bincode::deserialize(payload).ok()?;
+    Some(("syntax", Arc::new(module), Arc::new(program)))
+}
+
+fn store_syntax_cached(compiled: &CompiledStdlib) {
+    let Some(key) = syntax_cache_key() else {
+        return;
+    };
+    let Ok(payload) = bincode::serialize(&(compiled.1.as_ref(), compiled.2.as_ref())) else {
+        return;
+    };
+    let path = syntax_cache_path();
+    if let Some(parent) = path.parent()
+        && std::fs::create_dir_all(parent).is_err()
+    {
+        return;
+    }
+    let mut bytes = key.to_vec();
+    bytes.extend_from_slice(&payload);
+    let tmp = path.with_extension(format!("bin.{}", std::process::id()));
+    if std::fs::write(&tmp, &bytes).is_ok() {
+        let _ = std::fs::rename(&tmp, &path);
+    }
+}
+
+fn compile_module(name: &'static str, sources: Vec<Source>, module_id: ModuleId) -> CompiledStdlib {
+    let typed = compile_driver(name, sources, module_id);
     let program = typed.phase.program.clone();
     (name, Arc::new(typed.module(name)), Arc::new(program))
 }
@@ -214,23 +416,7 @@ fn active_stdlib_dir() -> PathBuf {
     path_override().unwrap_or_else(bundled_compilation_dir)
 }
 
-fn source_file_name(name: &str) -> Option<&'static str> {
-    STDLIB_SOURCE_NAMES
-        .iter()
-        .copied()
-        .find(|file_name| module_name_for_file_name(file_name) == Some(name))
-}
-
-fn module_name_for_file_name(file_name: &str) -> Option<&'static str> {
-    STDLIB_SOURCE_NAMES.iter().find_map(|source_name| {
-        if *source_name != file_name {
-            return None;
-        }
-        source_name.strip_suffix(".tlk")
-    })
-}
-
-fn compilation_sources() -> Vec<(&'static str, Source)> {
+fn compilation_sources() -> Vec<(&'static str, Vec<Source>)> {
     if let Some(stdlib_dir) = path_override() {
         assert!(
             stdlib_dir.is_dir(),
@@ -238,22 +424,54 @@ fn compilation_sources() -> Vec<(&'static str, Source)> {
             stdlib_dir.display()
         );
 
-        return STDLIB_SOURCE_NAMES
+        return STDLIB_MODULES
             .iter()
-            .filter_map(|filename| {
-                let name = module_name_for_file_name(filename)?;
-                Some((name, Source::from(stdlib_dir.join(filename))))
+            .map(|(name, root_source, _)| {
+                let paths: Vec<&str> = if *name == "syntax" {
+                    STDLIB_FILES
+                        .iter()
+                        .filter(|(path, _)| Path::new(path).starts_with("syntax"))
+                        .map(|(path, _)| *path)
+                        .collect()
+                } else {
+                    vec![*root_source]
+                };
+                (
+                    *name,
+                    paths
+                        .into_iter()
+                        .map(|path| Source::from(stdlib_dir.join(path)))
+                        .collect(),
+                )
             })
             .collect();
     }
 
     let stdlib_dir = bundled_compilation_dir();
-    stdlib_sources()
-        .into_iter()
-        .map(|(name, content)| {
+    STDLIB_MODULES
+        .iter()
+        .map(|(name, root_source, _)| {
+            let files: Vec<(&str, &str)> = if *name == "syntax" {
+                STDLIB_FILES
+                    .iter()
+                    .filter(|(path, _)| Path::new(path).starts_with("syntax"))
+                    .copied()
+                    .collect()
+            } else {
+                STDLIB_FILES
+                    .iter()
+                    .filter(|(path, _)| path == root_source)
+                    .copied()
+                    .collect()
+            };
             (
-                name,
-                Source::in_memory(stdlib_dir.join(format!("{name}.tlk")), content),
+                *name,
+                files
+                    .into_iter()
+                    .map(|(path, content)| {
+                        Source::in_memory(stdlib_dir.join(path), content.to_string())
+                    })
+                    .collect(),
             )
         })
         .collect()
@@ -267,14 +485,17 @@ fn bundled_compilation_dir() -> PathBuf {
 
     let dir = std::env::temp_dir().join("talk-stdlib");
     let _ = std::fs::create_dir_all(&dir);
-    for (name, content) in stdlib_sources() {
-        let path = dir.join(format!("{name}.tlk"));
+    for (name, content) in STDLIB_FILES {
+        let path = dir.join(name);
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let _ = std::fs::write(path, content);
     }
     dir
 }
 
-fn compile_driver(name: &'static str, source: Source, module_id: ModuleId) -> Driver<Typed> {
+fn compile_driver(name: &'static str, sources: Vec<Source>, module_id: ModuleId) -> Driver<Typed> {
     let mut modules = ModuleEnvironment::default();
     modules.import_core(super::core::compile());
 
@@ -283,7 +504,7 @@ fn compile_driver(name: &'static str, source: Source, module_id: ModuleId) -> Dr
     config.mode = CompilationMode::Library;
     config.modules = Rc::new(modules);
 
-    let driver = Driver::new_bare(vec![source], config);
+    let driver = Driver::new_bare(sources, config);
 
     #[allow(clippy::unwrap_used)]
     let typed = driver

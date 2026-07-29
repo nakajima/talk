@@ -190,14 +190,8 @@ fn goto_definition_from_import(
                     }
                     crate::node_kinds::decl::ImportPath::Package(package) => {
                         let stdlib = module.stdlib_workspace_for_package(package)?;
-                        let target_scope_id = crate::node_id::NodeID(crate::node_id::FileID(0), 0);
-                        let target_scope = stdlib.resolved_names.scopes.get(&target_scope_id)?;
-                        let symbol = target_scope
-                            .types
-                            .get(&imported.name)
-                            .or_else(|| target_scope.values.get(&imported.name))?;
-
-                        return definition_location_in_module(&stdlib, *symbol);
+                        let symbol = stdlib.exported_symbol(&imported.name)?;
+                        return definition_location_in_module(&stdlib, symbol);
                     }
                 }
             }

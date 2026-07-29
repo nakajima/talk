@@ -5,7 +5,7 @@
 //! with jump patching. Semantic decisions all happened in MIR.
 
 use rustc_hash::FxHashMap;
-use talk_runtime::{Chunk, CmpOp, Insn, IoOp, MemKind, Module, interp::Value};
+use talk_runtime::{Chunk, CmpOp, Constant as RuntimeConstant, Insn, IoOp, MemKind, Module};
 
 use super::BackendError;
 use super::mir::{
@@ -86,7 +86,7 @@ pub(crate) fn lower(program: &Program) -> Result<Module, BackendError> {
 
 #[derive(Default)]
 struct ConstPool {
-    values: Vec<Value>,
+    values: Vec<RuntimeConstant>,
     ids: FxHashMap<ConstKey, u32>,
 }
 
@@ -103,19 +103,22 @@ enum ConstKey {
 impl ConstPool {
     fn intern(&mut self, constant: Constant) -> u32 {
         let (key, value) = match constant {
-            Constant::Unit => (ConstKey::Unit, Value::Void),
-            Constant::Bool(value) => (ConstKey::Bool(value), Value::Bool(value)),
-            Constant::Int(value) => (ConstKey::Int(value), Value::I64(value)),
-            Constant::Float(value) => (ConstKey::Float(value.to_bits()), Value::F64(value)),
+            Constant::Unit => (ConstKey::Unit, RuntimeConstant::Void),
+            Constant::Bool(value) => (ConstKey::Bool(value), RuntimeConstant::Bool(value)),
+            Constant::Int(value) => (ConstKey::Int(value), RuntimeConstant::I64(value)),
+            Constant::Float(value) => (
+                ConstKey::Float(value.to_bits()),
+                RuntimeConstant::F64(value),
+            ),
         };
         self.intern_pair(key, value)
     }
 
     fn intern_ptr(&mut self, address: u32) -> u32 {
-        self.intern_pair(ConstKey::Ptr(address), Value::Ptr(address))
+        self.intern_pair(ConstKey::Ptr(address), RuntimeConstant::Ptr(address))
     }
 
-    fn intern_pair(&mut self, key: ConstKey, value: Value) -> u32 {
+    fn intern_pair(&mut self, key: ConstKey, value: RuntimeConstant) -> u32 {
         *self.ids.entry(key).or_insert_with(|| {
             self.values.push(value);
             u32::try_from(self.values.len() - 1).unwrap_or_default()

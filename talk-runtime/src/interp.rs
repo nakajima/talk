@@ -10,7 +10,7 @@ use crate::memory::{Allocations, MemoryError};
 use crate::objects::{ObjectError, Objects};
 use crate::symbol::Symbol;
 use crate::VmStats;
-use crate::{Chunk, Insn, MemKind, Module};
+use crate::{Chunk, Constant, Insn, MemKind, Module};
 use std::rc::Rc;
 
 /// Whether `TALK_TRACE_MEM` is set, read once: the check guards the
@@ -54,6 +54,71 @@ pub enum Value {
     /// frame and returns from it; the identity check makes an escaped
     /// continuation a clean trap instead of a smashed stack.
     Cont(u32, u64),
+}
+
+impl From<Constant> for Value {
+    fn from(value: Constant) -> Self {
+        match value {
+            Constant::I64(value) => Self::I64(value),
+            Constant::F64(value) => Self::F64(value),
+            Constant::Bool(value) => Self::Bool(value),
+            Constant::Byte(value) => Self::Byte(value),
+            Constant::Void => Self::Void,
+            Constant::Ptr(value) => Self::Ptr(value),
+        }
+    }
+}
+
+/// A register-or-constant operand normalized without cloning aggregate
+/// register values or materializing scalar constants as full VM values.
+#[derive(Clone, Copy, Debug)]
+enum OperandValue<'a> {
+    I64(i64),
+    F64(f64),
+    Bool(bool),
+    Byte(u8),
+    Void,
+    Ptr(u32),
+    Aggregate(&'a Value),
+}
+
+impl<'a> OperandValue<'a> {
+    fn from_value(value: &'a Value) -> Self {
+        match value {
+            Value::I64(value) => Self::I64(*value),
+            Value::F64(value) => Self::F64(*value),
+            Value::Bool(value) => Self::Bool(*value),
+            Value::Byte(value) => Self::Byte(*value),
+            Value::Void => Self::Void,
+            Value::Ptr(value) => Self::Ptr(*value),
+            value => Self::Aggregate(value),
+        }
+    }
+
+    fn into_value(self) -> Value {
+        match self {
+            Self::I64(value) => Value::I64(value),
+            Self::F64(value) => Value::F64(value),
+            Self::Bool(value) => Value::Bool(value),
+            Self::Byte(value) => Value::Byte(value),
+            Self::Void => Value::Void,
+            Self::Ptr(value) => Value::Ptr(value),
+            Self::Aggregate(value) => value.clone(),
+        }
+    }
+}
+
+impl<'a> From<Constant> for OperandValue<'a> {
+    fn from(value: Constant) -> Self {
+        match value {
+            Constant::I64(value) => Self::I64(value),
+            Constant::F64(value) => Self::F64(value),
+            Constant::Bool(value) => Self::Bool(value),
+            Constant::Byte(value) => Self::Byte(value),
+            Constant::Void => Self::Void,
+            Constant::Ptr(value) => Self::Ptr(value),
+        }
+    }
 }
 
 struct Frame {
@@ -1482,7 +1547,8 @@ fn exec_local(
             let value = module
                 .consts
                 .get(k as usize)
-                .cloned()
+                .copied()
+                .map(Value::from)
                 .ok_or_else(|| format!("vm: bad constant index {k}"))?;
             frame.regs[dest as usize] = value;
         }
@@ -1517,9 +1583,11 @@ fn exec_local(
         Insn::Div { dest, a, b } => {
             let (a, b) = (rk(module, frame, a)?, rk(module, frame, b)?);
             frame.regs[dest as usize] = match (a, b) {
-                (Value::I64(_), Value::I64(0)) => return Err("vm: division by zero".into()),
-                (Value::I64(x), Value::I64(y)) => Value::I64(x.wrapping_div(*y)),
-                (Value::F64(x), Value::F64(y)) => Value::F64(x / y),
+                (OperandValue::I64(_), OperandValue::I64(0)) => {
+                    return Err("vm: division by zero".into());
+                }
+                (OperandValue::I64(x), OperandValue::I64(y)) => Value::I64(x.wrapping_div(y)),
+                (OperandValue::F64(x), OperandValue::F64(y)) => Value::F64(x / y),
                 _ => return Err(format!("vm: div on {a:?} and {b:?}")),
             };
         }
@@ -2107,7 +2175,7 @@ fn call_regs(
     let mut regs = pool.pop().unwrap_or_default();
     regs.reserve(usize::from(n_regs));
     for &src in arg_regs {
-        regs.push(rk(module, frame, src)?.clone());
+        regs.push(rk(module, frame, src)?.into_value());
     }
     regs.resize(usize::from(n_regs), Value::Void);
     Ok(regs)
@@ -2129,23 +2197,26 @@ fn arg_values(
         .ok_or("vm: bad argument pool range")?;
     arg_regs
         .iter()
-        .map(|&src| rk(module, frame, src).cloned())
+        .map(|&src| rk(module, frame, src).map(OperandValue::into_value))
         .collect()
 }
 
 /// Read a register-or-constant operand field (RK encoding — see
 /// `RK_CONST` in the crate root).
 #[inline]
-fn rk<'a>(module: &'a Module, frame: &'a Frame, field: u16) -> Result<&'a Value, String> {
+fn rk<'a>(module: &'a Module, frame: &'a Frame, field: u16) -> Result<OperandValue<'a>, String> {
     if field & crate::RK_CONST != 0 {
         module
             .consts
             .get(usize::from(field & crate::RK_INDEX))
+            .copied()
+            .map(OperandValue::from)
             .ok_or_else(|| format!("vm: bad constant operand {}", field & crate::RK_INDEX))
     } else {
         frame
             .regs
             .get(usize::from(field))
+            .map(OperandValue::from_value)
             .ok_or_else(|| format!("vm: operand register r{field} out of range"))
     }
 }
@@ -2159,20 +2230,20 @@ enum ArithOp {
 
 fn arith(
     op: ArithOp,
-    a: &Value,
-    b: &Value,
+    a: OperandValue<'_>,
+    b: OperandValue<'_>,
     ints: fn(i64, i64) -> i64,
     floats: fn(f64, f64) -> f64,
 ) -> Result<Value, String> {
     match (a, b) {
-        (Value::I64(x), Value::I64(y)) => Ok(Value::I64(ints(*x, *y))),
-        (Value::F64(x), Value::F64(y)) => Ok(Value::F64(floats(*x, *y))),
+        (OperandValue::I64(x), OperandValue::I64(y)) => Ok(Value::I64(ints(x, y))),
+        (OperandValue::F64(x), OperandValue::F64(y)) => Ok(Value::F64(floats(x, y))),
         // Pointer arithmetic (`add RawPtr p offset`).
-        (Value::Ptr(p), Value::I64(off)) if op == ArithOp::Add => {
-            Ok(Value::Ptr((*p as i64 + off) as u32))
+        (OperandValue::Ptr(p), OperandValue::I64(off)) if op == ArithOp::Add => {
+            Ok(Value::Ptr((p as i64 + off) as u32))
         }
-        (Value::Ptr(p), Value::I64(off)) if op == ArithOp::Sub => {
-            Ok(Value::Ptr((*p as i64 - off) as u32))
+        (OperandValue::Ptr(p), OperandValue::I64(off)) if op == ArithOp::Sub => {
+            Ok(Value::Ptr((p as i64 - off) as u32))
         }
         _ => Err(format!("vm: arithmetic on {a:?} and {b:?}")),
     }
@@ -2180,14 +2251,14 @@ fn arith(
 
 fn bitwise(
     name: &str,
-    a: &Value,
-    b: &Value,
+    a: OperandValue<'_>,
+    b: OperandValue<'_>,
     ints: fn(i64, i64) -> i64,
     bytes: fn(u8, u8) -> u8,
 ) -> Result<Value, String> {
     match (a, b) {
-        (Value::I64(x), Value::I64(y)) => Ok(Value::I64(ints(*x, *y))),
-        (Value::Byte(x), Value::Byte(y)) => Ok(Value::Byte(bytes(*x, *y))),
+        (OperandValue::I64(x), OperandValue::I64(y)) => Ok(Value::I64(ints(x, y))),
+        (OperandValue::Byte(x), OperandValue::Byte(y)) => Ok(Value::Byte(bytes(x, y))),
         _ => Err(format!("vm: {name} on {a:?} and {b:?}")),
     }
 }
@@ -2196,23 +2267,23 @@ fn bitwise(
 /// `wrapping_sh*`: Int masks to 6 bits and Byte masks to 3 bits.
 fn shift(
     name: &str,
-    a: &Value,
-    b: &Value,
+    a: OperandValue<'_>,
+    b: OperandValue<'_>,
     ints: fn(i64, u32) -> i64,
     bytes: fn(u8, u32) -> u8,
 ) -> Result<Value, String> {
     match (a, b) {
-        (Value::I64(x), Value::I64(y)) => Ok(Value::I64(ints(*x, *y as u32))),
-        (Value::Byte(x), Value::I64(y)) => Ok(Value::Byte(bytes(*x, *y as u32))),
-        (Value::Byte(x), Value::Byte(y)) => Ok(Value::Byte(bytes(*x, u32::from(*y)))),
+        (OperandValue::I64(x), OperandValue::I64(y)) => Ok(Value::I64(ints(x, y as u32))),
+        (OperandValue::Byte(x), OperandValue::I64(y)) => Ok(Value::Byte(bytes(x, y as u32))),
+        (OperandValue::Byte(x), OperandValue::Byte(y)) => Ok(Value::Byte(bytes(x, u32::from(y)))),
         _ => Err(format!("vm: {name} on {a:?} and {b:?}")),
     }
 }
 
-fn compare(a: &Value, b: &Value, op: CmpOp) -> Result<bool, String> {
+fn compare(a: OperandValue<'_>, b: OperandValue<'_>, op: CmpOp) -> Result<bool, String> {
     use CmpOp::*;
     match (a, b) {
-        (Value::I64(x), Value::I64(y)) => Ok(match op {
+        (OperandValue::I64(x), OperandValue::I64(y)) => Ok(match op {
             Eq => x == y,
             Ne => x != y,
             Lt => x < y,
@@ -2220,7 +2291,7 @@ fn compare(a: &Value, b: &Value, op: CmpOp) -> Result<bool, String> {
             Gt => x > y,
             Ge => x >= y,
         }),
-        (Value::F64(x), Value::F64(y)) => Ok(match op {
+        (OperandValue::F64(x), OperandValue::F64(y)) => Ok(match op {
             Eq => x == y,
             Ne => x != y,
             Lt => x < y,
@@ -2228,7 +2299,7 @@ fn compare(a: &Value, b: &Value, op: CmpOp) -> Result<bool, String> {
             Gt => x > y,
             Ge => x >= y,
         }),
-        (Value::Byte(x), Value::Byte(y)) => Ok(match op {
+        (OperandValue::Byte(x), OperandValue::Byte(y)) => Ok(match op {
             Eq => x == y,
             Ne => x != y,
             Lt => x < y,
@@ -2236,7 +2307,7 @@ fn compare(a: &Value, b: &Value, op: CmpOp) -> Result<bool, String> {
             Gt => x > y,
             Ge => x >= y,
         }),
-        (Value::Bool(x), Value::Bool(y)) => match op {
+        (OperandValue::Bool(x), OperandValue::Bool(y)) => match op {
             Eq => Ok(x == y),
             Ne => Ok(x != y),
             _ => Err("vm: ordering comparison on bools".into()),
@@ -2257,7 +2328,7 @@ mod tests {
         (value, machine.objects.live_objects(), io.out.len())
     }
 
-    fn itob_module(k: Value) -> Module {
+    fn itob_module(k: Constant) -> Module {
         Module {
             chunks: vec![Chunk {
                 name: "main".into(),
@@ -2369,7 +2440,7 @@ mod tests {
                 n_regs: 2,
                 unwind: vec![],
             }],
-            consts: vec![Value::I64(1 << 40)],
+            consts: vec![Constant::I64(1 << 40)],
             exports: vec![("grab".into(), 0)],
             ..Module::default()
         };
@@ -2550,7 +2621,7 @@ mod tests {
     #[test]
     fn itob_converts_in_range_int() {
         let mut io = CaptureIO::default();
-        let (value, _machine) = run_machine(&itob_module(Value::I64(65)), &mut io).expect("vm run");
+        let (value, _machine) = run_machine(&itob_module(Constant::I64(65)), &mut io).expect("vm run");
         assert_eq!(value, Value::Byte(65));
     }
 
@@ -2558,7 +2629,7 @@ mod tests {
     fn itob_rejects_out_of_range_int() {
         for out_of_range in [-1, 256] {
             let mut io = CaptureIO::default();
-            let err = run_machine(&itob_module(Value::I64(out_of_range)), &mut io)
+            let err = run_machine(&itob_module(Constant::I64(out_of_range)), &mut io)
                 .err()
                 .expect("expected an itob range error");
             assert!(err.contains("itob"), "unexpected error: {err}");
@@ -2655,7 +2726,12 @@ mod tests {
                     unwind: vec![],
                 },
             ],
-            consts: vec![Value::I64(10), Value::I64(42), Value::I64(1), Value::Ptr(0)],
+            consts: vec![
+                Constant::I64(10),
+                Constant::I64(42),
+                Constant::I64(1),
+                Constant::Ptr(0),
+            ],
             arg_pool: vec![0],
             switch_pool: vec![],
             traps: vec![],
@@ -2692,7 +2768,7 @@ mod tests {
                 n_regs: 2,
                 unwind: vec![],
             }],
-            consts: vec![Value::I64(3)],
+            consts: vec![Constant::I64(3)],
             arg_pool: vec![],
             switch_pool: vec![],
             traps: vec![],
@@ -2762,7 +2838,7 @@ mod tests {
                 n_regs: 5,
                 unwind: vec![],
             }],
-            consts: vec![Value::I64(8), Value::I64(111), Value::I64(222)],
+            consts: vec![Constant::I64(8), Constant::I64(111), Constant::I64(222)],
             arg_pool: vec![0],
             switch_pool: vec![],
             traps: vec![],
@@ -2811,7 +2887,7 @@ mod tests {
                 n_regs: 5,
                 unwind: vec![],
             }],
-            consts: vec![Value::I64(0), Value::I64(42)],
+            consts: vec![Constant::I64(0), Constant::I64(42)],
             arg_pool: vec![0],
             switch_pool: vec![],
             traps: vec![],
@@ -2846,7 +2922,7 @@ mod tests {
                 n_regs: 2,
                 unwind: vec![],
             }],
-            consts: vec![Value::I64(7)],
+            consts: vec![Constant::I64(7)],
             arg_pool: vec![0],
             switch_pool: vec![],
             traps: vec!["vm: resumed past a same-frame abort".into()],

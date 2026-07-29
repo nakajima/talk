@@ -513,6 +513,16 @@ impl Driver {
                     // Discover imports and queue them for parsing
                     let source_path = file.path();
                     for import_path in extract_import_paths(&parsed) {
+                        if let ImportPath::Package(package) = &import_path {
+                            if self.config.modules.get_module_by_name(package).is_none()
+                                && let Some((id, module)) = super::stdlib::module_with_id(package)
+                            {
+                                Rc::make_mut(&mut self.config.modules)
+                                    .import_compiled((*module).clone(), id)
+                                    .expect("stdlib module registers once per session");
+                            }
+                            continue;
+                        }
                         if let Some((canonical, resolved)) = resolve_import_path(
                             source_path.as_ref(),
                             &import_path,
