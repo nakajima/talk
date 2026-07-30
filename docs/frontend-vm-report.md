@@ -203,14 +203,88 @@ Full-suite elapsed time moved from 11.641 to 11.486 seconds, but its run
 variance remains too high for a latency claim. The isolated critical path is
 the authoritative wall-time result.
 
+## Post-`rk_value` critical-path profile
+
+The refreshed frame-pointer capture attributes 97.28% of weighted cycles to the
+frontend VM. Exact-symbol inclusive accounting gives:
+
+| VM path | Inclusive cycles |
+| --- | ---: |
+| `call_regs` | 10.53% |
+| borrowed `rk` | 10.27% |
+| `rk_value` | 4.89% |
+| `arg_values` | 4.74% |
+| `deliver_return` | 3.97% |
+| `Allocations::check_access` | 1.75% |
+| `chunk` | 0.88% |
+
+`arg_values` fell from 8.81% to 4.74%. Of `call_regs`' 10.53%, 3.32 percentage
+points are nested `rk_value`, leaving about 7.21% outside operand ownership.
+Borrowed `rk` is therefore the largest independent helper at 10.27%.
+
+## Native cost by bytecode type
+
+The critical-path corpus executes 78,663,225 VM instructions across 257 export
+runs. Differential microbenchmarks compare loops containing four and twelve
+copies of one opcode, using exact retired native instructions and repeated wall
+and cycle counters. `Call+Ret` is measured as one call frame round trip. The
+wall estimates are context-sensitive and not additive, but their ranking and
+retired-instruction weights identify where execution time is actually spent.
+
+| Instruction | Critical executions | Native instructions/execution | Weighted native instructions | Share of all native instructions | Estimated wall time |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `GetField` | 18.09 M | 1,053 | 19.05 B | 18.6% | 1.25 s |
+| `Call+Ret` | 5.09 M | 3,359 | 17.10 B | 16.7% | 1.25 s |
+| `Cmp` | 8.19 M | 1,388 | 11.37 B | 11.1% | 0.80 s |
+| `Add` | 5.92 M | 1,390 | 8.24 B | 8.1% | 0.62 s |
+| `Branch` | 10.56 M | 610 | 6.44 B | 6.3% | 0.46 s |
+| `Const` | 4.92 M | 947 | 4.66 B | 4.6% | 0.36 s |
+| `Load` | 2.84 M | 1,458 | 4.14 B | 4.0% | 0.29 s |
+| `TupleNew` | 1.20 M | 2,274 | 2.74 B | 2.7% | 0.19 s |
+| `Extract` | 2.46 M | 1,053 | 2.59 B | 2.5% | 0.18 s |
+| `VariantNew` | 0.90 M | 2,287 | 2.05 B | 2.0% | 0.14 s |
+| `CheckedIndexedLoad` | 1.12 M | 1,796 | 2.02 B | 2.0% | 0.13 s |
+| `Jump` | 4.11 M | 458 | 1.88 B | 1.8% | 0.12 s |
+| `RecordNew` | 0.79 M | 2,282 | 1.81 B | 1.8% | 0.12 s |
+| `GetTag` | 1.74 M | 760 | 1.32 B | 1.3% | 0.08 s |
+
+These calibrated types explain 83.5% of retired native instructions and about
+75.7% of isolated wall time. Field projection, call frames, and comparison
+control flow are the dominant costs; borrowed RK combinators are a component
+of those handlers rather than the largest strategic opportunity by themselves.
+
+Exact dynamic shape counts expose the largest removable streams:
+
+| Shape | Executions | Share of all VM dispatches |
+| --- | ---: | ---: |
+| `Cmp; Branch` over the comparison result | 7,541,379 | 9.59% |
+| Consecutive `GetField` pair edge | 6,669,300 | 8.48% |
+| `CheckedIndexedLoad; Jump` | 1,122,524 | 1.43% |
+| Remaining direct `Call; Ret` tail shape | 400,228 | 0.51% |
+
+There are 1,174 immediate compare-branch sites among 1,282 emitted `Cmp` sites,
+so comparison branching is a general compiler shape rather than one anomalous
+source function.
+
 ## Ranked next work
 
-1. **Refresh the critical-path frame-pointer profile.** The previous `rk`,
-   `call_regs`, and `arg_values` weights predate a six-percent cycle reduction.
-2. **Emit checked indexed loads semantically from MIR.** Direct emission can
-   remove the structural matcher, make success fall through instead of
-   executing 3,477,483 `Jump`s, and cover unit-width accesses while preserving
-   the explicit source-owned failure target.
-3. **Re-evaluate call-frame construction.** Only investigate register
-   initialization or pool reuse if the refreshed profile still identifies it
-   as material.
+1. **Semantic compare-branch instructions.** Fuse a dead comparison result and
+   its branch in MIR or direct bytecode emission. This can remove up to 7.54
+   million dispatches, boolean register materialization, and the second
+   dispatch fetch while preserving typed comparison errors. It is the largest
+   bounded, generic opportunity.
+2. **Field-path projection.** Consecutive field reads expose 6.67 million
+   removable pair edges. A verified `GetFieldPath`-style operation could borrow
+   through intermediate records, clone only the final value, and avoid both
+   intermediate dispatches and `Rc` traffic. This may rival compare-branch but
+   requires more validation and encoding work.
+3. **Broader call reduction.** Call frames account for 16.7% of native
+   instructions, but only 0.51% of dispatches remain in the simple direct
+   tail-call shape. Significant gains require more inlining, specialization, or
+   a cheaper calling convention rather than another narrow forwarding pass.
+4. **Baseline native compilation.** The VM consumes 97.28% of critical-path
+   cycles. Removing interpretation entirely has the largest long-term ceiling,
+   but is a substantially larger project than semantic superinstructions.
+5. **Micro-optimizations.** Flattening borrowed `rk` and removing the checked
+   load success jump remain valid smaller experiments, but they should follow
+   the two measured superinstruction opportunities.

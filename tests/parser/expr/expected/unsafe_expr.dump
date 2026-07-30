@@ -1,11 +1,11 @@
 tokens:
-  Attribute @1..7 "unsafe"
+  Attribute @0..7 "@unsafe"
   LeftBrace @8..9 "{"
   Int @10..11 "1"
   RightBrace @12..13 "}"
   Newline @13..14
 tree:
-  Expr::Unsafe @1..13 "unsafe { 1 }"
+  Expr::Unsafe @0..13 "@unsafe { 1 }"
     Block @8..13 "{ 1 }"
       Stmt::Expr @10..11 "1"
         Expr::LiteralInt @10..11 "1"

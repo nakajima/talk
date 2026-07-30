@@ -15,7 +15,7 @@ tokens:
   RightParen @54..55 ")"
   Newline @55..56
   Effect @56..62 "effect"
-  EffectName @64..67 "log"
+  EffectName @63..67 "'log"
   LeftParen @67..68 "("
   Identifier @68..75 "message"
   Colon @75..76 ":"

@@ -35,12 +35,13 @@ test's elapsed time from 8.900 to 8.499 seconds (-4.50%), native instructions
 by 4.00%, cycles by 3.96%, and branches by 4.36%. A single parallel suite run
 can hide this gain through scheduler contention.
 
-The frame-pointer capture after forwarding but before owned RK materialization
-attributes 97.59% of this test's weighted cycles to the frontend VM.
-Overlapping inclusive costs were `rk` at 13.19%, `call_regs` at 11.06%,
-`arg_values` at 8.81%, and `deliver_return` at 3.91%. The owned RK change then
-reduced the isolated critical path by another 6.03% elapsed, 6.38% cycles, and
-3.15% native instructions. This attribution must now be refreshed.
+The frame-pointer capture after owned RK materialization attributes 97.28% of
+this test's weighted cycles to the frontend VM. Differential opcode calibration
+and exact critical-corpus counts identify the largest native costs as
+`GetField` (18.6% of retired instructions), `Call+Ret` (16.7%), `Cmp` (11.1%),
+`Add` (8.1%), and `Branch` (6.3%). Fourteen calibrated instruction types
+explain 83.5% of all retired native instructions and about 75.7% of isolated
+wall time.
 
 ## Improvements retained in this profiling round
 
@@ -125,16 +126,24 @@ The checked operation itself is compressed, but its success `Jump` executes
 
 ## Ranked opportunities
 
-1. **Refresh the critical-path frame-pointer profile.** The prior `rk`,
-   `call_regs`, and `arg_values` weights predate the retained owned-value path.
-2. **Semantic checked indexed loads in MIR.** Direct emission can remove the
-   structural matcher, make success fall through instead of executing
-   3,477,483 `Jump`s, and cover unit-width accesses while retaining the
-   original source-owned failure target.
-3. **Call-frame construction.** Only investigate register initialization or
-   pool changes if the refreshed profile still identifies them as material.
-   Ownership and continuation behavior remain hard constraints, and checked
-   register access must remain safe Rust.
+1. **Semantic compare-branch instructions.** The critical corpus executes
+   7,541,379 immediate `Cmp; Branch` pairs, 9.59% of all VM dispatches. There
+   are 1,174 such static sites among 1,282 emitted comparisons. Fusion removes
+   one dispatch and boolean materialization per execution and is the largest
+   bounded generic opportunity.
+2. **Field-path projection.** Consecutive `GetField` edges execute 6,669,300
+   times, 8.48% of dispatches. A verified path operation could avoid
+   intermediate dispatches and `Rc` clone/drop traffic; its potential is large
+   but its representation and validation are more involved.
+3. **Broader call reduction.** Call frame round trips consume 16.7% of native
+   instructions, but only 400,228 executions remain in a simple direct
+   `Call; Ret` tail shape. Further gains require broader inlining,
+   specialization, or calling-convention work.
+4. **Baseline native compilation.** Eliminating interpretation has the largest
+   long-term ceiling because the VM owns 97.28% of critical-path cycles, but it
+   is a much larger project.
+5. **Micro-optimizations.** Borrowed RK flattening and the checked-load success
+   jump are smaller than the measured compare-branch and field-path streams.
 
 Every runtime optimization remains subject to a direct 12-thread, five-run
 native-counter A/B. Exact dispatch reductions alone are necessary but not

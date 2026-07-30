@@ -103,12 +103,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Continue => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::SingleQuote => (),
                 TokenKind::In => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::EffectName => {
-                    // Span excludes the ', so we adjust for highlighting
-                    let mut tok = tok.clone();
-                    tok.start = tok.start.saturating_sub(1);
-                    self.make(&tok, Kind::EFFECT, &mut tokens)
-                }
+                TokenKind::EffectName => self.make(tok, Kind::EFFECT, &mut tokens),
                 TokenKind::Handling => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Effect => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Dollar | TokenKind::Hash => self.make(tok, Kind::OPERATOR, &mut tokens),

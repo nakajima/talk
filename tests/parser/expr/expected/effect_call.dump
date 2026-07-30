@@ -1,5 +1,5 @@
 tokens:
-  EffectName @1..3 "io"
+  EffectName @0..3 "'io"
   LeftParen @3..4 "("
   Identifier @4..11 "request"
   Colon @11..12 ":"
@@ -15,7 +15,7 @@ tokens:
   RightParen @45..46 ")"
   Newline @46..47
 tree:
-  Expr::CallEffect @1..46
+  Expr::CallEffect @0..46
     CallArg @4..45
       Expr::Call @13..45 ".socket(domain, socktype, proto)"
         Expr::Member @13..20 ".socket"

@@ -114,7 +114,7 @@ tokens:
   Newline @275..276
   Struct @276..282 "struct"
   Identifier @283..287 "Node"
-  EffectName @289..293 "heap"
+  EffectName @288..293 "'heap"
   LeftBrace @294..295 "{"
   Newline @295..296
   Let @297..300 "let"

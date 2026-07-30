@@ -6,7 +6,7 @@ tokens:
   Dot @19..20 "."
   Identifier @20..23 "map"
   LeftBrace @24..25 "{"
-  BoundVar @27..28 "0"
+  BoundVar @26..28 "$0"
   Star @29..30 "*"
   Int @31..32 "2"
   RightBrace @33..34 "}"
@@ -80,9 +80,9 @@ tree:
         Expr::Variable @14..19 "items"
       Block @24..34 "{ $0 * 2 }"
         Parameter @synthesized
-        Stmt::Expr @27..32 "0 * 2"
-          Expr::Binary @27..32 "0 * 2"
-            Expr::Variable @27..28 "0"
+        Stmt::Expr @26..32 "$0 * 2"
+          Expr::Binary @26..32 "$0 * 2"
+            Expr::Variable @26..28 "$0"
             Expr::LiteralInt @31..32 "2"
   Stmt::Expr @35..71
     Expr::Call @35..71

@@ -645,9 +645,9 @@ variant-takes-no-generics and bare-generic-head errors pinned — their
 `actual` fields turn out to be dead: `UnexpectedToken`'s Display names
 the token itself, so no Debug leak existed); the `unreachable` and
 `#macro(...)` expression prefixes; and `@"…"` quoted identifiers in
-the Talk lexer (an ordinary Identifier token whose span excludes the
-`@` and quotes, with the empty/unterminated/backslash error positions
-pinned). With every reference prefix handler ported, the
+the Talk lexer (an ordinary Identifier token whose full span includes
+the `@` and quotes while its lexeme excludes them, with the
+empty/unterminated/backslash error positions pinned). With every reference prefix handler ported, the
 `talk-parser.unported` machinery itself is deleted — the prefix
 fallthrough now reports the reference's own expected-an-expression
 error.
@@ -734,11 +734,11 @@ pinned and reproduced: a positional call argument's `label_span` is
 the argument's own span; a positional member's (`x.0`) span is the
 FOLLOWING token's; a float-split member (`x.0.1`) gets digit
 sub-spans; `use` path spans end at the START of the token after the
-path; macro `$param` spans include the sigil both lexers exclude from
-the token; `[T]` sugar's Array head has a synthesized name span while
-`T?` sugar's Optional name span is the node's own span; `consume mut`
-mode spans cover both words; effect-name token spans exclude the `'`
-sigil in both lexers. One reference cleanup (fix-not-enshrine): the
+path; macro `$param` spans include the sigil; `[T]` sugar's Array head
+has a synthesized name span while `T?` sugar's Optional name span is
+the node's own span; `consume mut` mode spans cover both words;
+effect-name token spans include the `'` sigil while their lexeme spans
+exclude it. One reference cleanup (fix-not-enshrine): the
 anonymous-func fallback name was a Debug leak
 (`#fn_Some(Token { .. })`, baking token line/col into a *name*); the
 reference now mints position-keyed `#fn_<start>_<end>` (the resolver

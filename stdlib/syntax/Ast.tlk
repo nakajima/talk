@@ -346,7 +346,7 @@ pub enum ExprKind {
 	// `unreachable` spanning the bang until desugaring sends it to 'panic.
 	case force_unwrap([Expr])
 	case unreachable_expr
-	// `'effect(args)`: the effect name (sigil excluded) and its token
+	// `'effect(args)`: the effect name (sigil excluded) and its lexeme
 	// span, explicit generic arguments, then the arguments.
 	case call_effect(String, Int, Int, [GenericArg], [CallArg])
 	// `{ label: value, ...spread }`: the fields, then the spread
@@ -460,7 +460,7 @@ pub struct RecordFieldPattern {
 	pub let end: Int
 }
 
-// A macro's `$param`; the span includes the sigil (token extents do not).
+// A macro's `$param`; the span includes the sigil.
 pub struct MacroParam {
 	pub let name: String
 	pub let start: Int
@@ -541,7 +541,7 @@ pub enum StmtKind {
 	// `'continue expr?` — resumes the enclosing effect handler.
 	case resume_stmt(Expr?)
 	// `@handle 'effect { body }` — the effect name (sigil excluded), its
-	// token span, and the handler block.
+	// lexeme span, and the handler block.
 	case handle_stmt(String, Int, Int, Block)
 }
 

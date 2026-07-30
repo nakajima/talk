@@ -1,11 +1,11 @@
 tokens:
-  Attribute @1..7 "handle"
-  EffectName @9..11 "io"
+  Attribute @0..7 "@handle"
+  EffectName @8..11 "'io"
   LeftBrace @12..13 "{"
   Identifier @14..21 "request"
   In @22..24 "in"
   Newline @24..25
-  EffectName @27..35 "continue"
+  EffectName @26..35 "'continue"
   Identifier @36..40 "host"
   LeftParen @40..41 "("
   Identifier @41..48 "request"
@@ -15,11 +15,11 @@ tokens:
   Newline @58..59
   RightBrace @59..60 "}"
   Newline @60..61
-  Attribute @62..68 "handle"
-  EffectName @70..75 "async"
+  Attribute @61..68 "@handle"
+  EffectName @69..75 "'async"
   LeftBrace @76..77 "{"
   Newline @77..78
-  EffectName @80..88 "continue"
+  EffectName @79..88 "'continue"
   Newline @88..89
   RightBrace @89..90 "}"
   Newline @90..91
@@ -28,16 +28,16 @@ tokens:
   RightBrace @97..98 "}"
   Newline @98..99
 tree:
-  Stmt::Handling @1..60
+  Stmt::Handling @0..60
     Block @12..60
       Parameter @22..21
-      Stmt::Resume @27..58 "continue host(request: request)"
+      Stmt::Resume @26..58 "'continue host(request: request)"
         Expr::Call @36..58 "host(request: request)"
           Expr::Variable @36..40 "host"
           CallArg @41..57 "request: request"
             Expr::Variable @50..57 "request"
-  Stmt::Handling @62..90
+  Stmt::Handling @61..90
     Block @76..90
-      Stmt::Resume @80..88 "continue"
+      Stmt::Resume @79..88 "'continue"
   Stmt::Loop @91..98 "loop {}"
     Block @96..98 "{}"

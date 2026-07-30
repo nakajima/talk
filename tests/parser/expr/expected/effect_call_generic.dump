@@ -1,5 +1,5 @@
 tokens:
-  EffectName @1..6 "alloc"
+  EffectName @0..6 "'alloc"
   Less @6..7 "<"
   Identifier @7..10 "Int"
   Greater @10..11 ">"
@@ -8,7 +8,7 @@ tokens:
   RightParen @17..18 ")"
   Newline @18..19
 tree:
-  Expr::CallEffect @1..18 "alloc<Int>(count)"
+  Expr::CallEffect @0..18 "'alloc<Int>(count)"
     TypeAnnotation::Nominal @7..10 "Int"
     CallArg @12..17 "count"
       Expr::Variable @12..17 "count"

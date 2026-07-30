@@ -28,7 +28,7 @@ tokens:
   Newline @86..87
   Enum @87..91 "enum"
   Identifier @92..96 "Tree"
-  EffectName @98..104 "linear"
+  EffectName @97..104 "'linear"
   LeftBrace @105..106 "{"
   Newline @106..107
   Case @108..112 "case"

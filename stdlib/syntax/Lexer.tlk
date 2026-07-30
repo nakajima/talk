@@ -94,7 +94,7 @@ pub enum TokenKind {
 	case tilde_equals
 	case caret
 	case caret_equals
-	// Prefixed forms whose spans exclude their sigil.
+	// Prefixed forms whose lexemes exclude their sigil.
 	case attribute
 	case dollar
 	case bound_var
@@ -315,8 +315,19 @@ pub func kind_spelling(kind: TokenKind) -> String {
 
 pub struct Token {
 	pub let kind: TokenKind
-	pub let start: Int
-	pub let end: Int
+	// The complete token spelling as a half-open byte range.
+	pub let span: Range<Int>
+	// The parser-facing value as a half-open byte range. This excludes
+	// sigils and identifier quotes; for ordinary tokens it equals span.
+	pub let lexeme: Range<Int>
+}
+
+func token(kind: TokenKind, start: Int, end: Int) -> Token {
+	Token(kind: kind, span: start..<end, lexeme: start..<end)
+}
+
+func token_with_lexeme(kind: TokenKind, start: Int, end: Int, lexeme_start: Int, lexeme_end: Int) -> Token {
+	Token(kind: kind, span: start..<end, lexeme: lexeme_start..<lexeme_end)
 }
 
 // A dropped line comment's span, preserved for the parse dump's
@@ -586,7 +597,7 @@ pub func scan(source: String) -> ScanResult {
 			loop i < n && view.at(index: i)._toInt() == newline_byte {
 				i = i + 1
 			}
-			tokens.push(Token(kind: .newline, start: start, end: i))
+			tokens.push(token(kind: .newline, start: start, end: i))
 			continue
 		}
 
@@ -619,9 +630,9 @@ pub func scan(source: String) -> ScanResult {
 				loop i < n && (is_digit(b: view.at(index: i)._toInt()) || view.at(index: i)._toInt() == underscore_byte) {
 					i = i + 1
 				}
-				tokens.push(Token(kind: .float_number, start: start, end: i))
+				tokens.push(token(kind: .float_number, start: start, end: i))
 			} else {
-				tokens.push(Token(kind: .int_number, start: start, end: i))
+				tokens.push(token(kind: .int_number, start: start, end: i))
 			}
 			continue
 		}
@@ -669,7 +680,7 @@ pub func scan(source: String) -> ScanResult {
 				"for" -> TokenKind.keyword_for,
 				_ -> TokenKind.identifier
 			}
-			tokens.push(Token(kind: kind, start: start, end: i))
+			tokens.push(token(kind: kind, start: start, end: i))
 			continue
 		}
 
@@ -708,7 +719,7 @@ pub func scan(source: String) -> ScanResult {
 				error_pos = i
 				break
 			}
-			tokens.push(Token(kind: .string_literal, start: start, end: i))
+			tokens.push(token(kind: .string_literal, start: start, end: i))
 			continue
 		}
 
@@ -723,8 +734,7 @@ pub func scan(source: String) -> ScanResult {
 				let run_end = ident_end(view: view, n: n, i: i + 1)
 				let closed = run_end < n && view.at(index: run_end)._toInt() == tick_byte
 				if closed == false {
-					// Effect-name spans exclude the tick.
-					tokens.push(Token(kind: .effect_name, start: i + 1, end: run_end))
+					tokens.push(token_with_lexeme(kind: .effect_name, start: i, end: run_end, lexeme_start: i + 1, lexeme_end: run_end))
 					i = run_end
 					continue
 				}
@@ -745,7 +755,7 @@ pub func scan(source: String) -> ScanResult {
 			}
 			if row_opener {
 				// The row's tick stands alone; `[` lexes next round.
-				tokens.push(Token(kind: .single_quote, start: i, end: i + 1))
+				tokens.push(token(kind: .single_quote, start: i, end: i + 1))
 				i = i + 1
 				continue
 			}
@@ -756,30 +766,30 @@ pub func scan(source: String) -> ScanResult {
 				break
 			}
 			if let .literal(end) = probe {
-				tokens.push(Token(kind: .character_literal, start: start, end: end))
+				tokens.push(token(kind: .character_literal, start: start, end: end))
 				i = end
 				continue
 			}
 			// Not a literal: a bare tick keeps its own span.
-			tokens.push(Token(kind: .single_quote, start: i, end: i + 1))
+			tokens.push(token(kind: .single_quote, start: i, end: i + 1))
 			i = i + 1
 			continue
 		}
 
-		// Sigil-prefixed forms whose spans exclude the sigil.
+		// Sigil-prefixed forms keep the complete spelling in span and the
+		// value after the sigil in lexeme.
 		if b == percent_byte && i + 1 < n && (is_digit(b: view.at(index: i + 1)._toInt()) || view.at(index: i + 1)._toInt() == question_byte) {
 			let register_start = i + 1
 			let j = register_start
 			loop j < n && (is_digit(b: view.at(index: j)._toInt()) || view.at(index: j)._toInt() == question_byte) {
 				j = j + 1
 			}
-			tokens.push(Token(kind: .ir_register, start: register_start, end: j))
+			tokens.push(token_with_lexeme(kind: .ir_register, start: i, end: j, lexeme_start: register_start, lexeme_end: j))
 			i = j
 			continue
 		}
 		// @"..." spells a literal identifier, letting keywords be used
-		// as names: an ordinary Identifier token whose span excludes the
-		// @ and the quotes.
+		// as names. Its lexeme excludes the @ and the quotes.
 		if b == at_byte && i + 1 < n && view.at(index: i + 1)._toInt() == quote_byte {
 			let start = i + 2
 			let j = start
@@ -811,29 +821,29 @@ pub func scan(source: String) -> ScanResult {
 				error_pos = j
 				break
 			}
-			tokens.push(Token(kind: .identifier, start: start, end: j))
+			tokens.push(token_with_lexeme(kind: .identifier, start: i, end: j + 1, lexeme_start: start, lexeme_end: j))
 			i = j + 1
 			continue
 		}
 		if b == at_byte && i + 1 < n && is_alnum(b: view.at(index: i + 1)._toInt()) {
 			let end = ident_end(view: view, n: n, i: i + 1)
-			tokens.push(Token(kind: .attribute, start: i + 1, end: end))
+			tokens.push(token_with_lexeme(kind: .attribute, start: i, end: end, lexeme_start: i + 1, lexeme_end: end))
 			i = end
 			continue
 		}
 		if b == dollar_byte && i + 1 < n && is_alnum(b: view.at(index: i + 1)._toInt()) {
 			let end = ident_end(view: view, n: n, i: i + 1)
-			tokens.push(Token(kind: .bound_var, start: i + 1, end: end))
+			tokens.push(token_with_lexeme(kind: .bound_var, start: i, end: end, lexeme_start: i + 1, lexeme_end: end))
 			i = end
 			continue
 		}
 		if b == dollar_byte {
-			tokens.push(Token(kind: .dollar, start: i, end: i + 1))
+			tokens.push(token(kind: .dollar, start: i, end: i + 1))
 			i = i + 1
 			continue
 		}
 		if b == hash_byte {
-			tokens.push(Token(kind: .hash, start: i, end: i + 1))
+			tokens.push(token(kind: .hash, start: i, end: i + 1))
 			i = i + 1
 			continue
 		}
@@ -841,17 +851,17 @@ pub func scan(source: String) -> ScanResult {
 		if b == dot_byte {
 			if i + 1 < n && view.at(index: i + 1)._toInt() == dot_byte {
 				if i + 2 < n && view.at(index: i + 2)._toInt() == dot_byte {
-					tokens.push(Token(kind: .dot_dot_dot, start: i, end: i + 3))
+					tokens.push(token(kind: .dot_dot_dot, start: i, end: i + 3))
 					i = i + 3
 				} else if i + 2 < n && view.at(index: i + 2)._toInt() == less_byte {
-					tokens.push(Token(kind: .dot_dot_less, start: i, end: i + 3))
+					tokens.push(token(kind: .dot_dot_less, start: i, end: i + 3))
 					i = i + 3
 				} else {
-					tokens.push(Token(kind: .dot_dot, start: i, end: i + 2))
+					tokens.push(token(kind: .dot_dot, start: i, end: i + 2))
 					i = i + 2
 				}
 			} else {
-				tokens.push(Token(kind: .dot, start: i, end: i + 1))
+				tokens.push(token(kind: .dot, start: i, end: i + 1))
 				i = i + 1
 			}
 			continue
@@ -881,7 +891,7 @@ pub func scan(source: String) -> ScanResult {
 				_ -> TokenKind.identifier
 			}
 			if is_operator(kind: two) {
-				tokens.push(Token(kind: two, start: i, end: i + 2))
+				tokens.push(token(kind: two, start: i, end: i + 2))
 				i = i + 2
 				continue
 			}
@@ -916,7 +926,7 @@ pub func scan(source: String) -> ScanResult {
 			_ -> TokenKind.identifier
 		}
 		if is_operator(kind: one) {
-			tokens.push(Token(kind: one, start: i, end: i + 1))
+			tokens.push(token(kind: one, start: i, end: i + 1))
 			i = i + 1
 			continue
 		}
@@ -1002,10 +1012,10 @@ pub func lex(source: String) -> String {
 		append(buf: out, text: "  ")
 		append(buf: out, text: kind_name(kind: token.kind))
 		append(buf: out, text: " @")
-		append_int(buf: out, value: token.start)
+		append_int(buf: out, value: token.span.lower)
 		append(buf: out, text: "..")
-		append_int(buf: out, value: token.end)
-		append_snippet(buf: out, view: view, start: token.start, end: token.end)
+		append_int(buf: out, value: token.span.upper)
+		append_snippet(buf: out, view: view, start: token.span.lower, end: token.span.upper)
 		append(buf: out, text: "\n")
 	}
 	if let .some(message) = result.error {
@@ -1112,17 +1122,17 @@ func group_tokens(tokens: [Token]) -> TreesResult {
 					current.push(TokenTree.group(Group(delimiter: delimiter, open: frame.opener, close: token, children: children)))
 					continue
 				}
-				let line = "tokentree.mismatched-closer closer at " + span_text(start: token.start, end: token.end) + " does not match the group opened at " + span_text(start: frame.opener.start, end: frame.opener.end)
+				let line = "tokentree.mismatched-closer closer at " + span_text(start: token.span.lower, end: token.span.upper) + " does not match the group opened at " + span_text(start: frame.opener.span.lower, end: frame.opener.span.upper)
 				return TreesResult(trees: empty_trees(), error_line: Optional.some(line))
 			}
-			let line = "tokentree.unexpected-closer closer at " + span_text(start: token.start, end: token.end) + " has no open group"
+			let line = "tokentree.unexpected-closer closer at " + span_text(start: token.span.lower, end: token.span.upper) + " has no open group"
 			return TreesResult(trees: empty_trees(), error_line: Optional.some(line))
 		}
 		current.push(TokenTree.leaf(token))
 	}
 	let leftover = stack.pop()
 	if let .some(frame) = leftover {
-		let line = "tokentree.unclosed group opened at " + span_text(start: frame.opener.start, end: frame.opener.end) + " is never closed"
+		let line = "tokentree.unclosed group opened at " + span_text(start: frame.opener.span.lower, end: frame.opener.span.upper) + " is never closed"
 		return TreesResult(trees: empty_trees(), error_line: Optional.some(line))
 	}
 	TreesResult(trees: current, error_line: Optional.none)
@@ -1140,10 +1150,10 @@ func render_leaf(mut buf: [Byte], view: UTF8View, token: Token, depth: Int) -> V
 	indent(buf: buf, depth: depth)
 	append(buf: buf, text: kind_name(kind: token.kind))
 	append(buf: buf, text: " @")
-	append_int(buf: buf, value: token.start)
+	append_int(buf: buf, value: token.span.lower)
 	append(buf: buf, text: "..")
-	append_int(buf: buf, value: token.end)
-	append_snippet(buf: buf, view: view, start: token.start, end: token.end)
+	append_int(buf: buf, value: token.span.upper)
+	append_snippet(buf: buf, view: view, start: token.span.lower, end: token.span.upper)
 	append(buf: buf, text: "\n")
 }
 
@@ -1159,9 +1169,9 @@ func render_trees(mut buf: [Byte], view: UTF8View, list: &[TokenTree], depth: In
 			append(buf: buf, text: "Group ")
 			append(buf: buf, text: delimiter_text(delimiter: inner.delimiter))
 			append(buf: buf, text: " open@")
-			append(buf: buf, text: span_text(start: inner.open.start, end: inner.open.end))
+			append(buf: buf, text: span_text(start: inner.open.span.lower, end: inner.open.span.upper))
 			append(buf: buf, text: " close@")
-			append(buf: buf, text: span_text(start: inner.close.start, end: inner.close.end))
+			append(buf: buf, text: span_text(start: inner.close.span.lower, end: inner.close.span.upper))
 			append(buf: buf, text: "\n")
 			render_trees(buf: buf, view: view, list: inner.children, depth: depth + 1)
 		}

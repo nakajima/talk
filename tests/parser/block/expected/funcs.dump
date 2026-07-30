@@ -122,7 +122,7 @@ tokens:
   Identifier @287..296 "effectful"
   LeftParen @296..297 "("
   RightParen @297..298 ")"
-  EffectName @300..302 "io"
+  EffectName @299..302 "'io"
   Arrow @303..305 "->"
   Identifier @306..309 "Int"
   LeftBrace @310..311 "{"
