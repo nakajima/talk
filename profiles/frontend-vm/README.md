@@ -1,5 +1,11 @@
 # Frontend VM statistics
 
+The current forwarding-call snapshot is
+[`d2bd469efa5d-dirty-a6b49355f2ef.txt`](d2bd469efa5d-dirty-a6b49355f2ef.txt);
+its clean pre-forwarding baseline is
+[`d2bd469efa5d.txt`](d2bd469efa5d.txt). Their findings are summarized in
+[`docs/frontend-vm-report.md`](../../docs/frontend-vm-report.md).
+
 Run from the repository root:
 
 ```text

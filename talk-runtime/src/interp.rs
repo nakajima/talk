@@ -71,7 +71,7 @@ impl From<Constant> for Value {
 
 /// A register-or-constant operand normalized without cloning aggregate
 /// register values or materializing scalar constants as full VM values.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 enum OperandValue<'a> {
     I64(i64),
     F64(f64),
@@ -94,16 +94,18 @@ impl<'a> OperandValue<'a> {
             value => Self::Aggregate(value),
         }
     }
+}
 
-    fn into_value(self) -> Value {
+impl std::fmt::Debug for OperandValue<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::I64(value) => Value::I64(value),
-            Self::F64(value) => Value::F64(value),
-            Self::Bool(value) => Value::Bool(value),
-            Self::Byte(value) => Value::Byte(value),
-            Self::Void => Value::Void,
-            Self::Ptr(value) => Value::Ptr(value),
-            Self::Aggregate(value) => value.clone(),
+            Self::I64(value) => formatter.debug_tuple("I64").field(value).finish(),
+            Self::F64(value) => formatter.debug_tuple("F64").field(value).finish(),
+            Self::Bool(value) => formatter.debug_tuple("Bool").field(value).finish(),
+            Self::Byte(value) => formatter.debug_tuple("Byte").field(value).finish(),
+            Self::Void => formatter.write_str("Void"),
+            Self::Ptr(value) => formatter.debug_tuple("Ptr").field(value).finish(),
+            Self::Aggregate(value) => formatter.debug_tuple("Aggregate").field(value).finish(),
         }
     }
 }
@@ -2230,7 +2232,7 @@ fn call_regs(
     let mut regs = pool.pop().unwrap_or_default();
     regs.reserve(usize::from(n_regs));
     for &src in arg_regs {
-        regs.push(rk(module, frame, src)?.into_value());
+        regs.push(rk_value(module, frame, src)?);
     }
     regs.resize(usize::from(n_regs), Value::Void);
     Ok(regs)
@@ -2250,10 +2252,30 @@ fn arg_values(
         .arg_pool
         .get(start..end)
         .ok_or("vm: bad argument pool range")?;
-    arg_regs
-        .iter()
-        .map(|&src| rk(module, frame, src).map(OperandValue::into_value))
-        .collect()
+    let mut values = Vec::with_capacity(arg_regs.len());
+    for &src in arg_regs {
+        values.push(rk_value(module, frame, src)?);
+    }
+    Ok(values)
+}
+
+/// Read a register-or-constant operand as an owned VM value.
+#[inline]
+fn rk_value(module: &Module, frame: &Frame<'_>, field: u16) -> Result<Value, String> {
+    if field & crate::RK_CONST != 0 {
+        module
+            .consts
+            .get(usize::from(field & crate::RK_INDEX))
+            .copied()
+            .map(Value::from)
+            .ok_or_else(|| format!("vm: bad constant operand {}", field & crate::RK_INDEX))
+    } else {
+        frame
+            .regs
+            .get(usize::from(field))
+            .cloned()
+            .ok_or_else(|| format!("vm: operand register r{field} out of range"))
+    }
 }
 
 /// Read a register-or-constant operand field (RK encoding — see
