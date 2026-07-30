@@ -165,33 +165,60 @@ the same material reduction in instructions, cycles, task time, and branches.
 Branch-miss direction was inconsistent between batches and is not claimed as
 an improvement.
 
-## Previous sampled attribution
+## Critical-path latency
 
-The most recent frame-pointer sample predates call forwarding:
+Per-test timing with 12 suite threads identifies
+`compiling::bridge::tests::structured_results_validate_over_corpus` as the
+wall-time gate. It consistently finishes about 0.2 seconds before the whole
+library suite; formatter, workspace, and LSP tests finish several seconds
+earlier. Full-suite wall time therefore varies with contention around this one
+frontend-VM-heavy test.
 
-| Category | Weighted cycles |
+Running that test alone for five repetitions removes suite scheduling noise:
+
+| Counter | Before | Current | Change |
+| --- | ---: | ---: | ---: |
+| Elapsed time | 8.900 s | 8.499 s | -4.50% |
+| CPU task time | 8.894 s | 8.496 s | -4.47% |
+| Cycles | 41.799 B | 40.144 B | -3.96% |
+| Instructions | 109.954 B | 105.560 B | -4.00% |
+| Branches | 16.477 B | 15.758 B | -4.36% |
+| Branch misses | 33.166 M | 34.051 M | +2.67% |
+
+The forwarding pass therefore does improve the actual critical path even
+though one full-suite wall-clock comparison showed no gain. The parallel suite
+is too contention-sensitive to expose a four-percent single-test reduction
+reliably in one run.
+
+A current frame-pointer profile of the critical test attributes 97.59% of
+weighted cycles to the frontend VM. Its overlapping inclusive costs are:
+
+| VM path | Inclusive cycles |
 | --- | ---: |
-| Frontend VM | 83.61% |
-| Type checking | 9.50% |
-| Frontend bridge | 2.52% |
-| Other | 2.26% |
-| Backend | 1.40% |
-| Name resolution | 0.56% |
+| `rk` | 13.19% |
+| `call_regs` | 11.06% |
+| `arg_values` | 8.81% |
+| `deliver_return` | 3.91% |
+| `Allocations::check_access` | 1.51% |
+| `chunk` | 0.83% |
 
-Its overlapping VM costs included `rk` at 10.70%, `call_regs` at 10.27%,
-`arg_values` at 6.82%, and `deliver_return` at 4.12%. Call forwarding removes
-work from the latter three, so this attribution must be refreshed before
-choosing a host-side call optimization.
+`call_regs` and `arg_values` both need owned `Value`s but currently route every
+operand through `rk`'s borrowed `OperandValue` normalization and then convert
+back to `Value`. `arg_values` also collects an iterator of `Result`s into a new
+vector; that iterator machinery is visible throughout its samples.
 
 ## Ranked next work
 
-1. **Refresh the frame-pointer profile.** Confirm how much `call_regs`,
-   `arg_values`, and `deliver_return` fell and identify the new dominant native
-   cost.
+1. **Specialize owned RK materialization.** Add a safe owned-value operand read
+   for call and aggregate argument construction, bypassing the redundant
+   `Value -> OperandValue -> Value` round trip. Replace `arg_values`' iterator
+   collector with one pre-sized explicit loop. Keep the borrowed `rk` path for
+   arithmetic and comparisons, where it avoids cloning aggregates. Measure
+   this as one isolated host-runtime A/B.
 2. **Emit checked indexed loads semantically from MIR.** Direct emission can
    remove the structural matcher, make success fall through instead of
    executing 3,477,483 `Jump`s, and cover unit-width accesses while preserving
    the explicit source-owned failure target.
-3. **Re-evaluate call-frame construction and RK operands.** Only optimize these
-   after the refreshed profile; forwarding has removed a large portion of the
-   traffic represented by the previous samples.
+3. **Reprofile call-frame construction.** If `call_regs` remains material after
+   owned operand specialization, investigate frame register initialization and
+   pool reuse without unsafe indexing or ownership changes.

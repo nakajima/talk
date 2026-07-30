@@ -2230,7 +2230,7 @@ fn call_regs(
     let mut regs = pool.pop().unwrap_or_default();
     regs.reserve(usize::from(n_regs));
     for &src in arg_regs {
-        regs.push(rk(module, frame, src)?.into_value());
+        regs.push(rk_value(module, frame, src)?);
     }
     regs.resize(usize::from(n_regs), Value::Void);
     Ok(regs)
@@ -2250,10 +2250,30 @@ fn arg_values(
         .arg_pool
         .get(start..end)
         .ok_or("vm: bad argument pool range")?;
-    arg_regs
-        .iter()
-        .map(|&src| rk(module, frame, src).map(OperandValue::into_value))
-        .collect()
+    let mut values = Vec::with_capacity(arg_regs.len());
+    for &src in arg_regs {
+        values.push(rk_value(module, frame, src)?);
+    }
+    Ok(values)
+}
+
+/// Read a register-or-constant operand as an owned VM value.
+#[inline]
+fn rk_value(module: &Module, frame: &Frame<'_>, field: u16) -> Result<Value, String> {
+    if field & crate::RK_CONST != 0 {
+        module
+            .consts
+            .get(usize::from(field & crate::RK_INDEX))
+            .copied()
+            .map(Value::from)
+            .ok_or_else(|| format!("vm: bad constant operand {}", field & crate::RK_INDEX))
+    } else {
+        frame
+            .regs
+            .get(usize::from(field))
+            .cloned()
+            .ok_or_else(|| format!("vm: operand register r{field} out of range"))
+    }
 }
 
 /// Read a register-or-constant operand field (RK encoding — see

@@ -26,24 +26,20 @@ fixed test threads, one warmup, and five `perf stat` repetitions. Cargo and
 build time are excluded. The exact VM workload parses the four sorted
 `stdlib/syntax/*.tlk` files through a twice-built fixed-point candidate.
 
-## Shape of the run
+## Shape of the critical path
 
-The latest frame-pointer capture predates forwarding-call threading and
-attributes weighted cycles as follows:
+Per-test timing identifies
+`compiling::bridge::tests::structured_results_validate_over_corpus` as the
+12-thread library suite's wall-time gate. An isolated five-run A/B reduced that
+test's elapsed time from 8.900 to 8.499 seconds (-4.50%), native instructions
+by 4.00%, cycles by 3.96%, and branches by 4.36%. A single parallel suite run
+can hide this gain through scheduler contention.
 
-| Category | Share |
-| --- | ---: |
-| Frontend VM | 83.61% |
-| Type checking | 9.50% |
-| Frontend bridge | 2.52% |
-| Other | 2.26% |
-| Backend | 1.40% |
-| Name resolution | 0.56% |
-| Formatter outside frontend | 0.10% |
-| Frontend initialization | 0.05% |
-
-The VM remains the correct optimization surface. Type checking is the largest
-non-VM category, but is less than one eighth of the VM share.
+A current frame-pointer capture attributes 97.59% of this test's weighted
+cycles to the frontend VM. Overlapping inclusive costs are `rk` at 13.19%,
+`call_regs` at 11.06%, `arg_values` at 8.81%, and `deliver_return` at 3.91%.
+Memory `check_access` is only 1.51%. Critical-path work should therefore remain
+on VM operand and argument handling.
 
 ## Improvements retained in this profiling round
 
@@ -122,19 +118,19 @@ The checked operation itself is compressed, but its success `Jump` executes
 
 ## Ranked opportunities
 
-1. **Refresh the frame-pointer profile.** Forwarding removed 23.19% of dynamic
-   calls and returns, invalidating the old `call_regs`, `arg_values`, and
-   `deliver_return` weights.
+1. **Owned RK materialization.** Calls and aggregate constructors need owned
+   `Value`s, but currently normalize register values through borrowed
+   `OperandValue` and immediately convert them back. Add a safe owned operand
+   read and replace `arg_values`' `Result` iterator collector with one
+   pre-sized loop. Keep borrowed `rk` for arithmetic and comparisons.
 2. **Semantic checked indexed loads in MIR.** Direct emission can remove the
    structural matcher, make success fall through instead of executing
    3,477,483 `Jump`s, and cover unit-width accesses while retaining the
    original source-owned failure target.
-3. **Call-frame construction and RK operands.** Re-evaluate these only after
-   the new profile. Ownership and continuation behavior remain hard constraints;
-   checked register access must remain safe Rust.
-4. **Type checking.** The previous profile placed it at 9.50% of the whole run;
-   it becomes the next major subsystem after the known VM reductions are
-   exhausted.
+3. **Call-frame construction.** Reprofile after owned operand specialization;
+   only then consider register initialization or pool changes. Ownership and
+   continuation behavior remain hard constraints, and checked register access
+   must remain safe Rust.
 
 Every runtime optimization remains subject to a direct 12-thread, five-run
 native-counter A/B. Exact dispatch reductions alone are necessary but not
