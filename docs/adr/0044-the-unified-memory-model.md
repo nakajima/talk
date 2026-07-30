@@ -180,6 +180,14 @@ initializedness, duplicate release of a dynamic owner, use-after-release, and
 pin violations fail deterministically. A backend may remove a check only when
 it proves the same condition from verified Talk IR.
 
+The bytecode runtime represents a raw pointer as an address plus stable
+allocation provenance. Allocation record `N` uses token `N + 1`; token zero
+identifies module static memory. Pointer arithmetic and pointer-valued memory
+cells preserve the token, so liveness and bounds checks index the owning record
+in constant time and then validate the addressed range. Records and tokens are
+never reused during a machine run. This is a target representation detail, not
+a source-level `RawPtr` escape hatch.
+
 Static buffers, including UTF-8 string literals and generated Unicode tables,
 implement the same read interface. They are immutable, never unique, need no
 owner-count changes, and are not reported as live dynamic allocations. Static

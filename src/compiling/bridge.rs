@@ -9,6 +9,7 @@
 use crate::compiling::abi::{AbiSchema, AbiTy, AbiTypeKind};
 use std::collections::HashMap;
 use talk_runtime::interp::{RunOutcome, Value};
+use talk_runtime::memory::Pointer;
 use talk_runtime::symbol::Symbol;
 
 pub struct ResultValidator<'a, 'io> {
@@ -260,9 +261,13 @@ impl<'a, 'io> ResultValidator<'a, 'io> {
     }
 }
 
-fn element_addr(base: u32, index: usize, stride: u64) -> Result<u32, String> {
-    let addr = u64::from(base) + (index as u64) * stride;
-    u32::try_from(addr).map_err(|_| "array element address out of range".into())
+fn element_addr(base: Pointer, index: usize, stride: u64) -> Result<Pointer, String> {
+    let offset = (index as u64)
+        .checked_mul(stride)
+        .and_then(|offset| usize::try_from(offset).ok())
+        .ok_or_else(|| "array element address out of range".to_string())?;
+    base.checked_add(offset)
+        .ok_or_else(|| "array element address out of range".into())
 }
 
 // ===== The adapter (ADR 0043 §5) =====

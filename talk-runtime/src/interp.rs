@@ -7,7 +7,7 @@
 use crate::CmpOp;
 use crate::VmStats;
 use crate::io::IO;
-use crate::memory::{Allocations, MemoryError};
+use crate::memory::{Allocations, MemoryError, Pointer};
 use crate::objects::{ObjectError, Objects};
 use crate::symbol::Symbol;
 use crate::{Chunk, Constant, Insn, MemKind, Module};
@@ -28,8 +28,8 @@ pub enum Value {
     Bool(bool),
     Byte(u8),
     Void,
-    /// An address in the VM's byte memory (statics ++ heap).
-    Ptr(u32),
+    /// An address and allocation identity in the VM's byte memory.
+    Ptr(Pointer),
     /// A record value: `Rc` makes copies O(1); field update clones the
     /// fields first (CoW — mutable value semantics, Racordon et al., JOT
     /// 2022).
@@ -64,7 +64,7 @@ impl From<Constant> for Value {
             Constant::Bool(value) => Self::Bool(value),
             Constant::Byte(value) => Self::Byte(value),
             Constant::Void => Self::Void,
-            Constant::Ptr(value) => Self::Ptr(value),
+            Constant::Ptr(value) => Self::Ptr(Pointer::static_at(value)),
         }
     }
 }
@@ -78,7 +78,7 @@ enum OperandValue<'a> {
     Bool(bool),
     Byte(u8),
     Void,
-    Ptr(u32),
+    Ptr(Pointer),
     Aggregate(&'a Value),
 }
 
@@ -116,7 +116,7 @@ impl<'a> From<Constant> for OperandValue<'a> {
             Constant::Bool(value) => Self::Bool(value),
             Constant::Byte(value) => Self::Byte(value),
             Constant::Void => Self::Void,
-            Constant::Ptr(value) => Self::Ptr(value),
+            Constant::Ptr(value) => Self::Ptr(Pointer::static_at(value)),
         }
     }
 }
@@ -264,17 +264,17 @@ impl RunOutcome<'_> {
     /// Bridge access (ADR 0043 §5): read one 8-byte word of the
     /// machine's memory, for walking array storage out of a returned
     /// value graph.
-    pub fn read_word(&self, addr: u32) -> Result<u64, String> {
-        self.machine.read_word(addr)
+    pub fn read_word(&self, pointer: Pointer) -> Result<u64, String> {
+        self.machine.read_word(pointer)
     }
 
     /// Bridge access: one raw byte of the machine's memory (byte-array
     /// element storage).
-    pub fn read_byte(&self, addr: u32) -> Result<u8, String> {
-        self.machine.check_access(addr, 1, "load")?;
+    pub fn read_byte(&self, pointer: Pointer) -> Result<u8, String> {
+        self.machine.check_access(pointer, 1, "load")?;
         self.machine
             .mem
-            .get(addr as usize)
+            .get(pointer.address() as usize)
             .copied()
             .ok_or_else(|| "vm: load out of bounds".into())
     }
@@ -422,7 +422,10 @@ fn run_export_inner<'io, S: StatsSink>(
                 Value::Record(
                     strings.string,
                     Rc::new(vec![
-                        Value::Record(strings.storage, Rc::new(vec![Value::Ptr(base)])),
+                        Value::Record(
+                            strings.storage,
+                            Rc::new(vec![Value::Ptr(Pointer::static_at(base))]),
+                        ),
                         Value::I64(len),
                         Value::I64(len),
                     ]),
@@ -835,8 +838,9 @@ fn run_loop<S: StatsSink>(
                         eprintln!("MEM alloc-site in {} at {pc}", target.name.as_str());
                     }
                     if let Some((kind, ptr)) = traced
-                        && let Value::Ptr(address) = frame.regs[ptr as usize]
+                        && let Value::Ptr(pointer) = frame.regs[ptr as usize]
                     {
+                        let address = pointer.address();
                         eprintln!(
                             "MEM {kind} ptr={address} in {} at {pc}",
                             chunk(module, current_chunk)
@@ -1006,7 +1010,7 @@ fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> Result<
         Value::Bool(v) => Ok(v.to_string()),
         Value::Byte(v) => Ok(v.to_string()),
         Value::Void => Ok("()".to_string()),
-        Value::Ptr(addr) => Ok(format!("RawPtr({addr})")),
+        Value::Ptr(pointer) => Ok(format!("RawPtr({})", pointer.address())),
         Value::Tuple(items) => {
             let items: Vec<String> = items
                 .iter()
@@ -1074,7 +1078,7 @@ fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> Result<
     }
 }
 
-fn string_bytes(field_values: &[Value]) -> Option<(u32, i64)> {
+fn string_bytes(field_values: &[Value]) -> Option<(Pointer, i64)> {
     match field_values {
         [Value::Ptr(base), Value::I64(len), ..] => Some((*base, *len)),
         [storage, Value::I64(len), ..] => storage_base(storage).map(|base| (base, *len)),
@@ -1082,7 +1086,7 @@ fn string_bytes(field_values: &[Value]) -> Option<(u32, i64)> {
     }
 }
 
-fn storage_base(value: &Value) -> Option<u32> {
+fn storage_base(value: &Value) -> Option<Pointer> {
     match value {
         Value::Ptr(base) => Some(*base),
         Value::Record(_, fields) => match fields.as_slice() {
@@ -1154,8 +1158,8 @@ impl Machine<'_> {
         let mut stack: Vec<Value> = vec![value.clone()];
         while let Some(value) = stack.pop() {
             match value {
-                Value::Ptr(addr) => {
-                    if let Some(record) = self.allocations.live_record(self.static_len, addr) {
+                Value::Ptr(pointer) => {
+                    if let Some(record) = self.allocations.live_record(pointer) {
                         bases.insert(record.start);
                         // Pointers and boxed handles are 8-byte words: a
                         // shorter buffer's contents can't own anything.
@@ -1199,9 +1203,9 @@ impl Machine<'_> {
         (bases.len(), objects.len(), exact)
     }
 
-    fn read_word(&self, addr: u32) -> Result<u64, String> {
-        self.check_access(addr, 8, "load")?;
-        let start = addr as usize;
+    fn read_word(&self, pointer: Pointer) -> Result<u64, String> {
+        self.check_access(pointer, 8, "load")?;
+        let start = pointer.address() as usize;
         let bytes = self
             .mem
             .get(start..start + 8)
@@ -1211,21 +1215,21 @@ impl Machine<'_> {
         Ok(u64::from_le_bytes(buf))
     }
 
-    fn load_value(&self, addr: u32, kind: MemKind) -> Result<Value, String> {
+    fn load_value(&self, pointer: Pointer, kind: MemKind) -> Result<Value, String> {
         match kind {
             MemKind::Byte => Ok(Value::Byte({
-                self.check_access(addr, 1, "load")?;
+                self.check_access(pointer, 1, "load")?;
                 self.mem
-                    .get(addr as usize)
+                    .get(pointer.address() as usize)
                     .copied()
                     .ok_or("vm: load out of bounds")?
             })),
-            MemKind::I64 => Ok(Value::I64(self.read_word(addr)? as i64)),
-            MemKind::F64 => Ok(Value::F64(f64::from_bits(self.read_word(addr)?))),
-            MemKind::Bool => Ok(Value::Bool(self.read_word(addr)? != 0)),
-            MemKind::Ptr => Ok(Value::Ptr(self.read_word(addr)? as u32)),
+            MemKind::I64 => Ok(Value::I64(self.read_word(pointer)? as i64)),
+            MemKind::F64 => Ok(Value::F64(f64::from_bits(self.read_word(pointer)?))),
+            MemKind::Bool => Ok(Value::Bool(self.read_word(pointer)? != 0)),
+            MemKind::Ptr => Ok(Value::Ptr(Pointer::decode(self.read_word(pointer)?))),
             MemKind::Boxed => {
-                let handle = self.read_word(addr)? as usize;
+                let handle = self.read_word(pointer)? as usize;
                 if handle == 0 {
                     return Err("vm: load of a bad arena handle".into());
                 }
@@ -1237,9 +1241,9 @@ impl Machine<'_> {
         }
     }
 
-    fn write_word(&mut self, addr: u32, word: u64) -> Result<(), String> {
-        self.check_access(addr, 8, "store")?;
-        let start = addr as usize;
+    fn write_word(&mut self, pointer: Pointer, word: u64) -> Result<(), String> {
+        self.check_access(pointer, 8, "store")?;
+        let start = pointer.address() as usize;
         let slot = self
             .mem
             .get_mut(start..start + 8)
@@ -1248,7 +1252,7 @@ impl Machine<'_> {
         Ok(())
     }
 
-    fn swap_memory(&mut self, a: u32, b: u32, len: usize) -> Result<(), String> {
+    fn swap_memory(&mut self, a: Pointer, b: Pointer, len: usize) -> Result<(), String> {
         self.check_access(a, len, "swap")?;
         self.check_access(b, len, "swap")?;
         if a == b {
@@ -1258,8 +1262,8 @@ impl Machine<'_> {
             return Err("vm: swap width too large".into());
         }
 
-        let a = a as usize;
-        let b = b as usize;
+        let a = a.address() as usize;
+        let b = b.address() as usize;
         let mut left = [0u8; 8];
         let mut right = [0u8; 8];
         left[..len].copy_from_slice(self.mem.get(a..a + len).ok_or("vm: swap out of bounds")?);
@@ -1275,37 +1279,37 @@ impl Machine<'_> {
         Ok(())
     }
 
-    fn free(&mut self, ptr: u32) -> Result<(), String> {
+    fn free(&mut self, pointer: Pointer) -> Result<(), String> {
         if trace_mem() {
-            eprintln!("MEM free {ptr}");
+            eprintln!("MEM free {}", pointer.address());
         }
         self.allocations
-            .free(self.static_len, ptr)
-            .map_err(|error| format!("{} (ptr {ptr})", vm_memory_error(error)))
+            .free(self.static_len, pointer)
+            .map_err(|error| format!("{} (ptr {})", vm_memory_error(error), pointer.address()))
     }
 
-    fn check_access(&self, addr: u32, len: usize, op: &str) -> Result<(), String> {
+    fn check_access(&self, pointer: Pointer, len: usize, op: &str) -> Result<(), String> {
         self.allocations
-            .check_access(self.mem.len(), self.static_len, addr, len, op)
+            .check_access(self.mem.len(), self.static_len, pointer, len, op)
             .map_err(vm_memory_error)
     }
 
-    fn c_string_tail(&self, addr: u32) -> Result<&[u8], String> {
-        let start = addr as usize;
+    fn c_string_tail(&self, pointer: Pointer) -> Result<&[u8], String> {
+        let start = pointer.address() as usize;
         let end = self
             .allocations
-            .accessible_tail_end(self.mem.len(), self.static_len, addr, "io")
+            .accessible_tail_end(self.mem.len(), self.static_len, pointer, "io")
             .map_err(vm_io_memory_error)?;
         self.mem
             .get(start..end)
             .ok_or_else(|| "vm: io open out of bounds".to_string())
     }
 
-    fn string_display_bytes(&self, addr: u32, len: i64) -> Result<&[u8], String> {
+    fn string_display_bytes(&self, pointer: Pointer, len: i64) -> Result<&[u8], String> {
         let len = usize::try_from(len)
             .map_err(|_| "vm: display string has invalid length".to_string())?;
-        self.check_access(addr, len, "display")?;
-        let start = addr as usize;
+        self.check_access(pointer, len, "display")?;
+        let start = pointer.address() as usize;
         let end = start
             .checked_add(len)
             .ok_or_else(|| "vm: display out of bounds".to_string())?;
@@ -1356,9 +1360,9 @@ fn run_io(
             ref other => Err(format!("vm: io integer operand, got {other:?}")),
         }
     };
-    let ptr = |reg: u16| -> Result<usize, String> {
+    let ptr = |reg: u16| -> Result<Pointer, String> {
         match frame.regs[reg as usize] {
-            Value::Ptr(off) => Ok(off as usize),
+            Value::Ptr(pointer) => Ok(pointer),
             ref other => Err(format!("vm: io pointer operand, got {other:?}")),
         }
     };
@@ -1371,8 +1375,9 @@ fn run_io(
             if count < 0 {
                 return Ok(count);
             }
-            let (start, len) = (ptr(b)?, count as usize);
-            machine.check_access(start as u32, len, "io")?;
+            let (pointer, len) = (ptr(b)?, count as usize);
+            machine.check_access(pointer, len, "io")?;
+            let start = pointer.address() as usize;
             let bytes = machine
                 .mem
                 .get(start..start + len)
@@ -1384,8 +1389,9 @@ fn run_io(
             if count < 0 {
                 return Ok(count);
             }
-            let (start, len) = (ptr(b)?, count as usize);
-            machine.check_access(start as u32, len, "io")?;
+            let (pointer, len) = (ptr(b)?, count as usize);
+            machine.check_access(pointer, len, "io")?;
+            let start = pointer.address() as usize;
             let buf = machine
                 .mem
                 .get_mut(start..start + len)
@@ -1393,8 +1399,7 @@ fn run_io(
             machine.io.read(fd, buf)
         }
         IoOp::Open => {
-            let start = ptr(a)?;
-            let tail = machine.c_string_tail(start as u32)?;
+            let tail = machine.c_string_tail(ptr(a)?)?;
             let len = tail
                 .iter()
                 .position(|&byte| byte == 0)
@@ -1406,7 +1411,7 @@ fn run_io(
         IoOp::Sleep => machine.io.sleep(int(a)?),
         IoOp::Ctl => machine.io.ctl(int(a)?, int(b)?, int(c)?),
         IoOp::Poll => {
-            let (start, count, timeout) = (ptr(a)?, int(b)?, int(c)?);
+            let (pointer, count, timeout) = (ptr(a)?, int(b)?, int(c)?);
             if count < 0 {
                 return Err("vm: io poll negative count".into());
             }
@@ -1414,7 +1419,8 @@ fn run_io(
             let len = count
                 .checked_mul(8)
                 .ok_or("vm: io poll count out of range")?;
-            machine.check_access(start as u32, len, "io")?;
+            machine.check_access(pointer, len, "io")?;
+            let start = pointer.address() as usize;
             let records = machine
                 .mem
                 .get(start..start + len)
@@ -1431,8 +1437,12 @@ fn run_io(
                 .collect();
             let result = machine.io.poll(&mut fds, timeout);
             for (index, (_, _, revents)) in fds.iter().enumerate() {
-                let at = start + index * 8 + 6;
-                machine.check_access(at as u32, 2, "io")?;
+                let offset = index * 8 + 6;
+                let at = pointer
+                    .checked_add(offset)
+                    .ok_or("vm: io poll out of bounds")?;
+                machine.check_access(at, 2, "io")?;
+                let at = at.address() as usize;
                 let slot = machine
                     .mem
                     .get_mut(at..at + 2)
@@ -1452,8 +1462,9 @@ fn run_io(
             if len < 0 {
                 return Ok(len);
             }
-            let start = ptr(a)?;
-            machine.check_access(start as u32, len as usize, "io")?;
+            let pointer = ptr(a)?;
+            machine.check_access(pointer, len as usize, "io")?;
+            let start = pointer.address() as usize;
             let buf = machine
                 .mem
                 .get_mut(start..start + len as usize)
@@ -1461,11 +1472,12 @@ fn run_io(
             machine.io.cwd_copy(buf)
         }
         IoOp::GetenvLen => {
-            let (start, len) = (ptr(a)?, int(b)?);
+            let (pointer, len) = (ptr(a)?, int(b)?);
             if len < 0 {
                 return Ok(len);
             }
-            machine.check_access(start as u32, len as usize, "io")?;
+            machine.check_access(pointer, len as usize, "io")?;
+            let start = pointer.address() as usize;
             let name = machine
                 .mem
                 .get(start..start + len as usize)
@@ -1473,11 +1485,12 @@ fn run_io(
             machine.io.getenv_len(name)
         }
         IoOp::GetenvCopy => {
-            let (name_start, name_len, dest) = (ptr(a)?, int(b)?, ptr(c)?);
+            let (name_pointer, name_len, dest_pointer) = (ptr(a)?, int(b)?, ptr(c)?);
             if name_len < 0 {
                 return Ok(name_len);
             }
-            machine.check_access(name_start as u32, name_len as usize, "io")?;
+            machine.check_access(name_pointer, name_len as usize, "io")?;
+            let name_start = name_pointer.address() as usize;
             let name = machine
                 .mem
                 .get(name_start..name_start + name_len as usize)
@@ -1487,7 +1500,8 @@ fn run_io(
             if len < 0 {
                 return Ok(len);
             }
-            machine.check_access(dest as u32, len as usize, "io")?;
+            machine.check_access(dest_pointer, len as usize, "io")?;
+            let dest = dest_pointer.address() as usize;
             let buf = machine
                 .mem
                 .get_mut(dest..dest + len as usize)
@@ -1497,12 +1511,13 @@ fn run_io(
         IoOp::Argc => machine.io.argc(),
         IoOp::ArgLen => machine.io.arg_len(int(a)?),
         IoOp::ArgCopy => {
-            let (index, dest) = (int(a)?, ptr(b)?);
+            let (index, pointer) = (int(a)?, ptr(b)?);
             let len = machine.io.arg_len(index);
             if len < 0 {
                 return Ok(len);
             }
-            machine.check_access(dest as u32, len as usize, "io")?;
+            machine.check_access(pointer, len as usize, "io")?;
+            let dest = pointer.address() as usize;
             let buf = machine
                 .mem
                 .get_mut(dest..dest + len as usize)
@@ -1510,8 +1525,7 @@ fn run_io(
             machine.io.arg_copy(index, buf)
         }
         IoOp::DirCount => {
-            let start = ptr(a)?;
-            let tail = machine.c_string_tail(start as u32)?;
+            let tail = machine.c_string_tail(ptr(a)?)?;
             let len = tail
                 .iter()
                 .position(|&byte| byte == 0)
@@ -1520,8 +1534,7 @@ fn run_io(
             machine.io.dir_count(&path)
         }
         IoOp::DirEntryKind => {
-            let start = ptr(a)?;
-            let tail = machine.c_string_tail(start as u32)?;
+            let tail = machine.c_string_tail(ptr(a)?)?;
             let len = tail
                 .iter()
                 .position(|&byte| byte == 0)
@@ -1530,8 +1543,7 @@ fn run_io(
             machine.io.dir_entry_kind(&path, int(b)?)
         }
         IoOp::DirEntryLen => {
-            let start = ptr(a)?;
-            let tail = machine.c_string_tail(start as u32)?;
+            let tail = machine.c_string_tail(ptr(a)?)?;
             let len = tail
                 .iter()
                 .position(|&byte| byte == 0)
@@ -1540,8 +1552,7 @@ fn run_io(
             machine.io.dir_entry_len(&path, int(b)?)
         }
         IoOp::DirEntryCopy => {
-            let start = ptr(a)?;
-            let tail = machine.c_string_tail(start as u32)?;
+            let tail = machine.c_string_tail(ptr(a)?)?;
             let len = tail
                 .iter()
                 .position(|&byte| byte == 0)
@@ -1552,8 +1563,9 @@ fn run_io(
             if entry_len < 0 {
                 return Ok(entry_len);
             }
-            let dest = ptr(c)?;
-            machine.check_access(dest as u32, entry_len as usize, "io")?;
+            let pointer = ptr(c)?;
+            machine.check_access(pointer, entry_len as usize, "io")?;
+            let dest = pointer.address() as usize;
             let buf = machine
                 .mem
                 .get_mut(dest..dest + entry_len as usize)
@@ -1564,7 +1576,7 @@ fn run_io(
         // `process::exit`, so Core types its exit tails with an idle
         // `loop {}` (`Host.tlk`'s panic fallback, `IO.tlk`'s `_io_exit`).
         // A capturing host does return, and handing control back would
-        // drop the VM into that loop — so the run ends here instead.
+        // drop the VM into that loop - so the run ends here instead.
         IoOp::Exit => {
             let code = machine.io.exit(int(a)?);
             return Err(format!("vm: program exited with code {code}"));
@@ -1884,14 +1896,14 @@ fn exec_local(
             if machine.mem.len().saturating_add(count) > budgets.memory_bytes {
                 return Err("vm: memory budget exhausted".into());
             }
-            let addr = machine
+            let pointer = machine
                 .allocations
                 .allocate(&mut machine.mem, count)
                 .map_err(vm_memory_error)?;
             if trace_mem() {
-                eprintln!("MEM alloc ptr={addr} count={count}");
+                eprintln!("MEM alloc ptr={} count={count}", pointer.address());
             }
-            frame.regs[dest as usize] = Value::Ptr(addr);
+            frame.regs[dest as usize] = Value::Ptr(pointer);
         }
         Insn::Free { dest, ptr } => {
             let Value::Ptr(ptr) = frame.regs[ptr as usize] else {
@@ -1901,15 +1913,15 @@ fn exec_local(
             frame.regs[dest as usize] = Value::Void;
         }
         Insn::Retain { dest, ptr } => {
-            let Value::Ptr(ptr) = frame.regs[ptr as usize] else {
+            let Value::Ptr(pointer) = frame.regs[ptr as usize] else {
                 return Err("vm: retain of a non-pointer".into());
             };
             if trace_mem() {
-                eprintln!("MEM retain ptr={ptr}");
+                eprintln!("MEM retain ptr={}", pointer.address());
             }
             machine
                 .allocations
-                .retain(machine.static_len, ptr)
+                .retain(machine.static_len, pointer)
                 .map_err(vm_memory_error)?;
             frame.regs[dest as usize] = Value::Void;
         }
@@ -2008,40 +2020,39 @@ fn exec_local(
                 MemKind::Byte => 1,
                 MemKind::I64 | MemKind::F64 | MemKind::Bool | MemKind::Ptr | MemKind::Boxed => 8,
             };
-            let offset = index.wrapping_mul(width);
-            let addr = (i64::from(base) + offset) as u32;
-            frame.regs[dest as usize] = machine.load_value(addr, kind)?;
+            let pointer = base.wrapping_offset(index.wrapping_mul(width));
+            frame.regs[dest as usize] = machine.load_value(pointer, kind)?;
         }
         Insn::Store { ptr, src, kind } => {
-            let Value::Ptr(addr) = frame.regs[ptr as usize] else {
+            let Value::Ptr(pointer) = frame.regs[ptr as usize] else {
                 return Err("vm: store to a non-pointer".into());
             };
             let value = frame.regs[src as usize].clone();
             match (kind, value) {
                 (MemKind::Byte, Value::Byte(byte)) => {
-                    machine.check_access(addr, 1, "store")?;
+                    machine.check_access(pointer, 1, "store")?;
                     let slot = machine
                         .mem
-                        .get_mut(addr as usize)
+                        .get_mut(pointer.address() as usize)
                         .ok_or("vm: store out of bounds")?;
                     *slot = byte;
                 }
-                (MemKind::I64, Value::I64(v)) => machine.write_word(addr, v as u64)?,
-                (MemKind::F64, Value::F64(v)) => machine.write_word(addr, v.to_bits())?,
-                (MemKind::Bool, Value::Bool(v)) => machine.write_word(addr, v as u64)?,
-                (MemKind::Ptr, Value::Ptr(v)) => machine.write_word(addr, v as u64)?,
+                (MemKind::I64, Value::I64(v)) => machine.write_word(pointer, v as u64)?,
+                (MemKind::F64, Value::F64(v)) => machine.write_word(pointer, v.to_bits())?,
+                (MemKind::Bool, Value::Bool(v)) => machine.write_word(pointer, v as u64)?,
+                (MemKind::Ptr, Value::Ptr(value)) => machine.write_word(pointer, value.encode())?,
                 (MemKind::Boxed, value) => {
                     // The bump allocator never reuses addresses and fresh
                     // memory is zeroed, so a nonzero word here can only be
                     // this cell's own handle (slot 0 is the reserved
                     // placeholder): overwrite its slot instead of growing
                     // the arena on every store.
-                    let existing = machine.read_word(addr)? as usize;
+                    let existing = machine.read_word(pointer)? as usize;
                     if existing != 0 && existing < machine.boxed.len() {
                         machine.boxed[existing] = value;
                     } else {
                         machine.boxed.push(value);
-                        machine.write_word(addr, (machine.boxed.len() - 1) as u64)?;
+                        machine.write_word(pointer, (machine.boxed.len() - 1) as u64)?;
                     }
                 }
                 (kind, value) => {
@@ -2062,7 +2073,11 @@ fn exec_local(
             }
             machine.check_access(*from, *len as usize, "copy")?;
             machine.check_access(*to, *len as usize, "copy")?;
-            let (from, to, len) = (*from as usize, *to as usize, *len as usize);
+            let (from, to, len) = (
+                from.address() as usize,
+                to.address() as usize,
+                *len as usize,
+            );
             machine.mem.copy_within(from..from + len, to);
         }
         Insn::Swap { a, b, kind } => {
@@ -2283,11 +2298,11 @@ fn arith(
         (OperandValue::I64(x), OperandValue::I64(y)) => Ok(Value::I64(ints(x, y))),
         (OperandValue::F64(x), OperandValue::F64(y)) => Ok(Value::F64(floats(x, y))),
         // Pointer arithmetic (`add RawPtr p offset`).
-        (OperandValue::Ptr(p), OperandValue::I64(off)) if op == ArithOp::Add => {
-            Ok(Value::Ptr((p as i64 + off) as u32))
+        (OperandValue::Ptr(pointer), OperandValue::I64(offset)) if op == ArithOp::Add => {
+            Ok(Value::Ptr(pointer.wrapping_offset(offset)))
         }
-        (OperandValue::Ptr(p), OperandValue::I64(off)) if op == ArithOp::Sub => {
-            Ok(Value::Ptr((p as i64 - off) as u32))
+        (OperandValue::Ptr(pointer), OperandValue::I64(offset)) if op == ArithOp::Sub => {
+            Ok(Value::Ptr(pointer.wrapping_offset(offset.wrapping_neg())))
         }
         _ => Err(format!("vm: arithmetic on {a:?} and {b:?}")),
     }
@@ -2508,6 +2523,44 @@ mod tests {
         assert_eq!(run_with_machine(&module(0)).0, Value::I64(42));
         assert_eq!(run_with_machine(&module(1)).0, Value::I64(-1));
         assert_eq!(run_with_machine(&module(-1)).0, Value::I64(-1));
+    }
+
+    #[test]
+    fn pointer_load_store_preserves_allocation_provenance() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "pointer_round_trip".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::Alloc { dest: 1, count: 0 },
+                    Insn::Const { dest: 2, k: 1 },
+                    Insn::Alloc { dest: 3, count: 2 },
+                    Insn::Store {
+                        ptr: 1,
+                        src: 3,
+                        kind: MemKind::Ptr,
+                    },
+                    Insn::Load {
+                        dest: 4,
+                        ptr: 1,
+                        kind: MemKind::Ptr,
+                    },
+                    Insn::Free { dest: 5, ptr: 4 },
+                    Insn::Free { dest: 5, ptr: 1 },
+                    Insn::Const { dest: 5, k: 2 },
+                    Insn::Ret { src: 5 },
+                ],
+                arity: 0,
+                n_regs: 6,
+                unwind: vec![],
+            }],
+            consts: vec![Constant::I64(8), Constant::I64(1), Constant::Void],
+            ..Module::default()
+        };
+        let mut io = CaptureIO::default();
+        let (value, machine) = run_machine(&module, &mut io).expect("run");
+        assert_eq!(value, Value::Void);
+        assert_eq!(machine.allocations.live_count(), 0);
     }
 
     #[test]
