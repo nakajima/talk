@@ -6,6 +6,7 @@
 mod branch_fold;
 mod constant_fold;
 mod dead_code;
+mod forward_calls;
 mod inline_small;
 mod match_switch;
 mod simplify_block_params;
@@ -52,6 +53,7 @@ struct Counters {
     constant_fold: u64,
     branch_fold: u64,
     dead_code: u64,
+    forward_calls: u64,
     inline_small: u64,
     match_switch: u64,
     simplify_block_params: u64,
@@ -73,6 +75,10 @@ impl Counters {
                 OptimizationPassStats {
                     name: "dead_code",
                     applied: self.dead_code,
+                },
+                OptimizationPassStats {
+                    name: "forward_calls",
+                    applied: self.forward_calls,
                 },
                 OptimizationPassStats {
                     name: "inline_small",
@@ -127,6 +133,7 @@ pub(crate) fn run(program: &mut Program) -> OptimizationStats {
     for function in &mut program.functions {
         simplify(function, &mut counters);
     }
+    counters.forward_calls += forward_calls::run(program).applied;
     counters.inline_small += inline_small::run(program).applied;
     for function in &mut program.functions {
         simplify(function, &mut counters);

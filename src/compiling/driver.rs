@@ -972,7 +972,7 @@ pub mod tests {
         .expect("service compiles");
         let mut stats = exe.stats();
         assert_eq!(stats.vm.runs(), 0);
-        assert_eq!(stats.optimizations.passes.len(), 8);
+        assert_eq!(stats.optimizations.passes.len(), 9);
         assert!(
             stats
                 .optimizations

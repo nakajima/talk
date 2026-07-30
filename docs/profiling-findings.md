@@ -1,116 +1,149 @@
 # Profiling findings
 
-Status: performance numbers are historical snapshots; the Tracy capture and
-infrastructure instructions are current as of commit `443edcef`.
+Status: current forwarding-call experiment on commit `d2bd469e`
+(2026-07-29). Exact frontend bytecode counts and detailed methodology are in
+[`frontend-vm-report.md`](frontend-vm-report.md); the full generated report is
+[`profiles/frontend-vm/d2bd469efa5d-dirty-a6b49355f2ef.txt`](../profiles/frontend-vm/d2bd469efa5d-dirty-a6b49355f2ef.txt).
 
-Historical snapshot at commit `7bc48b90` (2026-07-18), measured on the
-talk-syntax suite (225 tests) and the benchmark corpus (`bench/`). These
-numbers predate the self-hosted frontend and compiled core/stdlib caches and
-must not be treated as the current baseline. Full history and method live in
-the published profile report; this file records what that snapshot found.
-Instruction counts are the load-bearing metric throughout — the
-measurement machine throttles under sustained benchmarking, and wall
-clocks drifted up to 20% across batches at identical instruction
-counts.
+Native instruction counts are the load-bearing metric. The measurement machine
+throttles under sustained work, while instruction and branch counts are highly
+reproducible. Wall time and sampled attribution are supporting evidence.
 
-## Headline
+## Current headline
 
-| Measure | Value |
-| --- | --- |
-| Native instructions, full suite run | 5.81 G (was 13.15 G at first profile) |
-| VM instructions executed | 15.2 M (was 28.8 M) |
-| Wall clock (best of 5, throttled) | 0.68 s (was 8.28 s) |
-| Backend compile (direct timers) | 66 ms (was ~400 ms) |
-| Emitted bytecode | 50,280 instructions (was 215,508) |
-| Widest frame | 148 registers (was 48,824) |
-| Peak RSS | 101 MB |
+| Measure | Current |
+| --- | ---: |
+| Native instructions, root library suite | 769.837 B |
+| Native cycles | 389.504 B |
+| CPU task time | 92.045 s |
+| Native branches | 116.221 B |
+| VM instructions, frontend corpus | 175,259,482 |
+| Emitted frontend bytecode | 96,851 instructions |
+| Frontend artifact | 836,288 bytes |
 
-## The shape of a run
+The native workload runs the root library test executable directly with 12
+fixed test threads, one warmup, and five `perf stat` repetitions. Cargo and
+build time are excluded. The exact VM workload parses the four sorted
+`stdlib/syntax/*.tlk` files through a twice-built fixed-point candidate.
 
-VM execution 51.3% (~3.34 G native instructions), frontend compile
-~28% (type check 15.7%, name resolution 7.4%, parse 6.1%, desugar
-3.6%), backend compile 10.3%, harness/misc ~10%. Backend passes:
-`mir_build` 50.4 ms, `inline` 1.2 ms, `regalloc` 10.5 ms (fusion
-deletes ≈5,200 copies; the pass now removes more instructions than
-any pass adds), `lower` 3.5 ms.
+## Shape of the run
+
+The latest frame-pointer capture predates forwarding-call threading and
+attributes weighted cycles as follows:
+
+| Category | Share |
+| --- | ---: |
+| Frontend VM | 83.61% |
+| Type checking | 9.50% |
+| Frontend bridge | 2.52% |
+| Other | 2.26% |
+| Backend | 1.40% |
+| Name resolution | 0.56% |
+| Formatter outside frontend | 0.10% |
+| Frontend initialization | 0.05% |
+
+The VM remains the correct optimization surface. Type checking is the largest
+non-VM category, but is less than one eighth of the VM share.
+
+## Improvements retained in this profiling round
+
+### Transparent forwarding calls
+
+A strict whole-program MIR pass retargets direct calls through one-block,
+unwind-free identity forwarders. Forty static rewrites remove 6,764,604 exact
+dispatches and 3,382,302 frame round trips without changing artifact size. The
+conservative adjacent native A/B reduced instructions by 2.62%, cycles by
+2.77%, CPU task time by 2.61%, and branches by 2.84%. Branch-miss direction was
+inconsistent and is not claimed as an improvement.
+
+### Checked indexed loads
+
+Thirty-seven structural access sites execute 3,477,483 times. Replacing their
+replay-safe success paths with `CheckedIndexedLoad` reduced exact dispatches
+from 213,321,433 to 182,024,086 (-14.67%) while increasing the artifact by
+2,146 bytes (+0.26%). Native instructions fell approximately 8.2% in the
+isolated A/B. Failure still jumps to the original source-owned bounds helper,
+so Talk's catchable `'panic` semantics are unchanged.
+
+### Frame-cached code slices
+
+Each frame now stores its immutable instruction slice. Dispatch no longer
+reconstructs a chunk and `Vec<Insn>` slice on every instruction. The isolated
+A/B reduced native instructions by 16.01%, cycles by 12.62%, CPU task time by
+12.18%, branches by 16.90%, and branch misses by 19.38%. The old `interp::chunk`
+hotspot fell from 6.16% to approximately 0.62% inclusive.
+
+### Provenance-carrying pointers
+
+Pointers carry an address and allocation token in the existing eight-byte raw
+pointer cell. Access checks index the append-only allocation record directly
+and validate provenance, liveness, and range. The isolated A/B reduced native
+instructions by 9.82%, cycles by 9.94%, CPU task time by 8.73%, branches by
+10.14%, and branch misses by 15.14%.
+
+`Allocations::check_access` is now 1.13% inclusive, down from 7.56%, and the
+6.87% `record_containing` predecessor lookup is absent. Further memory-check
+micro-optimization is no longer high priority.
 
 ## What the VM executes
 
-GetField 2.25 M (14.8%), Add 2.16 M (14.2%), Branch+Cmp 3.60 M
-(23.7%), Const 1.49 M (9.8%, non-RK positions only), Call+Ret 1.44 M
-(9.5%), Load 0.79 M, Mul/Div/Sub/BToI 1.83 M, Jump 0.25 M (was
-1.61 M before threading), RecordNew/SetField/Extract 0.59 M, Move
-under 0.17 M (was 29% of all execution at its peak). The scalar-loop
-archetype runs 8 VM instructions per iteration with no moves and no
-constant loads; `fib` is 10 instructions total with its parameter,
-base-case join, and recursive sum coalesced onto one register.
+| Opcode | Executions | Share |
+| --- | ---: | ---: |
+| `GetField` | 41,678,989 | 23.78% |
+| `Branch` | 23,760,887 | 13.56% |
+| `Cmp` | 18,752,400 | 10.70% |
+| `Add` | 12,280,221 | 7.01% |
+| `Ret` | 11,204,762 | 6.39% |
+| `Call` | 11,204,754 | 6.39% |
+| `Jump` | 10,208,983 | 5.83% |
+| `Const` | 10,102,982 | 5.76% |
+| `Load` | 5,250,828 | 3.00% |
+| `CheckedIndexedLoad` | 3,477,483 | 1.98% |
 
-## Per-instruction implementation costs
+Calls and returns together are now 12.79% of dispatches. The previous sampled
+host profile put `call_regs` at 10.27% inclusive, `arg_values` at 6.82%, and
+`deliver_return` at 4.12%, but forwarding removes work from all three. Those
+inclusive values overlap and must be refreshed before guiding another host-side
+call optimization.
 
-Measured by delta microbenchmarks: paired 2M-iteration programs with
-K and 2K occurrences of one construct, compiled to images with
-`talk build`, instruction-counted with `perf stat` on
-`talk run-image`, differenced — `(I_2K − I_K) / (N·K)` is exact and
-sampling-free. Costs include all dispatch work.
+The dominant successful checked access is now six instructions:
 
-| Construct | Native insns / execution | Handler notes |
-| --- | --- | --- |
-| Const | 159 | pool index + Value clone + register write — near the dispatch floor |
-| GetField | 163 | record match, Rc-fields index, Value clone, register write |
-| Div (RK) | 204 | direct inline match, no helper |
-| Add / Mul | 227–228 | `arith()` takes the ops as **function pointers** — uninlinable indirect call per instruction |
-| Cmp + Branch + Jump | ≈436 for the trio | ≈145 each; near-floor handlers |
-| Call + Ret pair | ≈543 | pool pop, per-argument clone, frame push; delivery and recycle |
-| RecordNew (2 fields) | ≈729 | argument Vec + Rc allocation — one malloc per construction |
-| match, 2-arm enum | ≈955 composite | GetTag + Cmp + Branch + GetPayload + arm + join |
+```text
+GetField
+GetField
+GetField
+CheckedIndexedLoad
+Jump
+Ret
+```
 
-### Finding: the dispatch floor is ~145–160 native instructions, ≈65% of execution
-
-The cheapest handlers bound the fixed per-instruction machinery:
-bounds-checked fetch, four `frames[frame_index]` lookups, the
-finalizer-pump gate, the `trace_mem` OnceLock atomic, the jump-table
-match, and (for local instructions) an outlined `exec_local` call
-that saves five registers and a 472-byte stack frame. At ~150 × 15.2 M
-dispatches ≈ 2.3 G of the 3.34 G execution instructions, the floor —
-not handler work — dominates. Hardware counters agree the rest is
-already ideal: 0.79% branch misses, zero L1-dcache misses.
-
-### Finding: arithmetic pays an indirect call per instruction
-
-`interp::arith()` receives `ints: fn(i64, i64) -> i64` and a float
-counterpart as function pointers, so every Add/Sub/Mul makes an
-uninlinable indirect call to run one machine instruction of real
-work — measured ~24 instructions worse than Div, whose handler
-matches inline. ≈70 M wasted instructions per suite run.
-Monomorphized generics (`impl Fn`) or direct per-opcode matches
-remove it.
+The checked operation itself is compressed, but its success `Jump` executes
+3,477,483 times and remains a concrete direct-emission opportunity.
 
 ## Ranked opportunities
 
-1. **Solver instrumentation** (type checker, 15.7% of run) — the
-   largest unexplained mass; profile is flat, so measure constraint
-   volume/wakeups/re-examination per binding group before touching
-   anything. Representation changes were probed and declined on
-   evidence (`Ty` sharing: ~300 edit points for 15–20 ms).
-2. **Dispatch-loop frame caching** (~4% of run) — cache the current
-   frame's chunk/pc/regs in locals between frame switches.
-3. **Finalizer gate onto region-release/return events; `trace_mem`
-   flag into a loop local** (~1.5%).
-4. **Plain-loop argument collection; monomorphized `arith()`** (~2%).
-5. **Switch-based match dispatch** — the VM's `Switch` instruction is
-   never emitted; wide-enum matches (the parser's 60-way `Kind`
-   dispatch) still run cmp chains inside Branch+Cmp's 23.7%.
-6. **Loop-invariant `FindHandler`** — parked: sound hoisting needs
-   loop inversion (a missing-handler trap must not fire early on
-   zero-iteration loops).
-7. **The ceiling** — with prediction and caches perfect, only
-   baseline compilation (copy-and-patch, Xu & Kjolstad OOPSLA 2021)
-   removes the interpretation tax.
+1. **Refresh the frame-pointer profile.** Forwarding removed 23.19% of dynamic
+   calls and returns, invalidating the old `call_regs`, `arg_values`, and
+   `deliver_return` weights.
+2. **Semantic checked indexed loads in MIR.** Direct emission can remove the
+   structural matcher, make success fall through instead of executing
+   3,477,483 `Jump`s, and cover unit-width accesses while retaining the
+   original source-owned failure target.
+3. **Call-frame construction and RK operands.** Re-evaluate these only after
+   the new profile. Ownership and continuation behavior remain hard constraints;
+   checked register access must remain safe Rust.
+4. **Type checking.** The previous profile placed it at 9.50% of the whole run;
+   it becomes the next major subsystem after the known VM reductions are
+   exhausted.
+
+Every runtime optimization remains subject to a direct 12-thread, five-run
+native-counter A/B. Exact dispatch reductions alone are necessary but not
+sufficient.
 
 ## Capturing a Tracy profile
 
-The compiler and runtime use the `profiling` facade. Instrumentation is a
-no-op in normal builds; the `profile-tracy` feature enables the Tracy backend
+The compiler and runtime use the `profiling` facade. Instrumentation is a no-op
+in normal builds; the root `profile-tracy` feature enables Tracy consistently
 for both crates:
 
 ```text
@@ -119,17 +152,17 @@ cargo test --lib --features profile-tracy TEST_FILTER
 ```
 
 Start the Tracy viewer before the profiled operation, then connect to the
-process. The current scopes cover compiler parsing, name resolution, type
-checking, service compilation, bootstrap stages, frontend artifact loading and
-execution, bridge adaptation, and VM export execution. Tracy's timer fallback
-is enabled for machines without invariant TSC support.
+process. Current scopes cover parsing, name resolution, type checking, service
+compilation, bootstrap stages, frontend artifact loading and execution, bridge
+adaptation, backend work, and VM export execution. Tracy's timer fallback is
+enabled for machines without invariant TSC support.
 
-## Infrastructure
+## Reproducible infrastructure
 
-- `bench/` — eight archetype programs with pinned outputs
-  (`bench_corpus_runs`) and pinned code shapes
-  (`bench_bytecode_is_tight`): the analysis surface for IR
-  (`talk mir`) and bytecode (`talk bytecode`) reading.
-- Probes are temporary and env-gated (opcode histogram in the
-  dispatch loop, pass timers around the backend), added for a
-  measurement and removed in the same session; none live in tree.
+- `scripts/frontend-vm-stats.sh` builds and profiles a fixed-point frontend
+  candidate without overwriting checked-in artifacts.
+- `profiles/frontend-vm/` stores commit-addressed exact reports.
+- `VmStats` owns exact opcode, chunk, and instruction-site accounting in the
+  runtime; normal execution can use the no-statistics path.
+- `bench/` contains pinned archetype programs for MIR and bytecode inspection.
+- `talk bootstrap --check` is the explicit checked-in artifact gate.
