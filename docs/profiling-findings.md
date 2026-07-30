@@ -1,7 +1,7 @@
 # Profiling findings
 
-Status: current forwarding-call experiment on commit `d2bd469e`
-(2026-07-29). Exact frontend bytecode counts and detailed methodology are in
+Status: current frontend runtime snapshot after owned RK materialization
+(2026-07-30). Exact frontend bytecode counts and detailed methodology are in
 [`frontend-vm-report.md`](frontend-vm-report.md); the full generated report is
 [`profiles/frontend-vm/d2bd469efa5d-dirty-a6b49355f2ef.txt`](../profiles/frontend-vm/d2bd469efa5d-dirty-a6b49355f2ef.txt).
 
@@ -13,10 +13,10 @@ reproducible. Wall time and sampled attribution are supporting evidence.
 
 | Measure | Current |
 | --- | ---: |
-| Native instructions, root library suite | 769.837 B |
-| Native cycles | 389.504 B |
-| CPU task time | 92.045 s |
-| Native branches | 116.221 B |
+| Native instructions, root library suite | 748.512 B |
+| Native cycles | 370.319 B |
+| CPU task time | 87.779 s |
+| Native branches | 112.431 B |
 | VM instructions, frontend corpus | 175,259,482 |
 | Emitted frontend bytecode | 96,851 instructions |
 | Frontend artifact | 836,288 bytes |
@@ -35,13 +35,23 @@ test's elapsed time from 8.900 to 8.499 seconds (-4.50%), native instructions
 by 4.00%, cycles by 3.96%, and branches by 4.36%. A single parallel suite run
 can hide this gain through scheduler contention.
 
-A current frame-pointer capture attributes 97.59% of this test's weighted
-cycles to the frontend VM. Overlapping inclusive costs are `rk` at 13.19%,
-`call_regs` at 11.06%, `arg_values` at 8.81%, and `deliver_return` at 3.91%.
-Memory `check_access` is only 1.51%. Critical-path work should therefore remain
-on VM operand and argument handling.
+The frame-pointer capture after forwarding but before owned RK materialization
+attributes 97.59% of this test's weighted cycles to the frontend VM.
+Overlapping inclusive costs were `rk` at 13.19%, `call_regs` at 11.06%,
+`arg_values` at 8.81%, and `deliver_return` at 3.91%. The owned RK change then
+reduced the isolated critical path by another 6.03% elapsed, 6.38% cycles, and
+3.15% native instructions. This attribution must now be refreshed.
 
 ## Improvements retained in this profiling round
+
+### Owned RK materialization
+
+`rk_value` directly produces owned register and constant operands for calls and
+aggregate construction, while arithmetic and comparisons keep borrowed `rk`.
+`arg_values` now uses a pre-sized explicit loop instead of collecting an
+iterator of `Result`s. The isolated critical-path A/B reduced elapsed time by
+6.03%, cycles by 6.38%, instructions by 3.15%, branches by 3.76%, and branch
+misses by 26.06%. Full-suite native instructions fell 2.77% and cycles 6.05%.
 
 ### Transparent forwarding calls
 
@@ -96,11 +106,8 @@ micro-optimization is no longer high priority.
 | `Load` | 5,250,828 | 3.00% |
 | `CheckedIndexedLoad` | 3,477,483 | 1.98% |
 
-Calls and returns together are now 12.79% of dispatches. The previous sampled
-host profile put `call_regs` at 10.27% inclusive, `arg_values` at 6.82%, and
-`deliver_return` at 4.12%, but forwarding removes work from all three. Those
-inclusive values overlap and must be refreshed before guiding another host-side
-call optimization.
+Calls and returns together are now 12.79% of dispatches. Owned RK
+materialization is runtime-only, so these exact opcode counts do not change.
 
 The dominant successful checked access is now six instructions:
 
@@ -118,19 +125,16 @@ The checked operation itself is compressed, but its success `Jump` executes
 
 ## Ranked opportunities
 
-1. **Owned RK materialization.** Calls and aggregate constructors need owned
-   `Value`s, but currently normalize register values through borrowed
-   `OperandValue` and immediately convert them back. Add a safe owned operand
-   read and replace `arg_values`' `Result` iterator collector with one
-   pre-sized loop. Keep borrowed `rk` for arithmetic and comparisons.
+1. **Refresh the critical-path frame-pointer profile.** The prior `rk`,
+   `call_regs`, and `arg_values` weights predate the retained owned-value path.
 2. **Semantic checked indexed loads in MIR.** Direct emission can remove the
    structural matcher, make success fall through instead of executing
    3,477,483 `Jump`s, and cover unit-width accesses while retaining the
    original source-owned failure target.
-3. **Call-frame construction.** Reprofile after owned operand specialization;
-   only then consider register initialization or pool changes. Ownership and
-   continuation behavior remain hard constraints, and checked register access
-   must remain safe Rust.
+3. **Call-frame construction.** Only investigate register initialization or
+   pool changes if the refreshed profile still identifies them as material.
+   Ownership and continuation behavior remain hard constraints, and checked
+   register access must remain safe Rust.
 
 Every runtime optimization remains subject to a direct 12-thread, five-run
 native-counter A/B. Exact dispatch reductions alone are necessary but not

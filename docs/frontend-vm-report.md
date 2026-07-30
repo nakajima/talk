@@ -144,12 +144,12 @@ Jump
 Ret
 ```
 
-## Isolated native-counter A/B
+## Forwarding native-counter A/B
 
 The immediately warmed, adjacent three-run confirmation produced deterministic
 instruction and branch counts:
 
-| Counter | Before | Current | Change |
+| Counter | Before | After forwarding | Change |
 | --- | ---: | ---: | ---: |
 | CPU task time | 94.508 s | 92.045 s | -2.61% |
 | Cycles | 400.594 B | 389.504 B | -2.77% |
@@ -157,68 +157,60 @@ instruction and branch counts:
 | Branches | 119.615 B | 116.221 B | -2.84% |
 | Branch misses | 303.670 M | 312.907 M | +3.04% |
 
-A separate initial five-run batch measured -3.16% instructions, -3.48% cycles,
--3.88% CPU task time, and -3.42% branches. Full-suite subprocess and cache state
-can shift the absolute instruction baseline between batches, so the adjacent
-warm confirmation is the conservative retained result. Both batches establish
-the same material reduction in instructions, cycles, task time, and branches.
-Branch-miss direction was inconsistent between batches and is not claimed as
-an improvement.
-
 ## Critical-path latency
 
 Per-test timing with 12 suite threads identifies
 `compiling::bridge::tests::structured_results_validate_over_corpus` as the
 wall-time gate. It consistently finishes about 0.2 seconds before the whole
-library suite; formatter, workspace, and LSP tests finish several seconds
-earlier. Full-suite wall time therefore varies with contention around this one
-frontend-VM-heavy test.
+library suite. Running that test alone removes suite scheduling noise.
 
-Running that test alone for five repetitions removes suite scheduling noise:
+Forwarding-call threading improved the isolated critical path by 4.50% elapsed,
+4.00% instructions, 3.96% cycles, and 4.36% branches. A frame-pointer profile
+of that result attributed 97.59% of cycles to the frontend VM, led by `rk` at
+13.19%, `call_regs` at 11.06%, and `arg_values` at 8.81% inclusive.
 
-| Counter | Before | Current | Change |
+## Owned RK materialization
+
+`rk_value` now reads an owned register or constant operand directly for
+`call_regs` and aggregate argument construction. Borrowed `rk` remains in
+arithmetic and comparisons. `arg_values` uses one pre-sized explicit loop
+instead of collecting an iterator of `Result`s. Bounds checks, cloning,
+constant semantics, and safe Rust ownership are unchanged.
+
+The five-run isolated critical-path A/B is:
+
+| Counter | Before | With `rk_value` | Change |
 | --- | ---: | ---: | ---: |
-| Elapsed time | 8.900 s | 8.499 s | -4.50% |
-| CPU task time | 8.894 s | 8.496 s | -4.47% |
-| Cycles | 41.799 B | 40.144 B | -3.96% |
-| Instructions | 109.954 B | 105.560 B | -4.00% |
-| Branches | 16.477 B | 15.758 B | -4.36% |
-| Branch misses | 33.166 M | 34.051 M | +2.67% |
+| Elapsed time | 8.433 s | 7.925 s | -6.03% |
+| CPU task time | 8.428 s | 7.922 s | -6.01% |
+| Cycles | 39.967 B | 37.417 B | -6.38% |
+| Instructions | 105.560 B | 102.239 B | -3.15% |
+| Branches | 15.758 B | 15.166 B | -3.76% |
+| Branch misses | 34.544 M | 25.540 M | -26.06% |
 
-The forwarding pass therefore does improve the actual critical path even
-though one full-suite wall-clock comparison showed no gain. The parallel suite
-is too contention-sensitive to expose a four-percent single-test reduction
-reliably in one run.
+The full 12-thread library suite's adjacent three-run counters confirm the
+host-wide reduction:
 
-A current frame-pointer profile of the critical test attributes 97.59% of
-weighted cycles to the frontend VM. Its overlapping inclusive costs are:
+| Counter | Before | With `rk_value` | Change |
+| --- | ---: | ---: | ---: |
+| CPU task time | 92.803 s | 87.779 s | -5.41% |
+| Cycles | 394.164 B | 370.319 B | -6.05% |
+| Instructions | 769.838 B | 748.512 B | -2.77% |
+| Branches | 116.221 B | 112.431 B | -3.26% |
+| Branch misses | 312.980 M | 276.222 M | -11.74% |
 
-| VM path | Inclusive cycles |
-| --- | ---: |
-| `rk` | 13.19% |
-| `call_regs` | 11.06% |
-| `arg_values` | 8.81% |
-| `deliver_return` | 3.91% |
-| `Allocations::check_access` | 1.51% |
-| `chunk` | 0.83% |
-
-`call_regs` and `arg_values` both need owned `Value`s but currently route every
-operand through `rk`'s borrowed `OperandValue` normalization and then convert
-back to `Value`. `arg_values` also collects an iterator of `Result`s into a new
-vector; that iterator machinery is visible throughout its samples.
+Full-suite elapsed time moved from 11.641 to 11.486 seconds, but its run
+variance remains too high for a latency claim. The isolated critical path is
+the authoritative wall-time result.
 
 ## Ranked next work
 
-1. **Specialize owned RK materialization.** Add a safe owned-value operand read
-   for call and aggregate argument construction, bypassing the redundant
-   `Value -> OperandValue -> Value` round trip. Replace `arg_values`' iterator
-   collector with one pre-sized explicit loop. Keep the borrowed `rk` path for
-   arithmetic and comparisons, where it avoids cloning aggregates. Measure
-   this as one isolated host-runtime A/B.
+1. **Refresh the critical-path frame-pointer profile.** The previous `rk`,
+   `call_regs`, and `arg_values` weights predate a six-percent cycle reduction.
 2. **Emit checked indexed loads semantically from MIR.** Direct emission can
    remove the structural matcher, make success fall through instead of
    executing 3,477,483 `Jump`s, and cover unit-width accesses while preserving
    the explicit source-owned failure target.
-3. **Reprofile call-frame construction.** If `call_regs` remains material after
-   owned operand specialization, investigate frame register initialization and
-   pool reuse without unsafe indexing or ownership changes.
+3. **Re-evaluate call-frame construction.** Only investigate register
+   initialization or pool reuse if the refreshed profile still identifies it
+   as material.

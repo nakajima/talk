@@ -71,7 +71,7 @@ impl From<Constant> for Value {
 
 /// A register-or-constant operand normalized without cloning aggregate
 /// register values or materializing scalar constants as full VM values.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy)]
 enum OperandValue<'a> {
     I64(i64),
     F64(f64),
@@ -94,16 +94,18 @@ impl<'a> OperandValue<'a> {
             value => Self::Aggregate(value),
         }
     }
+}
 
-    fn into_value(self) -> Value {
+impl std::fmt::Debug for OperandValue<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::I64(value) => Value::I64(value),
-            Self::F64(value) => Value::F64(value),
-            Self::Bool(value) => Value::Bool(value),
-            Self::Byte(value) => Value::Byte(value),
-            Self::Void => Value::Void,
-            Self::Ptr(value) => Value::Ptr(value),
-            Self::Aggregate(value) => value.clone(),
+            Self::I64(value) => formatter.debug_tuple("I64").field(value).finish(),
+            Self::F64(value) => formatter.debug_tuple("F64").field(value).finish(),
+            Self::Bool(value) => formatter.debug_tuple("Bool").field(value).finish(),
+            Self::Byte(value) => formatter.debug_tuple("Byte").field(value).finish(),
+            Self::Void => formatter.write_str("Void"),
+            Self::Ptr(value) => formatter.debug_tuple("Ptr").field(value).finish(),
+            Self::Aggregate(value) => formatter.debug_tuple("Aggregate").field(value).finish(),
         }
     }
 }
