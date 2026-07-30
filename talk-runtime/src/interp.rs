@@ -121,8 +121,12 @@ impl<'a> From<Constant> for OperandValue<'a> {
     }
 }
 
-struct Frame {
+struct Frame<'module> {
     chunk: u32,
+    /// Immutable executable code for `chunk`. Keeping the slice in the frame
+    /// avoids rebuilding it from the module's chunk and instruction Vecs on
+    /// every dispatch.
+    code: &'module [Insn],
     pc: usize,
     regs: Vec<Value>,
     /// The closure environment this frame runs under (empty for direct
@@ -503,6 +507,7 @@ fn run_loop<S: StatsSink>(
     }
     let mut frames = vec![Frame {
         chunk: entry_index,
+        code: &entry.code,
         pc: 0,
         regs,
         env: empty_env.clone(),
@@ -560,6 +565,7 @@ fn run_loop<S: StatsSink>(
             regs[0] = Value::Object(object);
             frames.push(Frame {
                 chunk: fin_chunk,
+                code: &target.code,
                 pc: 0,
                 regs,
                 env,
@@ -579,8 +585,7 @@ fn run_loop<S: StatsSink>(
         let frame = &mut frames[frame_index];
         let current_chunk = frame.chunk;
         let pc = frame.pc;
-        let code = &chunk(module, current_chunk)?.code;
-        let Some(&insn) = code.get(pc) else {
+        let Some(&insn) = frame.code.get(pc) else {
             return Err(format!(
                 "vm: fell off the end of chunk {}",
                 chunk(module, current_chunk)?.name
@@ -611,6 +616,7 @@ fn run_loop<S: StatsSink>(
                 )?;
                 frames.push(Frame {
                     chunk: callee,
+                    code: &target.code,
                     pc: 0,
                     regs,
                     env: empty_env.clone(),
@@ -649,6 +655,7 @@ fn run_loop<S: StatsSink>(
                 )?;
                 frames.push(Frame {
                     chunk: target,
+                    code: &target_chunk.code,
                     pc: 0,
                     regs,
                     env,
@@ -850,23 +857,21 @@ fn run_loop<S: StatsSink>(
                         }
                     }
                 }
-                exec_local(module, frame, machine, local, budgets).map_err(
-                    |error| {
-                        if trace_mem && let Ok(target) = chunk(module, current_chunk) {
-                            let start = pc.saturating_sub(8);
-                            let end = (pc + 4).min(target.code.len());
-                            for (offset, insn) in target.code[start..end].iter().enumerate() {
-                                eprintln!("  [{}] {insn:?}", start + offset);
-                            }
+                exec_local(module, frame, machine, local, budgets).map_err(|error| {
+                    if trace_mem && let Ok(target) = chunk(module, current_chunk) {
+                        let start = pc.saturating_sub(8);
+                        let end = (pc + 4).min(target.code.len());
+                        for (offset, insn) in target.code[start..end].iter().enumerate() {
+                            eprintln!("  [{}] {insn:?}", start + offset);
                         }
-                        format!(
-                            "{error} [in {} (chunk {current_chunk}) at {pc}]",
-                            chunk(module, current_chunk)
-                                .map(|target| target.name.as_str())
-                                .unwrap_or("?")
-                        )
-                    },
-                )?
+                    }
+                    format!(
+                        "{error} [in {} (chunk {current_chunk}) at {pc}]",
+                        chunk(module, current_chunk)
+                            .map(|target| target.name.as_str())
+                            .unwrap_or("?")
+                    )
+                })?
             }
         }
     }
@@ -874,7 +879,11 @@ fn run_loop<S: StatsSink>(
 
 /// Pop the top frame, keeping the finalizer-pump count in step — every
 /// frame discarded on the abort-unwind paths shares this bookkeeping.
-fn pop_frame(frames: &mut Vec<Frame>, finalizer_frames: &mut usize, pool: &mut Vec<Vec<Value>>) {
+fn pop_frame(
+    frames: &mut Vec<Frame<'_>>,
+    finalizer_frames: &mut usize,
+    pool: &mut Vec<Vec<Value>>,
+) {
     if let Some(frame) = frames.pop() {
         if frame.dest == FINALIZER_DEST {
             *finalizer_frames = finalizer_frames.saturating_sub(1);
@@ -898,7 +907,7 @@ fn recycle(pool: &mut Vec<Vec<Value>>, mut regs: Vec<Value>) {
 /// an ordinary caller receives it in the saved dest register, and with
 /// no caller left it is the program's value (returned as `Some`).
 fn deliver_return(
-    frames: &mut Vec<Frame>,
+    frames: &mut Vec<Frame<'_>>,
     finalizer_frames: &mut usize,
     pool: &mut Vec<Vec<Value>>,
     value: Value,
@@ -931,7 +940,7 @@ fn deliver_return(
 /// caller (`Ok(Some(v))` = the program's value when there is no caller).
 fn advance_unwind(
     module: &Module,
-    frames: &mut Vec<Frame>,
+    frames: &mut Vec<Frame<'_>>,
     finalizer_frames: &mut usize,
     pool: &mut Vec<Vec<Value>>,
     unwinding: &mut Option<(usize, Value)>,
@@ -1202,6 +1211,32 @@ impl Machine<'_> {
         Ok(u64::from_le_bytes(buf))
     }
 
+    fn load_value(&self, addr: u32, kind: MemKind) -> Result<Value, String> {
+        match kind {
+            MemKind::Byte => Ok(Value::Byte({
+                self.check_access(addr, 1, "load")?;
+                self.mem
+                    .get(addr as usize)
+                    .copied()
+                    .ok_or("vm: load out of bounds")?
+            })),
+            MemKind::I64 => Ok(Value::I64(self.read_word(addr)? as i64)),
+            MemKind::F64 => Ok(Value::F64(f64::from_bits(self.read_word(addr)?))),
+            MemKind::Bool => Ok(Value::Bool(self.read_word(addr)? != 0)),
+            MemKind::Ptr => Ok(Value::Ptr(self.read_word(addr)? as u32)),
+            MemKind::Boxed => {
+                let handle = self.read_word(addr)? as usize;
+                if handle == 0 {
+                    return Err("vm: load of a bad arena handle".into());
+                }
+                self.boxed
+                    .get(handle)
+                    .cloned()
+                    .ok_or_else(|| "vm: load of a bad arena handle".into())
+            }
+        }
+    }
+
     fn write_word(&mut self, addr: u32, word: u64) -> Result<(), String> {
         self.check_access(addr, 8, "store")?;
         let start = addr as usize;
@@ -1308,7 +1343,7 @@ fn vm_io_memory_error(error: MemoryError) -> String {
 /// call through the IO boundary. POSIX return conventions throughout.
 fn run_io(
     machine: &mut Machine,
-    frame: &Frame,
+    frame: &Frame<'_>,
     op: crate::IoOp,
     a: u16,
     b: u16,
@@ -1540,7 +1575,7 @@ fn run_io(
 /// Instructions that touch only the current frame (and the machine state).
 fn exec_local(
     module: &Module,
-    frame: &mut Frame,
+    frame: &mut Frame<'_>,
     machine: &mut Machine,
     insn: Insn,
     budgets: &Budgets,
@@ -1947,33 +1982,35 @@ fn exec_local(
             let Value::Ptr(addr) = frame.regs[ptr as usize] else {
                 return Err("vm: load of a non-pointer".into());
             };
-            frame.regs[dest as usize] = match kind {
-                MemKind::Byte => Value::Byte({
-                    machine.check_access(addr, 1, "load")?;
-                    machine
-                        .mem
-                        .get(addr as usize)
-                        .copied()
-                        .ok_or("vm: load out of bounds")?
-                }),
-                MemKind::I64 => Value::I64(machine.read_word(addr)? as i64),
-                MemKind::F64 => Value::F64(f64::from_bits(machine.read_word(addr)?)),
-                MemKind::Bool => Value::Bool(machine.read_word(addr)? != 0),
-                MemKind::Ptr => Value::Ptr(machine.read_word(addr)? as u32),
-                MemKind::Boxed => {
-                    let handle = machine.read_word(addr)? as usize;
-                    if handle == 0 {
-                        // The reserved placeholder: this cell was never
-                        // stored to.
-                        return Err("vm: load of a bad arena handle".into());
-                    }
-                    machine
-                        .boxed
-                        .get(handle)
-                        .cloned()
-                        .ok_or("vm: load of a bad arena handle")?
-                }
+            frame.regs[dest as usize] = machine.load_value(addr, kind)?;
+        }
+        Insn::CheckedIndexedLoad {
+            dest,
+            base,
+            index,
+            length,
+            kind,
+            failure_target,
+        } => {
+            let (Value::I64(index), Value::I64(length)) =
+                (&frame.regs[index as usize], &frame.regs[length as usize])
+            else {
+                return Err("vm: checked indexed load bounds operands".into());
             };
+            if *index < 0 || *index >= *length {
+                frame.pc = failure_target as usize;
+                return Ok(());
+            }
+            let Value::Ptr(base) = frame.regs[base as usize] else {
+                return Err("vm: checked indexed load of a non-pointer".into());
+            };
+            let width = match kind {
+                MemKind::Byte => 1,
+                MemKind::I64 | MemKind::F64 | MemKind::Bool | MemKind::Ptr | MemKind::Boxed => 8,
+            };
+            let offset = index.wrapping_mul(width);
+            let addr = (i64::from(base) + offset) as u32;
+            frame.regs[dest as usize] = machine.load_value(addr, kind)?;
         }
         Insn::Store { ptr, src, kind } => {
             let Value::Ptr(addr) = frame.regs[ptr as usize] else {
@@ -2158,7 +2195,7 @@ fn vm_object_error(error: ObjectError) -> String {
 /// interpreter's hottest edge.
 fn call_regs(
     module: &Module,
-    frame: &Frame,
+    frame: &Frame<'_>,
     args_start: u32,
     args_len: u16,
     n_regs: u16,
@@ -2186,7 +2223,7 @@ fn call_regs(
 
 fn arg_values(
     module: &Module,
-    frame: &Frame,
+    frame: &Frame<'_>,
     args_start: u32,
     args_len: u16,
 ) -> Result<Vec<Value>, String> {
@@ -2207,7 +2244,11 @@ fn arg_values(
 /// Read a register-or-constant operand field (RK encoding — see
 /// `RK_CONST` in the crate root).
 #[inline]
-fn rk<'a>(module: &'a Module, frame: &'a Frame, field: u16) -> Result<OperandValue<'a>, String> {
+fn rk<'a>(
+    module: &'a Module,
+    frame: &'a Frame<'_>,
+    field: u16,
+) -> Result<OperandValue<'a>, String> {
     if field & crate::RK_CONST != 0 {
         module
             .consts
@@ -2427,6 +2468,46 @@ mod tests {
             .err()
             .expect("recursion must exhaust the frame budget");
         assert!(err.contains("call stack overflow"), "{err}");
+    }
+
+    #[test]
+    fn checked_indexed_load_loads_or_takes_the_failure_target() {
+        let module = |index| Module {
+            chunks: vec![Chunk {
+                name: "checked_load".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::Const { dest: 1, k: 1 },
+                    Insn::Const { dest: 2, k: 2 },
+                    Insn::CheckedIndexedLoad {
+                        dest: 3,
+                        base: 0,
+                        index: 1,
+                        length: 2,
+                        kind: MemKind::I64,
+                        failure_target: 5,
+                    },
+                    Insn::Ret { src: 3 },
+                    Insn::Const { dest: 3, k: 3 },
+                    Insn::Ret { src: 3 },
+                ],
+                arity: 0,
+                n_regs: 4,
+                unwind: vec![],
+            }],
+            consts: vec![
+                Constant::Ptr(0),
+                Constant::I64(index),
+                Constant::I64(1),
+                Constant::I64(-1),
+            ],
+            statics: 42i64.to_le_bytes().to_vec(),
+            ..Module::default()
+        };
+
+        assert_eq!(run_with_machine(&module(0)).0, Value::I64(42));
+        assert_eq!(run_with_machine(&module(1)).0, Value::I64(-1));
+        assert_eq!(run_with_machine(&module(-1)).0, Value::I64(-1));
     }
 
     #[test]

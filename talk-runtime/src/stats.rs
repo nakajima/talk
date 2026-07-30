@@ -318,6 +318,7 @@ fn opcode_name(insn: &Insn) -> &'static str {
         Insn::Retain { .. } => "Retain",
         Insn::IsUnique { .. } => "IsUnique",
         Insn::Load { .. } => "Load",
+        Insn::CheckedIndexedLoad { .. } => "CheckedIndexedLoad",
         Insn::Store { .. } => "Store",
         Insn::Copy { .. } => "Copy",
         Insn::Swap { .. } => "Swap",

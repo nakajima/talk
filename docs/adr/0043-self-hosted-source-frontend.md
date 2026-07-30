@@ -385,7 +385,7 @@ Equatable<Substring>`, and `Array.pop`/`last`, each with tests.
 
 - **Service compilation and the call ABI.** `compile_service(exports,
   allowed_effects)` compiles named public functions into a module export
-  table (wire format v3, validated on decode); `Executable::run_export`
+  table (wire format v4, with v3 compatibility and validation on decode); `Executable::run_export`
   calls one on a fresh machine with scalar and string arguments and
   reads structured results (including strings) while the machine is
   alive. Each export wraps in the ordinary `_with_host` entry machinery,

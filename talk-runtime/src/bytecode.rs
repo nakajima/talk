@@ -5,7 +5,12 @@ use crate::{Chunk, Constant, Insn, IoOp, MemKind, Module};
 const MAGIC: &[u8; 7] = b"TALKBC\0";
 /// The wire-format version, embedded in every image header and recorded
 /// in artifact manifests (ADR 0043): a loader refuses any other version.
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
+const MIN_SUPPORTED_FORMAT_VERSION: u32 = 3;
+
+pub fn supports_format(version: u32) -> bool {
+    (MIN_SUPPORTED_FORMAT_VERSION..=FORMAT_VERSION).contains(&version)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EncodeError {
@@ -348,6 +353,22 @@ impl Encoder {
                 self.u16(ptr);
                 self.mem_kind(kind);
             }
+            Insn::CheckedIndexedLoad {
+                dest,
+                base,
+                index,
+                length,
+                kind,
+                failure_target,
+            } => {
+                self.u8(63);
+                self.u16(dest);
+                self.u16(base);
+                self.u16(index);
+                self.u16(length);
+                self.mem_kind(kind);
+                self.u32(failure_target);
+            }
             Insn::Store { ptr, src, kind } => {
                 self.u8(26);
                 self.u16(ptr);
@@ -614,7 +635,7 @@ impl<'a> Decoder<'a> {
             return Err(DecodeError::BadMagic);
         }
         let version = self.u32()?;
-        if version != FORMAT_VERSION {
+        if !supports_format(version) {
             return Err(DecodeError::UnsupportedVersion(version));
         }
         let entry = self.u32()?;
@@ -811,6 +832,14 @@ impl<'a> Decoder<'a> {
                 dest: self.u16()?,
                 ptr: self.u16()?,
                 kind: self.mem_kind()?,
+            }),
+            63 => Ok(Insn::CheckedIndexedLoad {
+                dest: self.u16()?,
+                base: self.u16()?,
+                index: self.u16()?,
+                length: self.u16()?,
+                kind: self.mem_kind()?,
+                failure_target: self.u32()?,
             }),
             26 => Ok(Insn::Store {
                 ptr: self.u16()?,
@@ -1329,6 +1358,17 @@ impl Insn {
                 Register::new(n_regs).check_many(&[dest, rec, src])?
             }
             Insn::Load { dest, ptr, .. } => Register::new(n_regs).check_many(&[dest, ptr])?,
+            Insn::CheckedIndexedLoad {
+                dest,
+                base,
+                index,
+                length,
+                failure_target,
+                ..
+            } => {
+                Register::new(n_regs).check_many(&[dest, base, index, length])?;
+                Self::check_target(failure_target, code_len)?;
+            }
             Insn::Store { ptr, src, .. } => Register::new(n_regs).check_many(&[ptr, src])?,
             Insn::Copy { from, to, len } => Register::new(n_regs).check_many(&[from, to, len])?,
             Insn::Swap { a, b, .. } => Register::new(n_regs).check_many(&[a, b])?,
@@ -1498,6 +1538,71 @@ impl Register {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn round_trips_checked_indexed_load() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::CheckedIndexedLoad {
+                        dest: 0,
+                        base: 1,
+                        index: 2,
+                        length: 3,
+                        kind: MemKind::I64,
+                        failure_target: 1,
+                    },
+                    Insn::Ret { src: 0 },
+                ],
+                arity: 0,
+                n_regs: 4,
+                unwind: vec![],
+            }],
+            ..Module::default()
+        };
+        let decoded = Module::decode_bytecode(&module.encode_bytecode().unwrap()).unwrap();
+        assert_eq!(decoded.chunks[0].code, module.chunks[0].code);
+    }
+
+    #[test]
+    fn rejects_checked_indexed_load_with_bad_failure_target() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![Insn::CheckedIndexedLoad {
+                    dest: 0,
+                    base: 1,
+                    index: 2,
+                    length: 3,
+                    kind: MemKind::I64,
+                    failure_target: 1,
+                }],
+                arity: 0,
+                n_regs: 4,
+                unwind: vec![],
+            }],
+            ..Module::default()
+        };
+        assert!(Module::decode_bytecode(&module.encode_bytecode().unwrap()).is_err());
+    }
+
+    #[test]
+    fn decodes_the_previous_bytecode_format() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![Insn::Ret { src: 0 }],
+                arity: 0,
+                n_regs: 1,
+                unwind: vec![],
+            }],
+            ..Module::default()
+        };
+        let mut encoded = module.encode_bytecode().unwrap();
+        encoded[MAGIC.len()..MAGIC.len() + 4].copy_from_slice(&(FORMAT_VERSION - 1).to_le_bytes());
+        assert!(Module::decode_bytecode(&encoded).is_ok());
+    }
 
     #[test]
     fn rejects_counts_that_violate_element_widths() {

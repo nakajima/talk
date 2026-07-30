@@ -11,6 +11,7 @@
 //! placement of bytecode verification — Leroy 2003, "Java Bytecode
 //! Verification: Algorithms and Formalizations").
 
+mod checked_indexed_load;
 mod lower;
 mod optimize;
 
@@ -184,7 +185,7 @@ pub(crate) fn compile(
         profiling::scope!("backend.mir_build");
         mir::build(programs, entry, false)?
     };
-    let optimizations = {
+    let mut optimizations = {
         profiling::scope!("backend.optimize");
         optimize::run(&mut program)
     };
@@ -194,10 +195,15 @@ pub(crate) fn compile(
             regalloc::reuse_locals(function);
         }
     }
-    let module = {
+    let mut module = {
         profiling::scope!("backend.lower");
         lower::lower(&program)?
     };
+    let checked_indexed_loads = checked_indexed_load::run(&mut module);
+    optimizations.passes.push(OptimizationPassStats {
+        name: "checked_indexed_load",
+        applied: checked_indexed_loads,
+    });
     Ok(Executable {
         module,
         names: display_names(programs),

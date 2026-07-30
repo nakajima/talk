@@ -238,6 +238,18 @@ pub enum Insn {
         ptr: u16,
         kind: MemKind,
     },
+    /// Bounds-check and load one fixed-width memory element. An invalid
+    /// index jumps to `failure_target`, where compiled Talk code owns the
+    /// catchable failure behavior; this instruction never turns it into a
+    /// VM trap.
+    CheckedIndexedLoad {
+        dest: u16,
+        base: u16,
+        index: u16,
+        length: u16,
+        kind: MemKind,
+        failure_target: u32,
+    },
     Store {
         ptr: u16,
         src: u16,
@@ -598,6 +610,17 @@ impl Module {
             Insn::IsUnique { dest, ptr } => format!("is_unique r{dest} <- r{ptr}"),
             Insn::Load { dest, ptr, kind } => format!(
                 "load_{} r{dest} <- [r{ptr}]",
+                format!("{kind:?}").to_lowercase()
+            ),
+            Insn::CheckedIndexedLoad {
+                dest,
+                base,
+                index,
+                length,
+                kind,
+                failure_target,
+            } => format!(
+                "checked_indexed_load_{} r{dest} <- [r{base} + r{index}], len r{length}, fail {failure_target}",
                 format!("{kind:?}").to_lowercase()
             ),
             Insn::Store { ptr, src, kind } => format!(

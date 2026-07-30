@@ -67,17 +67,16 @@ impl ArtifactManifest {
 
     /// Fail-closed validation: the artifact bytes, the sources, and the
     /// ABI descriptor (when the manifest records one) must all match,
-    /// and the recorded format version must be the one this compiler
-    /// loads.
+    /// and the recorded format version must be one this compiler loads.
     pub fn verify(
         &self,
         sources: &[(String, String)],
         image: &[u8],
         abi: Option<&str>,
     ) -> Result<(), String> {
-        if self.format_version != talk_runtime::bytecode::FORMAT_VERSION {
+        if !talk_runtime::bytecode::supports_format(self.format_version) {
             return Err(format!(
-                "artifact manifest records bytecode format {} but this compiler loads {}; regenerate the artifact",
+                "artifact manifest records unsupported bytecode format {}; this compiler writes format {}; regenerate the artifact",
                 self.format_version,
                 talk_runtime::bytecode::FORMAT_VERSION
             ));

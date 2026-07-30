@@ -85,7 +85,10 @@ frontend result
 - Bytecode is the reference execution target. Effects use dynamic
   nearest-handler routing with one-shot resumptions [Plotkin & Pretnar 2013,
   "Handling Algebraic Effects"; Bruggeman, Waddell & Dybvig 1996,
-  "Representing Control in the Presence of One-Shot Continuations"].
+  "Representing Control in the Presence of One-Shot Continuations"]. Target
+  superinstructions may fuse a successful operation, but a catchable failure
+  branches back to compiled Talk code rather than becoming a VM trap;
+  `CheckedIndexedLoad` follows this rule.
 
 A new internal seam is introduced only when at least two real consumers
 require it. A stage that one function can express is a function, not a

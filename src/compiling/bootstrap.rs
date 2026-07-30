@@ -148,7 +148,7 @@ mod tests {
             .manifest
             .verify(&sources, &outcome.image, None)
             .expect("manifest verifies its own output");
-        assert_eq!(outcome.stage_optimizations[0].passes.len(), 7);
+        assert_eq!(outcome.stage_optimizations[0].passes.len(), 8);
         assert_eq!(
             outcome.stage_optimizations[0],
             outcome.stage_optimizations[1],
