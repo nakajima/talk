@@ -381,14 +381,15 @@ fn resolve_import_path(
     let Ok(canonical) = resolved.canonicalize() else {
         return Ok(None);
     };
-    if let Some(root) = workspace_root
-        && !canonical.starts_with(root)
-    {
-        return Err(CompileError::ImportOutsideWorkspace {
-            source: source_path.to_string(),
-            import_path: module_path.clone(),
-            workspace_root: root.to_path_buf(),
-        });
+    if let Some(root) = workspace_root {
+        let canonical_root = root.canonicalize().map_err(CompileError::IO)?;
+        if !canonical.starts_with(&canonical_root) {
+            return Err(CompileError::ImportOutsideWorkspace {
+                source: source_path.to_string(),
+                import_path: module_path.clone(),
+                workspace_root: root.to_path_buf(),
+            });
+        }
     }
 
     // Return both the canonical path (for tracking) and the resolved path for source.
