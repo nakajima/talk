@@ -807,6 +807,23 @@ impl Driver<Typed> {
         .map_err(|error| self.locate_backend_error(&error))
     }
 
+    /// Emit C source for a service: the same export wrappers
+    /// `compile_service` builds, translated to C instead of bytecode.
+    pub fn render_c_service(
+        &self,
+        exports: &[String],
+        allowed_effects: &[String],
+    ) -> Result<String, String> {
+        let entry = crate::backend::Entry::Exports {
+            names: exports,
+            allowed_effects,
+        };
+        self.with_backend_inputs(entry, |programs, entry| {
+            crate::backend::render_c(programs, entry)
+        })
+        .map_err(|error| self.locate_backend_error(&error))
+    }
+
     /// Assemble the reachable source graph (this program, core, imported
     /// stdlib modules, dependency libraries) and the module-alias map, and
     /// hand them to the backend.

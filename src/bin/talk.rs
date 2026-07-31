@@ -162,6 +162,13 @@ async fn main() {
             filenames: Vec<String>,
             #[arg(long, value_name = "NAME")]
             entry: Option<String>,
+            /// Emit a service instead of a program: one host-callable
+            /// wrapper per exported function (repeatable).
+            #[arg(long = "export", value_name = "NAME")]
+            exports: Vec<String>,
+            /// Effects the exports may perform (repeatable).
+            #[arg(long = "allow-effect", value_name = "EFFECT")]
+            allow_effects: Vec<String>,
         },
         /// Render the backend's middle representation for the input.
         Mir {
@@ -863,9 +870,19 @@ async fn main() {
             let executable = compile_or_exit(filenames, entry.as_deref());
             print!("{}", executable.render_bytecode());
         }
-        Commands::C { filenames, entry } => {
+        Commands::C {
+            filenames,
+            entry,
+            exports,
+            allow_effects,
+        } => {
             let typed = check_or_exit(filenames);
-            match typed.render_c(entry.as_deref()) {
+            let rendered = if exports.is_empty() {
+                typed.render_c(entry.as_deref())
+            } else {
+                typed.render_c_service(exports, allow_effects)
+            };
+            match rendered {
                 Ok(rendered) => print!("{rendered}"),
                 Err(message) => {
                     eprintln!("error: {message}");
