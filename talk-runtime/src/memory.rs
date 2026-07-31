@@ -81,6 +81,7 @@ pub struct Allocations {
     /// to a freed allocation can never resolve to a live one, and an id
     /// below this watermark is one that was issued and has since died.
     next_id: u32,
+
     /// Spans returned by `free`, keyed by their reserved length. A later
     /// allocation of the same span reuses the address instead of
     /// extending memory, which is what keeps an allocate/free loop from
@@ -135,6 +136,22 @@ impl Allocations {
             }
             std::collections::hash_map::Entry::Vacant(_) => Err(MemoryError::InvalidFree),
         }
+    }
+
+    /// The byte-memory length an allocation of `count` would leave
+    /// behind. A reused span does not grow memory, so a budget checked
+    /// against `len + count` would reject an allocate/free loop that
+    /// never actually grows.
+    pub fn projected_len(&self, mem_len: usize, count: usize) -> usize {
+        let reserve = count.max(1);
+        if self
+            .free_spans
+            .get(&reserve)
+            .is_some_and(|addresses| !addresses.is_empty())
+        {
+            return mem_len;
+        }
+        mem_len.saturating_add(reserve)
     }
 
     pub fn allocate(&mut self, mem: &mut Vec<u8>, count: usize) -> Result<Pointer, MemoryError> {
@@ -558,6 +575,37 @@ mod tests {
         };
         assert_eq!(allocations.free(8, forged), Err(MemoryError::InvalidFree));
         assert_eq!(allocations.retain(8, forged), Err(MemoryError::InvalidFree));
+    }
+
+    /// A budget is about memory actually held. Reusing a freed span
+    /// holds no more of it, so a loop that allocates and frees inside a
+    /// fixed budget must keep running.
+    #[test]
+    fn a_reused_span_does_not_count_as_new_memory() {
+        let mut mem = vec![0u8; 8];
+        let mut allocations = Allocations::default();
+
+        let first = allocations.allocate(&mut mem, 32).expect("first");
+        let settled = mem.len();
+        allocations.free(8, first).expect("release");
+
+        assert_eq!(
+            allocations.projected_len(mem.len(), 32),
+            settled,
+            "reusing the freed span should not grow memory"
+        );
+        assert_eq!(
+            allocations.projected_len(mem.len(), 64),
+            settled + 64,
+            "a size with no free span still grows"
+        );
+
+        for _ in 0..100 {
+            assert_eq!(allocations.projected_len(mem.len(), 32), settled);
+            let pointer = allocations.allocate(&mut mem, 32).expect("reused");
+            assert_eq!(mem.len(), settled, "the loop grew memory");
+            allocations.free(8, pointer).expect("release");
+        }
     }
 
     #[test]

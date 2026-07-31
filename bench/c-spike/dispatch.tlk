@@ -1,0 +1,30 @@
+// Archetype: enum construction and match dispatch — VariantNew,
+// GetTag/GetPayload, branch chains over variant tags.
+enum Shape {
+	case dot
+	case line(Int)
+	case rect(Int, Int)
+}
+func area(s: &Shape) -> Int {
+	match s {
+		.dot -> 1,
+		.line(len) -> len,
+		.rect(w, h) -> w * h
+	}
+}
+pub func bench() -> Int {
+	let total = 0
+	let i = 0
+	loop i < 400000 {
+		let s = if i / 3 * 3 == i {
+			Shape.dot
+		} else if (i + 1) / 3 * 3 == i + 1 {
+			Shape.line(i)
+		} else {
+			Shape.rect(i, 2)
+		}
+		total = total + area(s: s)
+		i = i + 1
+	}
+	total
+}

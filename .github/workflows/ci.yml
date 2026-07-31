@@ -25,6 +25,27 @@ jobs:
       - name: Run tests
         run: cargo test --workspace --all-targets --verbose --locked
 
+  c-backend:
+    name: C backend differential
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the compiler
+        run: cargo build --release --locked
+      # Compiles every program in the corpora through both targets and
+      # fails on a single byte of disagreement. The default test suite
+      # already gates bench/ and tests/programs/; this adds the reference
+      # corpora and the examples.
+      - name: Sweep the corpora through both targets
+        run: ./scripts/c-backend-sweep.sh
+      # The generated C is meant to be portable between the two compilers
+      # anyone is likely to have.
+      - name: Sweep again with clang
+        run: ./scripts/c-backend-sweep.sh --cc clang
+
   talk-swift:
     name: TalkSwift
     runs-on: macos-14

@@ -11,6 +11,8 @@
 //! placement of bytecode verification — Leroy 2003, "Java Bytecode
 //! Verification: Algorithms and Formalizations").
 
+mod c;
+mod c_escape;
 mod checked_indexed_load;
 mod lower;
 mod optimize;
@@ -219,6 +221,24 @@ pub(crate) fn check(programs: &[ProgramInput<'_>], entry: Entry) -> Result<(), B
     // Checking means checking everything: every body compiles, called
     // or not, entry or no entry.
     mir::build(programs, entry, true).map(|_| ())
+}
+
+/// Emit C source for the program (a spike; see `c.rs` for the scope it
+/// accepts). The C shares `compile`'s pipeline up to lowering, so the two
+/// targets translate the same optimized, register-allocated MIR.
+pub(crate) fn render_c(
+    programs: &[ProgramInput<'_>],
+    entry: Entry,
+) -> Result<String, BackendError> {
+    let mut program = mir::build(programs, entry, false)?;
+    optimize::run(&mut program);
+    // Read before register allocation, where a parameter's slot is still
+    // only ever the parameter (see `c_escape::parameter_summaries`).
+    let escaping_parameters = c_escape::parameter_summaries(&program);
+    for function in &mut program.functions {
+        regalloc::reuse_locals(function);
+    }
+    c::emit(&program, &escaping_parameters, &c::display_names(programs))
 }
 
 /// Render the middle representation for inspection (TOOL-10).

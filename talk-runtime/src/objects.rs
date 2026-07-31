@@ -56,6 +56,9 @@ pub enum ObjectError {
     ReleaseUnderflow,
     DeadObject,
     UnknownObject,
+    /// Handles are never recycled, so the supply is finite. Running out
+    /// ends the program rather than wrapping.
+    HandlesExhausted,
 }
 
 impl ObjectError {
@@ -65,6 +68,7 @@ impl ObjectError {
             ObjectError::ReleaseUnderflow => "region released more times than acquired",
             ObjectError::DeadObject => "use of an object in a dead region",
             ObjectError::UnknownObject => "unknown object handle",
+            ObjectError::HandlesExhausted => "ran out of heap object handles",
         }
     }
 }
@@ -108,11 +112,20 @@ impl<V> Default for Objects<V> {
 impl<V: Clone> Objects<V> {
     /// Allocate a new object in a fresh region with owner count 1 (the +1
     /// belongs to whatever binding receives the rvalue).
-    pub fn allocate(&mut self, fields: Vec<V>) -> u32 {
+    pub fn allocate(&mut self, fields: Vec<V>) -> Result<u32, ObjectError> {
         let region = self.next_region;
         let index = self.next_object;
-        self.next_region = self.next_region.wrapping_add(1);
-        self.next_object = self.next_object.wrapping_add(1);
+        // Checked, not wrapping: recycling an id would let a stale handle
+        // name a live object, and the watermark that separates "torn
+        // down" from "never issued" would stop meaning anything.
+        self.next_region = self
+            .next_region
+            .checked_add(1)
+            .ok_or(ObjectError::HandlesExhausted)?;
+        self.next_object = self
+            .next_object
+            .checked_add(1)
+            .ok_or(ObjectError::HandlesExhausted)?;
         self.regions.insert(
             region,
             Region {
@@ -133,7 +146,7 @@ impl<V: Clone> Objects<V> {
                 finalized: false,
             },
         );
-        index
+        Ok(index)
     }
 
     /// A handle's record. Removing torn-down objects would otherwise blur
@@ -421,8 +434,8 @@ mod tests {
     #[test]
     fn allocate_link_release_frees_cycle() {
         let mut o = objects();
-        let a = o.allocate(vec![0, 0]);
-        let b = o.allocate(vec![0, 0]);
+        let a = o.allocate(vec![0, 0]).unwrap();
+        let b = o.allocate(vec![0, 0]).unwrap();
         // a.next = b merges the regions; b.prev = a makes a cycle.
         o.set_field(a, 0, 1, &[b]).unwrap();
         o.set_field(b, 1, 2, &[a]).unwrap();
@@ -442,8 +455,8 @@ mod tests {
     fn dead_objects_and_regions_do_not_accumulate() {
         let mut o = objects();
         for _ in 0..1000 {
-            let a = o.allocate(vec![0, 0]);
-            let b = o.allocate(vec![0, 0]);
+            let a = o.allocate(vec![0, 0]).unwrap();
+            let b = o.allocate(vec![0, 0]).unwrap();
             // Merge, so teardown has a union-find tree to reclaim rather
             // than two singleton regions.
             o.set_field(a, 0, 1, &[b]).unwrap();
@@ -467,7 +480,7 @@ mod tests {
     #[test]
     fn ledger_operations_tolerate_a_dead_handle_but_not_an_unknown_one() {
         let mut o = objects();
-        let a = o.allocate(vec![0]);
+        let a = o.allocate(vec![0]).unwrap();
         o.release(&[a]).unwrap();
         assert!(o.next_finalizer().is_none());
         assert_eq!(o.live_objects(), 0);
@@ -484,7 +497,7 @@ mod tests {
     #[test]
     fn acquire_extends_region_life() {
         let mut o = objects();
-        let a = o.allocate(vec![0]);
+        let a = o.allocate(vec![0]).unwrap();
         o.acquire(&[a]).unwrap(); // second binding
         o.release(&[a]).unwrap();
         assert_eq!(o.live_objects(), 1);
@@ -496,8 +509,8 @@ mod tests {
     #[test]
     fn merge_sums_owner_counts() {
         let mut o = objects();
-        let a = o.allocate(vec![0]);
-        let b = o.allocate(vec![0]);
+        let a = o.allocate(vec![0]).unwrap();
+        let b = o.allocate(vec![0]).unwrap();
         o.set_field(a, 0, 7, &[b]).unwrap(); // merged: count 2
         o.release(&[a]).unwrap();
         assert_eq!(o.live_objects(), 2);
@@ -509,9 +522,9 @@ mod tests {
     #[test]
     fn finalizers_run_in_reverse_allocation_order_then_free() {
         let mut o = objects();
-        let a = o.allocate(vec![0, 0]);
-        let b = o.allocate(vec![0, 0]);
-        let c = o.allocate(vec![0, 0]);
+        let a = o.allocate(vec![0, 0]).unwrap();
+        let b = o.allocate(vec![0, 0]).unwrap();
+        let c = o.allocate(vec![0, 0]).unwrap();
         o.set_finalizer(a, 100).unwrap();
         o.set_finalizer(b, 101).unwrap();
         o.set_finalizer(c, 102).unwrap();
@@ -532,7 +545,7 @@ mod tests {
     #[test]
     fn fields_readable_during_teardown() {
         let mut o = objects();
-        let a = o.allocate(vec![41]);
+        let a = o.allocate(vec![41]).unwrap();
         o.set_finalizer(a, 9).unwrap();
         o.release(&[a]).unwrap();
         assert_eq!(o.next_finalizer(), Some((9, a)));
@@ -545,8 +558,8 @@ mod tests {
     #[test]
     fn storing_handle_during_teardown_traps() {
         let mut o = objects();
-        let dying = o.allocate(vec![0]);
-        let survivor = o.allocate(vec![0]);
+        let dying = o.allocate(vec![0]).unwrap();
+        let survivor = o.allocate(vec![0]).unwrap();
         o.set_finalizer(dying, 1).unwrap();
         o.release(&[dying]).unwrap();
         assert_eq!(o.next_finalizer(), Some((1, dying)));
@@ -562,7 +575,7 @@ mod tests {
     #[test]
     fn release_underflow_traps() {
         let mut o = objects();
-        let a = o.allocate(vec![0]);
+        let a = o.allocate(vec![0]).unwrap();
         o.acquire(&[a]).unwrap();
         o.release(&[a]).unwrap();
         o.release(&[a]).unwrap();
@@ -570,11 +583,11 @@ mod tests {
         // Dead region: further releases are inert, not underflow…
         assert_eq!(o.release(&[a]), Ok(()));
         // …but a live region under-released is caught before going negative.
-        let b = o.allocate(vec![0]);
+        let b = o.allocate(vec![0]).unwrap();
         o.release(&[b]).unwrap();
         let _ = o.next_finalizer();
         assert_eq!(o.release(&[b]), Ok(()), "dead again — inert");
-        let c = o.allocate(vec![0]);
+        let c = o.allocate(vec![0]).unwrap();
         o.release(&[c]).unwrap(); // count 0, finalizing
         assert_eq!(o.release(&[c]), Ok(()), "finalizing — inert");
     }
@@ -582,8 +595,8 @@ mod tests {
     #[test]
     fn nested_teardown_stacks() {
         let mut o = objects();
-        let a = o.allocate(vec![0]);
-        let b = o.allocate(vec![0]);
+        let a = o.allocate(vec![0]).unwrap();
+        let b = o.allocate(vec![0]).unwrap();
         o.set_finalizer(a, 1).unwrap();
         o.set_finalizer(b, 2).unwrap();
         o.release(&[a]).unwrap();
@@ -599,7 +612,7 @@ mod tests {
     #[test]
     fn acquire_during_teardown_is_inert() {
         let mut o = objects();
-        let a = o.allocate(vec![0]);
+        let a = o.allocate(vec![0]).unwrap();
         o.set_finalizer(a, 1).unwrap();
         o.release(&[a]).unwrap();
         assert_eq!(o.next_finalizer(), Some((1, a)));

@@ -14,3 +14,8 @@ talk-ex/index.wit
 server.log
 *.log
 .tmp
+
+# Artifacts from the C backend: emitted translation units and the
+# executables built from them.
+bench/c-spike/*.c
+bench/c-spike/*.bin

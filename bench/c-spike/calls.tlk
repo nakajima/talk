@@ -1,0 +1,10 @@
+func fib(n: Int) -> Int {
+	if n < 2 {
+		n
+	} else {
+		fib(n: n - 1) + fib(n: n - 2)
+	}
+}
+pub func bench() -> Int {
+	fib(n: 26)
+}
