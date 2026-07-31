@@ -1,4 +1,15 @@
+@font-face {
+  font-family: "Bitstream Vera Sans Mono";
+  src:
+    url("/fonts/VeraMono.woff2") format("woff2"),
+    url("/fonts/VeraMono.woff") format("woff");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
+  --page-bg: #060707;
   --color-tin-1: rgb(9.71% 9.82% 12.9%);
   --color-tin-1-contrast: #fff;
   --color-tin-2: rgb(26% 24% 31%);
@@ -26,9 +37,9 @@
 }
 
 html {
-  background: var(--color-tin-1);
+  background: var(--page-bg);
   color: oklch(96.816% 0.00355 220.931);
-  font-family: "Fira Code", monospace;
+  font-family: "Bitstream Vera Sans Mono", monospace;
   font-weight: 400;
 }
 
@@ -47,17 +58,11 @@ h4,
 h5,
 h6 {
   font-weight: 200;
-  margin: 1rem;
+  margin: 1rem 0;
 }
 
 main li p {
   margin: 0;
-}
-
-h1 {
-  text-decoration: underline;
-  text-decoration-thickness: 1px;
-  text-decoration-color: oklch(66.7% 0.274 260);
 }
 
 main h4, main h5 {
@@ -72,7 +77,7 @@ p {
 pre,
 code,
 .code-editable {
-  font-family: "Fira Code", monospace;
+  font-family: "Bitstream Vera Sans Mono", monospace;
   font-weight: 200;
   font-style: normal;
   color: oklch(96.816% 0.00355 220.931);
@@ -85,46 +90,77 @@ pre,
   tab-size: 2;
 }
 
-pre .keyword {
+code .keyword, pre .keyword {
   color: oklch(77% 0.156 12.4);
   /*color: oklch(54.3% 0.217 11);*/
 }
 
-pre .number {
+code .number, pre .number {
   color: oklch(95% 0.217 48.1);
 }
 
-pre .comment {
+code .comment, pre .comment {
   color: oklch(61.539% 0.03627 241.494);
 }
 
-pre .string {
+code .string, pre .string {
   /* color: oklch(95% 0.38 253); */
   color: oklch(88.4% 0.31 220);
 }
 
-pre .self,
-pre .type {
+code .self, pre .self,
+code .type, pre .type {
   /* color: oklch(89.421% 0.05474 288.654); */
   color: oklch(91.1% 0.267 260);
 }
 
-pre .parameter {
+code .parameter, pre .parameter {
   color: oklch(65.217% 0.17683 257.397);
 }
 
-pre .decorator {
+code .decorator, pre .decorator {
   color: oklch(90.983% 0.13819 182.575);
 }
 
-pre .effect {
+code .effect, pre .effect {
   color: oklch(78.916% 0.13222 230.749);
 }
 
-pre .enum_member,
-pre .method,
-pre .function {
+code .enum_member, pre .enum_member,
+code .method, pre .method,
+code .function, pre .function {
   color: oklch(83.491% 0.14808 330.328);
+}
+
+h1 {
+  padding: 0 1ex;
+}
+
+header {
+  padding: 2ex 2ex 0 2ex;
+}
+
+.intro {
+  display: flex;
+  gap: 0.5ex;
+}
+
+.intro-txt, .intro-code {
+  flex-grow: 1;
+  flex-basis: 0;
+  padding: 2ex;
+}
+
+.intro-txt {
+  background: #00000089;
+}
+
+.intro-code {
+  background: black;
+}
+
+.intro-code pre {
+  padding:0;
 }
 
 .runnable,
@@ -132,7 +168,6 @@ pre .function {
   background: rgb(13, 13, 17);
   position: relative;
   margin: 1rem;
-  box-shadow: 0.4rex 0.4rex 0.4rex rgba(13, 13, 19, 0.506);
 }
 
 .no-run {
@@ -224,14 +259,14 @@ pre .function {
 
 .runnable .actions {
   background: rgb(13, 13, 17);
-  padding: 1ex 2ex 2ex 2ex;
+  padding: 2ex 0 0;
   color: var(--color-tin-3);
   font-size: small;
 }
 
 .runnable .actions {
   display: flex;
-  gap: 2rex;
+  gap: 0.5rex;
 }
 
 .runnable button {
@@ -301,7 +336,6 @@ pre .function {
   font-size: 0.75rem;
   line-height: 1.3;
   max-width: min(48ch, 90vw);
-  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
   pointer-events: none;
 }
 

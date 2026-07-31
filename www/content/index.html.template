@@ -7,15 +7,39 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300..700&display=swap" rel="stylesheet">
     <link href="/reset.css" rel="stylesheet">
-   	<link href="/style.css" rel="stylesheet">
-		<link href="https://unpkg.com/tippy.js@6.3.7/dist/tippy.css" rel="stylesheet">
+    <link href="/style.css" rel="stylesheet">
+    <link href="https://unpkg.com/tippy.js@6.3.7/dist/tippy.css" rel="stylesheet">
   </head>
   <body>
     <main>
-			<h1>talktalk</h1>
+      <header>
+        <h1><code>print(<span class="string">"hi, it’s talktalk"</span>)</code></h1>
+
+        <div class="intro">
+          <code class="intro-txt">
+            We’ve got <span class="type" title="struct Person {
+  let name: String
+  let age: Int
+}">structs</span>, <span class="string" title="&quot;hello there&quot;">strings</span>, <span
+              class="number">ints</span>, <span class="number">floats</span>, <span class="type">enums</span>,
+            <span class="function">effects</span>, <span class="keyword">bools</span>, <span
+              class="parameter">tuples</span>,
+            <span class="type">arrays</span>, <span class="string">chars</span>,
+            <span class="type">records</span>, and
+            <span class="function">functions</span>.
+          </code>
+          <div class="intro-code">
+            <pre>struct Person {
+  let name: String
+  let age: Int
+}</pre>
+          </div>
+
+        </div>
+      </header>
       {CONTENT_GOES_HERE}
-			<script src="https://unpkg.com/@popperjs/core@2"></script>
-			<script src="https://unpkg.com/tippy.js@6"></script>
+      <script src="https://unpkg.com/@popperjs/core@2"></script>
+      <script src="https://unpkg.com/tippy.js@6"></script>
       <script type="module" src="/page.js"></script>
     </main>
   </body>

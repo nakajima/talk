@@ -782,13 +782,13 @@ impl Driver<Typed> {
 
     /// Render the backend's middle representation for inspection
     /// (TOOL-10). Same inputs as `compile_executable`.
-    pub fn render_mir(&self, entry: Option<&str>) -> Result<String, String> {
+    pub fn render_mir(&self, entry: Option<&str>, optimized: bool) -> Result<String, String> {
         let entry = match entry {
             Some(name) => crate::backend::Entry::Named(name),
             None => crate::backend::Entry::Script,
         };
         self.with_backend_inputs(entry, |programs, entry| {
-            crate::backend::render_mir(programs, entry)
+            crate::backend::render_mir(programs, entry, optimized)
         })
         .map_err(|error| self.locate_backend_error(&error))
     }

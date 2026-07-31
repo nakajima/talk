@@ -138,12 +138,15 @@ async fn main() {
             #[arg(long, value_name = "NAME")]
             entry: Option<String>,
         },
-        /// Render the backend's middle representation for the input.
+        /// Render the optimized backend middle representation for the input.
         Mir {
             #[arg(value_hint = ValueHint::FilePath)]
             filenames: Vec<String>,
             #[arg(long, value_name = "NAME")]
             entry: Option<String>,
+            /// Render MIR before optimization.
+            #[arg(long)]
+            no_opt: bool,
         },
         /// Create a new package directory.
         New {
@@ -799,9 +802,13 @@ async fn main() {
             let executable = compile_or_exit(filenames, entry.as_deref());
             print!("{}", executable.render_bytecode());
         }
-        Commands::Mir { filenames, entry } => {
+        Commands::Mir {
+            filenames,
+            entry,
+            no_opt,
+        } => {
             let typed = check_or_exit(filenames);
-            match typed.render_mir(entry.as_deref()) {
+            match typed.render_mir(entry.as_deref(), !no_opt) {
                 Ok(rendered) => print!("{rendered}"),
                 Err(message) => {
                     eprintln!("error: {message}");
@@ -845,7 +852,8 @@ Talk is a statically typed, Swift-flavored language with local type inference, g
     talk build files -o FILE        compile to a bytecode image
     talk run-image FILE             validate and execute a bytecode image
     talk check [--json] files       typecheck, ownership-check, print diagnostics
-    talk bytecode / talk mir files  render lowered output
+    talk bytecode files             render compiled bytecode
+    talk mir [--no-opt] files       render optimized or raw MIR
     talk new / install / update     package management
     talk repl                       interactive type queries and completion
     talk format [file]              format source from file or stdin

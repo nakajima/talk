@@ -225,8 +225,15 @@ pub(crate) fn check(programs: &[ProgramInput<'_>], entry: Entry) -> Result<(), B
 pub(crate) fn render_mir(
     programs: &[ProgramInput<'_>],
     entry: Entry,
+    optimized: bool,
 ) -> Result<String, BackendError> {
-    let program = mir::build(programs, entry, false)?;
+    let mut program = mir::build(programs, entry, false)?;
+    if optimized {
+        optimize::run(&mut program);
+        for function in &mut program.functions {
+            regalloc::reuse_locals(function);
+        }
+    }
     Ok(program.render())
 }
 

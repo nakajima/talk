@@ -2,6 +2,7 @@ use js_sys::{Array, Object, Reflect};
 use talk::{
     analysis::{Diagnostic, DocumentInput, Workspace},
     common::text::{clamp_to_char_boundary, line_info_for_offset_utf16},
+    compiling::driver::{Driver, DriverConfig, Source},
     formatter,
     highlighter::highlight_html as highlight_source_html,
     repl::{ReplEvalResult, ReplSession},
@@ -36,11 +37,37 @@ pub fn run_program(source: &str) -> Result<Object, JsValue> {
 }
 
 #[wasm_bindgen]
-pub fn show_ir(_source: &str) -> Result<Object, JsValue> {
+pub fn show_ir(source: &str) -> Result<Object, JsValue> {
     init();
-    Err(JsValue::from_str(
-        "lowered output is unavailable while Talk is frontend-only",
-    ))
+    let ir = render_ir(source).map_err(|message| JsValue::from_str(&message))?;
+    let obj = Object::new();
+    set_str(&obj, "ir", &ir)?;
+    set_str(&obj, "highlightedIr", &highlight_source_html(&ir))?;
+    Ok(obj)
+}
+
+fn render_ir(source: &str) -> Result<String, String> {
+    let driver = Driver::new(
+        vec![Source::in_memory(
+            std::path::PathBuf::from("playground.tlk"),
+            source,
+        )],
+        DriverConfig::new("Playground").executable(),
+    );
+    let parsed = driver.parse().map_err(|error| format!("{error:?}"))?;
+    let resolved = parsed
+        .resolve_names()
+        .map_err(|error| format!("{error:?}"))?;
+    let typed = resolved.type_check();
+    if typed.has_errors() {
+        return Err(typed
+            .diagnostics()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+    typed.render_mir(None, true)
 }
 
 #[wasm_bindgen]

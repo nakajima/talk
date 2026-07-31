@@ -1,21 +1,32 @@
-It has some types you may have heard of before.
-```tlk
-123 // Ints
-1.23 // Floats
-true // Booleans
-"Hello 🦉" // Strings
-[1, 2, 3] // Arrays
-(true, 123) // Tuples?
-{ fizz: "buzz" } // Records??
-```
-
-Here, have some arithmetic.
+Here, have some math.
 
 ```tlk
-2 * 3 + 4 / 2 // I can't do this in my head
+2 * 3 / 4 + 10 // I can’t do this in my head
 ```
 
-Maybe you like assigning things. Like a variable?
+ok ok, that was exciting, let’s write a function now
+
+```tlk
+func add(x, y) {
+  x + y
+}
+```
+
+Let's call the function with `Int`s:
+
+```tlk
+add(x: 1, y: 2) // => 3
+```
+
+Now let's call it with `String`s:
+
+```tlk
+add(x: "hello ", y: "world") // => "hello world"
+```
+
+Wow functions are polymorphic. What a world!
+
+"ok" you say, but do you have *variables*? we do! let me show you, you smug piece of
 
 ```tlk
 let a = 1

@@ -23,6 +23,61 @@ fn format_does_not_add_a_blank_line_at_eof() {
     assert_eq!(output.stdout, b"let x = 1\n");
 }
 
+#[test]
+fn mir_is_optimized_by_default_and_no_opt_renders_raw_mir() {
+    let source = b"func f() -> Int {\n\tlet x = 1 + 2\n\t4\n}\nf()\n";
+    let render = |arguments: &[&str]| {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_talk"))
+            .arg("mir")
+            .args(arguments)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("run `talk mir`");
+        child
+            .stdin
+            .take()
+            .expect("piped stdin")
+            .write_all(source)
+            .expect("write Talk source");
+        child.wait_with_output().expect("read MIR output")
+    };
+
+    let optimized = render(&[]);
+    assert!(
+        optimized.status.success(),
+        "{}",
+        String::from_utf8_lossy(&optimized.stderr)
+    );
+    let raw = render(&["--no-opt"]);
+    assert!(
+        raw.status.success(),
+        "{}",
+        String::from_utf8_lossy(&raw.stderr)
+    );
+
+    let optimized = String::from_utf8(optimized.stdout).expect("optimized MIR is UTF-8");
+    let optimized_f = optimized
+        .split("\nfn")
+        .find(|section| section.contains(" f "))
+        .expect("f in optimized MIR");
+    assert!(
+        !optimized_f.contains("Call"),
+        "optimized MIR retained the unused computation:\n{optimized_f}"
+    );
+
+    let raw = String::from_utf8(raw.stdout).expect("raw MIR is UTF-8");
+    let raw_f = raw
+        .split("\nfn")
+        .find(|section| section.contains(" f "))
+        .expect("f in raw MIR");
+    assert!(
+        raw_f.contains("Call"),
+        "--no-opt did not retain the unused computation:\n{raw_f}"
+    );
+}
+
 fn run_source(source: &[u8], arguments: &[&str]) -> std::process::Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_talk"))
         .arg("run")

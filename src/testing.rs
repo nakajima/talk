@@ -541,7 +541,7 @@ impl Runner {
     fn execute(typed: &Driver<Typed>) -> Result<(String, i64), TestError> {
         // Diagnostic: dump the composed suite's middle representation.
         if std::env::var_os("TALK_DUMP_MIR").is_some() {
-            match typed.render_mir(None) {
+            match typed.render_mir(None, false) {
                 Ok(rendered) => eprintln!("{rendered}"),
                 Err(error) => eprintln!("mir render failed: {error}"),
             }

@@ -163,15 +163,23 @@ fn _compile() -> CoreArtifacts {
 /// This binary's identity (modification stamp and length): any rebuild
 /// of the compiler invalidates compile caches keyed with it.
 pub(crate) fn exe_fingerprint() -> Option<(u128, u64)> {
-    let exe = std::env::current_exe().ok()?;
-    let meta = std::fs::metadata(&exe).ok()?;
-    let stamp = meta
-        .modified()
-        .ok()?
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_nanos();
-    Some((stamp, meta.len()))
+    #[cfg(target_family = "wasm")]
+    {
+        None
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let exe = std::env::current_exe().ok()?;
+        let meta = std::fs::metadata(&exe).ok()?;
+        let stamp = meta
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        Some((stamp, meta.len()))
+    }
 }
 
 fn cache_key() -> Option<[u8; 32]> {

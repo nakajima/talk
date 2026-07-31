@@ -1185,8 +1185,9 @@ impl Machine<'_> {
                 }
                 Value::Object(handle) => {
                     for member in self.objects.region_live_members(handle) {
-                        if objects.insert(member) {
-                            let record = &self.objects.records[member as usize];
+                        if objects.insert(member)
+                            && let Some(record) = self.objects.records.get(&member)
+                        {
                             stack.extend(record.fields.iter().cloned());
                             if let Some(finalizer) = &record.finalizer {
                                 stack.push(finalizer.clone());

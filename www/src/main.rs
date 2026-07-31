@@ -35,8 +35,8 @@ fn main() {
     );
 
     let content = [
-        std::fs::read_to_string("./content/intro.md").unwrap(),
         std::fs::read_to_string("./content/index.md").unwrap(),
+        std::fs::read_to_string("./content/intro.md").unwrap(),
     ]
     .join("\n\n");
     let arena = Arena::new();

@@ -1,12 +1,13 @@
-import init, {
-  Repl,
+const wasmCacheKey = new URL(import.meta.url).search;
+const {
+  default: init,
   highlight,
   format,
   run_program,
-  version as wasmVersion,
+  version: wasmVersion,
   show_ir,
   check,
-} from "/pkg/talk_wasm.js?123";
+} = await import(`/pkg/talk_wasm.js${wasmCacheKey}`);
 
 function getTooltipContent(tokenEl) {
   return `Token: ${tokenEl.textContent || ""}`;
@@ -372,10 +373,11 @@ function renderDiagnostics(container, highlightEl, diagnosticsLayer, checkResult
 }
 
 export async function loadTalk() {
-  await init();
+  await init({
+    module_or_path: `/pkg/talk_wasm_bg.wasm${wasmCacheKey}`,
+  });
 
   return {
-    newRepl: () => new Repl(),
     runProgram: (source) => run_program(source),
     highlight: (source) => highlight(source),
     format: (source) => format(source),

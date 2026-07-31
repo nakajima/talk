@@ -83,9 +83,15 @@ pub fn stdlib_sources() -> Vec<(&'static str, &'static str)> {
 }
 
 pub fn module_name_for_path(path: &Path) -> Option<&'static str> {
-    let source_path = path.canonicalize().ok()?;
-    let stdlib_dir = active_stdlib_dir().canonicalize().ok()?;
-    let relative = source_path.strip_prefix(stdlib_dir).ok()?;
+    #[cfg(target_family = "wasm")]
+    let relative = path.strip_prefix("stdlib").ok()?;
+
+    #[cfg(not(target_family = "wasm"))]
+    let relative = {
+        let source_path = path.canonicalize().ok()?;
+        let stdlib_dir = active_stdlib_dir().canonicalize().ok()?;
+        source_path.strip_prefix(stdlib_dir).ok()?.to_path_buf()
+    };
 
     for (name, source, _) in STDLIB_MODULES {
         if relative == Path::new(source) {
@@ -223,7 +229,9 @@ fn compile_all() -> Vec<CompiledStdlib> {
     }
     let compiled: Vec<CompiledStdlib> = compilation_sources()
         .into_iter()
-        .filter(|(name, _)| *name != "syntax")
+        .filter(|(name, _)| {
+            *name != "syntax" && !(cfg!(target_family = "wasm") && *name == "testing")
+        })
         .map(|(name, sources)| {
             let index = STDLIB_MODULES
                 .iter()
@@ -412,6 +420,7 @@ fn compile_module(name: &'static str, sources: Vec<Source>, module_id: ModuleId)
     (name, Arc::new(typed.module(name)), Arc::new(program))
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn active_stdlib_dir() -> PathBuf {
     path_override().unwrap_or_else(bundled_compilation_dir)
 }
@@ -478,21 +487,29 @@ fn compilation_sources() -> Vec<(&'static str, Vec<Source>)> {
 }
 
 fn bundled_compilation_dir() -> PathBuf {
-    let source_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib");
-    if source_dir.is_dir() {
-        return source_dir;
+    #[cfg(target_family = "wasm")]
+    {
+        PathBuf::from("stdlib")
     }
 
-    let dir = std::env::temp_dir().join("talk-stdlib");
-    let _ = std::fs::create_dir_all(&dir);
-    for (name, content) in STDLIB_FILES {
-        let path = dir.join(name);
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let source_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("stdlib");
+        if source_dir.is_dir() {
+            return source_dir;
         }
-        let _ = std::fs::write(path, content);
+
+        let dir = std::env::temp_dir().join("talk-stdlib");
+        let _ = std::fs::create_dir_all(&dir);
+        for (name, content) in STDLIB_FILES {
+            let path = dir.join(name);
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(path, content);
+        }
+        dir
     }
-    dir
 }
 
 fn compile_driver(name: &'static str, sources: Vec<Source>, module_id: ModuleId) -> Driver<Typed> {
