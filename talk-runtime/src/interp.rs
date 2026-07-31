@@ -1185,8 +1185,9 @@ impl Machine<'_> {
                 }
                 Value::Object(handle) => {
                     for member in self.objects.region_live_members(handle) {
-                        if objects.insert(member) {
-                            let record = &self.objects.records[member as usize];
+                        if objects.insert(member)
+                            && let Some(record) = self.objects.records.get(&member)
+                        {
                             stack.extend(record.fields.iter().cloned());
                             if let Some(finalizer) = &record.finalizer {
                                 stack.push(finalizer.clone());
@@ -1895,7 +1896,11 @@ fn exec_local(
                 return Err("vm: alloc of a negative count".into());
             }
             let count = usize::try_from(count).map_err(|_| "vm: alloc count out of range")?;
-            if machine.mem.len().saturating_add(count) > budgets.memory_bytes {
+            // Against the length the allocation would actually leave
+            // behind: reusing a freed span holds no more memory, and
+            // budgeting on `len + count` would fail an allocate/free
+            // loop that never grows.
+            if machine.allocations.projected_len(machine.mem.len(), count) > budgets.memory_bytes {
                 return Err("vm: memory budget exhausted".into());
             }
             let pointer = machine
@@ -1943,7 +1948,7 @@ fn exec_local(
             args_len,
         } => {
             let fields = arg_values(module, frame, args_start, args_len)?;
-            let object = machine.objects.allocate(fields);
+            let object = machine.objects.allocate(fields).map_err(vm_object_error)?;
             frame.regs[dest as usize] = Value::Object(object);
         }
         Insn::SetFinalizer { obj, closure } => {

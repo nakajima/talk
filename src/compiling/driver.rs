@@ -793,6 +793,20 @@ impl Driver<Typed> {
         .map_err(|error| self.locate_backend_error(&error))
     }
 
+    /// Emit C source for the program (`talk c`). Same inputs as
+    /// `compile_executable`; the accepted subset is a spike's, so most
+    /// programs are rejected rather than translated.
+    pub fn render_c(&self, entry: Option<&str>) -> Result<String, String> {
+        let entry = match entry {
+            Some(name) => crate::backend::Entry::Named(name),
+            None => crate::backend::Entry::Script,
+        };
+        self.with_backend_inputs(entry, |programs, entry| {
+            crate::backend::render_c(programs, entry)
+        })
+        .map_err(|error| self.locate_backend_error(&error))
+    }
+
     /// Assemble the reachable source graph (this program, core, imported
     /// stdlib modules, dependency libraries) and the module-alias map, and
     /// hand them to the backend.

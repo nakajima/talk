@@ -95,11 +95,29 @@ async fn main() {
         Build {
             #[arg(value_hint = ValueHint::FilePath)]
             filenames: Vec<String>,
-            /// Where to write the image.
+            /// Where to write the image, or the executable with --native.
             #[arg(short, long, value_name = "FILE")]
             output: String,
             #[arg(long, value_name = "NAME")]
             entry: Option<String>,
+            /// Compile ahead of time to a native executable through C
+            /// instead of writing a bytecode image.
+            #[arg(long)]
+            native: bool,
+            /// The C compiler to drive (default: $CC, else `cc`; with
+            /// --target, `zig cc`).
+            #[arg(long, value_name = "PROGRAM")]
+            cc: Option<String>,
+            /// Cross-compile for this target triple, which needs `zig`
+            /// on PATH (for example aarch64-linux-musl).
+            #[arg(long, value_name = "TRIPLE")]
+            target: Option<String>,
+            /// Extra arguments for the C compiler, after the defaults.
+            #[arg(long = "cflag", value_name = "FLAG")]
+            cflags: Vec<String>,
+            /// Keep the generated C beside the executable.
+            #[arg(long)]
+            keep_c: bool,
         },
         /// Regenerate a service artifact and its manifest from a source
         /// directory, requiring the stage-1/stage-2 fixed point (ADR
@@ -133,6 +151,13 @@ async fn main() {
         },
         /// Render the bytecode compiled from the input.
         Bytecode {
+            #[arg(value_hint = ValueHint::FilePath)]
+            filenames: Vec<String>,
+            #[arg(long, value_name = "NAME")]
+            entry: Option<String>,
+        },
+        /// Emit C source for the input (the ahead-of-time target).
+        C {
             #[arg(value_hint = ValueHint::FilePath)]
             filenames: Vec<String>,
             #[arg(long, value_name = "NAME")]
@@ -640,7 +665,46 @@ async fn main() {
             filenames,
             output,
             entry,
+            native,
+            cc,
+            target,
+            cflags,
+            keep_c,
         } => {
+            // These only mean anything to the ahead-of-time path; taking
+            // them and quietly writing a bytecode image instead would be
+            // a silent no-op.
+            if !*native && target.is_none() {
+                let ignored = [
+                    ("--cc", cc.is_some()),
+                    ("--cflag", !cflags.is_empty()),
+                    ("--keep-c", *keep_c),
+                ];
+                let given: Vec<&str> = ignored
+                    .iter()
+                    .filter(|(_, present)| *present)
+                    .map(|(flag, _)| *flag)
+                    .collect();
+                if !given.is_empty() {
+                    eprintln!(
+                        "error: {} only applies with --native or --target",
+                        given.join(", ")
+                    );
+                    std::process::exit(1);
+                }
+            }
+            if *native || target.is_some() {
+                build_native(
+                    filenames,
+                    output,
+                    entry.as_deref(),
+                    cc.as_deref(),
+                    target.as_deref(),
+                    cflags,
+                    *keep_c,
+                );
+                return;
+            }
             let executable = compile_or_exit(filenames, entry.as_deref());
             let bytes = match executable.encode_bytecode() {
                 Ok(bytes) => bytes,
@@ -798,6 +862,16 @@ async fn main() {
         Commands::Bytecode { filenames, entry } => {
             let executable = compile_or_exit(filenames, entry.as_deref());
             print!("{}", executable.render_bytecode());
+        }
+        Commands::C { filenames, entry } => {
+            let typed = check_or_exit(filenames);
+            match typed.render_c(entry.as_deref()) {
+                Ok(rendered) => print!("{rendered}"),
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    std::process::exit(1);
+                }
+            }
         }
         Commands::Mir { filenames, entry } => {
             let typed = check_or_exit(filenames);
@@ -1146,6 +1220,181 @@ fn check_or_exit(
         std::process::exit(1);
     }
     typed
+}
+
+/// Create the scratch translation unit, refusing to write through an
+/// existing file. `create_new` makes the create-and-open one step, so a
+/// name that lost a race -- or was pre-created as a symlink pointing
+/// somewhere else -- is an error rather than a file this process
+/// truncates. On unix it is created readable only by its owner.
+#[cfg(feature = "cli")]
+fn scratch_source(source: &str) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write as _;
+
+    let directory = std::env::temp_dir();
+    let mut last = None;
+    for attempt in 0..32u32 {
+        let unique = format!(
+            "talk-{}-{}-{attempt}.c",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_nanos())
+                .unwrap_or_default()
+        );
+        let path = directory.join(unique);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            options.mode(0o600);
+        }
+        match options.open(&path) {
+            Ok(mut file) => {
+                file.write_all(source.as_bytes())?;
+                return Ok(path);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => last = Some(err),
+            Err(err) => return Err(err),
+        }
+    }
+    Err(last.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            "could not find an unused scratch name",
+        )
+    }))
+}
+
+/// Which C compiler to drive.
+///
+/// The default is the host's, because the generated translation unit is
+/// ordinary self-contained C and whatever the machine already has will
+/// build it. Cross-compiling is the case that needs more than a compiler
+/// -- headers and a libc for the target too -- so it goes through `zig
+/// cc`, which carries its own.
+#[cfg(feature = "cli")]
+enum Toolchain {
+    Host(String),
+    Zig(String),
+}
+
+#[cfg(feature = "cli")]
+impl Toolchain {
+    fn command(&self) -> (&str, Vec<String>) {
+        match self {
+            Toolchain::Host(program) => (program, vec![]),
+            Toolchain::Zig(triple) => ("zig", vec!["cc".into(), "-target".into(), triple.clone()]),
+        }
+    }
+}
+
+#[cfg(feature = "cli")]
+fn toolchain(compiler: Option<&str>, target: Option<&str>) -> Result<Toolchain, String> {
+    let Some(triple) = target else {
+        return Ok(Toolchain::Host(
+            compiler
+                .map(str::to_string)
+                .or_else(|| std::env::var("CC").ok())
+                .unwrap_or_else(|| "cc".to_string()),
+        ));
+    };
+    // An explicit --cc wins: someone who has a cross toolchain of their
+    // own should not be made to install another one.
+    if let Some(compiler) = compiler {
+        return Ok(Toolchain::Host(compiler.to_string()));
+    }
+    let available = std::process::Command::new("zig")
+        .arg("version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if !available {
+        return Err(format!(
+            "error: cross-compiling to `{triple}` needs `zig` on PATH\n\
+             note: zig cc carries headers and a libc for every target, which a\n\
+             \x20     bare cross compiler does not\n\
+             note: install it from https://ziglang.org/download/ (or your package\n\
+             \x20     manager), or pass --cc with a cross compiler you already have"
+        ));
+    }
+    Ok(Toolchain::Zig(triple.to_string()))
+}
+
+/// Compile ahead of time to a native executable: emit C, then drive a C
+/// compiler over it. The generated translation unit is self-contained, so
+/// there is nothing to link against and no build system involved.
+#[cfg(feature = "cli")]
+fn build_native(
+    filenames: &[String],
+    output: &str,
+    entry: Option<&str>,
+    compiler: Option<&str>,
+    target: Option<&str>,
+    extra_flags: &[String],
+    keep_c: bool,
+) {
+    let toolchain = match toolchain(compiler, target) {
+        Ok(toolchain) => toolchain,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(1);
+        }
+    };
+    let source = match check_or_exit(filenames).render_c(entry) {
+        Ok(source) => source,
+        Err(message) => {
+            eprintln!("error: {message}");
+            std::process::exit(1);
+        }
+    };
+
+    // A uniquely named scratch file, never `<output>.c`: building `foo`
+    // must not truncate a `foo.c` that the user owns. `--keep-c` is the
+    // one case that writes beside the output, because it was asked for.
+    let c_path = if keep_c {
+        std::path::Path::new(output).with_extension("c")
+    } else {
+        match scratch_source(&source) {
+            Ok(path) => path,
+            Err(err) => {
+                eprintln!("error: failed to write the generated C: {err}");
+                std::process::exit(1);
+            }
+        }
+    };
+    if keep_c && let Err(err) = std::fs::write(&c_path, &source) {
+        eprintln!("error: failed to write {}: {err}", c_path.display());
+        std::process::exit(1);
+    }
+
+    let (program, leading) = toolchain.command();
+    let mut command = std::process::Command::new(program);
+    command
+        .args(leading)
+        .args(["-O2", "-std=c11"])
+        .arg(&c_path)
+        .arg("-o")
+        .arg(output)
+        .args(extra_flags);
+    let status = match command.status() {
+        Ok(status) => status,
+        Err(err) => {
+            eprintln!("error: failed to run `{program}`: {err}");
+            eprintln!("note: the generated C is at {}", c_path.display());
+            std::process::exit(1);
+        }
+    };
+    if !status.success() {
+        eprintln!("error: `{program}` failed to compile the generated C");
+        eprintln!("note: the generated C is at {}", c_path.display());
+        std::process::exit(1);
+    }
+    if !keep_c {
+        let _ = std::fs::remove_file(&c_path);
+    }
 }
 
 #[cfg(feature = "cli")]
