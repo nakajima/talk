@@ -31,7 +31,7 @@ pub struct String {
 
 	// The bytes are copied into a fresh buffer, so byte-level string
 	// building needs no raw allocation at the call site (ADR 0043
-	// stage 0: the frontend source set may not use `@_ir`).
+	// stage 0: the frontend source set may not use `#_ir`).
 	pub static func from_bytes(bytes: &[Byte]) -> String {
 		let count: Int = bytes.count
 		let base: RawPtr = _alloc<Byte>(count: count)
@@ -170,7 +170,7 @@ extend Substring {
 		loop i < self.byte_count {
 			let lhs_byte: Byte = self.storage.get(self.start + i)
 			let rhs_byte: Byte = rhs.storage.get(i)
-			let same: Bool = @_ir(lhs_byte, rhs_byte) { %? = cmp Byte $0 == $1 }
+			let same: Bool = #_ir(lhs_byte, rhs_byte) { %? = cmp Byte $0 == $1 }
 			if same == false { return false }
 			i = i + 1
 		}
@@ -251,7 +251,7 @@ extend String: Equatable<String> {
 		loop i < self.byte_count {
 			let lhs_byte: Byte = self.storage.get(i)
 			let rhs_byte: Byte = rhs.storage.get(i)
-			let same: Bool = @_ir(lhs_byte, rhs_byte) { %? = cmp Byte $0 == $1 }
+			let same: Bool = #_ir(lhs_byte, rhs_byte) { %? = cmp Byte $0 == $1 }
 			if same == false { return false }
 			i = i + 1
 		}

@@ -1,0 +1,104 @@
+// Runtime support for the stdlib HTML syntax macro.
+
+pub struct Markup {
+	let value: String
+
+	pub init(value: String) {
+		self.value = value
+	}
+
+	pub func into_string() -> String {
+		self.value.to_string()
+	}
+}
+
+extend Markup: Showable {
+	pub func show() -> String {
+		self.value.to_string()
+	}
+}
+
+pub struct PreEscaped {
+	let value: String
+
+	pub init(value: String) {
+		self.value = value
+	}
+}
+
+extend PreEscaped: Showable {
+	pub func show() -> String {
+		self.value.to_string()
+	}
+}
+
+pub let DOCTYPE = PreEscaped(value: "<!DOCTYPE html>")
+
+func escape_html(value: String) -> String {
+	let escaped = ""
+	for character in value {
+		escaped = escaped + match character {
+		'&' -> "&amp;",
+		'<' -> "&lt;",
+		'>' -> "&gt;",
+		'"' -> "&quot;",
+		'\'' -> "&#39;",
+		_ -> character.to_string()
+		}
+	}
+	escaped
+}
+
+pub protocol RenderHtml where Self: Showable {
+	func render_html() -> String {
+		escape_html(value: self.show())
+	}
+}
+
+extend String: RenderHtml {}
+extend Int: RenderHtml {}
+extend Float: RenderHtml {}
+extend Bool: RenderHtml {}
+extend Character: RenderHtml {}
+
+extend Markup: RenderHtml {
+	pub func render_html() -> String {
+		self.value.to_string()
+	}
+}
+
+extend PreEscaped: RenderHtml {
+	pub func render_html() -> String {
+		self.value.to_string()
+	}
+}
+
+pub func render_html<Value: RenderHtml>(value: Value) -> String {
+	value.render_html()
+}
+
+pub func append_html_class(classes: String, value: String) -> String {
+	if classes.byte_count == 0 { return value }
+	if value.byte_count == 0 { return classes }
+	classes + " " + value
+}
+
+pub func render_class_attribute(value: String) -> String {
+	if value.byte_count == 0 { "" } else { " class=\"" + value + "\"" }
+}
+
+pub func render_optional_html_attribute<Value: RenderHtml>(name: String, consume value: Value?) -> String {
+	match value {
+		.some(found) -> " " + name + "=\"" + render_html(value: found) + "\"",
+		.none -> ""
+	}
+}
+
+pub func render_html_loop<Values: Iterable>(values: Values, consume body: (Values.Element) -> String) -> String {
+	let output = ""
+	for value in values {
+		output = output + body(value)
+	}
+	output
+}
+

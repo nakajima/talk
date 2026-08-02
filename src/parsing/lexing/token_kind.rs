@@ -133,7 +133,7 @@ impl TokenKind {
             TokenKind::IRRegister => "%<reg>",
             TokenKind::Any => "any",
             TokenKind::As => "as",
-            TokenKind::Attribute => "@<attr>",
+            TokenKind::Attribute => "@<macro>",
             TokenKind::Typealias => "typealias",
             TokenKind::LineComment => "// <comment>",
             TokenKind::If => "if",

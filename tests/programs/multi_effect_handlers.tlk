@@ -10,11 +10,11 @@ func work(n: Int) -> Int {
 }
 
 func attempt(n: Int) -> Int {
-	@handle 'quit { message in
+	#handle 'quit { message in
 		print(message)
 		0 - 1
 	}
-	@handle 'ask { 'continue 5 }
+	#handle 'ask { 'continue 5 }
 	work(n: n)
 }
 

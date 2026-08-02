@@ -28,7 +28,7 @@ struct Body @ struct:65535.24
 	start: Int
 	end: Int
 
-struct CallArg @ struct:65535.35
+struct CallArg @ struct:65535.36
 	label: String?
 	label_start: Int
 	label_end: Int
@@ -52,17 +52,17 @@ struct CaptureSpec @ struct:65535.17
 	start: Int
 	end: Int
 
-struct Comment @ struct:65535.51
+struct Comment @ struct:65535.52
 	start: Int
 	end: Int
 
-struct Decl @ struct:65535.45
+struct Decl @ struct:65535.46
 	kind: DeclKind
 	is_public: Bool
 	start: Int
 	end: Int
 
-enum DeclKind @ enum:65535.44
+enum DeclKind @ enum:65535.45
 	let_decl(Pattern, TypeAnnotation?, Expr?)
 	import_decl(Import)
 	func_decl(Func)
@@ -88,7 +88,7 @@ struct EffectSet @ struct:65535.4
 	name_ends: [Int]
 	open: Bool
 
-struct Expr @ struct:65535.34
+struct Expr @ struct:65535.35
 	kind: ExprKind
 	start: Int
 	end: Int
@@ -122,9 +122,10 @@ enum ExprKind @ enum:65535.30
 	call_effect(String, Int, Int, [GenericArg], [CallArg])
 	record_literal([RecordField], [Expr])
 	inline_ir([Expr], IRInstruction)
-	macro_call(String, Int, Int, [Expr])
+	macro_call(String, Int, Int, Int, Int, [MacroToken], [Expr])
+	syntax_quote(String, [MacroToken], [String])
 
-struct Fail @ struct:65535.65
+struct Fail @ struct:65535.69
 	code: String
 	message: String
 	start: Int
@@ -172,7 +173,7 @@ struct GenericDecl @ struct:65535.18
 	start: Int
 	end: Int
 
-struct IRInstruction @ struct:65535.32
+struct IRInstruction @ struct:65535.33
 	name: String
 	name_start: Int
 	name_end: Int
@@ -181,7 +182,7 @@ struct IRInstruction @ struct:65535.32
 	values: [IRValue]
 	op: TokenKind?
 
-enum IRValue @ enum:65535.31
+enum IRValue @ enum:65535.32
 	reg(Int)
 	int_value(Int)
 	float_value(String)
@@ -189,34 +190,41 @@ enum IRValue @ enum:65535.31
 	void_value
 	bind(Int)
 
-struct Import @ struct:65535.43
+struct Import @ struct:65535.44
 	symbols: ImportedSymbols
 	path: String
 	path_start: Int
 	path_end: Int
 	local: Bool
 
-struct ImportedSymbol @ struct:65535.41
+struct ImportedSymbol @ struct:65535.42
 	name: String
 	name_start: Int
 	name_end: Int
 	alias: String?
 
-enum ImportedSymbols @ enum:65535.42
+enum ImportedSymbols @ enum:65535.43
 	all
 	named([ImportedSymbol])
 
-enum Item @ enum:65535.48
+enum Item @ enum:65535.49
 	decl_item(Decl)
 	stmt_item(Stmt)
 	expr_item(Expr)
 	pattern_item(Pattern)
 	type_item(TypeAnnotation)
 
-struct MacroParam @ struct:65535.40
+struct MacroParam @ struct:65535.41
 	name: String
 	start: Int
 	end: Int
+
+struct MacroToken @ struct:65535.31
+	kind: TokenKind
+	span_start: Int
+	span_end: Int
+	lexeme_start: Int
+	lexeme_end: Int
 
 struct MatchArm @ struct:65535.28
 	pattern: Pattern
@@ -264,21 +272,21 @@ struct Parameter @ struct:65535.15
 	start: Int
 	end: Int
 
-struct ParseOutcome @ struct:65535.66
+struct ParseOutcome @ struct:65535.70
 	items: [Item]
 	failure: Fail?
 	diags: [Fail]
 	comments: [Comment]
 	metas: [NodeMeta]
 
-struct Pattern @ struct:65535.37
+struct Pattern @ struct:65535.38
 	kind: PatternKind
 	start: Int
 	end: Int
 	meta_start: Int
 	meta_end: Int
 
-enum PatternKind @ enum:65535.36
+enum PatternKind @ enum:65535.37
 	bind(String)
 	wildcard
 	literal_int(String)
@@ -298,7 +306,7 @@ enum ReceiverMode @ enum:65535.26
 	ref_receiver
 	consuming_receiver
 
-struct RecordField @ struct:65535.33
+struct RecordField @ struct:65535.34
 	label: String
 	label_start: Int
 	label_end: Int
@@ -306,12 +314,12 @@ struct RecordField @ struct:65535.33
 	start: Int
 	end: Int
 
-struct RecordFieldPattern @ struct:65535.39
+struct RecordFieldPattern @ struct:65535.40
 	kind: RecordFieldPatternKind
 	start: Int
 	end: Int
 
-enum RecordFieldPatternKind @ enum:65535.38
+enum RecordFieldPatternKind @ enum:65535.39
 	bind_field(String)
 	equals_field(String, Int, Int, Pattern)
 	rest_field
@@ -342,12 +350,12 @@ enum StaticOpKind @ enum:65535.6
 	sub
 	mul
 
-struct Stmt @ struct:65535.47
+struct Stmt @ struct:65535.48
 	kind: StmtKind
 	start: Int
 	end: Int
 
-enum StmtKind @ enum:65535.46
+enum StmtKind @ enum:65535.47
 	expr_stmt(Expr)
 	if_stmt(Expr, Block, Block?)
 	return_stmt(Expr?)
@@ -359,7 +367,7 @@ enum StmtKind @ enum:65535.46
 	resume_stmt(Expr?)
 	handle_stmt(String, Int, Int, Block)
 
-enum TokenKind @ enum:65535.49
+enum TokenKind @ enum:65535.50
 	identifier
 	int_number
 	float_number

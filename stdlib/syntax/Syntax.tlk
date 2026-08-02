@@ -1,0 +1,919 @@
+// Opaque, category-indexed syntax values for procedural macros.
+//
+// Syntax keeps token boundaries, source trivia, provenance, and hygiene
+// contexts. Quotation marks written identifiers with definition-site plus
+// fresh expansion scopes. Antiquotation (`$name`) embeds an existing syntax
+// value without changing its use-site context. Parsing validates categories
+// from canonical tokens; it never re-lexes rendered text.
+
+use package::Lexer::{
+	Token, TokenKind, TokenRange, TokenTree, MacroInput, group_contents,
+	capture_macro_input
+}
+use package::Parser::{
+	Fail, ParseOutcome,
+	parse_expr_tokens, parse_pattern_tokens, parse_type_tokens, parse_decl_tokens
+}
+use package::Ast::{ Expr, Pattern, TypeAnnotation, Decl }
+
+pub enum SyntaxOrigin {
+	case use_site
+	case definition_site
+}
+
+// Scope identities are allocated by the macro driver. The pair keeps scope
+// ordinals local to one deterministic compilation namespace.
+pub enum SyntaxScopeKind {
+	case lexical
+	case expansion
+	case module
+}
+
+pub struct SyntaxScope {
+	let kind: SyntaxScopeKind
+	let namespace: Int
+	let ordinal: Int
+
+	init(kind: SyntaxScopeKind, namespace: Int, ordinal: Int) {
+		self.kind = kind
+		self.namespace = namespace
+		self.ordinal = ordinal
+	}
+}
+
+extend SyntaxScope: Copy {}
+
+// A set of lexical scopes. Its representation is private so identifiers can
+// acquire context only through explicit syntax operations, never from text.
+pub struct SyntaxContext {
+	let scopes: [SyntaxScope]
+
+	init(scopes: [SyntaxScope]) {
+		self.scopes = scopes
+	}
+}
+
+pub struct QuoteContext {
+	let definition_site: SyntaxContext
+	let expansion_scope: SyntaxScope
+
+	init(definition_site: SyntaxContext, expansion_scope: SyntaxScope) {
+		self.definition_site = definition_site
+		self.expansion_scope = expansion_scope
+	}
+}
+
+pub func lexical_scope(file_id: Int, node_id: Int) -> SyntaxScope {
+	SyntaxScope(kind: .lexical, namespace: file_id, ordinal: node_id)
+}
+
+pub func expansion_scope(namespace: Int, ordinal: Int) -> SyntaxScope {
+	SyntaxScope(kind: .expansion, namespace: namespace, ordinal: ordinal)
+}
+
+pub func module_scope(module_id: Int) -> SyntaxScope {
+	SyntaxScope(kind: .module, namespace: module_id, ordinal: 0)
+}
+
+pub func empty_syntax_context() -> SyntaxContext {
+	SyntaxContext(scopes: [])
+}
+
+func same_scope_kind(a: SyntaxScopeKind, b: SyntaxScopeKind) -> Bool {
+	match a {
+		.lexical -> if let .lexical = b { true } else { false },
+		.expansion -> if let .expansion = b { true } else { false },
+		.module -> if let .module = b { true } else { false }
+	}
+}
+
+func same_scope(a: &SyntaxScope, b: &SyntaxScope) -> Bool {
+	same_scope_kind(a: a.kind, b: b.kind) && a.namespace == b.namespace && a.ordinal == b.ordinal
+}
+
+func contains_scope(context: &SyntaxContext, scope: &SyntaxScope) -> Bool {
+	for candidate in context.scopes {
+		if same_scope(a: candidate, b: scope) { return true }
+	}
+	false
+}
+
+pub func syntax_context_with_scope(context: SyntaxContext, scope: SyntaxScope) -> SyntaxContext {
+	if contains_scope(context: context, scope: scope) { return context }
+	let scopes = context.scopes
+	scopes.push(scope)
+	SyntaxContext(scopes: scopes)
+}
+
+pub func same_syntax_context(a: &SyntaxContext, b: &SyntaxContext) -> Bool {
+	if a.scopes.count != b.scopes.count { return false }
+	for scope in a.scopes {
+		if contains_scope(context: b, scope: scope) == false { return false }
+	}
+	true
+}
+
+pub func quote_context(definition_site: SyntaxContext, expansion_scope: SyntaxScope) -> QuoteContext {
+	QuoteContext(definition_site: definition_site, expansion_scope: expansion_scope)
+}
+
+func introduced_context(context: &QuoteContext) -> SyntaxContext {
+	syntax_context_with_scope(context: context.definition_site, scope: context.expansion_scope)
+}
+
+enum SyntaxCategory {
+	case expr
+	case pattern
+	case type_annotation
+	case decl
+}
+
+struct SyntaxToken {
+	let kind: TokenKind
+	let leading: String
+	let spelling: String
+	let lexeme_start: Int
+	let lexeme_end: Int
+	let source_id: Int
+	let source_span: Range<Int>
+	let context: SyntaxContext
+	let origin: SyntaxOrigin
+}
+
+enum SyntaxPiece {
+	case token(SyntaxToken)
+	// The leading trivia belonged to the antiquotation token. RawSyntax is
+	// array-indirected because syntax pieces are recursively nestable values.
+	case splice(String, [RawSyntax])
+}
+
+struct RawSyntax {
+	let category: SyntaxCategory
+	let pieces: [SyntaxPiece]
+	let trailing: String
+	// Expression splices are parenthesized by default to preserve their
+	// precedence. A macro can disable that only for syntax used in a
+	// non-expression grammar role, such as a loop binding; the completed
+	// quotation is still category-checked before it can escape.
+	let group_when_spliced: Bool
+}
+
+// Category is phantom by design. The only constructors in this module first
+// validate RawSyntax with the category's canonical parser entry point.
+pub struct Syntax<Category> {
+	let raw: RawSyntax
+
+	init(raw: RawSyntax) {
+		self.raw = raw
+	}
+}
+
+pub struct SyntaxSplice<Category> {
+	let name: String
+	let syntax: Syntax<Category>
+
+	init(name: String, syntax: Syntax<Category>) {
+		self.name = name
+		self.syntax = syntax
+	}
+}
+
+pub struct SyntaxFailure {
+	pub let code: String
+	pub let message: String
+	pub let span: Range<Int>
+}
+
+pub struct SyntaxResult<Category> {
+	pub let value: Syntax<Category>?
+	pub let failure: SyntaxFailure?
+
+	pub consuming func into_value() -> Syntax<Category>? {
+		self.value
+	}
+}
+
+pub struct SyntaxIdentifier {
+	pub let text: String
+	pub let context: SyntaxContext
+	pub let origin: SyntaxOrigin
+	pub let source_id: Int
+	pub let source_span: Range<Int>
+}
+
+// One identifier in the virtual source parsed for expansion. `span` and
+// `lexeme` index that virtual source; source_* point back to the token from
+// which the syntax object was captured or quoted.
+pub struct MaterializedIdentifier {
+	pub let text: String
+	pub let span: Range<Int>
+	pub let lexeme: Range<Int>
+	pub let context: SyntaxContext
+	pub let origin: SyntaxOrigin
+	pub let source_id: Int
+	pub let source_span: Range<Int>
+	pub let source_lexeme: Range<Int>
+}
+
+// A category-checked AST materialization. Parenthesized grouping is inserted
+// around expression, pattern, and type splices before parsing so a splice is
+// one syntax node rather than textual precedence-sensitive substitution.
+pub struct MaterializedSyntax<Category> {
+	pub let source: String
+	pub let input: TokenRange
+	pub let outcome: ParseOutcome
+	pub let identifiers: [MaterializedIdentifier]
+}
+
+pub struct MaterializedResult<Category> {
+	pub let value: MaterializedSyntax<Category>?
+	pub let failure: SyntaxFailure?
+
+	pub consuming func into_value() -> MaterializedSyntax<Category>? {
+		self.value
+	}
+}
+
+// ABI-facing hygiene records keep generic Range fields flattened. Macro
+// services return this envelope beside their category-specific parse result.
+pub struct SyntaxScopeRecord {
+	pub let kind: SyntaxScopeKind
+	pub let namespace: Int
+	pub let ordinal: Int
+}
+
+pub struct SyntaxIdentifierRecord {
+	pub let text: String
+	pub let span_start: Int
+	pub let span_end: Int
+	pub let lexeme_start: Int
+	pub let lexeme_end: Int
+	pub let scopes: [SyntaxScopeRecord]
+	pub let origin: SyntaxOrigin
+	pub let source_id: Int
+	pub let source_span_start: Int
+	pub let source_span_end: Int
+	pub let source_lexeme_start: Int
+	pub let source_lexeme_end: Int
+}
+
+pub struct SyntaxMetadataOutput {
+	pub let identifiers: [SyntaxIdentifierRecord]
+}
+
+// The service boundary for expression procedural macros. A successful value
+// carries the already-parsed canonical outcome; Rust adapts it directly and
+// does not parse or lex the materialized source again.
+pub struct ExprMacroOutput {
+	pub let source: String
+	pub let outcome: ParseOutcome?
+	pub let metadata: SyntaxMetadataOutput
+	pub let failure_code: String?
+	pub let failure_message: String?
+	pub let failure_start: Int
+	pub let failure_end: Int
+}
+
+struct RawSplice {
+	let name: String
+	let raw: RawSyntax
+}
+
+struct RawQuoteResult {
+	let raw: RawSyntax?
+	let failure: SyntaxFailure?
+}
+
+struct MaterializedTokens {
+	let source: String
+	let input: TokenRange
+	let identifiers: [MaterializedIdentifier]
+}
+
+struct SyntaxBuilder {
+	let source: String
+	let tokens: [Token]
+	let identifiers: [MaterializedIdentifier]
+}
+
+func source_slice(view: UTF8View, range: Range<Int>) -> String {
+	view.slice(start: range.lower, byte_count: range.upper - range.lower).to_string()
+}
+
+func syntax_token(source_id: Int, source: String, token: Token, leading_start: Int, context: SyntaxContext, origin: SyntaxOrigin) -> SyntaxToken {
+	let view = source.utf8()
+	SyntaxToken(
+		kind: token.kind,
+		leading: source_slice(view: view, range: leading_start..<token.span.lower),
+		spelling: source_slice(view: view, range: token.span),
+		lexeme_start: token.lexeme.lower - token.span.lower,
+		lexeme_end: token.lexeme.upper - token.span.lower,
+		source_id: source_id,
+		source_span: token.span,
+		context: context,
+		origin: origin
+	)
+}
+
+pub func copy_syntax_context(context: &SyntaxContext) -> SyntaxContext {
+	let scopes: [SyntaxScope] = []
+	for scope in context.scopes { scopes.push(scope) }
+	SyntaxContext(scopes: scopes)
+}
+
+pub func copy_quote_context(context: &QuoteContext) -> QuoteContext {
+	QuoteContext(
+		definition_site: copy_syntax_context(context: context.definition_site),
+		expansion_scope: context.expansion_scope
+	)
+}
+
+func raw_from_range(source_id: Int, source: String, input: TokenRange, category: SyntaxCategory, context: &SyntaxContext, origin: SyntaxOrigin) -> RawSyntax {
+	let pieces: [SyntaxPiece] = []
+	let previous = input.span.lower
+	for token in input.tokens {
+		pieces.push(.token(syntax_token(source_id: source_id, source: source, token: token, leading_start: previous, context: copy_syntax_context(context: context), origin: origin)))
+		previous = token.span.upper
+	}
+	let trailing = source_slice(view: source.utf8(), range: previous..<input.span.upper)
+	RawSyntax(category: category, pieces: pieces, trailing: trailing, group_when_spliced: true)
+}
+
+func grouped_splice(category: SyntaxCategory) -> Bool {
+	match category {
+		.expr -> true,
+		.pattern -> true,
+		.type_annotation -> true,
+		.decl -> false
+	}
+}
+
+func append_delimiter(mut builder: SyntaxBuilder, kind: TokenKind, spelling: String) -> Void {
+	let start = builder.source.utf8().count()
+	builder.source = builder.source + spelling
+	let end = builder.source.utf8().count()
+	builder.tokens.push(Token(kind: kind, span: start..<end, lexeme: start..<end))
+}
+
+func append_raw(mut builder: SyntaxBuilder, raw: &RawSyntax, group_splices: Bool) -> Void {
+	for piece in raw.pieces {
+		match piece {
+			.token(token) -> {
+				builder.source = builder.source + token.leading
+				let start = builder.source.utf8().count()
+				builder.source = builder.source + token.spelling
+				let end = builder.source.utf8().count()
+				let lexeme = (start + token.lexeme_start)..<(start + token.lexeme_end)
+				builder.tokens.push(Token(kind: token.kind, span: start..<end, lexeme: lexeme))
+				if identifier_token(kind: token.kind) {
+					builder.identifiers.push(MaterializedIdentifier(
+						text: token_lexeme(token: token),
+						span: start..<end,
+						lexeme: lexeme,
+						context: token.context,
+						origin: token.origin,
+						source_id: token.source_id,
+						source_span: token.source_span,
+						source_lexeme: (token.source_span.lower + token.lexeme_start)..<(token.source_span.lower + token.lexeme_end)
+					))
+				}
+			},
+			.splice(leading, nested) -> {
+				builder.source = builder.source + leading
+				if nested.count == 1 {
+					let grouped = group_splices && grouped_splice(category: raw.category) && nested[0].group_when_spliced
+					if grouped { append_delimiter(builder: builder, kind: .left_paren, spelling: "(") }
+					append_raw(builder: builder, raw: nested[0], group_splices: group_splices)
+					if grouped { append_delimiter(builder: builder, kind: .right_paren, spelling: ")") }
+				}
+			}
+		}
+	}
+	builder.source = builder.source + raw.trailing
+}
+
+func materialize(raw: &RawSyntax, group_splices: Bool) -> MaterializedTokens {
+	let builder = SyntaxBuilder(source: "", tokens: [], identifiers: [])
+	append_raw(builder: builder, raw: raw, group_splices: group_splices)
+	let end = builder.source.utf8().count()
+	MaterializedTokens(source: builder.source, input: TokenRange(tokens: builder.tokens, span: 0..<end), identifiers: builder.identifiers)
+}
+
+func syntax_failure(failure: Fail, fallback: Range<Int>) -> SyntaxFailure {
+	let span = if failure.start >= 0 { failure.start..<failure.end } else { fallback.lower..<fallback.upper }
+	SyntaxFailure(code: failure.code, message: failure.message, span: span)
+}
+
+func parse_failure(outcome: ParseOutcome, fallback: Range<Int>) -> SyntaxFailure? {
+	if let .some(failure) = outcome.failure {
+		return .some(syntax_failure(failure: failure, fallback: fallback))
+	}
+	.none
+}
+
+func category_name(category: SyntaxCategory) -> String {
+	match category {
+		.expr -> "expression",
+		.pattern -> "pattern",
+		.type_annotation -> "type",
+		.decl -> "declaration"
+	}
+}
+
+func category_matches(a: SyntaxCategory, b: SyntaxCategory) -> Bool {
+	match a {
+		.expr -> if let .expr = b { true } else { false },
+		.pattern -> if let .pattern = b { true } else { false },
+		.type_annotation -> if let .type_annotation = b { true } else { false },
+		.decl -> if let .decl = b { true } else { false }
+	}
+}
+
+func raw_splice_at(name: String, splices: &[RawSplice]) -> Int {
+	let index = 0
+	loop index < splices.count {
+		if splices[index].name == name { return index }
+		index = index + 1
+	}
+	0 - 1
+}
+
+func quote_raw(input: MacroInput, splices: [RawSplice], context: &QuoteContext, category: SyntaxCategory) -> RawQuoteResult {
+	let source_id = input.source_id
+	let source = input.source
+	let range: TokenRange
+	match input.tree {
+		.group(group) -> range = group_contents(group: group),
+		.leaf(token) -> return RawQuoteResult(
+			raw: .none,
+			failure: .some(SyntaxFailure(code: "syntax.quote.expected-group", message: "Quotation requires a delimited token tree", span: token.span))
+		)
+	}
+
+	let duplicate = 0
+	loop duplicate < splices.count {
+		let other = duplicate + 1
+		loop other < splices.count {
+			if splices[duplicate].name == splices[other].name {
+				return RawQuoteResult(
+					raw: .none,
+					failure: .some(SyntaxFailure(code: "syntax.quote.duplicate-splice", message: "Duplicate splice `" + splices[duplicate].name + "`", span: range.span))
+				)
+			}
+			other = other + 1
+		}
+		duplicate = duplicate + 1
+	}
+
+	let uses: [Int] = []
+	for _ in splices { uses.push(0) }
+	let pieces: [SyntaxPiece] = []
+	let previous = range.span.lower
+	let quote_site = introduced_context(context: context)
+	for token in range.tokens {
+		let atom = syntax_token(source_id: source_id, source: source, token: token, leading_start: previous, context: quote_site, origin: .definition_site)
+		previous = token.span.upper
+		if token.kind == .bound_var {
+			let name = source_slice(view: source.utf8(), range: token.lexeme)
+			let found = raw_splice_at(name: name, splices: splices)
+			if found >= 0 {
+				if category_matches(a: category, b: splices[found].raw.category) == false {
+					return RawQuoteResult(
+						raw: .none,
+						failure: .some(SyntaxFailure(code: "syntax.quote.category-mismatch", message: "Splice `" + name + "` is not " + category_name(category: category) + " syntax", span: token.span))
+					)
+				}
+				uses[found] = uses[found] + 1
+				if uses[found] > 1 {
+					return RawQuoteResult(
+						raw: .none,
+						failure: .some(SyntaxFailure(code: "syntax.quote.repeated-splice", message: "Syntax splice `" + name + "` appears more than once", span: token.span))
+					)
+				}
+				pieces.push(.splice(atom.leading, [splices[found].raw]))
+				continue
+			}
+			// `$0` and friends remain ordinary closure shorthand. A named
+			// antiquotation must always have a supplied syntax value.
+			let first = name.utf8().at(index: 0)._toInt()
+			if first < 48 || first > 57 {
+				return RawQuoteResult(
+					raw: .none,
+					failure: .some(SyntaxFailure(code: "syntax.quote.unknown-splice", message: "Unknown syntax splice `" + name + "`", span: token.span))
+				)
+			}
+		}
+		pieces.push(.token(atom))
+	}
+
+	let index = 0
+	loop index < splices.count {
+		if uses[index] == 0 {
+			return RawQuoteResult(
+				raw: .none,
+				failure: .some(SyntaxFailure(code: "syntax.quote.unused-splice", message: "Syntax splice `" + splices[index].name + "` is not used by the quotation", span: range.span))
+			)
+		}
+		index = index + 1
+	}
+
+	let trailing = source_slice(view: source.utf8(), range: previous..<range.span.upper)
+	RawQuoteResult(raw: .some(RawSyntax(category: category, pieces: pieces, trailing: trailing, group_when_spliced: true)), failure: .none)
+}
+
+func raw_expr_splices(splices: [SyntaxSplice<Expr>]) -> [RawSplice] {
+	let raw: [RawSplice] = []
+	for item in splices { raw.push(RawSplice(name: item.name, raw: item.syntax.raw)) }
+	raw
+}
+
+func raw_pattern_splices(splices: [SyntaxSplice<Pattern>]) -> [RawSplice] {
+	let raw: [RawSplice] = []
+	for item in splices { raw.push(RawSplice(name: item.name, raw: item.syntax.raw)) }
+	raw
+}
+
+func raw_type_splices(splices: [SyntaxSplice<TypeAnnotation>]) -> [RawSplice] {
+	let raw: [RawSplice] = []
+	for item in splices { raw.push(RawSplice(name: item.name, raw: item.syntax.raw)) }
+	raw
+}
+
+func raw_decl_splices(splices: [SyntaxSplice<Decl>]) -> [RawSplice] {
+	let raw: [RawSplice] = []
+	for item in splices { raw.push(RawSplice(name: item.name, raw: item.syntax.raw)) }
+	raw
+}
+
+pub func splice<Category>(name: String, consume syntax: Syntax<Category>) -> SyntaxSplice<Category> {
+	SyntaxSplice<Category>(name: name, syntax: consume syntax)
+}
+
+func raw_expr_fragment(consume raw: RawSyntax) -> Syntax<Expr> {
+	Syntax<Expr>(raw: RawSyntax(
+		category: .expr,
+		pieces: raw.pieces,
+		trailing: raw.trailing,
+		group_when_spliced: false
+	))
+}
+
+pub func ungrouped_expr_splice(consume syntax: Syntax<Expr>) -> Syntax<Expr> {
+	raw_expr_fragment(raw: consume syntax.raw)
+}
+
+// These fragments are valid only inside an expression quotation at the
+// corresponding grammar position. The completed quotation is parsed before
+// it can escape, so a pattern or type can never materialize as a standalone
+// expression result.
+pub func pattern_expr_fragment(consume syntax: Syntax<Pattern>) -> Syntax<Expr> {
+	raw_expr_fragment(raw: consume syntax.raw)
+}
+
+pub func type_expr_fragment(consume syntax: Syntax<TypeAnnotation>) -> Syntax<Expr> {
+	raw_expr_fragment(raw: consume syntax.raw)
+}
+
+func generated_syntax_token(kind: TokenKind, spelling: String, leading: String, source_id: Int, source_span: Range<Int>, context: &QuoteContext) -> SyntaxToken {
+	SyntaxToken(
+		kind: kind,
+		leading: leading,
+		spelling: spelling,
+		lexeme_start: 0,
+		lexeme_end: spelling.utf8().count(),
+		source_id: source_id,
+		source_span: source_span,
+		context: introduced_context(context: context),
+		origin: .definition_site
+	)
+}
+
+func ungrouped_raw(consume raw: RawSyntax) -> RawSyntax {
+	RawSyntax(
+		category: raw.category,
+		pieces: raw.pieces,
+		trailing: raw.trailing,
+		group_when_spliced: false
+	)
+}
+
+// Build one match expression from heterogeneous, already-validated syntax
+// categories. This keeps all arms in one match so ordinary exhaustiveness and
+// ownership checking see the same structure the author wrote.
+pub func build_match_expr(consume subject: Syntax<Expr>, consume patterns: [Syntax<Pattern>], consume bodies: [Syntax<Expr>], source_id: Int, source_span: Range<Int>, context: &QuoteContext) -> SyntaxResult<Expr> {
+	if patterns.count == 0 || patterns.count != bodies.count {
+		return SyntaxResult<Expr>(value: .none, failure: .some(SyntaxFailure(code: "syntax.match.invalid-arms", message: "Match syntax requires equally many patterns and bodies", span: source_span)))
+	}
+	let ordered_patterns: [Syntax<Pattern>] = []
+	let ordered_bodies: [Syntax<Expr>] = []
+	loop patterns.count > 0 {
+		if let .some(pattern) = patterns.pop() { ordered_patterns.push(consume pattern) }
+		if let .some(body) = bodies.pop() { ordered_bodies.push(consume body) }
+	}
+	let pieces: [SyntaxPiece] = []
+	pieces.push(.token(generated_syntax_token(kind: .keyword_match, spelling: "match", leading: "", source_id: source_id, source_span: source_span, context: context)))
+	pieces.push(.splice(" ", [subject.raw]))
+	pieces.push(.token(generated_syntax_token(kind: .left_brace, spelling: "{", leading: " ", source_id: source_id, source_span: source_span, context: context)))
+	loop ordered_patterns.count > 0 {
+		let pattern = ordered_patterns.pop()
+		let body = ordered_bodies.pop()
+		if let .some(pattern_value) = pattern {
+			if let .some(body_value) = body {
+				pieces.push(.splice(" ", [ungrouped_raw(raw: consume pattern_value.raw)]))
+				pieces.push(.token(generated_syntax_token(kind: .arrow, spelling: "->", leading: " ", source_id: source_id, source_span: source_span, context: context)))
+				pieces.push(.splice(" ", [body_value.raw]))
+				if ordered_patterns.count > 0 {
+					pieces.push(.token(generated_syntax_token(kind: .comma, spelling: ",", leading: "", source_id: source_id, source_span: source_span, context: context)))
+				}
+			}
+		}
+	}
+	pieces.push(.token(generated_syntax_token(kind: .right_brace, spelling: "}", leading: " ", source_id: source_id, source_span: source_span, context: context)))
+	SyntaxResult<Expr>(value: .some(Syntax<Expr>(raw: RawSyntax(category: .expr, pieces: pieces, trailing: "", group_when_spliced: true))), failure: .none)
+}
+
+// Construct a category-checked string literal without routing generated text
+// through the lexer. This is intentionally a literal-only constructor: macro
+// authors still cannot manufacture identifiers or their syntax contexts from
+// strings. The generated token points back to the source syntax that caused
+// the literal so diagnostics retain useful provenance.
+pub func string_literal_expr(value: String, source_id: Int, source_span: Range<Int>, context: &QuoteContext) -> Syntax<Expr> {
+	let spelling = "\""
+	for character in value {
+		spelling = spelling + match character {
+			'\\' -> "\\\\",
+			'\"' -> "\\\"",
+			'\n' -> "\\n",
+			'\r' -> "\\r",
+			'\t' -> "\\t",
+			_ -> character.to_string()
+		}
+	}
+	spelling = spelling + "\""
+	let token = SyntaxToken(
+		kind: .string_literal,
+		leading: "",
+		spelling: spelling,
+		lexeme_start: 0,
+		lexeme_end: spelling.utf8().count(),
+		source_id: source_id,
+		source_span: source_span,
+		context: introduced_context(context: context),
+		origin: .definition_site
+	)
+	Syntax<Expr>(raw: RawSyntax(category: .expr, pieces: [.token(token)], trailing: "", group_when_spliced: true))
+}
+
+pub func capture_expr(source_id: Int, source: String, input: TokenRange, context: &SyntaxContext) -> SyntaxResult<Expr> {
+	let outcome = parse_expr_tokens(source: source, input: input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: input.span) {
+		return SyntaxResult<Expr>(value: .none, failure: .some(failure))
+	}
+	let raw = raw_from_range(source_id: source_id, source: source, input: input, category: .expr, context: context, origin: .use_site)
+	SyntaxResult<Expr>(value: .some(Syntax<Expr>(raw: raw)), failure: .none)
+}
+
+pub func capture_pattern(source_id: Int, source: String, input: TokenRange, context: &SyntaxContext) -> SyntaxResult<Pattern> {
+	let outcome = parse_pattern_tokens(source: source, input: input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: input.span) {
+		return SyntaxResult<Pattern>(value: .none, failure: .some(failure))
+	}
+	let raw = raw_from_range(source_id: source_id, source: source, input: input, category: .pattern, context: context, origin: .use_site)
+	SyntaxResult<Pattern>(value: .some(Syntax<Pattern>(raw: raw)), failure: .none)
+}
+
+pub func capture_type(source_id: Int, source: String, input: TokenRange, context: &SyntaxContext) -> SyntaxResult<TypeAnnotation> {
+	let outcome = parse_type_tokens(source: source, input: input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: input.span) {
+		return SyntaxResult<TypeAnnotation>(value: .none, failure: .some(failure))
+	}
+	let raw = raw_from_range(source_id: source_id, source: source, input: input, category: .type_annotation, context: context, origin: .use_site)
+	SyntaxResult<TypeAnnotation>(value: .some(Syntax<TypeAnnotation>(raw: raw)), failure: .none)
+}
+
+pub func capture_decl(source_id: Int, source: String, input: TokenRange, context: &SyntaxContext) -> SyntaxResult<Decl> {
+	let outcome = parse_decl_tokens(source: source, input: input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: input.span) {
+		return SyntaxResult<Decl>(value: .none, failure: .some(failure))
+	}
+	let raw = raw_from_range(source_id: source_id, source: source, input: input, category: .decl, context: context, origin: .use_site)
+	SyntaxResult<Decl>(value: .some(Syntax<Decl>(raw: raw)), failure: .none)
+}
+
+func quote_expr_result(result: RawQuoteResult) -> SyntaxResult<Expr> {
+	if let .some(failure) = result.failure { return SyntaxResult<Expr>(value: .none, failure: .some(failure)) }
+	if let .some(raw) = result.raw {
+		// Expression macros commonly compose many small quotations. Parsing
+		// every intermediate tree makes that composition quadratic. Keep the
+		// structural splice checks here and perform the category parse once in
+		// materialize_expr_syntax at the macro service boundary.
+		return SyntaxResult<Expr>(value: .some(Syntax<Expr>(raw: raw)), failure: .none)
+	}
+	SyntaxResult<Expr>(value: .none, failure: .some(SyntaxFailure(code: "syntax.quote.invalid", message: "Invalid expression quotation", span: 0..<0)))
+}
+
+pub func quote_expr(input: MacroInput, splices: [SyntaxSplice<Expr>], context: &QuoteContext) -> SyntaxResult<Expr> {
+	quote_expr_result(result: quote_raw(input: input, splices: raw_expr_splices(splices: splices), context: context, category: .expr))
+}
+
+// Lowering target for `quote { ... }`: canonical parser tokens are embedded in
+// the macro service image and decoded without scanning source text.
+pub func quote_expr_encoded(source_id: Int, source: String, encoded: String, splices: [SyntaxSplice<Expr>], context: &QuoteContext) -> SyntaxResult<Expr> {
+	if let .some(input) = capture_macro_input(source_id: source_id, source: source, encoded: encoded) {
+		return quote_expr(input: input, splices: splices, context: context)
+	}
+	SyntaxResult<Expr>(
+		value: .none,
+		failure: .some(SyntaxFailure(
+			code: "syntax.quote.invalid-tokens",
+			message: "Quotation token records are invalid",
+			span: 0..<0
+		))
+	)
+}
+
+pub func quote_pattern(input: MacroInput, splices: [SyntaxSplice<Pattern>], context: &QuoteContext) -> SyntaxResult<Pattern> {
+	let result = quote_raw(input: input, splices: raw_pattern_splices(splices: splices), context: context, category: .pattern)
+	if let .some(failure) = result.failure { return SyntaxResult<Pattern>(value: .none, failure: .some(failure)) }
+	if let .some(raw) = result.raw {
+		let materialized = materialize(raw: raw, group_splices: false)
+		if let .some(failure) = parse_failure(outcome: parse_pattern_tokens(source: materialized.source, input: materialized.input), fallback: materialized.input.span) {
+			return SyntaxResult<Pattern>(value: .none, failure: .some(failure))
+		}
+		return SyntaxResult<Pattern>(value: .some(Syntax<Pattern>(raw: raw)), failure: .none)
+	}
+	SyntaxResult<Pattern>(value: .none, failure: .some(SyntaxFailure(code: "syntax.quote.invalid", message: "Invalid pattern quotation", span: 0..<0)))
+}
+
+pub func quote_type(input: MacroInput, splices: [SyntaxSplice<TypeAnnotation>], context: &QuoteContext) -> SyntaxResult<TypeAnnotation> {
+	let result = quote_raw(input: input, splices: raw_type_splices(splices: splices), context: context, category: .type_annotation)
+	if let .some(failure) = result.failure { return SyntaxResult<TypeAnnotation>(value: .none, failure: .some(failure)) }
+	if let .some(raw) = result.raw {
+		let materialized = materialize(raw: raw, group_splices: false)
+		if let .some(failure) = parse_failure(outcome: parse_type_tokens(source: materialized.source, input: materialized.input), fallback: materialized.input.span) {
+			return SyntaxResult<TypeAnnotation>(value: .none, failure: .some(failure))
+		}
+		return SyntaxResult<TypeAnnotation>(value: .some(Syntax<TypeAnnotation>(raw: raw)), failure: .none)
+	}
+	SyntaxResult<TypeAnnotation>(value: .none, failure: .some(SyntaxFailure(code: "syntax.quote.invalid", message: "Invalid type quotation", span: 0..<0)))
+}
+
+pub func quote_decl(input: MacroInput, splices: [SyntaxSplice<Decl>], context: &QuoteContext) -> SyntaxResult<Decl> {
+	let result = quote_raw(input: input, splices: raw_decl_splices(splices: splices), context: context, category: .decl)
+	if let .some(failure) = result.failure { return SyntaxResult<Decl>(value: .none, failure: .some(failure)) }
+	if let .some(raw) = result.raw {
+		let materialized = materialize(raw: raw, group_splices: false)
+		if let .some(failure) = parse_failure(outcome: parse_decl_tokens(source: materialized.source, input: materialized.input), fallback: materialized.input.span) {
+			return SyntaxResult<Decl>(value: .none, failure: .some(failure))
+		}
+		return SyntaxResult<Decl>(value: .some(Syntax<Decl>(raw: raw)), failure: .none)
+	}
+	SyntaxResult<Decl>(value: .none, failure: .some(SyntaxFailure(code: "syntax.quote.invalid", message: "Invalid declaration quotation", span: 0..<0)))
+}
+
+pub func materialize_expr_syntax(syntax: &Syntax<Expr>) -> MaterializedResult<Expr> {
+	let materialized = materialize(raw: syntax.raw, group_splices: true)
+	let outcome = parse_expr_tokens(source: materialized.source, input: materialized.input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: materialized.input.span) {
+		return MaterializedResult<Expr>(value: .none, failure: .some(failure))
+	}
+	MaterializedResult<Expr>(
+		value: .some(MaterializedSyntax<Expr>(source: materialized.source, input: materialized.input, outcome: outcome, identifiers: materialized.identifiers)),
+		failure: .none
+	)
+}
+
+pub func materialize_pattern_syntax(syntax: &Syntax<Pattern>) -> MaterializedResult<Pattern> {
+	let materialized = materialize(raw: syntax.raw, group_splices: true)
+	let outcome = parse_pattern_tokens(source: materialized.source, input: materialized.input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: materialized.input.span) {
+		return MaterializedResult<Pattern>(value: .none, failure: .some(failure))
+	}
+	MaterializedResult<Pattern>(
+		value: .some(MaterializedSyntax<Pattern>(source: materialized.source, input: materialized.input, outcome: outcome, identifiers: materialized.identifiers)),
+		failure: .none
+	)
+}
+
+pub func materialize_type_syntax(syntax: &Syntax<TypeAnnotation>) -> MaterializedResult<TypeAnnotation> {
+	let materialized = materialize(raw: syntax.raw, group_splices: true)
+	let outcome = parse_type_tokens(source: materialized.source, input: materialized.input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: materialized.input.span) {
+		return MaterializedResult<TypeAnnotation>(value: .none, failure: .some(failure))
+	}
+	MaterializedResult<TypeAnnotation>(
+		value: .some(MaterializedSyntax<TypeAnnotation>(source: materialized.source, input: materialized.input, outcome: outcome, identifiers: materialized.identifiers)),
+		failure: .none
+	)
+}
+
+pub func materialize_decl_syntax(syntax: &Syntax<Decl>) -> MaterializedResult<Decl> {
+	let materialized = materialize(raw: syntax.raw, group_splices: true)
+	let outcome = parse_decl_tokens(source: materialized.source, input: materialized.input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: materialized.input.span) {
+		return MaterializedResult<Decl>(value: .none, failure: .some(failure))
+	}
+	MaterializedResult<Decl>(
+		value: .some(MaterializedSyntax<Decl>(source: materialized.source, input: materialized.input, outcome: outcome, identifiers: materialized.identifiers)),
+		failure: .none
+	)
+}
+
+func scope_records(context: &SyntaxContext) -> [SyntaxScopeRecord] {
+	let records: [SyntaxScopeRecord] = []
+	for scope in context.scopes {
+		records.push(SyntaxScopeRecord(kind: scope.kind, namespace: scope.namespace, ordinal: scope.ordinal))
+	}
+	records
+}
+
+pub func syntax_metadata_output<Category>(materialized: &MaterializedSyntax<Category>) -> SyntaxMetadataOutput {
+	let identifiers: [SyntaxIdentifierRecord] = []
+	for identifier in materialized.identifiers {
+		identifiers.push(SyntaxIdentifierRecord(
+			text: identifier.text,
+			span_start: identifier.span.lower,
+			span_end: identifier.span.upper,
+			lexeme_start: identifier.lexeme.lower,
+			lexeme_end: identifier.lexeme.upper,
+			scopes: scope_records(context: identifier.context),
+			origin: identifier.origin,
+			source_id: identifier.source_id,
+			source_span_start: identifier.source_span.lower,
+			source_span_end: identifier.source_span.upper,
+			source_lexeme_start: identifier.source_lexeme.lower,
+			source_lexeme_end: identifier.source_lexeme.upper
+		))
+	}
+	SyntaxMetadataOutput(identifiers: identifiers)
+}
+
+pub func expr_macro_failure(code: String, message: String, span: Range<Int>) -> ExprMacroOutput {
+	ExprMacroOutput(
+		source: "",
+		outcome: .none,
+		metadata: SyntaxMetadataOutput(identifiers: []),
+		failure_code: .some(code),
+		failure_message: .some(message),
+		failure_start: span.lower,
+		failure_end: span.upper
+	)
+}
+
+// Turn the macro author's category-checked result into the single flattened
+// service output consumed by the Rust expansion driver.
+pub func materialize_expr_macro_result(consume result: SyntaxResult<Expr>) -> ExprMacroOutput {
+	if let .some(failure) = result.failure {
+		return expr_macro_failure(code: failure.code, message: failure.message, span: failure.span)
+	}
+	if let .some(syntax) = result.value {
+		let materialized = materialize_expr_syntax(syntax: syntax)
+		if let .some(failure) = materialized.failure {
+			return expr_macro_failure(code: failure.code, message: failure.message, span: failure.span)
+		}
+		if let .some(value) = materialized.value {
+			let metadata = syntax_metadata_output(materialized: value)
+			return ExprMacroOutput(
+				source: value.source,
+				outcome: .some(value.outcome),
+				metadata: metadata,
+				failure_code: .none,
+				failure_message: .none,
+				failure_start: 0,
+				failure_end: 0
+			)
+		}
+	}
+	expr_macro_failure(code: "macro.empty-result", message: "Macro returned no expression syntax", span: 0..<0)
+}
+
+pub func syntax_text<Category>(syntax: &Syntax<Category>) -> String {
+	materialize(raw: syntax.raw, group_splices: false).source
+}
+
+func identifier_token(kind: TokenKind) -> Bool {
+	kind == .identifier || kind == .bound_var || kind == .attribute || kind == .effect_name || kind == .ir_register
+}
+
+func token_lexeme(token: &SyntaxToken) -> String {
+	token.spelling.utf8().slice(start: token.lexeme_start, byte_count: token.lexeme_end - token.lexeme_start).to_string()
+}
+
+func collect_identifiers(raw: &RawSyntax, mut identifiers: [SyntaxIdentifier]) -> Void {
+	for piece in raw.pieces {
+		match piece {
+			.token(token) -> {
+				if identifier_token(kind: token.kind) {
+					identifiers.push(SyntaxIdentifier(text: token_lexeme(token: token), context: token.context, origin: token.origin, source_id: token.source_id, source_span: token.source_span))
+				}
+			},
+			.splice(_, nested) -> if nested.count == 1 { collect_identifiers(raw: nested[0], identifiers: identifiers) }
+		}
+	}
+}
+
+pub func syntax_identifiers<Category>(syntax: &Syntax<Category>) -> [SyntaxIdentifier] {
+	let identifiers: [SyntaxIdentifier] = []
+	collect_identifiers(raw: syntax.raw, identifiers: identifiers)
+	identifiers
+}

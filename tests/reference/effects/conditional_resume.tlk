@@ -1,5 +1,5 @@
 effect 'check(n) -> Int
-@handle 'check { n in
+#handle 'check { n in
 	if n > 0 {
 		'continue n
 	}

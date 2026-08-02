@@ -127,6 +127,7 @@ parse_file
 parse_expr
 parse_pattern
 parse_type
+parse_decl
 parse_block_items
 ```
 
@@ -134,17 +135,16 @@ The concrete names may differ, but the capabilities are required. Parse
 operations accept an explicit mode for strict compilation versus lenient
 editor recovery and an explicit trivia/comment policy where relevant.
 
-Tokens and token trees are internal to the frontend and do not cross the
-ABI in production. The compiler consumes parse results, which already
-carry the comment tokens and node-meta token extents downstream passes
-need, so no token serialization format or token-kind numbering is shared
-across the boundary. A `lex` export exists as a validation and tooling
-surface: the differential harness compares it against the reference
-lexer during migration, and narrow editor queries (identifier
-validation, token scans) become purpose-built operations rather than a
-token-stream export. Token trees are the macro system's substrate inside
-the frontend; expansion runs where they live, so they never need a wire
-representation.
+Ordinary frontend consumers do not receive tokens or token trees. Parse results
+already carry the comments and node-meta extents downstream passes need, and a
+`lex` export exists only as a validation and narrow tooling surface. Procedural
+invocations are the deliberate exception: the parse AST carries flattened
+canonical token records for that invocation, and the host forwards their kind
+tags and ranges through the private macro-service ABI. The macro service is
+compiled from the same syntax source set and validates every record before
+rebuilding the `TokenTree`; token spelling is never interpreted and source text
+is not scanned again. This is an internal artifact contract, not a public token
+serialization API.
 
 Every result preserves the information currently required downstream:
 
@@ -157,7 +157,118 @@ Every result preserves the information currently required downstream:
 
 The future macro system calls these same category entry points when it treats a
 token range as embedded Talk. It does not contain another expression, pattern,
-or type parser.
+type, or declaration parser.
+
+The in-Talk macro-facing substrate is concrete: `Delimiter`, `TokenTree`, and
+`Group` are public frontend types; balanced capture returns a structured
+`TokenTreeError`; and `TokenRange` pairs canonical tokens with the source byte
+extent they own. Category entry points accept the original source plus a
+`TokenRange`, so parsing captured syntax neither reconstructs nor re-lexes source
+text. `MacroInput` carries a source identity and source text together with one
+delimited `TokenTree`; the tree's token `span` and `lexeme` ranges index the
+accompanying source.
+
+`stdlib/syntax/Syntax.tlk` owns the next layer. `Syntax<Category>` is opaque and
+uses the canonical AST category types as phantom indices, including
+`Syntax<Expr>`, `Syntax<Pattern>`, `Syntax<TypeAnnotation>`, and `Syntax<Decl>`.
+Capture validates a token range with the matching canonical parser. Quotation
+accepts a delimited `MacroInput`; named bound-variable tokens (`$name`) are
+antiquotation sites for same-category `SyntaxSplice` values. The internal syntax
+piece tree retains splice boundaries rather than flattening them into text.
+Quoted identifiers receive the definition-site scope set plus one fresh
+expansion scope, while syntax nested by a splice retains its use-site context
+and provenance. Scope allocation belongs to the macro driver.
+
+Category-specific `materialize_*_syntax` operations produce the AST handoff:
+a virtual source and canonical token range, the matching `ParseOutcome`, and an
+ordered identifier table carrying both virtual and originating ranges together
+with syntax context and provenance. Expression, pattern, and type splices gain
+synthetic grouping delimiters during this handoff, preserving each splice as
+one syntax node instead of allowing textual precedence to reinterpret it;
+declaration splices remain ungrouped. Materialization parses the supplied token
+range directly and never re-lexes. The raw syntax piece tree remains the
+source-faithful expansion representation, while `syntax_text` is only its
+ungrouped metadata/debugging view.
+
+On the Rust side, materialized identifiers enter the AST through
+`SyntaxMetadata`. `SyntaxMetadataOutput` is the flattened macro-service ABI
+record: each identifier carries its virtual token/lexeme bounds, originating
+source id and bounds, origin, and typed lexical/expansion scopes. The bridge
+validates that record against its generated schema before constructing Rust
+metadata. Applying the metadata rewrites unresolved `Name` values to carry their
+scope set before name resolution. The resolver stores bindings with
+an expansion scope in separate hygienic maps: ordinary caller references cannot
+see them, while an introduced reference with the same context can. If no such
+introduced binding exists, a contextual reference begins ordinary lookup at
+the deepest lexical scope named by its context. This gives quoted free names
+definition-site lookup and lets spliced use-site names bypass caller-local
+shadowing introduced by the expansion. Contexts without an expansion scope
+continue to declare ordinary bindings, which is how a caller-provided identifier
+may intentionally be spliced into binder position.
+
+The first procedural execution seam discovers `*.macro.tlk` recursively under
+the package workspace root, in sorted path order. These files are not
+runtime source units. Every public function in them defines an expression macro
+with this Talk-level contract:
+
+```tlk
+pub func name(
+    input: MacroInput,
+    use_site: SyntaxContext,
+    context: QuoteContext
+) -> SyntaxResult<Expr>
+```
+
+Invocation parsing accepts one arbitrary balanced parenthesized, bracketed, or
+braced token tree after `@name`; it does not parse the tree as Talk syntax.
+Legacy parenthesized declarative invocations additionally retain expression
+arguments when every top-level comma-separated segment parses as an expression.
+The parser records the invocation's canonical tokens alongside its source
+range. A generated wrapper decodes those validated records into the canonical
+tree without invoking the lexer, supplies an empty use-site context plus a
+fresh expansion scope, and materializes the returned expression. A local macro
+uses the invocation file's package-root lexical context; an imported macro uses
+the defining dependency module's context. Empty use-site contexts deliberately
+remain ordinary Rust AST names: they resolve at the expansion position but
+cannot see generated hygienic binders.
+
+Macro units also recognize expression quotation syntax directly:
+
+```tlk
+quote { helper(value: $value) }
+```
+
+The parser stores the quotation's original source, canonical group tokens, and
+named antiquotations. Before macro-service name resolution, lowering embeds the
+token records as constants and rewrites the quotation to the opaque
+`quote_expr` API. Consequently neither invocation capture nor quotation capture
+re-lexes text. Quoted identifiers receive the wrapper's definition and fresh
+expansion scopes; `$value` is moved as expression syntax and retains its
+use-site context.
+
+Macro units compile together with the syntax substrate as a separate service.
+Inline IR and `#unsafe` are rejected by an AST validation pass before service
+compilation. Exported wrapper effects are limited to `'alloc` and the reserved
+`'diagnostic` capability; `'panic` from syntax operations is handled inside the
+wrapper, and all other direct or indirect escaping effects fail service
+compilation. Each invocation runs with fixed instruction, frame, and memory
+budgets. The service returns `ExprMacroOutput`, containing the already-parsed
+`ParseOutcome` and flattened syntax metadata. Rust validates and adapts that
+nested outcome directly rather than lexing or parsing materialized text again.
+
+Compiled library modules carry a serialized macro-service image, its ABI
+schema, and a sorted map from public macro names to service wrappers. Dependency
+module loading validates that image and exposes its names through ordinary
+package imports. Named imports and aliases bind only the requested macros;
+import-all binds every public macro. Macro-only names are consumed by expansion
+and do not create fake runtime symbols. Conflicting imported macro names are
+diagnosed at invocation. Generated definition-site identifiers use the
+library's session module identity and resolve through its public runtime
+interface.
+
+This seam remains expression-only. Declaration/pattern/type invocation
+positions, source-map-backed expanded diagnostics, persistent expansion caches,
+and quotations for the other syntax categories remain follow-ups.
 
 ### 5. Talk declarations own the frontend data schema
 
@@ -202,7 +313,7 @@ surface provides source bytes, deterministic allocation, and structured
 frontend diagnostics. It has no filesystem, environment, network, process,
 clock, randomness, or application host access.
 
-Inline IR and `@unsafe` are not admitted in the frontend source set. Frontend
+Inline IR and `#unsafe` are not admitted in the frontend source set. Frontend
 execution has explicit instruction, recursion, and allocation budgets. Budget
 exhaustion is a structured compiler failure attributed to the parsing
 operation, not permission to invoke an ambient panic or IO capability.
@@ -234,8 +345,8 @@ depend on either system.
 
 ### Stage 0 - Close the core gaps the frontend subset requires
 
-ADR §7 bars `@unsafe` and inline IR from the frontend source set. Core
-currently builds every `String` through `_alloc`/`_copy` behind `@_ir`, so
+ADR §7 bars `#unsafe` and inline IR from the frontend source set. Core
+currently builds every `String` through `_alloc`/`_copy` behind `#_ir`, so
 that restriction leaves frontend code unable to construct a string from
 computed bytes at all, and able to concatenate only in O(n²). The following
 core and language work precedes the frontend port:
@@ -243,7 +354,7 @@ core and language work precedes the frontend port:
 1. A safe growable string builder in Core, plus a `[Byte] -> String`
    constructor. No frontend source may allocate raw buffers.
 2. `Int`-to-`Byte` conversion, so byte-level lexing does not route through
-   `_toInt()` or `@_ir { cmp Byte }`.
+   `_toInt()` or `#_ir { cmp Byte }`.
 3. `Substring: Equatable<Substring>`, so comparing two source slices does not
    allocate.
 4. `Array` stack operations (`pop`, `last`), required for delimiter-stack
@@ -253,7 +364,7 @@ These are language and Core deficiencies of exactly the kind this ADR's
 Consequences anticipate ("Parser development uses Talk's own type, effect,
 ownership, and module systems, exposing deficiencies that matter for
 self-hosting"). They are fixed in Core rather than worked around in the
-frontend, because a workaround would either re-admit `@unsafe` or bake
+frontend, because a workaround would either re-admit `#unsafe` or bake
 quadratic string building into the compiler's hot path.
 
 Match guards are a known ergonomic gap in the same area and are deliberately
@@ -363,7 +474,7 @@ The self-hosting project is complete when:
 6. every compiler and tooling consumer uses the frontend service;
 7. no production path contains or selects the old Rust lexer/parser;
 8. malformed or incompatible frontend artifacts and results fail closed;
-9. frontend execution has no inline IR, `@unsafe`, or ambient host capability;
+9. frontend execution has no inline IR, `#unsafe`, or ambient host capability;
 10. no frontend source constructs a `String` through raw allocation, and
     string building in the lexer and diagnostics path is linear;
 11. `cargo check --workspace --exclude www` and
@@ -532,9 +643,9 @@ slices, in landing order:
   collection; multi-clause `if` folding in both positions — the
   else-block duplication that motivated the deep-copy deferral turned
   out to need only a value copy, since the reference's
-  `freshened_block` renews node ids but never spans; `@handle`
+  `freshened_block` renews node ids but never spans; `#handle`
   effect handlers (`Stmt::Handling`, span starting after the `@`);
-  the full `@_ir` instruction set (disjoint dest/dest-less tables,
+  the full `#_ir` instruction set (disjoint dest/dest-less tables,
   every `ir_value` form including `void`; only binds render as dump
   children, and the node's span ends before the closing brace); and
   ADR 0035 `static N: Int` generic parameters with the
@@ -644,9 +755,9 @@ inline-array types (an implied `InlineArray` head, like `[T]` implies
 variant-takes-no-generics and bare-generic-head errors pinned — their
 `actual` fields turn out to be dead: `UnexpectedToken`'s Display names
 the token itself, so no Debug leak existed); the `unreachable` and
-`#macro(...)` expression prefixes; and `@"…"` quoted identifiers in
+`@macro(...)` expression prefixes; and `#"…"` quoted identifiers in
 the Talk lexer (an ordinary Identifier token whose full span includes
-the `@` and quotes while its lexeme excludes them, with the
+the `#` and quotes while its lexeme excludes them, with the
 empty/unterminated/backslash error positions pinned). With every reference prefix handler ported, the
 `talk-parser.unported` machinery itself is deleted — the prefix
 fallthrough now reports the reference's own expected-an-expression
@@ -707,7 +818,7 @@ token extents diverge from spans (`Func` declaration extents, the
 for-loop pattern replacement), the trailing-block / spread / receiver
 one-element-array conventions unwrapped back into options and boxes,
 positional call-arg labels reconstructed by ordinal, and the full
-`@_ir` instruction set rebuilt. The dump machinery gained a
+`#_ir` instruction set rebuilt. The dump machinery gained a
 `render_bridged` seam (tree, comments, and diagnostics sections over
 an already-built AST, byte-compatible with the parser's own path), and
 `bridged_results_render_identically_over_corpus` proves the whole

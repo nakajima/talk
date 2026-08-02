@@ -1,6 +1,6 @@
 effect 'oops(message) -> Never
 
-@handle 'oops { message in
+#handle 'oops { message in
 	print("handled: " + message)
 	0
 }

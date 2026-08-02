@@ -19,6 +19,7 @@ use crate::{
         module_path::LocalModulePaths,
     },
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
+    hygiene::SyntaxContext,
     label::Label,
     name::Name,
     name_resolution::{
@@ -134,12 +135,17 @@ pub struct Scope {
     pub parent_id: Option<NodeID>,
     pub values: FxHashMap<String, Symbol>,
     pub types: FxHashMap<String, Symbol>,
+    /// Introduced bindings are separate from ordinary lexical bindings.
+    /// Only an identifier carrying the exact expansion context can see them.
+    pub hygienic_values: FxHashMap<(String, SyntaxContext), Symbol>,
+    pub hygienic_types: FxHashMap<(String, SyntaxContext), Symbol>,
     pub handlers: FxHashMap<Symbol, (Symbol, NodeID)>,
     /// Named-callable overload sets by base name (ADR 0041). Every
     /// func-valued binder registers here; a set of two or more supersedes
     /// the single `types` entry (which keeps the last declaration for
     /// name-keyed consumers) and calls select among it by written labels.
     pub overloads: FxHashMap<String, Vec<Symbol>>,
+    pub hygienic_overloads: FxHashMap<(String, SyntaxContext), Vec<Symbol>>,
     pub depth: u32,
 }
 
@@ -151,8 +157,33 @@ impl Scope {
             depth,
             values: Default::default(),
             types: Default::default(),
+            hygienic_values: Default::default(),
+            hygienic_types: Default::default(),
             handlers: Default::default(),
             overloads: Default::default(),
+            hygienic_overloads: Default::default(),
+        }
+    }
+
+    fn type_binding(&self, name: &Name) -> Option<Symbol> {
+        match name.syntax_context() {
+            Some(context) if context.has_expansion_scope() => self
+                .hygienic_types
+                .get(&(name.name_str(), context.clone()))
+                .copied(),
+            _ => self.types.get(&name.name_str()).copied(),
+        }
+    }
+
+    fn insert_type(&mut self, name: &Name, symbol: Symbol) {
+        match name.syntax_context() {
+            Some(context) if context.has_expansion_scope() => {
+                self.hygienic_types
+                    .insert((name.name_str(), context.clone()), symbol);
+            }
+            _ => {
+                self.types.insert(name.name_str(), symbol);
+            }
         }
     }
 }
@@ -286,7 +317,7 @@ pub struct NameResolver {
     // A local `let`'s binders become visible *after* its initializer:
     // they are staged here on decl entry and inserted into the enclosing
     // scope on decl exit, so the rhs resolves against outer bindings.
-    pending_locals: Vec<Vec<(String, Symbol)>>,
+    pending_locals: Vec<Vec<(String, Option<SyntaxContext>, Symbol)>>,
     // Call callees already bound by overload selection (ADR 0041); the
     // generic variable pass must not re-resolve them by base name.
     overload_selected: FxHashSet<NodeID>,
@@ -298,6 +329,9 @@ pub struct NameResolver {
     // the collision authority for import-vs-import and
     // declaration-vs-import conflicts.
     explicit_imports: FxHashMap<(NodeID, String), Symbol>,
+    // Context survives after declaration names become `Resolved`, allowing
+    // callable registration and other side tables to stay hygienic.
+    hygienic_symbols: FxHashMap<Symbol, SyntaxContext>,
 
     // For figuring out child types
     pub(super) nominal_stack: Vec<(Symbol, NodeID)>,
@@ -328,6 +362,7 @@ impl NameResolver {
             overload_selected: Default::default(),
             predeclared: Default::default(),
             explicit_imports: Default::default(),
+            hygienic_symbols: Default::default(),
             nominal_stack: Default::default(),
             for_pattern_roots: Default::default(),
             modules,
@@ -540,6 +575,7 @@ impl NameResolver {
                 for (import, decl_id) in imports {
                     let mut imported_module = false;
                     let mut imported_file_id = None;
+                    let mut procedural_macro_exports = FxHashSet::default();
 
                     let mut harvested = Vec::new();
                     let target_symbols: Vec<(String, Vec<Symbol>, bool)> = match &import.path {
@@ -552,6 +588,10 @@ impl NameResolver {
                                 continue;
                             };
                             imported_module = true;
+                            if let Some(artifact) = &module.procedural_macros {
+                                procedural_macro_exports
+                                    .extend(artifact.exported_names().map(str::to_string));
+                            }
                             let symbols: Vec<(String, Vec<Symbol>, bool)> = module
                                 .exports
                                 .iter()
@@ -604,9 +644,8 @@ impl NameResolver {
                                     .exports
                                     .iter()
                                     .map(|(name, set)| {
-                                        let is_type = set
-                                            .last()
-                                            .is_some_and(|symbol| is_type_symbol(symbol));
+                                        let is_type =
+                                            set.last().is_some_and(|symbol| is_type_symbol(symbol));
                                         (name.clone(), set.clone(), is_type)
                                     })
                                     .collect();
@@ -655,8 +694,7 @@ impl NameResolver {
                                     .into_iter()
                                     .filter(|symbol| {
                                         !matches!(symbol, Symbol::Builtin(..))
-                                            && (imported_module
-                                                || public_symbols.contains(symbol))
+                                            && (imported_module || public_symbols.contains(symbol))
                                     })
                                     .collect();
                                 self.bind_import(source_scope_id, &name, &set, decl_id);
@@ -679,8 +717,7 @@ impl NameResolver {
                                             .iter()
                                             .copied()
                                             .filter(|symbol| {
-                                                imported_module
-                                                    || self.phase.is_public(symbol)
+                                                imported_module || self.phase.is_public(symbol)
                                             })
                                             .collect();
                                         if set.is_empty() {
@@ -698,6 +735,10 @@ impl NameResolver {
                                             &set,
                                             decl_id,
                                         );
+                                    }
+                                    None if procedural_macro_exports.contains(name_to_find) => {
+                                        // Macro imports occupy a separate compile-time namespace;
+                                        // expansion consumed the binding before ordinary names run.
                                     }
                                     None => {
                                         // Check if the symbol is a private let binding
@@ -792,33 +833,85 @@ impl NameResolver {
         matches!(self.current_scope_id, Some(NodeID(_, 0)))
     }
 
-    fn lookup_in_scope(&mut self, name: &Name, scope_id: NodeID) -> Option<Symbol> {
-        if let Name::Raw(raw) = name
-            && raw.contains("::")
-        {
-            return self.lookup_qualified(raw, scope_id);
+    fn lookup_ordinary_in_scope(&mut self, name: &str, scope_id: NodeID) -> Option<Symbol> {
+        if name.contains("::") {
+            return self.lookup_qualified(name, scope_id);
         }
-
         let scope = self
             .scopes
             .get(&scope_id)
-            .unwrap_or_else(|| unreachable!("scope not found: {scope_id:?}, {:?}", name));
-
-        if let Some(symbol) = scope.types.get(&name.name_str()) {
+            .unwrap_or_else(|| unreachable!("scope not found: {scope_id:?}, {name}"));
+        if let Some(symbol) = scope.types.get(name) {
             return Some(*symbol);
         }
-
-        if let Some(symbol) = scope.values.get(&name.name_str()) {
+        if let Some(symbol) = scope.values.get(name) {
             return Some(*symbol);
         }
-
         if let Some(parent) = scope.parent_id
             && parent != scope_id
         {
-            return self.lookup_in_scope(name, parent);
+            return self.lookup_ordinary_in_scope(name, parent);
+        }
+        None
+    }
+
+    fn lookup_hygienic_in_scope(
+        &self,
+        name: &str,
+        context: &SyntaxContext,
+        scope_id: NodeID,
+    ) -> Option<Symbol> {
+        let scope = self.scopes.get(&scope_id)?;
+        let key = (name.to_string(), context.clone());
+        if let Some(symbol) = scope.hygienic_types.get(&key) {
+            return Some(*symbol);
+        }
+        if let Some(symbol) = scope.hygienic_values.get(&key) {
+            return Some(*symbol);
+        }
+        let parent = scope.parent_id.filter(|parent| *parent != scope_id)?;
+        self.lookup_hygienic_in_scope(name, context, parent)
+    }
+
+    fn lexical_scope_for_context(&self, context: &SyntaxContext) -> Option<NodeID> {
+        context
+            .lexical_scopes()
+            .filter_map(|node| self.scopes.get(&node).map(|scope| (scope.depth, node)))
+            .max_by_key(|(depth, _)| *depth)
+            .map(|(_, node)| node)
+    }
+
+    fn module_definition_set(&mut self, module_id: ModuleId, name: &str) -> Option<Vec<Symbol>> {
+        let (set, labels) = {
+            let module = self.modules.get_module(module_id)?;
+            let set = module.exports.get(name)?.clone();
+            let labels = Self::collect_module_labels(module, &set);
+            (set, labels)
+        };
+        self.apply_callable_labels(labels);
+        Some(set)
+    }
+
+    fn lookup_in_scope(&mut self, name: &Name, scope_id: NodeID) -> Option<Symbol> {
+        let text = name.name_str();
+        let Some(context) = name.syntax_context() else {
+            return self.lookup_ordinary_in_scope(&text, scope_id);
+        };
+
+        if context.has_expansion_scope()
+            && let Some(symbol) = self.lookup_hygienic_in_scope(&text, context, scope_id)
+        {
+            return Some(symbol);
         }
 
-        None
+        if let Some(module) = context.definition_module() {
+            return self
+                .module_definition_set(module, &text)
+                .and_then(|set| set.first().copied());
+        }
+
+        let definition_scope = self.lexical_scope_for_context(context)?;
+        self.lookup_ordinary_in_scope(&text, definition_scope)
     }
 
     /// Diagnose public type names exported by more than one declaration
@@ -990,13 +1083,9 @@ impl NameResolver {
                 .then(|| self.modules.get_module_by_name("Core"))
                 .flatten()
             {
-                let set = core
-                    .exports
-                    .get(symbol_name)
-                    .cloned()
-                    .ok_or_else(|| {
-                        NameResolverError::SymbolNotFoundInModule(symbol_name.to_string())
-                    })?;
+                let set = core.exports.get(symbol_name).cloned().ok_or_else(|| {
+                    NameResolverError::SymbolNotFoundInModule(symbol_name.to_string())
+                })?;
                 let pairs = Self::collect_module_labels(core, &set);
                 self.apply_callable_labels(pairs);
                 return Ok((set, true));
@@ -1097,7 +1186,11 @@ impl NameResolver {
             return self.lookup(name);
         }
         let mut segments = text.split('.');
-        let head: Name = segments.next()?.to_string().into();
+        let head_text = segments.next()?.to_string();
+        let head = match name.syntax_context() {
+            Some(context) => Name::Syntax(head_text, context.clone()),
+            None => Name::Raw(head_text),
+        };
         let mut symbol = self.lookup(&head)?.symbol().ok()?;
         let current_file = self.current_scope_id.map(|scope| scope.0);
         for segment in segments {
@@ -1186,7 +1279,7 @@ impl NameResolver {
             && self
                 .scopes
                 .get(&scope_id)
-                .and_then(|scope| scope.types.get(&name_str))
+                .and_then(|scope| scope.type_binding(name))
                 .is_some_and(|existing| {
                     matches!(
                         existing,
@@ -1209,10 +1302,10 @@ impl NameResolver {
                 | SymbolKind::Protocol
                 | SymbolKind::Effect
                 | SymbolKind::TypeAlias
-        ) && let Some(&existing) = self
+        ) && let Some(existing) = self
             .scopes
             .get(&scope_id)
-            .and_then(|s| s.types.get(&name_str))
+            .and_then(|scope| scope.type_binding(name))
             && SymbolKind::of(&existing) == Some(kind)
         {
             return Name::Resolved(existing, name_str);
@@ -1225,10 +1318,10 @@ impl NameResolver {
         // Note: Don't record span here - it was already recorded during predeclaration
         if at_module_scope
             && matches!(kind, SymbolKind::Global)
-            && let Some(&existing) = self
+            && let Some(existing) = self
                 .scopes
                 .get(&scope_id)
-                .and_then(|s| s.types.get(&name_str))
+                .and_then(|scope| scope.type_binding(name))
             && matches!(existing, Symbol::Global(..))
             && self.phase.is_public(&existing)
         {
@@ -1264,10 +1357,7 @@ impl NameResolver {
             .scopes
             .get_mut(&scope_id)
             .unwrap_or_else(|| unreachable!("scope not found: {:?}", scope_id));
-        scope.types.insert(
-            name_str,
-            resolved.symbol().unwrap_or_else(|_| unreachable!()),
-        );
+        scope.insert_type(name, resolved.symbol().unwrap_or_else(|_| unreachable!()));
 
         resolved
     }
@@ -1279,7 +1369,16 @@ impl NameResolver {
             return;
         };
         if let Some(scope) = self.scopes.get_mut(&scope_id) {
-            scope.types.insert(name.to_string(), symbol);
+            match self.hygienic_symbols.get(&symbol) {
+                Some(context) => {
+                    scope
+                        .hygienic_types
+                        .insert((name.to_string(), context.clone()), symbol);
+                }
+                None => {
+                    scope.types.insert(name.to_string(), symbol);
+                }
+            }
         }
     }
 
@@ -1305,10 +1404,13 @@ impl NameResolver {
         let Some(scope_id) = self.current_scope_id else {
             return;
         };
-        let existing = self
-            .scopes
-            .get(&scope_id)
-            .and_then(|scope| scope.overloads.get(base));
+        let context = self.hygienic_symbols.get(&symbol).cloned();
+        let existing = self.scopes.get(&scope_id).and_then(|scope| match &context {
+            Some(context) => scope
+                .hygienic_overloads
+                .get(&(base.to_string(), context.clone())),
+            None => scope.overloads.get(base),
+        });
         if let Some(set) = existing {
             if set.contains(&symbol) {
                 return;
@@ -1332,19 +1434,57 @@ impl NameResolver {
         }
         self.phase.callable_labels.insert(symbol, labels);
         if let Some(scope) = self.scopes.get_mut(&scope_id) {
-            scope
-                .overloads
-                .entry(base.to_string())
-                .or_default()
-                .push(symbol);
+            match context {
+                Some(context) => scope
+                    .hygienic_overloads
+                    .entry((base.to_string(), context))
+                    .or_default()
+                    .push(symbol),
+                None => scope
+                    .overloads
+                    .entry(base.to_string())
+                    .or_default()
+                    .push(symbol),
+            }
         }
     }
 
-    /// The overload set visible for `base`: from the nearest scope that
-    /// defines the name at all, and only when it holds two or more
-    /// callables (an inner single binding shadows any outer set).
-    fn visible_overloads(&self, base: &str) -> Option<Vec<Symbol>> {
-        let mut scope_id = self.current_scope_id?;
+    /// The overload set visible for a name, respecting the same hygiene
+    /// boundary as ordinary lookup.
+    fn visible_overloads(&mut self, name: &Name) -> Option<Vec<Symbol>> {
+        let base = name.name_str();
+        if let Some(context) = name.syntax_context() {
+            if context.has_expansion_scope() {
+                let mut scope_id = self.current_scope_id?;
+                loop {
+                    let scope = self.scopes.get(&scope_id)?;
+                    let key = (base.clone(), context.clone());
+                    if let Some(set) = scope.hygienic_overloads.get(&key) {
+                        return (set.len() > 1).then(|| set.clone());
+                    }
+                    if scope.hygienic_types.contains_key(&key)
+                        || scope.hygienic_values.contains_key(&key)
+                    {
+                        return None;
+                    }
+                    let Some(parent) = scope.parent_id.filter(|parent| *parent != scope_id) else {
+                        break;
+                    };
+                    scope_id = parent;
+                }
+            }
+            if let Some(module) = context.definition_module() {
+                return self
+                    .module_definition_set(module, &base)
+                    .filter(|set| set.len() > 1);
+            }
+            return self
+                .visible_ordinary_overloads(&base, self.lexical_scope_for_context(context)?);
+        }
+        self.visible_ordinary_overloads(&base, self.current_scope_id?)
+    }
+
+    fn visible_ordinary_overloads(&self, base: &str, mut scope_id: NodeID) -> Option<Vec<Symbol>> {
         loop {
             let scope = self.scopes.get(&scope_id)?;
             if let Some(set) = scope.overloads.get(base)
@@ -1499,6 +1639,11 @@ impl NameResolver {
             }
         };
 
+        if let Some(context) = name.syntax_context()
+            && context.has_expansion_scope()
+        {
+            self.hygienic_symbols.insert(symbol, context.clone());
+        }
         self.phase.symbols_to_node.insert(symbol, node_id);
         self.phase.symbol_names.insert(symbol, name_str.clone());
         self.phase.declarations.insert(
@@ -1541,7 +1686,7 @@ impl NameResolver {
         let span = *span;
 
         match kind {
-            PatternKind::Bind(name @ Name::Raw(_)) => {
+            PatternKind::Bind(name) if name.is_unresolved() => {
                 *name = if self.at_module_scope() {
                     self.declare(name, SymbolKind::Global, pattern.id, span)
                 } else {
@@ -1618,18 +1763,19 @@ impl NameResolver {
         &mut self,
         pattern: &mut Pattern,
         bind_type: SymbolKind,
-        out: &mut Vec<(String, Symbol)>,
+        out: &mut Vec<(String, Option<SyntaxContext>, Symbol)>,
     ) {
         let Pattern { kind, span, .. } = pattern;
         let span = *span;
 
         match kind {
             PatternKind::Bind(name) => {
-                if matches!(name, Name::Raw(_)) {
+                let context = name.syntax_context().cloned();
+                if name.is_unresolved() {
                     *name = self.mint(name, bind_type, pattern.id, span);
                 }
                 if let Ok(symbol) = name.symbol() {
-                    out.push((name.name_str(), symbol));
+                    out.push((name.name_str(), context, symbol));
                 }
             }
             PatternKind::Or(patterns) => {
@@ -1646,7 +1792,8 @@ impl NameResolver {
                 for field in fields {
                     match &mut field.kind {
                         RecordFieldPatternKind::Bind(name) => {
-                            if matches!(name, Name::Raw(_)) {
+                            let context = name.syntax_context().cloned();
+                            if name.is_unresolved() {
                                 *name = self.mint(
                                     name,
                                     SymbolKind::PatternBindLocal,
@@ -1655,7 +1802,7 @@ impl NameResolver {
                                 );
                             }
                             if let Ok(symbol) = name.symbol() {
-                                out.push((name.name_str(), symbol));
+                                out.push((name.name_str(), context, symbol));
                             }
                         }
                         RecordFieldPatternKind::Equals {
@@ -1663,7 +1810,8 @@ impl NameResolver {
                             name_span,
                             value,
                         } => {
-                            if matches!(name, Name::Raw(_)) {
+                            let context = name.syntax_context().cloned();
+                            if name.is_unresolved() {
                                 *name = self.mint(
                                     name,
                                     SymbolKind::PatternBindLocal,
@@ -1672,7 +1820,7 @@ impl NameResolver {
                                 );
                             }
                             if let Ok(symbol) = name.symbol() {
-                                out.push((name.name_str(), symbol));
+                                out.push((name.name_str(), context, symbol));
                             }
                             self.mint_pattern(value, SymbolKind::PatternBindLocal, out);
                         }
@@ -1717,7 +1865,7 @@ impl NameResolver {
         }
 
         match &mut pattern.kind {
-            PatternKind::Bind(name @ Name::Raw(_)) => {
+            PatternKind::Bind(name) if name.is_unresolved() => {
                 *name = self.lookup(name).unwrap_or_else(|| {
                     self.diagnostic(pattern.id, NameResolverError::Unresolved(name.clone()));
                     name.clone()
@@ -1879,7 +2027,8 @@ impl NameResolver {
                     },
                 ..
             }) = node
-                && let PatternKind::Bind(name @ Name::Raw(_)) = &mut lhs.kind
+                && let PatternKind::Bind(name) = &mut lhs.kind
+                && name.is_unresolved()
             {
                 *name = self.declare(name, SymbolKind::DeclaredLocal, lhs.id, lhs.span);
                 // A lowered local `func` declaration joins the block
@@ -2051,7 +2200,7 @@ impl NameResolver {
         on!(&mut expr.kind, ExprKind::Call { callee, args, .. }, {
             if let ExprKind::Variable(name) = &mut callee.kind
                 && name.symbol().is_err()
-                && let Some(set) = self.visible_overloads(&name.name_str())
+                && let Some(set) = self.visible_overloads(name)
             {
                 self.select_overload(name, expr.id, &set, args);
                 self.overload_selected.insert(callee.id);
@@ -2064,7 +2213,7 @@ impl NameResolver {
                 return;
             }
             // A bare reference resolves only when the set has one callable.
-            if let Some(set) = self.visible_overloads(&name.name_str()) {
+            if let Some(set) = self.visible_overloads(name) {
                 let candidates = set
                     .iter()
                     .filter_map(|symbol| {
@@ -2351,8 +2500,15 @@ impl NameResolver {
                 && let Some(staged) = self.pending_locals.pop()
                 && let Some(scope) = self.current_scope_mut()
             {
-                for (name, symbol) in staged {
-                    scope.types.insert(name, symbol);
+                for (name, context, symbol) in staged {
+                    match context {
+                        Some(context) if context.has_expansion_scope() => {
+                            scope.hygienic_types.insert((name, context), symbol);
+                        }
+                        _ => {
+                            scope.types.insert(name, symbol);
+                        }
+                    }
                 }
             }
         })

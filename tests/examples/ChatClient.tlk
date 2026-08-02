@@ -6,7 +6,7 @@
 //
 // Usage: talk run examples/ChatClient.tlk
 
-@unsafe {
+#unsafe {
 	let sock = _io_socket(domain: AF_INET, socktype: SOCK_STREAM, proto: 0)
 	_io_connect(fd: sock, addr: LOCALHOST, port: 9900)
 

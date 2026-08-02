@@ -1,4 +1,4 @@
-@unsafe {
+#unsafe {
 	let p = _alloc<Int>(count: 1)
 	_free(ptr: p)
 }

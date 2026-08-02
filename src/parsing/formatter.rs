@@ -151,7 +151,7 @@ pub fn text(s: impl Into<String>) -> Doc {
     Doc::Text(s.into())
 }
 
-/// Spells an identifier, restoring the @"..." quoting for names that can't
+/// Spells an identifier, restoring the `#"..."` quoting for names that can't
 /// lex as a plain identifier (keywords or exotic characters). Compiler-minted
 /// names keep their `$`/`#` sigils unquoted.
 fn identifier_text(name: &str) -> String {
@@ -162,7 +162,7 @@ fn identifier_text(name: &str) -> String {
             .any(|c| !(c.is_alphanumeric() || matches!(c, '_' | '$' | '#')));
 
     if quoted {
-        format!("@\"{name}\"")
+        format!("#\"{name}\"")
     } else {
         name.to_string()
     }
@@ -435,19 +435,40 @@ impl<'a> Formatter<'a> {
     fn format_expr(&self, expr: &Expr) -> Doc {
         let doc = match &expr.kind {
             ExprKind::Incomplete(_) => Doc::Empty,
-            ExprKind::MacroCall { name, args, .. } => group(
-                text(format!("#{name}("))
-                    + nest(
-                        1,
-                        softline()
-                            + join(
-                                args.iter().map(|arg| self.format_expr(arg)).collect(),
-                                text(",") + line(),
-                            ),
+            ExprKind::SyntaxQuote { .. } => self
+                .source
+                .and_then(|source| source.get(expr.span.start as usize..expr.span.end as usize))
+                .map(|source| text(source.to_string()))
+                .unwrap_or_else(|| text("quote {}")),
+            ExprKind::MacroCall {
+                name,
+                input_span,
+                args,
+                ..
+            } => {
+                if let Some(source) = self.source
+                    && let Some(input) =
+                        source.get(input_span.start as usize..input_span.end as usize)
+                    && !input.starts_with('(')
+                {
+                    let separator = if input.starts_with('{') { " " } else { "" };
+                    text(format!("@{name}{separator}{input}"))
+                } else {
+                    group(
+                        text(format!("@{name}("))
+                            + nest(
+                                1,
+                                softline()
+                                    + join(
+                                        args.iter().map(|arg| self.format_expr(arg)).collect(),
+                                        text(",") + line(),
+                                    ),
+                            )
+                            + softline()
+                            + text(")"),
                     )
-                    + softline()
-                    + text(")"),
-            ),
+                }
+            }
             ExprKind::CallEffect {
                 effect_name, args, ..
             } => {
@@ -492,7 +513,7 @@ impl<'a> Formatter<'a> {
             ),
             ExprKind::Tuple(items) => self.format_tuple(items),
             ExprKind::Block(block) => self.format_block(block),
-            ExprKind::Unsafe(block) => text("@unsafe ") + self.format_block(block),
+            ExprKind::Unsafe(block) => text("#unsafe ") + self.format_block(block),
             ExprKind::Call {
                 callee,
                 type_args,
@@ -519,7 +540,7 @@ impl<'a> Formatter<'a> {
             ExprKind::InlineIR(instruction) => {
                 if instruction.binds.is_empty() {
                     concat(
-                        concat(text("@_ir { "), text(format!("{instruction}"))),
+                        concat(text("#_ir { "), text(format!("{instruction}"))),
                         text(" }"),
                     )
                 } else {
@@ -527,7 +548,7 @@ impl<'a> Formatter<'a> {
                         concat(
                             concat(
                                 concat(
-                                    text("@_ir("),
+                                    text("#_ir("),
                                     join(
                                         instruction
                                             .binds
@@ -726,7 +747,7 @@ impl<'a> Formatter<'a> {
         let doc = match &stmt.kind {
             StmtKind::Handling {
                 effect_name, body, ..
-            } => text(format!("@handle '{} ", effect_name.name_str())) + self.format_block(body),
+            } => text(format!("#handle '{} ", effect_name.name_str())) + self.format_block(body),
             StmtKind::Expr(expr) => self.format_expr(expr),
             StmtKind::Continue => text("continue"),
             StmtKind::Resume(expr) => {
@@ -3311,8 +3332,16 @@ mod formatter_tests {
     #[test]
     fn formats_macro_rules_and_invocations() {
         assert_eq!(
-            format_code("macro choose($yes,$no)=$yes\n#choose(1,2)", 80),
-            "macro choose($yes, $no) = $yes\n#choose(1, 2)"
+            format_code("macro choose($yes,$no)=$yes\n@choose(1,2)", 80),
+            "macro choose($yes, $no) = $yes\n@choose(1, 2)"
+        );
+        assert_eq!(
+            format_code("@html { div class=@card { <not talk> } }", 80),
+            "@html { div class=@card { <not talk> } }"
+        );
+        assert_eq!(
+            format_code("quote { helper(value: $item) }", 80),
+            "quote { helper(value: $item) }"
         );
     }
 
@@ -3433,12 +3462,12 @@ mod formatter_tests {
         // `'continue` resumes the enclosing handler, with or without a
         // payload.
         assert_eq!(
-            format_code("@handle 'ask {\n'continue 1\n}", 80),
-            "@handle 'ask {\n\t'continue 1\n}"
+            format_code("#handle 'ask {\n'continue 1\n}", 80),
+            "#handle 'ask {\n\t'continue 1\n}"
         );
         assert_eq!(
-            format_code("@handle 'ping {\n'continue\n}", 80),
-            "@handle 'ping {\n\t'continue\n}"
+            format_code("#handle 'ping {\n'continue\n}", 80),
+            "#handle 'ping {\n\t'continue\n}"
         );
     }
 
@@ -3478,22 +3507,22 @@ mod formatter_tests {
 
     #[test]
     fn formats_quoted_identifiers() {
-        // Names that collide with keywords keep their @"..." spelling.
+        // Names that collide with keywords keep their #"..." spelling.
         assert_eq!(
-            format_code("enum Fizz { case @\"as\", @\"func\" }", 80),
-            "enum Fizz {\n\tcase @\"as\"\n\tcase @\"func\"\n}"
+            format_code("enum Fizz { case #\"as\", #\"func\" }", 80),
+            "enum Fizz {\n\tcase #\"as\"\n\tcase #\"func\"\n}"
         );
         assert_eq!(
-            format_code("let @\"struct\" = 1", 80),
-            "let @\"struct\" = 1"
+            format_code("let #\"struct\" = 1", 80),
+            "let #\"struct\" = 1"
         );
         assert_eq!(
-            format_code("let @\"hello world\" = 1", 80),
-            "let @\"hello world\" = 1"
+            format_code("let #\"hello world\" = 1", 80),
+            "let #\"hello world\" = 1"
         );
         // Quoting an ordinary identifier canonicalizes to the plain spelling.
-        assert_eq!(format_code("let @\"foo\" = 1", 80), "let foo = 1");
-        assert_eq!(format_code("Fizz.@\"as\"", 80), "Fizz.@\"as\"");
+        assert_eq!(format_code("let #\"foo\" = 1", 80), "let foo = 1");
+        assert_eq!(format_code("Fizz.#\"as\"", 80), "Fizz.#\"as\"");
     }
 
     #[test]
@@ -3703,20 +3732,20 @@ mod formatter_tests {
         assert_eq!(format_code("map({ $0 })", 80), "map { $0 }");
 
         assert_eq!(
-            format_code("@handle 'fizz { x in x }", 80),
-            "@handle 'fizz { x in x }"
+            format_code("#handle 'fizz { x in x }", 80),
+            "#handle 'fizz { x in x }"
         );
 
-        let input = "@handle 'fizz { x: Int, y: Bool in\nx\n}";
-        let expected = "@handle 'fizz { x: Int, y: Bool in x }";
+        let input = "#handle 'fizz { x: Int, y: Bool in\nx\n}";
+        let expected = "#handle 'fizz { x: Int, y: Bool in x }";
         assert_eq!(format_code(input, 80), expected);
 
-        let input = "@handle 'fizz { x in\nx\nx\n}";
-        let expected = "@handle 'fizz { x in\n\tx\n\tx\n}";
+        let input = "#handle 'fizz { x in\nx\nx\n}";
+        let expected = "#handle 'fizz { x in\n\tx\n\tx\n}";
         assert_eq!(format_code(input, 80), expected);
 
-        let input = "@handle 'os { request in match request { .cwd -> \"\", .args -> [] } }";
-        let expected = "@handle 'os { request in\n\tmatch request {\n\t\t.cwd -> \"\",\n\t\t.args -> []\n\t}\n}";
+        let input = "#handle 'os { request in match request { .cwd -> \"\", .args -> [] } }";
+        let expected = "#handle 'os { request in\n\tmatch request {\n\t\t.cwd -> \"\",\n\t\t.args -> []\n\t}\n}";
         assert_eq!(format_code(input, 80), expected);
     }
 

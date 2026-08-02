@@ -1,12 +1,12 @@
 effect 'fizz() -> Int
 func a() -> Int {
-	@handle 'fizz {
+	#handle 'fizz {
 		'continue 1
 	}
 	'fizz()
 }
 func b() -> Int {
-	@handle 'fizz {
+	#handle 'fizz {
 		'continue 2
 	}
 	'fizz()

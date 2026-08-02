@@ -1118,7 +1118,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             ExprKind::Unreachable => {
                 unreachable!("unreachable expressions are desugared to the panic effect")
             }
-            ExprKind::MacroCall { .. } => Ty::Error,
+            ExprKind::MacroCall { .. } | ExprKind::SyntaxQuote { .. } => Ty::Error,
             ExprKind::LiteralInt(source) => {
                 self.check_integer_literal(expr.id, source);
                 Ty::Nominal(Symbol::Int, vec![])
@@ -1368,7 +1368,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 // Performing an operation: arguments check against the
                 // declared signature, the effect joins the ambient row
                 // (Plotkin & Pretnar 2009 operations; row growth per Koka).
-                // Discharge happens at the handler's extent — a `@handle`
+                // Discharge happens at the handler's extent — a `#handle`
                 // widening the ambient row for the rest of its block — not
                 // at the perform site; closed effect annotations are
                 // checked after the group solve.
@@ -1378,7 +1378,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 if symbol == Symbol::Unsafe {
                     self.unsupported(
                         expr.id,
-                        "the intrinsic `'unsafe` effect cannot be performed; use `@unsafe { ... }`",
+                        "the intrinsic `'unsafe` effect cannot be performed; use `#unsafe { ... }`",
                     );
                     return Ty::Error;
                 }

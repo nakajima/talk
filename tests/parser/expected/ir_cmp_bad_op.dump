@@ -1,5 +1,6 @@
 tokens:
-  Attribute @0..4 "@_ir"
+  Hash @0..1 "#"
+  Identifier @1..4 "_ir"
   LeftBrace @5..6 "{"
   IRRegister @7..9 "%0"
   Equals @10..11 "="

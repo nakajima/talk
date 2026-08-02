@@ -11,23 +11,23 @@ pub enum Allocation {
 pub effect 'alloc(allocation: Allocation) -> Void
 
 pub func _alloc<Element>(count: Int) 'alloc -> RawPtr {
-	@_ir(count) { %? = alloc Element $0 }
+	#_ir(count) { %? = alloc Element $0 }
 }
 
 pub func _store<Element>(ptr: RawPtr, consume value: Element) 'alloc -> Void {
-	@_ir(value, ptr) { store Element $0 $1 }
+	#_ir(value, ptr) { store Element $0 $1 }
 }
 
 pub func _load<Element>(ptr: RawPtr) 'alloc -> Element {
-	@_ir(ptr) { %? = load Element $0 }
+	#_ir(ptr) { %? = load Element $0 }
 }
 
 pub func _copy(from: RawPtr, to: RawPtr, length: Int) 'alloc -> Void {
-	@_ir(from, to, length) { copy Byte $0 $1 $2 }
+	#_ir(from, to, length) { copy Byte $0 $1 $2 }
 }
 
 pub func _swap<Element>(a: RawPtr, b: RawPtr) 'alloc -> Void {
-	@_ir(a, b) { swap Element $0 $1 }
+	#_ir(a, b) { swap Element $0 $1 }
 }
 
 func _take_owned<Element>(consume value: Element) -> Element {
@@ -35,7 +35,7 @@ func _take_owned<Element>(consume value: Element) -> Element {
 }
 
 pub func replace<Element>(mut place: Element, consume replacement: Element) -> Element {
-	let previous: Element = @_ir(place) { %? = take Element $0 }
+	let previous: Element = #_ir(place) { %? = take Element $0 }
 	place = _take_owned(value: consume replacement)
 	previous
 }
@@ -43,7 +43,7 @@ pub func replace<Element>(mut place: Element, consume replacement: Element) -> E
 // Release one reference to a raw allocation (frees at zero). Static data
 // is unmanaged: freeing it is a no-op.
 pub func _free(ptr: RawPtr) 'alloc -> Void {
-	@_ir(ptr) { free $0 }
+	#_ir(ptr) { free $0 }
 }
 
 // Add one reference to every refcounted buffer `value` owns — the
@@ -51,29 +51,29 @@ pub func _free(ptr: RawPtr) 'alloc -> Void {
 // per specialization (scalars are a no-op; static data is unmanaged),
 // mirroring how a drop of the same value would release.
 pub func _retain<Element>(value: &Element) 'alloc -> Void {
-	@_ir(value) { retain Element $0 }
+	#_ir(value) { retain Element $0 }
 }
 
 pub func _ptr_add(ptr: RawPtr, offset: Int) 'alloc -> RawPtr {
-	@_ir(ptr, offset) { %? = add RawPtr $0 $1 }
+	#_ir(ptr, offset) { %? = add RawPtr $0 $1 }
 }
 
 // Whether this allocation has exactly one owner (refcount 1). Static data
 // is never unique: it cannot be freed, so callers must copy before writing.
 pub func _is_unique(ptr: RawPtr) 'alloc -> Bool {
-	@_ir(ptr) { %? = is_unique $0 }
+	#_ir(ptr) { %? = is_unique $0 }
 }
 
 pub struct Storage<Element> {
 	pub let base: RawPtr
 
 	pub func get(_ index: Int) -> &Element {
-		let ptr: RawPtr = @_ir(self.base, index) { %? = gep Element $0 $1 }
+		let ptr: RawPtr = #_ir(self.base, index) { %? = gep Element $0 $1 }
 		_load<Element>(ptr: ptr)
 	}
 
 	pub func set(index: Int, consume value: Element) -> Void {
-		let ptr: RawPtr = @_ir(self.base, index) { %? = gep Element $0 $1 }
+		let ptr: RawPtr = #_ir(self.base, index) { %? = gep Element $0 $1 }
 		_store<Element>(ptr: ptr, value: value)
 	}
 }
@@ -90,12 +90,12 @@ pub struct ByteStorage {
 	pub let base: RawPtr
 
 	pub func get(_ index: Int) -> Byte {
-		let ptr: RawPtr = @_ir(self.base, index) { %? = gep Byte $0 $1 }
+		let ptr: RawPtr = #_ir(self.base, index) { %? = gep Byte $0 $1 }
 		_load<Byte>(ptr: ptr)
 	}
 
 	pub func set(index: Int, value: Byte) -> Void {
-		let ptr: RawPtr = @_ir(self.base, index) { %? = gep Byte $0 $1 }
+		let ptr: RawPtr = #_ir(self.base, index) { %? = gep Byte $0 $1 }
 		_store<Byte>(ptr: ptr, value: value)
 	}
 }
@@ -110,7 +110,7 @@ pub func _byte_storage(capacity: Int) 'alloc -> ByteStorage {
 
 extend Byte {
 	pub func _toInt() -> Int {
-		@_ir { %? = btoi %0 }
+		#_ir { %? = btoi %0 }
 	}
 }
 
@@ -118,6 +118,6 @@ extend Int {
 	// Out of range (outside 0..=255) is a VM error: callers wanting
 	// wrapping must mask explicitly first.
 	pub func _toByte() -> Byte {
-		@_ir { %? = itob %0 }
+		#_ir { %? = itob %0 }
 	}
 }

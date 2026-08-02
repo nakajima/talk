@@ -519,7 +519,7 @@ fn postfix_question_mark_propagates_second_enum_variant() {
           \tif ok { .ok(41) } else { .error(\"nope\") }\n\
           }\n\
           func outer(ok: Bool) -> Result<Int, String> {\n\
-          \t@handle 'ask {\n\
+          \t#handle 'ask {\n\
           \t\tlet value = source(ok: ok)?\n\
           \t\t'continue value\n\
           \t}\n\
@@ -834,13 +834,13 @@ fn run_quoted_identifiers() {
     // cases, bindings, and patterns.
     assert_runs(
         b"enum Fizz {\n\
-          \tcase @\"as\", @\"func\", @\"struct\"\n\
+          \tcase #\"as\", #\"func\", #\"struct\"\n\
           }\n\
-          let @\"let\" = 40\n\
-          match Fizz.@\"func\" {\n\
-          \t.@\"as\" -> print(0),\n\
-          \t.@\"func\" -> print(@\"let\" + 2),\n\
-          \t.@\"struct\" -> print(1)\n\
+          let #\"let\" = 40\n\
+          match Fizz.#\"func\" {\n\
+          \t.#\"as\" -> print(0),\n\
+          \t.#\"func\" -> print(#\"let\" + 2),\n\
+          \t.#\"struct\" -> print(1)\n\
           }\n",
         &[],
         b"42\n",
@@ -917,7 +917,7 @@ fn run_mut_args_through_places_and_rejects_rvalues() {
     // A `mut` effect argument through a tuple-element place writes back.
     assert_runs(
         b"effect 'adjust(mut value: Int) -> ()\n\
-          @handle 'adjust { v in\n\
+          #handle 'adjust { v in\n\
           \tv = v + 10\n\
           \t'continue ()\n\
           }\n\
@@ -931,7 +931,7 @@ fn run_mut_args_through_places_and_rejects_rvalues() {
     // A true rvalue `mut` argument is a frontend error: its evolution
     // would be silently discarded.
     for source in [
-        &b"effect 'adjust(mut value: Int) -> ()\n@handle 'adjust { v in\n\tv = v + 10\n\t'continue ()\n}\n'adjust(value: mut (1 + 2))\nprint(9)\n"[..],
+        &b"effect 'adjust(mut value: Int) -> ()\n#handle 'adjust { v in\n\tv = v + 10\n\t'continue ()\n}\n'adjust(value: mut (1 + 2))\nprint(9)\n"[..],
         &b"func inc(mut n: Int) -> Void {\n\tn = n + 1\n}\ninc(n: mut (1 + 2))\nprint(0)\n"[..],
     ] {
         let output = run_source(source, &[]);
@@ -2480,7 +2480,7 @@ fn run_performs_ambient_io_operations() {
         .as_nanos();
     let path = std::env::temp_dir().join(format!("talk-io-{}-{unique}.txt", std::process::id()));
     let source = format!(
-        "@unsafe {{\n\
+        "#unsafe {{\n\
          let ok = sleep(ms: 0)\n\
          let fd = open_path(path: \"{}\", flags: O_WRONLY + O_CREAT + O_TRUNC, mode: S_IRUSR + S_IWUSR)\n\
          write_string(fd: fd, s: \"hello\")\n\
@@ -2972,7 +2972,7 @@ fn run_routes_clause_performs_to_outer_handlers() {
     // CHG-01: a perform inside a handler clause searches from below the
     // clause's own delimiter, so it reaches the next handler out.
     assert_runs(
-        b"effect 'ask() -> Int\n@handle 'ask {\n\t'continue 1\n}\nfunc f() 'ask -> Int {\n\t@handle 'ask {\n\t\t'continue 'ask() + 10\n\t}\n\t'ask()\n}\nprint(f())\n",
+        b"effect 'ask() -> Int\n#handle 'ask {\n\t'continue 1\n}\nfunc f() 'ask -> Int {\n\t#handle 'ask {\n\t\t'continue 'ask() + 10\n\t}\n\t'ask()\n}\nprint(f())\n",
         &[],
         b"11\n",
     );
@@ -3116,9 +3116,9 @@ fn run_captures_capabilities_lexically() {
     assert_runs(
         b"effect 'boost() -> Int\n\
           func run() -> Int {\n\
-          \t@handle 'boost { 'continue 100 }\n\
+          \t#handle 'boost { 'continue 100 }\n\
           \tlet f = func() -> Int { 'boost() }\n\
-          \t@handle 'boost { 'continue 200 }\n\
+          \t#handle 'boost { 'continue 200 }\n\
           \tf() + 'boost()\n\
           }\n\
           run()\n",
@@ -3488,7 +3488,7 @@ fn run_user_handlers_intercept_ambient_effects() {
     // 'async is 'ambient (ADR 0039): a live user handler intercepts its
     // performs through the ordinary handler stack.
     assert_runs(
-        b"@handle 'async {\n\tprint(\"yield\")\n\t'continue\n}\n'async()\nprint(1)\n",
+        b"#handle 'async {\n\tprint(\"yield\")\n\t'continue\n}\n'async()\nprint(1)\n",
         &[],
         b"yield\n1\n",
     );
@@ -3500,7 +3500,7 @@ fn run_ambient_clause_performs_delegate_to_the_fallback() {
     // perform inside it reaches the next handler out — here the host
     // fallback, which resumes with unit.
     assert_runs(
-        b"@handle 'async {\n\tprint(\"seen\")\n\t'async()\n\t'continue\n}\n'async()\nprint(1)\n",
+        b"#handle 'async {\n\tprint(\"seen\")\n\t'async()\n\t'continue\n}\n'async()\nprint(1)\n",
         &[],
         b"seen\n1\n",
     );
@@ -3511,7 +3511,7 @@ fn run_nested_ambient_handlers_delegate_outward_to_the_fallback() {
     // inner user handler -> outer user handler -> host fallback: the
     // ordinary routing order for an ambient effect (ADR 0039 §4).
     assert_runs(
-        b"@handle 'async {\n\tprint(\"outer\")\n\t'async()\n\t'continue\n}\n@handle 'async {\n\tprint(\"inner\")\n\t'async()\n\t'continue\n}\n'async()\nprint(1)\n",
+        b"#handle 'async {\n\tprint(\"outer\")\n\t'async()\n\t'continue\n}\n#handle 'async {\n\tprint(\"inner\")\n\t'async()\n\t'continue\n}\n'async()\nprint(1)\n",
         &[],
         b"inner\nouter\n1\n",
     );
@@ -3523,7 +3523,7 @@ fn run_ambient_handlers_may_discontinue() {
     // a clause that completes without resuming aborts the handled scope
     // (with its value, which must match the scope's — unit here).
     assert_runs(
-        b"@handle 'async {\n\tprint(\"abort\")\n}\n'async()\nprint(99)\n",
+        b"#handle 'async {\n\tprint(\"abort\")\n}\n'async()\nprint(99)\n",
         &[],
         b"abort\n",
     );
@@ -3544,7 +3544,7 @@ fn run_function_values_reach_the_fallback_without_a_user_handler() {
 #[test]
 fn run_function_values_capture_ambient_handlers_at_creation() {
     assert_runs(
-        b"@handle 'async {\n\tprint(\"captured\")\n\t'continue\n}\nlet f = func() {\n\t'async()\n\t7\n}\nprint(f())\n",
+        b"#handle 'async {\n\tprint(\"captured\")\n\t'continue\n}\nlet f = func() {\n\t'async()\n\t7\n}\nprint(f())\n",
         &[],
         b"captured\n7\n",
     );
@@ -3581,7 +3581,7 @@ fn run_user_handlers_intercept_io() {
     // proves both performs routed to it. (print bypasses 'io — it is a
     // raw io_write intrinsic — so it still reaches stdout.)
     assert_runs(
-        b"let count = 0\n@handle 'io { request in\n\tcount = count + 1\n\t'continue 0\n}\nsleep(ms: 1)\nsleep(ms: 1)\nprint(count)\n",
+        b"let count = 0\n#handle 'io { request in\n\tcount = count + 1\n\t'continue 0\n}\nsleep(ms: 1)\nsleep(ms: 1)\nprint(count)\n",
         &[],
         b"2\n",
     );
@@ -3592,7 +3592,7 @@ fn run_io_handlers_delegate_to_the_host_fallback() {
     // A clause re-performing the same request reaches the io host
     // fallback below its floor; the program still behaves normally.
     assert_runs(
-        b"@handle 'io { request in\n\t'continue 'io(request: request)\n}\nsleep(ms: 1)\nprint(1)\n",
+        b"#handle 'io { request in\n\t'continue 'io(request: request)\n}\nsleep(ms: 1)\nprint(1)\n",
         &[],
         b"1\n",
     );
@@ -3605,7 +3605,7 @@ fn run_lying_io_handlers_cannot_break_memory_safety() {
     // 999999 yields a wrong (truncated) string, never an out-of-bounds
     // view.
     assert_runs(
-        b"let calls = 0\n@handle 'io { request in\n\tcalls = calls + 1\n\tif calls == 1 {\n\t\t'continue 8\n\t}\n\t'continue 999999\n}\nlet c = OS.cwd()\nprint(calls)\n",
+        b"let calls = 0\n#handle 'io { request in\n\tcalls = calls + 1\n\tif calls == 1 {\n\t\t'continue 8\n\t}\n\t'continue 999999\n}\nlet c = OS.cwd()\nprint(calls)\n",
         &[],
         b"2\n",
     );
@@ -3717,7 +3717,7 @@ fn writeback_matrix_covers_call_shapes_and_mutation_shapes() {
         ),
         (
             "rigid-dictionary/receiver-and-param",
-            format!("{PROTOCOL}effect 'acc<T: Counter>(value: T) -> ()\n@handle 'acc {{ v in\n\tlet step = 3\n\tprint(v.bump_by(amount: mut step))\n\tprint(step)\n\tprint(v.bump_by(amount: mut step))\n\tprint(step)\n\t'continue ()\n}}\n'acc(value: C(n: 0, tag: \"t\" + \"g\"))\n"),
+            format!("{PROTOCOL}effect 'acc<T: Counter>(value: T) -> ()\n#handle 'acc {{ v in\n\tlet step = 3\n\tprint(v.bump_by(amount: mut step))\n\tprint(step)\n\tprint(v.bump_by(amount: mut step))\n\tprint(step)\n\t'continue ()\n}}\n'acc(value: C(n: 0, tag: \"t\" + \"g\"))\n"),
             "3\n6\n9\n12\n",
         ),
         (
@@ -3727,12 +3727,12 @@ fn writeback_matrix_covers_call_shapes_and_mutation_shapes() {
         ),
         (
             "perform/mut-arg",
-            "effect 'adjust(mut value: Int) -> ()\n@handle 'adjust { v in\n\tv = v + 10\n\t'continue ()\n}\nlet n = 1\n'adjust(value: mut n)\n'adjust(value: mut n)\nprint(n)\n".into(),
+            "effect 'adjust(mut value: Int) -> ()\n#handle 'adjust { v in\n\tv = v + 10\n\t'continue ()\n}\nlet n = 1\n'adjust(value: mut n)\n'adjust(value: mut n)\nprint(n)\n".into(),
             "21\n",
         ),
         (
             "perform/two-mut-args-with-owned-arg",
-            "effect 'both(mut a: Int, mut b: Int, label: String) -> ()\n@handle 'both { p, q, s in\n\tp = p + s.byte_count\n\tq = q + 2\n\t'continue ()\n}\nlet x = 0\nlet y = 0\n'both(a: mut x, b: mut y, label: \"ab\" + \"c\")\nprint(x)\nprint(y)\n".into(),
+            "effect 'both(mut a: Int, mut b: Int, label: String) -> ()\n#handle 'both { p, q, s in\n\tp = p + s.byte_count\n\tq = q + 2\n\t'continue ()\n}\nlet x = 0\nlet y = 0\n'both(a: mut x, b: mut y, label: \"ab\" + \"c\")\nprint(x)\nprint(y)\n".into(),
             "3\n2\n",
         ),
         (
@@ -3908,7 +3908,7 @@ fn run_tears_down_globals_after_a_top_level_discontinue() {
     let source = b"effect 'quit() -> Never\n\
         let box = Array<String>(capacity: 0)\n\
         box.push(\"x\" + \"y\")\n\
-        @handle 'quit { 0 - 1 }\n\
+        #handle 'quit { 0 - 1 }\n\
         func risky() 'quit -> Int {\n\
         \t'quit()\n\
         }\n\
@@ -3985,12 +3985,12 @@ fn check_accepts_generic_values_in_handler_clauses() {
     // Handler clauses inherit the enclosing frame's witnesses and
     // dictionaries through their environments, like ordinary closures.
     assert_checks(
-        b"effect 'emit(x: Int) -> ()\nfunc run<T: Showable>(v: T) -> () {\n\t@handle 'emit { n in\n\t\tprint(v.show())\n\t\t'continue ()\n\t}\n\t'emit(x: 1)\n}\nrun(v: 42)\n",
+        b"effect 'emit(x: Int) -> ()\nfunc run<T: Showable>(v: T) -> () {\n\t#handle 'emit { n in\n\t\tprint(v.show())\n\t\t'continue ()\n\t}\n\t'emit(x: 1)\n}\nrun(v: 42)\n",
     );
     // Ownership witnesses too: a clause that consumes a captured rigid
     // releases it through the inherited drop witness.
     assert_checks(
-        b"effect 'ping() -> ()\nfunc hold<T>(consume v: T) -> () {\n\t@handle 'ping {\n\t\tlet w = v\n\t\t'continue ()\n\t}\n\t'ping()\n}\nhold(v: \"a\" + \"b\")\n",
+        b"effect 'ping() -> ()\nfunc hold<T>(consume v: T) -> () {\n\t#handle 'ping {\n\t\tlet w = v\n\t\t'continue ()\n\t}\n\t'ping()\n}\nhold(v: \"a\" + \"b\")\n",
     );
 }
 
@@ -3999,7 +3999,7 @@ fn run_resumes_from_inside_a_loop_in_a_handler_clause() {
     // `'continue` is a frame return from the clause, legal at any loop
     // depth: the loop searches for an answer and resumes with it.
     assert_runs(
-        b"effect 'ask() -> Int\n@handle 'ask {\n\tlet i = 0\n\tloop i < 10 {\n\t\tif i == 7 {\n\t\t\t'continue i\n\t\t}\n\t\ti = i + 1\n\t}\n\t'continue 0\n}\nprint('ask())\n",
+        b"effect 'ask() -> Int\n#handle 'ask {\n\tlet i = 0\n\tloop i < 10 {\n\t\tif i == 7 {\n\t\t\t'continue i\n\t\t}\n\t\ti = i + 1\n\t}\n\t'continue 0\n}\nprint('ask())\n",
         &[],
         b"7\n",
     );
@@ -4011,77 +4011,77 @@ fn run_passes_owned_payloads_through_generic_effects() {
     // existential-shaped [drop, retain] package, so one clause body
     // serves every instantiation — releasing an unconsumed payload…
     assert_runs(
-        b"effect 'give<T>(value: T) -> ()\n@handle 'give { v in 'continue () }\nfunc send(consume s: String) 'give -> Void {\n\t'give(value: s)\n}\nsend(s: \"a\" + \"b\")\nprint(1)\n",
+        b"effect 'give<T>(value: T) -> ()\n#handle 'give { v in 'continue () }\nfunc send(consume s: String) 'give -> Void {\n\t'give(value: s)\n}\nsend(s: \"a\" + \"b\")\nprint(1)\n",
         &[],
         b"1\n",
     );
     // …resuming with it (the perform site unwraps the package)…
     assert_runs(
-        b"effect 'echo<T>(value: T) -> T\n@handle 'echo { v in 'continue v }\nfunc round(consume s: String) 'echo -> String {\n\t'echo(value: s)\n}\nprint(round(s: \"hi\" + \"!\"))\n",
+        b"effect 'echo<T>(value: T) -> T\n#handle 'echo { v in 'continue v }\nfunc round(consume s: String) 'echo -> String {\n\t'echo(value: s)\n}\nprint(round(s: \"hi\" + \"!\"))\n",
         &[],
         b"hi!\n",
     );
     // …and discontinuing past it (abort cleanup drops the package).
     assert_runs(
-        b"effect 'toss<T>(value: T) -> Never\nfunc risky() -> Int {\n\t@handle 'toss { v in -1 }\n\tlet s = \"a\" + \"b\"\n\t'toss(value: s)\n}\nprint(risky())\n",
+        b"effect 'toss<T>(value: T) -> Never\nfunc risky() -> Int {\n\t#handle 'toss { v in -1 }\n\tlet s = \"a\" + \"b\"\n\t'toss(value: s)\n}\nprint(risky())\n",
         &[],
         b"-1\n",
     );
     // Copy instantiations use the same packaging convention.
     assert_runs(
-        b"effect 'echo<T>(value: T) -> T\n@handle 'echo { v in 'continue v }\nprint('echo(value: 41) + 1)\n",
+        b"effect 'echo<T>(value: T) -> T\n#handle 'echo { v in 'continue v }\nprint('echo(value: 41) + 1)\n",
         &[],
         b"42\n",
     );
     // Nested positions hold native values; the clause's structural glue
     // reaches rigid leaves through the perform site's witnesses.
     assert_runs(
-        b"effect 'pair<T>(value: (Int, T)) -> ()\n@handle 'pair { v in 'continue () }\n'pair(value: (1, 2))\nprint(3)\n",
+        b"effect 'pair<T>(value: (Int, T)) -> ()\n#handle 'pair { v in 'continue () }\n'pair(value: (1, 2))\nprint(3)\n",
         &[],
         b"3\n",
     );
     assert_runs(
-        b"effect 'pair<T>(value: (Int, T)) -> ()\n@handle 'pair { v in 'continue () }\nlet s = \"a\" + \"b\"\n'pair(value: (1, s))\nprint(3)\n",
+        b"effect 'pair<T>(value: (Int, T)) -> ()\n#handle 'pair { v in 'continue () }\nlet s = \"a\" + \"b\"\n'pair(value: (1, s))\nprint(3)\n",
         &[],
         b"3\n",
     );
     // …including through a compound type's own teardown (Array's deinit
     // instantiated at the rigid element receives the same witnesses)…
     assert_runs(
-        b"effect 'batch<T>(values: Array<T>) -> ()\n@handle 'batch { vs in 'continue () }\nlet xs: Array<String> = [\"a\" + \"b\", \"c\" + \"d\"]\n'batch(values: xs)\nprint(4)\n",
+        b"effect 'batch<T>(values: Array<T>) -> ()\n#handle 'batch { vs in 'continue () }\nlet xs: Array<String> = [\"a\" + \"b\", \"c\" + \"d\"]\n'batch(values: xs)\nprint(4)\n",
         &[],
         b"4\n",
     );
     // …and through enum payload glue.
     assert_runs(
-        b"enum Wrap<T> {\n\tcase full(T)\n\tcase empty\n}\neffect 'opt<T>(value: Wrap<T>) -> ()\n@handle 'opt { v in 'continue () }\n'opt(value: Wrap.full(\"a\" + \"b\"))\nprint(5)\n",
+        b"enum Wrap<T> {\n\tcase full(T)\n\tcase empty\n}\neffect 'opt<T>(value: Wrap<T>) -> ()\n#handle 'opt { v in 'continue () }\n'opt(value: Wrap.full(\"a\" + \"b\"))\nprint(5)\n",
         &[],
         b"5\n",
     );
     // A nested payload continued back returns natively.
     assert_runs(
-        b"effect 'swap<T>(value: (Int, T)) -> (Int, T)\n@handle 'swap { v in 'continue v }\nlet back = 'swap(value: (7, \"x\" + \"y\"))\nprint(back.0)\nprint(back.1)\n",
+        b"effect 'swap<T>(value: (Int, T)) -> (Int, T)\n#handle 'swap { v in 'continue v }\nlet back = 'swap(value: (7, \"x\" + \"y\"))\nprint(back.0)\nprint(back.1)\n",
         &[],
         b"7\nxy\n",
     );
     // A clause handing its rigid value to a generic function threads the
     // witnesses through that instance's hidden parameters.
     assert_runs(
-        b"effect 'sink<T>(value: T) -> ()\nfunc discard<X>(consume x: X) -> Void {\n}\n@handle 'sink { v in\n\tdiscard(x: v)\n\t'continue ()\n}\n'sink(value: \"a\" + \"b\")\nprint(1)\n",
+        b"effect 'sink<T>(value: T) -> ()\nfunc discard<X>(consume x: X) -> Void {\n}\n#handle 'sink { v in\n\tdiscard(x: v)\n\t'continue ()\n}\n'sink(value: \"a\" + \"b\")\nprint(1)\n",
         &[],
         b"1\n",
     );
     // A clause re-performing with its rigid value forwards its own
     // witnesses to the next handler out.
     assert_runs(
-        b"effect 'inner<T>(value: T) -> ()\neffect 'outer<T>(value: T) -> ()\n@handle 'inner { v in 'continue () }\n@handle 'outer { v in\n\t'inner(value: v)\n\t'continue ()\n}\n'outer(value: \"a\" + \"b\")\nprint(2)\n",
+        b"effect 'inner<T>(value: T) -> ()\neffect 'outer<T>(value: T) -> ()\n#handle 'inner { v in 'continue () }\n#handle 'outer { v in\n\t'inner(value: v)\n\t'continue ()\n}\n'outer(value: \"a\" + \"b\")\nprint(2)\n",
         &[],
         b"2\n",
     );
     // A compound rigid payload re-performs through glue closures that
     // capture the inner witnesses.
     assert_runs(
-        b"effect 'batch<T>(values: Array<T>) -> ()\neffect 'again<U>(value: U) -> ()\n@handle 'again { u in 'continue () }\n@handle 'batch { vs in\n\t'again(value: vs)\n\t'continue ()\n}\nlet xs: Array<String> = [\"a\" + \"b\"]\n'batch(values: xs)\nprint(3)\n",
+        b"effect 'batch<T>(values: Array<T>) -> ()\neffect 'again<U>(value: U) -> ()\n#handle 'again { u in 'continue () }\n#handle 'batch { vs in\n\t'again(value: vs)\n\t'continue ()\n}\nlet xs: Array<String> = [\"a\" + \"b\"]\n'batch(values: xs)\nprint(3)\n",
         &[],
         b"3\n",
     );
@@ -4104,21 +4104,21 @@ fn run_dispatches_constrained_generic_effects() {
     // alongside [drop, retain]: one clause body calls requirements on
     // every instantiation…
     assert_runs(
-        b"effect 'show<T: Showable>(value: T) -> ()\n@handle 'show { v in\n\tprint(v.show())\n\t'continue ()\n}\n'show(value: 42)\n'show(value: \"a\" + \"b\")\n",
+        b"effect 'show<T: Showable>(value: T) -> ()\n#handle 'show { v in\n\tprint(v.show())\n\t'continue ()\n}\n'show(value: 42)\n'show(value: \"a\" + \"b\")\n",
         &[],
         b"42\nab\n",
     );
     // …and packs the rigid value into an existential from the same
     // dictionary.
     assert_runs(
-        b"effect 'show<T: Showable>(value: T) -> ()\n@handle 'show { v in\n\tlet s: any Showable = v\n\tprint(s.show())\n\t'continue ()\n}\n'show(value: 42)\n",
+        b"effect 'show<T: Showable>(value: T) -> ()\n#handle 'show { v in\n\tlet s: any Showable = v\n\tprint(s.show())\n\t'continue ()\n}\n'show(value: 42)\n",
         &[],
         b"42\n",
     );
     // A `mut func` requirement returns (result, final self); the rigid
     // dispatch writes the evolved receiver back through the dictionary.
     assert_runs(
-        b"protocol Counter {\n\tmut func bump() -> Int\n}\nstruct C {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nextend C: Counter {\n\tmut func bump() -> Int {\n\t\tself.n = self.n + 1\n\t\tself.n\n\t}\n}\neffect 'tick<T: Counter>(value: T) -> ()\n@handle 'tick { v in\n\tprint(v.bump())\n\tprint(v.bump())\n\t'continue ()\n}\n'tick(value: C(n: 0))\n",
+        b"protocol Counter {\n\tmut func bump() -> Int\n}\nstruct C {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nextend C: Counter {\n\tmut func bump() -> Int {\n\t\tself.n = self.n + 1\n\t\tself.n\n\t}\n}\neffect 'tick<T: Counter>(value: T) -> ()\n#handle 'tick { v in\n\tprint(v.bump())\n\tprint(v.bump())\n\t'continue ()\n}\n'tick(value: C(n: 0))\n",
         &[],
         b"1\n2\n",
     );
@@ -4147,14 +4147,14 @@ fn run_dispatches_constrained_generic_effects() {
     // `mut` parameters and a `mut` receiver on one requirement land in
     // callee order: (result, final self, final mut values…).
     assert_runs(
-        b"protocol Counter {\n\tmut func bump_by(mut amount: Int) -> Int\n}\nstruct C {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nextend C: Counter {\n\tmut func bump_by(mut amount: Int) -> Int {\n\t\tself.n = self.n + amount\n\t\tamount = amount * 2\n\t\tself.n\n\t}\n}\neffect 'acc<T: Counter>(value: T) -> ()\n@handle 'acc { v in\n\tlet step = 3\n\tprint(v.bump_by(amount: mut step))\n\tprint(step)\n\tprint(v.bump_by(amount: mut step))\n\tprint(step)\n\t'continue ()\n}\n'acc(value: C(n: 0))\n",
+        b"protocol Counter {\n\tmut func bump_by(mut amount: Int) -> Int\n}\nstruct C {\n\tlet n: Int\n\tinit(n: Int) {\n\t\tself.n = n\n\t\tself\n\t}\n}\nextend C: Counter {\n\tmut func bump_by(mut amount: Int) -> Int {\n\t\tself.n = self.n + amount\n\t\tamount = amount * 2\n\t\tself.n\n\t}\n}\neffect 'acc<T: Counter>(value: T) -> ()\n#handle 'acc { v in\n\tlet step = 3\n\tprint(v.bump_by(amount: mut step))\n\tprint(step)\n\tprint(v.bump_by(amount: mut step))\n\tprint(step)\n\t'continue ()\n}\n'acc(value: C(n: 0))\n",
         &[],
         b"3\n6\n9\n12\n",
     );
     // A closure created inside the clause inherits the witnesses through
     // its environment.
     assert_runs(
-        b"effect 'hold<T>(value: T) -> ()\nfunc discard<X>(consume x: X) -> Void {\n}\n@handle 'hold { v in\n\tlet run = func(consume x: String) -> Void {\n\t}\n\trun(\"q\" + \"r\")\n\tdiscard(x: v)\n\t'continue ()\n}\n'hold(value: \"a\" + \"b\")\nprint(1)\n",
+        b"effect 'hold<T>(value: T) -> ()\nfunc discard<X>(consume x: X) -> Void {\n}\n#handle 'hold { v in\n\tlet run = func(consume x: String) -> Void {\n\t}\n\trun(\"q\" + \"r\")\n\tdiscard(x: v)\n\t'continue ()\n}\n'hold(value: \"a\" + \"b\")\nprint(1)\n",
         &[],
         b"1\n",
     );
@@ -4209,7 +4209,7 @@ fn postfix_bang_panics_on_the_second_variant() {
     assert!(stderr.contains("reached unreachable"), "{stderr}");
 
     assert_runs(
-        b"func recover() -> Int {\n\t@handle 'panic { message in 7 }\n\tlet value: Result<Int, String> = .error(\"bad\")\n\tvalue!\n}\nprint(recover())\n",
+        b"func recover() -> Int {\n\t#handle 'panic { message in 7 }\n\tlet value: Result<Int, String> = .error(\"bad\")\n\tvalue!\n}\nprint(recover())\n",
         &[],
         b"7\n",
     );
@@ -4218,7 +4218,7 @@ fn postfix_bang_panics_on_the_second_variant() {
 #[test]
 fn run_can_handle_an_unreachable_panic() {
     assert_runs(
-        b"func recover() -> Int {\n\t@handle 'panic { message in 42 }\n\tunreachable\n}\nprint(recover())\n",
+        b"func recover() -> Int {\n\t#handle 'panic { message in 42 }\n\tunreachable\n}\nprint(recover())\n",
         &[],
         b"42\n",
     );
@@ -4286,7 +4286,7 @@ fn an_array_bounds_panic_is_handleable() {
     // Panic is an ordinary effect, so a bounds failure routes through a
     // user handler before reaching the host's abort fallback.
     assert_runs(
-        b"func lookup() -> Int {\n\t@handle 'panic { message in 0 }\n\tlet items = [1, 2, 3]\n\treturn items[7]\n}\nprint(lookup())\n",
+        b"func lookup() -> Int {\n\t#handle 'panic { message in 0 }\n\tlet items = [1, 2, 3]\n\treturn items[7]\n}\nprint(lookup())\n",
         &[],
         b"0\n",
     );

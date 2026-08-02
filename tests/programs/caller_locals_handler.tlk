@@ -9,7 +9,7 @@ func risky(n: Int) {
 
 func attempt(n: Int) {
 	let prefix = "caught: "
-	@handle 'fail { message in print(prefix + message) }
+	#handle 'fail { message in print(prefix + message) }
 	risky(n: n)
 	print("after risky")
 }

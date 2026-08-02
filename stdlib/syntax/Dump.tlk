@@ -67,7 +67,8 @@ func expr_label(kind: &ExprKind) -> String {
 		.call_effect(_, _, _, _, _) -> "Expr::CallEffect",
 		.record_literal(_, _) -> "Expr::RecordLiteral",
 		.inline_ir(_, _) -> "Expr::InlineIR",
-		.macro_call(_, _, _, _) -> "Expr::MacroCall"
+		.macro_call(_, _, _, _, _, _, _) -> "Expr::MacroCall",
+		.syntax_quote(_, _, _) -> "Expr::SyntaxQuote"
 	}
 }
 
@@ -203,14 +204,14 @@ func render_expr(mut buf: [Byte], view: UTF8View, expr: &Expr, depth: Int) -> Vo
 			render_expr(buf: buf, view: view, expr: spread_value, depth: depth + 1)
 		}
 	}
-	// Only an @_ir node's binds render; the instruction's registers,
+	// Only an #_ir node's binds render; the instruction's registers,
 	// values, and type operand are not visited nodes.
 	if let .inline_ir(binds, _) = expr.kind {
 		for bind in binds {
 			render_expr(buf: buf, view: view, expr: bind, depth: depth + 1)
 		}
 	}
-	if let .macro_call(_, _, _, args) = expr.kind {
+	if let .macro_call(_, _, _, _, _, _, args) = expr.kind {
 		for arg in args {
 			render_expr(buf: buf, view: view, expr: arg, depth: depth + 1)
 		}

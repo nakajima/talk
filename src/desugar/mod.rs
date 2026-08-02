@@ -10,6 +10,7 @@ pub mod lower_funcs_to_lets;
 pub mod lower_if_to_match;
 pub mod lower_operators;
 pub mod lower_subscripts;
+pub mod lower_syntax_quotes;
 pub mod lower_trailing_blocks;
 pub mod lower_unreachable;
 pub mod prepend_self_to_methods;
@@ -20,6 +21,7 @@ use lower_funcs_to_lets::LowerFuncsToLets;
 use lower_if_to_match::LowerIfToMatch;
 use lower_operators::LowerOperators;
 use lower_subscripts::LowerSubscripts;
+use lower_syntax_quotes::LowerSyntaxQuotes;
 use lower_trailing_blocks::LowerTrailingBlocks;
 use lower_unreachable::LowerUnreachable;
 use prepend_self_to_methods::PrependSelfToMethods;
@@ -28,6 +30,9 @@ use resolve_param_modes::ResolveParamModes;
 /// Run every syntactic transform over each parsed file, in place.
 pub fn desugar(asts: &mut [AST<Parsed>]) {
     for ast in asts.iter_mut() {
+        // Macro-unit quotations become calls into the opaque syntax runtime
+        // before ordinary expression sugar is lowered.
+        LowerSyntaxQuotes::run(ast);
         // First: a trailing block becomes an ordinary anonymous-function
         // argument, so every later pass (and phase) sees one closure form.
         LowerTrailingBlocks::run(ast);

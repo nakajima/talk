@@ -85,7 +85,7 @@ pub protocol IntoIterator {
 
 pub protocol Iterable {
 	associated Element
-	associated T: Iterator
+	associated T: Iterator where T.Element == Element
 	func iter() -> T
 }
 

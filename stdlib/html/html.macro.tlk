@@ -1,0 +1,810 @@
+use package::Lexer::{
+	MacroInput, Token, TokenKind, TokenRange, TokenTree, Group,
+	group_contents, token_tree_range
+}
+use package::Ast::{ Expr, Pattern }
+use package::Syntax::{
+	Syntax, SyntaxFailure, SyntaxResult, SyntaxContext, QuoteContext,
+	capture_expr, capture_pattern, capture_type, string_literal_expr,
+	ungrouped_expr_splice, pattern_expr_fragment, type_expr_fragment,
+	build_match_expr,
+	copy_syntax_context, copy_quote_context
+}
+
+struct HtmlResult {
+	let value: Syntax<Expr>?
+	let failure: SyntaxFailure?
+}
+
+struct HtmlPatternResult {
+	let value: Syntax<Pattern>?
+	let failure: SyntaxFailure?
+}
+
+struct HtmlName {
+	let text: String
+	let span: Range<Int>
+}
+
+struct HtmlParser {
+	let source_id: Int
+	let source: String
+	let trees: [TokenTree]
+	let index: Int
+	let use_site: SyntaxContext
+	let context: QuoteContext
+}
+
+func html_failure(code: String, message: String, span: Range<Int>) -> HtmlResult {
+	HtmlResult(
+		value: .none,
+		failure: .some(SyntaxFailure(code: code, message: message, span: span))
+	)
+}
+
+func html_ok(consume value: Syntax<Expr>) -> HtmlResult {
+	HtmlResult(value: .some(consume value), failure: .none)
+}
+
+func must_quote(consume result: SyntaxResult<Expr>) -> Syntax<Expr> {
+	if let .some(value) = result.into_value() { return value }
+	unreachable
+}
+
+func concat_expr(consume lhs: Syntax<Expr>, consume rhs: Syntax<Expr>, context: &QuoteContext) -> Syntax<Expr> {
+	must_quote(result: quote { $lhs + $rhs })
+}
+
+func render_expr(consume value: Syntax<Expr>, context: &QuoteContext) -> Syntax<Expr> {
+	must_quote(result: quote { render_html(value: $value) })
+}
+
+func choose_expr(consume condition: Syntax<Expr>, consume yes: Syntax<Expr>, consume no: Syntax<Expr>, context: &QuoteContext) -> Syntax<Expr> {
+	must_quote(result: quote { if $condition { $yes } else { $no } })
+}
+
+func copy_token(token: &Token) -> Token {
+	Token(
+		kind: token.kind,
+		span: token.span.lower..<token.span.upper,
+		lexeme: token.lexeme.lower..<token.lexeme.upper
+	)
+}
+
+func copy_group(group: &Group) -> Group {
+	Group(
+		delimiter: group.delimiter,
+		open: copy_token(token: group.open),
+		close: copy_token(token: group.close),
+		children: copy_trees(trees: group.children)
+	)
+}
+
+func copy_tree(tree: &TokenTree) -> TokenTree {
+	match tree {
+		.leaf(token) -> .leaf(copy_token(token: token)),
+		.group(group) -> .group(copy_group(group: group))
+	}
+}
+
+func copy_trees(trees: &[TokenTree]) -> [TokenTree] {
+	let copied: [TokenTree] = []
+	for tree in trees { copied.push(copy_tree(tree: tree)) }
+	copied
+}
+
+func copy_trees_between(trees: &[TokenTree], start: Int, end: Int) -> [TokenTree] {
+	let copied: [TokenTree] = []
+	let index = start
+	loop index < end {
+		copied.push(copy_tree(tree: trees[index]))
+		index = index + 1
+	}
+	copied
+}
+
+func source_text(source: &String, span: Range<Int>) -> String {
+	source.utf8().slice(start: span.lower, byte_count: span.upper - span.lower).to_string()
+}
+
+func tree_span(tree: &TokenTree) -> Range<Int> {
+	token_tree_range(tree: tree).span
+}
+
+func is_leaf_kind(tree: &TokenTree, kind: TokenKind) -> Bool {
+	match tree {
+		.leaf(token) -> token.kind == kind,
+		.group(_) -> false
+	}
+}
+
+func leaf_token(tree: &TokenTree) -> &Token? {
+	match tree {
+		.leaf(token) -> .some(token),
+		.group(_) -> .none
+	}
+}
+
+func copied_leaf_token(tree: &TokenTree) -> Token? {
+	if let .some(token) = leaf_token(tree: tree) {
+		.some(copy_token(token: token))
+	} else {
+		.none
+	}
+}
+
+func brace_group(tree: &TokenTree) -> &Group? {
+	match tree {
+		.group(group) -> match group.delimiter {
+			.brace -> .some(group),
+			_ -> .none
+		},
+		.leaf(_) -> .none
+	}
+}
+
+func paren_group(tree: &TokenTree) -> &Group? {
+	match tree {
+		.group(group) -> match group.delimiter {
+			.paren -> .some(group),
+			_ -> .none
+		},
+		.leaf(_) -> .none
+	}
+}
+
+func bracket_group(tree: &TokenTree) -> &Group? {
+	match tree {
+		.group(group) -> match group.delimiter {
+			.bracket -> .some(group),
+			_ -> .none
+		},
+		.leaf(_) -> .none
+	}
+}
+
+func is_html_word(source: &String, tree: &TokenTree) -> Bool {
+	match tree {
+		.group(_) -> false,
+		.leaf(token) -> {
+			let text = source_text(source: source, span: token.span)
+			if text.utf8().count() == 0 { return false }
+			let first = text.utf8().at(index: 0)._toInt()
+			(first >= 65 && first <= 90) || (first >= 97 && first <= 122) || first == 95
+		}
+	}
+}
+
+func range_of(trees: &[TokenTree], start: Int, end: Int) -> TokenRange {
+	let tokens: [Token] = []
+	let i = start
+	loop i < end {
+		let range = token_tree_range(tree: trees[i])
+		for token in consume range.tokens { tokens.push(token) }
+		i = i + 1
+	}
+	TokenRange(tokens: tokens, span: tree_span(tree: trees[start]).lower..<tree_span(tree: trees[end - 1]).upper)
+}
+
+func captured_expr(parser: &HtmlParser, range: TokenRange) -> HtmlResult {
+	let captured = capture_expr(
+		source_id: parser.source_id,
+		source: parser.source,
+		input: range,
+		context: parser.use_site
+	)
+	if let .some(value) = captured.value { return html_ok(value: consume value) }
+	HtmlResult(value: .none, failure: captured.failure)
+}
+
+func captured_pattern_syntax(parser: &HtmlParser, range: TokenRange) -> HtmlPatternResult {
+	let captured = capture_pattern(
+		source_id: parser.source_id,
+		source: parser.source,
+		input: range,
+		context: parser.use_site
+	)
+	HtmlPatternResult(value: captured.value, failure: captured.failure)
+}
+
+func captured_pattern_fragment(parser: &HtmlParser, range: TokenRange) -> HtmlResult {
+	let captured = capture_pattern(
+		source_id: parser.source_id,
+		source: parser.source,
+		input: range,
+		context: parser.use_site
+	)
+	if let .some(value) = captured.value {
+		return html_ok(value: pattern_expr_fragment(syntax: consume value))
+	}
+	HtmlResult(value: .none, failure: captured.failure)
+}
+
+func captured_type_fragment(parser: &HtmlParser, range: TokenRange) -> HtmlResult {
+	let captured = capture_type(
+		source_id: parser.source_id,
+		source: parser.source,
+		input: range,
+		context: parser.use_site
+	)
+	if let .some(value) = captured.value {
+		return html_ok(value: type_expr_fragment(syntax: consume value))
+	}
+	HtmlResult(value: .none, failure: captured.failure)
+}
+
+extend HtmlParser {
+	func static_expr(text: String, span: Range<Int>) -> Syntax<Expr> {
+		string_literal_expr(
+			value: text,
+			source_id: self.source_id,
+			source_span: span,
+			context: self.context
+		)
+	}
+
+	mut func skip_layout() -> Void {
+		loop self.index < self.trees.count && is_leaf_kind(tree: self.trees[self.index], kind: .newline) {
+			self.index = self.index + 1
+		}
+	}
+
+	mut func take_name() -> HtmlName? {
+		if self.index >= self.trees.count || is_html_word(source: self.source, tree: self.trees[self.index]) == false {
+			return .none
+		}
+		let start = tree_span(tree: self.trees[self.index]).lower
+		let text = source_text(source: self.source, span: tree_span(tree: self.trees[self.index]))
+		let end = tree_span(tree: self.trees[self.index]).upper
+		self.index = self.index + 1
+		loop self.index + 1 < self.trees.count && is_leaf_kind(tree: self.trees[self.index], kind: .minus) && is_html_word(source: self.source, tree: self.trees[self.index + 1]) {
+			text = text + "-" + source_text(source: self.source, span: tree_span(tree: self.trees[self.index + 1]))
+			end = tree_span(tree: self.trees[self.index + 1]).upper
+			self.index = self.index + 2
+		}
+		.some(HtmlName(text: text, span: start..<end))
+	}
+
+	func expression_in_group(group: &Group) -> HtmlResult {
+		captured_expr(parser: self, range: group_contents(group: group))
+	}
+
+	mut func parse_interpolation(group: &Group) -> HtmlResult {
+		let captured = self.expression_in_group(group: group)
+		if let .some(value) = captured.value {
+			return html_ok(value: render_expr(value: consume value, context: self.context))
+		}
+		captured
+	}
+
+	mut func parse_if(attribute: &Token) -> HtmlResult {
+		let condition_start = self.index
+		loop self.index < self.trees.count {
+			if let .some(_) = brace_group(tree: self.trees[self.index]) { break }
+			self.index = self.index + 1
+		}
+		if condition_start == self.index {
+			return html_failure(code: "html.expected-condition", message: "Expected a condition after `@if`", span: attribute.span)
+		}
+		if self.index >= self.trees.count {
+			return html_failure(code: "html.expected-body", message: "Expected a body after `@if`", span: attribute.span)
+		}
+
+		let condition: Syntax<Expr>? = .none
+		let let_pattern: Syntax<Expr>? = .none
+		let let_value: Syntax<Expr>? = .none
+		if is_leaf_kind(tree: self.trees[condition_start], kind: .keyword_let) {
+			let equals = condition_start + 1
+			loop equals < self.index && is_leaf_kind(tree: self.trees[equals], kind: .equals) == false { equals = equals + 1 }
+			if equals == condition_start + 1 || equals >= self.index {
+				return html_failure(code: "html.expected-let-condition", message: "Expected a pattern and value after `@if let`", span: attribute.span)
+			}
+			let pattern = captured_pattern_fragment(parser: self, range: range_of(trees: self.trees, start: condition_start + 1, end: equals))
+			let value = captured_expr(parser: self, range: range_of(trees: self.trees, start: equals + 1, end: self.index))
+			if let .some(failure) = pattern.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+			if let .some(failure) = value.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+			let_pattern = pattern.value
+			let_value = value.value
+		} else {
+			let captured = captured_expr(parser: self, range: range_of(trees: self.trees, start: condition_start, end: self.index))
+			if let .some(failure) = captured.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+			condition = captured.value
+		}
+
+		let then_group: &Group
+		if let .some(group) = brace_group(tree: self.trees[self.index]) {
+			then_group = group
+		} else {
+			return html_failure(code: "html.expected-body", message: "Expected a body after `@if`", span: tree_span(tree: self.trees[self.index]))
+		}
+		self.index = self.index + 1
+		let then_parser = HtmlParser(source_id: self.source_id, source: self.source.to_string(), trees: copy_trees(trees: then_group.children), index: 0, use_site: copy_syntax_context(context: self.use_site), context: copy_quote_context(context: self.context))
+		let then_value = then_parser.parse_all()
+		if let .some(failure) = then_value.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+
+		self.skip_layout()
+		let otherwise = self.static_expr(text: "", span: attribute.span)
+		if self.index < self.trees.count {
+			let else_tree: &TokenTree = self.trees[self.index]
+			match else_tree {
+				.leaf(token) -> if token.kind == .attribute && source_text(source: self.source, span: token.lexeme) == "else" {
+					let else_span = token.span
+					self.index = self.index + 1
+					self.skip_layout()
+					if self.index >= self.trees.count {
+						return html_failure(code: "html.expected-body", message: "Expected a body after `@else`", span: else_span)
+					}
+					if is_leaf_kind(tree: self.trees[self.index], kind: .keyword_if) {
+						if let .some(if_token) = copied_leaf_token(tree: self.trees[self.index]) {
+							self.index = self.index + 1
+							let parsed = self.parse_if(attribute: if_token)
+							if let .some(failure) = parsed.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+							if let .some(value) = parsed.value { otherwise = value }
+						}
+					} else if let .some(group) = brace_group(tree: self.trees[self.index]) {
+						let else_parser = HtmlParser(source_id: self.source_id, source: self.source.to_string(), trees: copy_trees(trees: group.children), index: 0, use_site: copy_syntax_context(context: self.use_site), context: copy_quote_context(context: self.context))
+						let parsed = else_parser.parse_all()
+						if let .some(failure) = parsed.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+						if let .some(value) = parsed.value { otherwise = value }
+						self.index = self.index + 1
+					} else {
+						return html_failure(code: "html.expected-body", message: "Expected `if` or a braced body after `@else`", span: tree_span(tree: self.trees[self.index]))
+					}
+				},
+				_ -> ()
+			}
+		}
+
+		if let .some(yes) = then_value.value {
+			let context = self.context
+			if let .some(pattern) = let_pattern {
+				if let .some(value) = let_value {
+					return html_ok(value: must_quote(result: quote { if let $pattern = $value { $yes } else { $otherwise } }))
+				}
+			}
+			if let .some(condition_value) = condition {
+				return html_ok(value: must_quote(result: quote { if $condition_value { $yes } else { $otherwise } }))
+			}
+		}
+		html_failure(code: "html.invalid-if", message: "Could not build `@if` output", span: attribute.span)
+	}
+
+	mut func parse_for(attribute: &Token) -> HtmlResult {
+		let binding_start = self.index
+		loop self.index < self.trees.count && is_leaf_kind(tree: self.trees[self.index], kind: .keyword_in) == false {
+			self.index = self.index + 1
+		}
+		if binding_start == self.index {
+			return html_failure(code: "html.expected-binding", message: "Expected a pattern after `@for`", span: attribute.span)
+		}
+		if self.index >= self.trees.count {
+			return html_failure(code: "html.expected-in", message: "Expected `in` after the `@for` pattern", span: attribute.span)
+		}
+		let binding_end = self.index
+		self.index = self.index + 1
+		let sequence_start = self.index
+		loop self.index < self.trees.count {
+			if let .some(_) = brace_group(tree: self.trees[self.index]) { break }
+			self.index = self.index + 1
+		}
+		if sequence_start == self.index {
+			return html_failure(code: "html.expected-sequence", message: "Expected an expression after `in`", span: attribute.span)
+		}
+		if self.index >= self.trees.count {
+			return html_failure(code: "html.expected-body", message: "Expected a body after `@for`", span: attribute.span)
+		}
+		let binding = captured_pattern_fragment(parser: self, range: range_of(trees: self.trees, start: binding_start, end: binding_end))
+		let sequence = captured_expr(parser: self, range: range_of(trees: self.trees, start: sequence_start, end: self.index))
+		let body_group: &Group
+		if let .some(group) = brace_group(tree: self.trees[self.index]) {
+			body_group = group
+		} else {
+			return html_failure(code: "html.expected-body", message: "Expected a body after `@for`", span: tree_span(tree: self.trees[self.index]))
+		}
+		self.index = self.index + 1
+		let body_parser = HtmlParser(source_id: self.source_id, source: self.source.to_string(), trees: copy_trees(trees: body_group.children), index: 0, use_site: copy_syntax_context(context: self.use_site), context: copy_quote_context(context: self.context))
+		let body = body_parser.parse_all()
+		if let .some(failure) = binding.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+		if let .some(failure) = sequence.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+		if let .some(failure) = body.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+		if let .some(binding_value) = binding.value {
+			if let .some(sequence_value) = sequence.value {
+				let sequence_value = ungrouped_expr_splice(syntax: consume sequence_value)
+				if let .some(body_value) = body.value {
+					let context = self.context
+					let quoted = quote { render_html_loop(values: $sequence_value) { $binding_value in $body_value } }
+					if let .some(value) = quoted.value { return html_ok(value: consume value) }
+					return HtmlResult(value: .none, failure: quoted.failure)
+				}
+			}
+		}
+		html_failure(code: "html.invalid-for", message: "Could not build `@for` output", span: attribute.span)
+	}
+
+	mut func parse_let(attribute: &Token) -> HtmlResult {
+		let declaration_start = self.index
+		loop self.index < self.trees.count && is_leaf_kind(tree: self.trees[self.index], kind: .semicolon) == false {
+			self.index = self.index + 1
+		}
+		if self.index >= self.trees.count {
+			return html_failure(code: "html.expected-semicolon", message: "Expected `;` after `@let`", span: attribute.span)
+		}
+		let declaration_end = self.index
+		let equals = declaration_start
+		loop equals < declaration_end && is_leaf_kind(tree: self.trees[equals], kind: .equals) == false { equals = equals + 1 }
+		if equals == declaration_start || equals >= declaration_end {
+			return html_failure(code: "html.expected-let-value", message: "Expected a binding and value after `@let`", span: attribute.span)
+		}
+		let colon = declaration_start
+		loop colon < equals && is_leaf_kind(tree: self.trees[colon], kind: .colon) == false { colon = colon + 1 }
+		let pattern_end = if colon < equals { colon } else { equals }
+		let pattern = captured_pattern_fragment(parser: self, range: range_of(trees: self.trees, start: declaration_start, end: pattern_end))
+		let value = captured_expr(parser: self, range: range_of(trees: self.trees, start: equals + 1, end: declaration_end))
+		if let .some(failure) = pattern.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+		if let .some(failure) = value.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+		let annotation: Syntax<Expr>? = .none
+		if colon < equals {
+			let captured = captured_type_fragment(parser: self, range: range_of(trees: self.trees, start: colon + 1, end: equals))
+			if let .some(failure) = captured.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+			annotation = captured.value
+		}
+		self.index = self.index + 1
+		let remainder = self.parse_all()
+		if let .some(failure) = remainder.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+		if let .some(pattern_value) = pattern.value {
+			if let .some(rhs) = value.value {
+				if let .some(rest) = remainder.value {
+					let context = self.context
+					if let .some(type_value) = annotation {
+						return html_ok(value: must_quote(result: quote {
+							{
+								let $pattern_value: $type_value = $rhs
+								$rest
+							}
+						}))
+					}
+					return html_ok(value: must_quote(result: quote {
+						{
+							let $pattern_value = $rhs
+							$rest
+						}
+					}))
+				}
+			}
+		}
+		html_failure(code: "html.invalid-let", message: "Could not build `@let` output", span: attribute.span)
+	}
+
+	mut func parse_match(attribute: &Token) -> HtmlResult {
+		let subject_start = self.index
+		loop self.index < self.trees.count {
+			if let .some(_) = brace_group(tree: self.trees[self.index]) { break }
+			self.index = self.index + 1
+		}
+		if subject_start == self.index {
+			return html_failure(code: "html.expected-match-value", message: "Expected a value after `@match`", span: attribute.span)
+		}
+		if self.index >= self.trees.count {
+			return html_failure(code: "html.expected-match-arms", message: "Expected match arms after `@match`", span: attribute.span)
+		}
+		let subject = captured_expr(parser: self, range: range_of(trees: self.trees, start: subject_start, end: self.index))
+		if let .some(failure) = subject.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+		let arms: Group
+		if let .some(group) = brace_group(tree: self.trees[self.index]) {
+			arms = copy_group(group: group)
+		} else {
+			return html_failure(code: "html.expected-match-arms", message: "Expected match arms after `@match`", span: attribute.span)
+		}
+		self.index = self.index + 1
+
+		let patterns: [Syntax<Pattern>] = []
+		let bodies: [Syntax<Expr>] = []
+		let arm_index = 0
+		loop arm_index < arms.children.count {
+			loop arm_index < arms.children.count && (is_leaf_kind(tree: arms.children[arm_index], kind: .newline) || is_leaf_kind(tree: arms.children[arm_index], kind: .comma)) { arm_index = arm_index + 1 }
+			if arm_index >= arms.children.count { break }
+			let pattern_start = arm_index
+			loop arm_index < arms.children.count && is_leaf_kind(tree: arms.children[arm_index], kind: .arrow) == false { arm_index = arm_index + 1 }
+			if pattern_start == arm_index || arm_index >= arms.children.count {
+				return html_failure(code: "html.expected-match-arrow", message: "Expected `->` in HTML match arm", span: tree_span(tree: arms.children[pattern_start]))
+			}
+			let pattern = captured_pattern_syntax(parser: self, range: range_of(trees: arms.children, start: pattern_start, end: arm_index))
+			if let .some(failure) = pattern.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+			arm_index = arm_index + 1
+			loop arm_index < arms.children.count && is_leaf_kind(tree: arms.children[arm_index], kind: .newline) { arm_index = arm_index + 1 }
+			if arm_index >= arms.children.count {
+				return html_failure(code: "html.expected-match-body", message: "Expected HTML after match arm `->`", span: attribute.span)
+			}
+
+			let body: HtmlResult
+			if let .some(group) = brace_group(tree: arms.children[arm_index]) {
+				let parser = HtmlParser(source_id: self.source_id, source: self.source.to_string(), trees: copy_trees(trees: group.children), index: 0, use_site: copy_syntax_context(context: self.use_site), context: copy_quote_context(context: self.context))
+				body = parser.parse_all()
+				arm_index = arm_index + 1
+			} else {
+				let body_start = arm_index
+				loop arm_index < arms.children.count && is_leaf_kind(tree: arms.children[arm_index], kind: .comma) == false { arm_index = arm_index + 1 }
+				let parser = HtmlParser(source_id: self.source_id, source: self.source.to_string(), trees: copy_trees_between(trees: arms.children, start: body_start, end: arm_index), index: 0, use_site: copy_syntax_context(context: self.use_site), context: copy_quote_context(context: self.context))
+				body = parser.parse_all()
+			}
+			if let .some(failure) = body.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+			if let .some(pattern_value) = pattern.value { patterns.push(consume pattern_value) }
+			if let .some(body_value) = body.value { bodies.push(consume body_value) }
+		}
+		if patterns.count == 0 || patterns.count != bodies.count {
+			return html_failure(code: "html.expected-match-arms", message: "Expected at least one complete HTML match arm", span: attribute.span)
+		}
+
+		if let .some(subject_value) = subject.value {
+			let built = build_match_expr(subject: consume subject_value, patterns: consume patterns, bodies: consume bodies, source_id: self.source_id, source_span: attribute.span, context: self.context)
+			if let .some(failure) = built.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+			if let .some(match_value) = built.value { return html_ok(value: consume match_value) }
+		}
+		html_failure(code: "html.invalid-match", message: "Could not build `@match` output", span: attribute.span)
+	}
+
+	mut func parse_rendered_value(message: String) -> HtmlResult {
+		if self.index >= self.trees.count {
+			return html_failure(code: "html.expected-value", message: message, span: 0..<0)
+		}
+		let value_tree: &TokenTree = self.trees[self.index]
+		if let .some(group) = paren_group(tree: value_tree) {
+			self.index = self.index + 1
+			let captured = self.expression_in_group(group: group)
+			if let .some(value) = captured.value {
+				return html_ok(value: render_expr(value: consume value, context: self.context))
+			}
+			return captured
+		}
+		if let .some(group) = brace_group(tree: value_tree) {
+			self.index = self.index + 1
+			let parser = HtmlParser(source_id: self.source_id, source: self.source.to_string(), trees: copy_trees(trees: group.children), index: 0, use_site: copy_syntax_context(context: self.use_site), context: copy_quote_context(context: self.context))
+			return parser.parse_all()
+		}
+		match value_tree {
+			.leaf(token) -> if token.kind == .string_literal {
+				self.index = self.index + 1
+				let captured = captured_expr(parser: self, range: token_tree_range(tree: value_tree))
+				if let .some(value) = captured.value {
+					return html_ok(value: render_expr(value: consume value, context: self.context))
+				}
+				captured
+			} else {
+				html_failure(code: "html.expected-value", message: message, span: token.span)
+			},
+			.group(_) -> html_failure(code: "html.expected-value", message: message, span: tree_span(tree: value_tree))
+		}
+	}
+
+	mut func parse_element() -> HtmlResult {
+		let starts_with_shortcut = self.index < self.trees.count && (is_leaf_kind(tree: self.trees[self.index], kind: .dot) || is_leaf_kind(tree: self.trees[self.index], kind: .hash))
+		let name: HtmlName
+		if starts_with_shortcut {
+			let span = tree_span(tree: self.trees[self.index])
+			name = HtmlName(text: "div", span: span)
+		} else if let .some(found) = self.take_name() {
+			name = found
+		} else {
+			return html_failure(code: "html.expected-element", message: "Expected an HTML element", span: tree_span(tree: self.trees[self.index]))
+		}
+
+		if name.text == "DOCTYPE" && self.index < self.trees.count && is_leaf_kind(tree: self.trees[self.index], kind: .semicolon) {
+			self.index = self.index + 1
+			return html_ok(value: self.static_expr(text: "<!DOCTYPE html>", span: name.span))
+		}
+
+		let output_parts: [Syntax<Expr>] = [self.static_expr(text: "<" + name.text, span: name.span)]
+		let class_value = self.static_expr(text: "", span: name.span)
+		let class_count = 0
+		let id_value: Syntax<Expr>? = .none
+		loop {
+			self.skip_layout()
+			if self.index >= self.trees.count { break }
+			let is_class = is_leaf_kind(tree: self.trees[self.index], kind: .dot)
+			let is_id = is_leaf_kind(tree: self.trees[self.index], kind: .hash)
+			if is_class == false && is_id == false { break }
+			let shortcut_span = tree_span(tree: self.trees[self.index])
+			self.index = self.index + 1
+			let parsed: HtmlResult
+			if let .some(value) = self.take_name() {
+				parsed = html_ok(value: self.static_expr(text: value.text, span: value.span))
+			} else {
+				parsed = self.parse_rendered_value(message: "Expected a name, string, interpolation, or template after `.` or `#`")
+			}
+			if let .some(failure) = parsed.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+			if let .some(value) = parsed.value {
+				if is_class {
+					let fragment = value
+					if self.index < self.trees.count {
+						if let .some(toggle) = bracket_group(tree: self.trees[self.index]) {
+							let condition = captured_expr(parser: self, range: group_contents(group: toggle))
+							if let .some(failure) = condition.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+							if let .some(condition_value) = condition.value {
+								fragment = choose_expr(condition: consume condition_value, yes: consume fragment, no: consume self.static_expr(text: "", span: shortcut_span), context: self.context)
+							}
+							self.index = self.index + 1
+						}
+					}
+					let context = self.context
+					class_value = must_quote(result: quote { append_html_class(classes: $class_value, value: $fragment) })
+					class_count = class_count + 1
+				} else {
+					if self.index < self.trees.count {
+						if let .some(_) = bracket_group(tree: self.trees[self.index]) {
+							return html_failure(code: "html.id-toggle", message: "ID shortcuts cannot be toggled", span: shortcut_span)
+						}
+					}
+					id_value = .some(value)
+				}
+			}
+		}
+		if let .some(id) = id_value {
+			output_parts.push(self.static_expr(text: " id=\"", span: name.span))
+			output_parts.push(consume id)
+			output_parts.push(self.static_expr(text: "\"", span: name.span))
+		}
+		if class_count > 0 {
+			let context = self.context
+			let attribute = must_quote(result: quote { render_class_attribute(value: $class_value) })
+			output_parts.push(consume attribute)
+		}
+
+		loop {
+			self.skip_layout()
+			if self.index >= self.trees.count { return html_failure(code: "html.unclosed-element", message: "Expected `{ ... }` or `;` after element `" + name.text + "`", span: name.span) }
+			if let .some(attribute) = self.take_name() {
+				if self.index < self.trees.count && is_leaf_kind(tree: self.trees[self.index], kind: .equals) {
+					self.index = self.index + 1
+					if self.index >= self.trees.count { return html_failure(code: "html.expected-attribute-value", message: "Expected a value for attribute `" + attribute.text + "`", span: attribute.span) }
+					if let .some(optional) = bracket_group(tree: self.trees[self.index]) {
+						let captured = captured_expr(parser: self, range: group_contents(group: optional))
+						if let .some(failure) = captured.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+						if let .some(value) = captured.value {
+							let name_value = self.static_expr(text: attribute.text, span: attribute.span)
+							let context = self.context
+							let rendered = must_quote(result: quote { render_optional_html_attribute(name: $name_value, value: $value) })
+							output_parts.push(consume rendered)
+							self.index = self.index + 1
+							continue
+						}
+					}
+					let value = self.parse_rendered_value(message: "Attribute values must be strings, parenthesized expressions, or braced templates")
+					if let .some(failure) = value.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+					if let .some(syntax) = value.value {
+						output_parts.push(self.static_expr(text: " " + attribute.text + "=\"", span: attribute.span))
+						output_parts.push(consume syntax)
+						output_parts.push(self.static_expr(text: "\"", span: attribute.span))
+						continue
+					}
+				}
+				if self.index < self.trees.count && is_leaf_kind(tree: self.trees[self.index], kind: .question_mark) {
+					self.index = self.index + 1
+					output_parts.push(self.static_expr(text: " " + attribute.text, span: attribute.span))
+					continue
+				}
+				if self.index < self.trees.count {
+					if let .some(toggle) = bracket_group(tree: self.trees[self.index]) {
+						let captured = captured_expr(parser: self, range: group_contents(group: toggle))
+						if let .some(failure) = captured.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+						if let .some(condition) = captured.value {
+							let rendered = choose_expr(condition: consume condition, yes: consume self.static_expr(text: " " + attribute.text, span: attribute.span), no: consume self.static_expr(text: "", span: attribute.span), context: self.context)
+							output_parts.push(consume rendered)
+							self.index = self.index + 1
+							continue
+						}
+					}
+				}
+				output_parts.push(self.static_expr(text: " " + attribute.text, span: attribute.span))
+				continue
+			}
+			break
+		}
+
+		if is_leaf_kind(tree: self.trees[self.index], kind: .semicolon) {
+			let end_span = tree_span(tree: self.trees[self.index])
+			self.index = self.index + 1
+			output_parts.push(self.static_expr(text: ">", span: end_span))
+			return html_ok(value: self.join_parts(parts: consume output_parts, span: name.span))
+		}
+		if let .some(group) = brace_group(tree: self.trees[self.index]) {
+			self.index = self.index + 1
+			let body_parser = HtmlParser(source_id: self.source_id, source: self.source.to_string(), trees: copy_trees(trees: group.children), index: 0, use_site: copy_syntax_context(context: self.use_site), context: copy_quote_context(context: self.context))
+			let body = body_parser.parse_all()
+			if let .some(failure) = body.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+			if let .some(body_value) = body.value {
+				output_parts.push(self.static_expr(text: ">", span: group.open.span))
+				output_parts.push(consume body_value)
+				output_parts.push(self.static_expr(text: "</" + name.text + ">", span: group.close.span))
+				return html_ok(value: self.join_parts(parts: consume output_parts, span: name.span))
+			}
+		}
+		html_failure(code: "html.expected-body", message: "Expected `{ ... }` or `;` after element `" + name.text + "`", span: name.span)
+	}
+
+	mut func parse_node() -> HtmlResult {
+		self.skip_layout()
+		if self.index >= self.trees.count {
+			return html_failure(code: "html.expected-node", message: "Expected HTML content", span: 0..<0)
+		}
+		if let .some(group) = paren_group(tree: self.trees[self.index]) {
+			self.index = self.index + 1
+			return self.parse_interpolation(group: group)
+		}
+		let current: &TokenTree = self.trees[self.index]
+		match current {
+			.leaf(token) -> {
+				if token.kind == .string_literal {
+					self.index = self.index + 1
+					let captured = captured_expr(parser: self, range: token_tree_range(tree: self.trees[self.index - 1]))
+					if let .some(value) = captured.value { return html_ok(value: render_expr(value: consume value, context: self.context)) }
+					return captured
+				}
+				if token.kind == .attribute {
+					let control = source_text(source: self.source, span: token.lexeme)
+					self.index = self.index + 1
+					if control == "if" { return self.parse_if(attribute: token) }
+					if control == "for" { return self.parse_for(attribute: token) }
+					if control == "let" { return self.parse_let(attribute: token) }
+					if control == "match" { return self.parse_match(attribute: token) }
+					return html_failure(code: "html.unknown-control", message: "Unknown HTML control `@" + control + "`", span: token.span)
+				}
+			},
+			_ -> ()
+		}
+		self.parse_element()
+	}
+
+	func join_parts(consume parts: [Syntax<Expr>], span: Range<Int>) -> Syntax<Expr> {
+		if parts.count == 0 { return self.static_expr(text: "", span: span) }
+		loop parts.count > 1 {
+			let ordered: [Syntax<Expr>] = []
+			loop parts.count > 0 {
+				if let .some(value) = parts.pop() { ordered.push(consume value) }
+			}
+			let combined: [Syntax<Expr>] = []
+			loop ordered.count > 0 {
+				let lhs = ordered.pop()
+				if let .some(lhs_value) = lhs {
+					let rhs = ordered.pop()
+					if let .some(rhs_value) = rhs {
+						combined.push(concat_expr(lhs: consume lhs_value, rhs: consume rhs_value, context: self.context))
+					} else {
+						combined.push(consume lhs_value)
+					}
+				}
+			}
+			parts = combined
+		}
+		if let .some(value) = parts.pop() { value } else { self.static_expr(text: "", span: span) }
+	}
+
+	mut func parse_all() -> HtmlResult {
+		let span = if self.trees.count == 0 { 0..<0 } else { tree_span(tree: self.trees[0]).lower..<tree_span(tree: self.trees[self.trees.count - 1]).upper }
+		let parts: [Syntax<Expr>] = []
+		self.skip_layout()
+		loop self.index < self.trees.count {
+			let node = self.parse_node()
+			if let .some(failure) = node.failure { return HtmlResult(value: .none, failure: .some(failure)) }
+			if let .some(value) = node.value { parts.push(consume value) }
+			self.skip_layout()
+		}
+		html_ok(value: self.join_parts(parts: consume parts, span: span))
+	}
+}
+
+pub func html(input: MacroInput, use_site: SyntaxContext, context: QuoteContext) -> SyntaxResult<Expr> {
+	match input.tree {
+		.group(group) -> {
+			let parser = HtmlParser(source_id: input.source_id, source: input.source.to_string(), trees: copy_trees(trees: group.children), index: 0, use_site: copy_syntax_context(context: use_site), context: copy_quote_context(context: context))
+			let parsed = parser.parse_all()
+			if let .some(failure) = parsed.failure {
+				return SyntaxResult<Expr>(value: .none, failure: .some(failure))
+			}
+			if let .some(value) = parsed.value {
+				return quote { Markup(value: $value) }
+			}
+			SyntaxResult<Expr>(value: .none, failure: .some(SyntaxFailure(code: "html.empty", message: "HTML macro produced no output", span: group.open.span.lower..<group.close.span.upper)))
+		},
+		.leaf(token) -> SyntaxResult<Expr>(value: .none, failure: .some(SyntaxFailure(code: "html.expected-group", message: "HTML macro requires a delimited body", span: token.span)))
+	}
+}

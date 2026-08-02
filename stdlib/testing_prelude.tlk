@@ -7,7 +7,7 @@ let __talktalk_current_test = ""
 let __talktalk_filter_enabled = false
 let __talktalk_filter_name = ""
 
-@handle 'registerTest { testCase in
+#handle 'registerTest { testCase in
 	if __talktalk_filter_enabled {
 		if testCase.name == __talktalk_filter_name {
 			__talktalk_tests.push(TestCase(name: testCase.name.to_string(), block: testCase.block))
@@ -18,7 +18,7 @@ let __talktalk_filter_name = ""
 	'continue ()
 }
 
-@handle 'fail { message in
+#handle 'fail { message in
 	print_raw(ColorfulString.red("F"))
 
 	__talktalk_failures.push(

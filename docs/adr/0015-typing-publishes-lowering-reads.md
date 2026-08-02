@@ -148,7 +148,7 @@ their closure rows instead of sharing one module-wide row var.
   never a move before a live use; moving early and reusing would read
   memory the consumer may already have freed). Zero consumes → generic
   bindings and by-value params get scope-exit candidates, classified
-  once over the generic body and elided per θ. Impure `@_ir` binds
+  once over the generic body and elided per θ. Impure `#_ir` binds
   (auto-cloned generics) lower continuation-style through `lower_args`.
   The `eval_expecting_generic_ownership_leak` fence is DELETED — every
   test asserts strict allocation balance.
@@ -167,7 +167,7 @@ their closure rows instead of sharing one module-wide row var.
   zero-length statics interned at the region's end aliased the first
   heap allocation (they now reserve a byte); derived `show`'s
   accumulator chain borrowed-and-leaked every intermediate (each
-  continuation now frees the superseded acc). New `@_ir { free $0 }`
+  continuation now frees the superseded acc). New `#_ir { free $0 }`
   instruction + core `_free(ptr)`; `open_path` frees its NUL copy; raw
   io examples/tests free their buffers.
 - **Block-scoped alias double-free — FIXED (day 2)**: tail-position

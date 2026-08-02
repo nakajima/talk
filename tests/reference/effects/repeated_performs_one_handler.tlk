@@ -1,5 +1,5 @@
 effect 'step(n) -> Int
-@handle 'step { n in
+#handle 'step { n in
 	'continue n + 1
 }
 func go() 'step -> Int {

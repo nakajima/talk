@@ -72,7 +72,7 @@ Precedent, per decision:
 - Witnesses for non-Copy types must annotate the borrow
   (`func equals(rhs: &String)`); Copy-graded types may keep by-value
   annotations because `&T ~ T` erasure unifies them either way.
-- Runtime is unchanged: borrows erase in `map_ty`, so `@_ir` witness
+- Runtime is unchanged: borrows erase in `map_ty`, so `#_ir` witness
   bodies and dispatch are byte-identical.
 - `needle == candidate` over borrowed elements no longer round-trips
   through copy-out coercions or the given-equality escape hatch — the

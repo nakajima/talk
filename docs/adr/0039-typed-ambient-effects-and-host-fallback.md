@@ -45,7 +45,7 @@ effect anywhere**. The host's behavior is ordinary Talk source in
   the runtime's operation table; unused slots pass zero). Adding a request
   case forces an arm here via exhaustiveness.
 - `_with_host(consume body: () '[io, alloc, async, panic] -> ()) -> ()` — installs
-  the host fallbacks as ordinary `@handle` statements. IO delegates to
+  the host fallbacks as ordinary `#handle` statements. IO delegates to
   `_io_host`; alloc and async resume immediately because allocation
   bookkeeping is carried by the `'unsafe` intrinsics and the reference host
   has no scheduler. The public abortive `'panic(message: String) -> Never`
@@ -67,9 +67,9 @@ The compiler knows exactly one well-known symbol: `_with_host`.
 - **MIR** treats every declared effect identically: performs use the
   capability path, closures capture capabilities for every declared effect
   in their row (a handler always exists at any legal capture point), and
-  `@handle` is legal over any declared effect. Only the undeclared
+  `#handle` is legal over any declared effect. Only the undeclared
   compile-time `'unsafe` capability stays outside the handler stack
-  (`@unsafe` is its mask; the lexical gate is unchanged).
+  (`#unsafe` is its mask; the lexical gate is unchanged).
 
 Routing order for a host effect is therefore the ordinary order:
 
@@ -141,7 +141,7 @@ Rejected in favor of self-hosting: the dispatcher is 24 lines of ordinary
 Talk, the ambient set is a function signature, and changing host behavior
 is a core-source edit.
 
-### Reject `@handle` over raw `'io` until a safe typed request API exists
+### Reject `#handle` over raw `'io` until a safe typed request API exists
 
 The original draft. The actual soundness hole was never the raw pointers
 but core's trust in reply counts, which clamping closes at ~5 call sites.

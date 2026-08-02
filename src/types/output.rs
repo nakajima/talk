@@ -302,7 +302,7 @@ pub struct TypeOutput {
     pub local_tys: FxHashMap<Symbol, Ty>,
     /// Expression nodes implicitly packed into an existential expected type.
     pub existential_packs: FxHashMap<NodeID, ExistentialPack>,
-    /// Checked inline-IR operation per `@_ir` expression (ADR 0038). The
+    /// Checked inline-IR operation per `#_ir` expression (ADR 0038). The
     /// typed-tree build bakes these onto the tree; lowering never
     /// interprets parser instructions.
     pub checked_ir: FxHashMap<NodeID, CheckedIrKind>,

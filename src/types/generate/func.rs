@@ -314,7 +314,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let mut last = StmtValue::Unit;
         let mut is_empty = true;
         let final_index = block.body.len().saturating_sub(1);
-        // `@handle 'e` delimits the rest of its block: statements after it
+        // `#handle 'e` delimits the rest of its block: statements after it
         // check under an ambient row extended with `e`.
         let mut scoped: Option<Ctx> = None;
         for (index, node) in block.body.iter().enumerate() {
@@ -389,7 +389,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             self.emit_eq(expected.clone(), Ty::unit(), block.id, reason);
             return;
         }
-        // `@handle 'e` delimits the rest of its block: statements after it
+        // `#handle 'e` delimits the rest of its block: statements after it
         // check under an ambient row extended with `e`.
         let mut scoped: Option<Ctx> = None;
         for (index, node) in block.body.iter().enumerate() {
@@ -458,7 +458,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
 
     /// Enter a handler's extent: the rest of the scope checks under a
     /// fresh ambient row, connected to the current one by a label filter
-    /// (`HandleEffect`) — the `@handle` discharges every occurrence of its
+    /// (`HandleEffect`) — the `#handle` discharges every occurrence of its
     /// effect, whatever the instantiation (label-scoped elimination —
     /// docs/effects.md).
     fn enter_handler_extent(&mut self, ctx: &Ctx, effect: Symbol, node: NodeID) -> Ctx {
@@ -466,7 +466,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     }
 
     /// Check a lexical body under an effect that is discharged at the
-    /// boundary. Runtime handlers and compile-time `@unsafe` blocks share
+    /// boundary. Runtime handlers and compile-time `#unsafe` blocks share
     /// this row operation, but only handlers lower to runtime machinery.
     pub(super) fn enter_effect_mask(&mut self, ctx: &Ctx, effect: Symbol, node: NodeID) -> Ctx {
         let inner = EffectRow::open(self.store.fresh_eff(self.level, node));

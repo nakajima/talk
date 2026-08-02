@@ -273,7 +273,7 @@ Check it out, we've got effects:
 effect 'fizz(x: Int) -> Int
 
 // Handles 'fizz for as long as handler is in scope
-@handle 'fizz { x in
+#handle 'fizz { x in
 	// This effect doesn't do much, it just returns what it was passed
 	continue x
 }
@@ -293,7 +293,7 @@ Ok so are effects just weird functions? I mean kind of? But you can also use the
 effect 'throw(msg: String) -> Never
 
 func boom(x) {
-	@handle 'throw { msg in
+	#handle 'throw { msg in
 		print("caught: " + msg)
 		return true
 	}

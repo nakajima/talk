@@ -10,6 +10,6 @@ pub struct InlineArray<Element, static Count: Int> {
 	pub func get(_ index: Int) -> Optional<&Element> {
 		if index < 0 { return .none }
 		if Count <= index { return .none }
-		.some(@_ir(index) { %? = inline_get Element %0 $0 })
+		.some(#_ir(index) { %? = inline_get Element %0 $0 })
 	}
 }

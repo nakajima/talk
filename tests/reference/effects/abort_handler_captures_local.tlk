@@ -1,6 +1,6 @@
 effect 'oops(error) -> Never
 let tag = "caught: "
-@handle 'oops { err in
+#handle 'oops { err in
 	print(tag)
 	print(err)
 }

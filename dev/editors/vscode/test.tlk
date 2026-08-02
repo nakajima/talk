@@ -3,7 +3,7 @@ func foo() {
 }
 
 enum Fizz {
-  case @"as", @"func", @"struct"
+  case #"as", #"func", #"struct"
 }
 
-let @"let" = "not an identifier: @\"escaped\""
+let #"let" = "not an identifier: #\"escaped\""

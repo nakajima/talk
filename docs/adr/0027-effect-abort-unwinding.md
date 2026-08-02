@@ -16,7 +16,7 @@ Landed as specified, with these resolutions/refinements:
   rather than needing new flow modeling. The finalizer thunk's glue
   (witness call + field frees) passes no capabilities, so — with Deinit
   rows enforced pure — the only effectful code reachable during teardown
-  is inside the witness under its own `@handle`, whose delimiter is the
+  is inside the witness under its own `#handle`, whose delimiter is the
   witness's own frame. No abort can ever discard the thunk frame or skip
   its field frees; the witness's own suspension sites get ordinary
   `Unwind` coverage from its own flow pass. Test 5 is green in the only
@@ -89,7 +89,7 @@ func work() {
 }
 
 func main() {
-	@handle 'bail { message in print("caught: " + message) }
+	#handle 'bail { message in print("caught: " + message) }
 	work()                            // owned's drop never runs
 }
 ```
@@ -107,7 +107,7 @@ func middle() {
 }
 ```
 
-**Shape 3 — the installing frame's own pre-`@handle` locals.** The
+**Shape 3 — the installing frame's own pre-`#handle` locals.** The
 delimiter is `raw_ret_k`, the *raw* machine return — deliberately below
 the drop wrappers layered onto `ret_k`/`tail_k` (`src/lower/mod.rs:229-234`).
 An abort therefore exits the installing function without running even the
@@ -116,7 +116,7 @@ installing frame's own scope-exit drops.
 ```talk
 func run() {
 	let before = ["pre-handle"]       // owned before the install
-	@handle 'bail { m in print(m) }
+	#handle 'bail { m in print(m) }
 	work()
 	print(before.count)               // abort skips before's drop
 }
@@ -268,10 +268,10 @@ pipeline just finished deleting.
   - `Insn::UnwindRet` (the compilation of `Op::UnwindDone`) executed by
     the cursor frame: pop it, continue the loop.
   - top frame index == target: same lookup — **this is where the
-    installing frame's pre-`@handle` locals drop**, because its
+    installing frame's pre-`#handle` locals drop**, because its
     suspension pc is a capability-passing call inside the handled extent
     and its `Unwind` candidates there include everything live, installed
-    before or after the `@handle`. After its entry completes, pop it and
+    before or after the `#handle`. After its entry completes, pop it and
     deliver the stashed value to its caller's dest register — the
     unchanged tail of today's `CallCont` (`interp.rs:280-288`).
 - **Finalizer frames** run their unwind entries like any frame; the
@@ -332,7 +332,7 @@ evaluator interprets the *same lowered annotations* dynamically:
   only; a match pops it (the call completed normally, or resumed). LIFO
   suffices: in one-shot CPS the innermost suspended call's continuation
   is always the next of the recorded ones to run.
-- `Op::HandleInstall(delimiter)`, emitted at each `@handle`
+- `Op::HandleInstall(delimiter)`, emitted at each `#handle`
   (`lower_mir_handling`, `src/lower/mir_lowering.rs:1292-1346`), pushes a
   **delimiter marker**; the scheduler compiles it to *nothing* (the VM
   needs no marker — the `Cont`'s frame index is the marker). The marker
@@ -426,7 +426,7 @@ much more than the cost of capturing a continuation").
   verified.
 - Multi-shot resumption remains out of scope; one-shot enforcement is
   unchanged.
-- v1 limitations, accepted: abort-during-unwind traps; `@handle` inside a
+- v1 limitations, accepted: abort-during-unwind traps; `#handle` inside a
   nested block remains unsupported at the `lower_handle_statement` /
   `nested_handle` fence, independent of this ADR.
 
@@ -437,7 +437,7 @@ much more than the cost of capturing a continuation").
 2. **Intervening frame**: shape 2 — owned array in a frame between
    performer and installer; abort; balanced.
 3. **Installing frame**: shape 3 — owned locals declared before the
-   `@handle`; abort; balanced.
+   `#handle`; abort; balanced.
 4. **`'heap` across an abort**: a region-allocated object live across the
    perform; abort; region released (rule F), `live_objects()` zero,
    finalizer side effects observed.
@@ -515,6 +515,6 @@ discontinue re-raises into ML exception frames, whereas here the "landing
 pads" are ordinary λ_G continuations steered by a one-shot delimited
 `CallCont` in a CPS-scheduled VM, with drop *content* owned entirely by
 the compiler. The evaluator-side reading of the same annotations as a
-dynamic extent stack (markers at `@handle`, entries at suspension sites,
+dynamic extent stack (markers at `#handle`, entries at suspension sites,
 `run_finalizer`-style nested evaluation of entries) is likewise novel and
 exists to keep the two engines executing one artifact.

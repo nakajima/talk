@@ -1,5 +1,6 @@
 tokens:
-  Attribute @0..7 "@handle"
+  Hash @0..1 "#"
+  Identifier @1..7 "handle"
   EffectName @8..11 "'io"
   LeftBrace @12..13 "{"
   Identifier @14..21 "request"
@@ -15,7 +16,8 @@ tokens:
   Newline @58..59
   RightBrace @59..60 "}"
   Newline @60..61
-  Attribute @61..68 "@handle"
+  Hash @61..62 "#"
+  Identifier @62..68 "handle"
   EffectName @69..75 "'async"
   LeftBrace @76..77 "{"
   Newline @77..78

@@ -4,7 +4,7 @@ func take(consume s: String) -> Int {
 effect 'oops(error) -> Never
 func check() -> Int {
 	let s = "a" + "b"
-	@handle 'oops { err in
+	#handle 'oops { err in
 		take(s: s)
 		0
 	}

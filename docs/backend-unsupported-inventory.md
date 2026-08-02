@@ -206,7 +206,7 @@ path (entries:325). Demand-compiled readers only inline scalar literals
 | :6405 | global with non-literal initializer read from a function | VALID — every global gets a stable slot + initializer thunk + init state, demand-independent; readers use the existing slot branch (:6240) |
 | :5937 | *write* to a global with no slot | VALID — same slot fix |
 | :6412 | variable resolves to no local/slot/static/callable/global | split: declared-but-unsupplied callable → **LINKER**; unresolved recovery → **ICE** |
-| :2058 | call to a name with no compilable body (`demand`) | **LINKER** — name resolved, body absent; structured missing-supplier diagnostic. (Core primitives carry `@_ir` bodies and are unaffected.) |
+| :2058 | call to a name with no compilable body (`demand`) | **LINKER** — name resolved, body absent; structured missing-supplier diagnostic. (Core primitives carry `#_ir` bodies and are unaffected.) |
 | entries:270 | linear global teardown | VALID — requires the §5 whole-program finite-exit analysis (callable summaries → fixed point); invalid programs get the ordinary linearity diagnostic. Genuinely new machinery, unique site |
 
 ## G. Ambient core effects (§6) — 1 site

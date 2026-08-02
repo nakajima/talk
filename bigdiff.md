@@ -6,7 +6,7 @@ These changes were removed to keep the current PR focused. Reintroduce them as
 independent follow-ups so each has a small interface, focused tests, and no
 ownership/effect coupling.
 
-## 1. Nested `@_ir` type resolution
+## 1. Nested `#_ir` type resolution
 
 ### Scope
 
@@ -26,7 +26,7 @@ inline IR instructions, such as `retain Wrapper<String> %0`.
 
 ### Acceptance tests
 
-- Name resolution resolves both names in `Outer<Inner>` inside `@_ir`.
+- Name resolution resolves both names in `Outer<Inner>` inside `#_ir`.
 - Lowering `retain Wrapper<String> %0` walks the instantiated `String` field.
 - A generic type parameter in an inline-IR annotation resolves through theta.
 - Unsupported nested annotation forms fail with a lowering diagnostic.
@@ -92,7 +92,7 @@ mixing it with compiler behavior changes.
 The follow-ups are independent. Preferred order:
 
 1. Parser diagnostic range improvement.
-2. Nested `@_ir` type resolution.
+2. Nested `#_ir` type resolution.
 3. Tour documentation refresh.
 
 Each should land as its own PR. None should modify ownership flow, checked MIR,

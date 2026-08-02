@@ -45,8 +45,7 @@ pub mod tests {
                 Source::in_memory(std::path::PathBuf::from(path), (*code).to_string())
             })
             .collect();
-        let config =
-            DriverConfig::new("TypesTest").source_root(std::path::PathBuf::from("."));
+        let config = DriverConfig::new("TypesTest").source_root(std::path::PathBuf::from("."));
         Driver::new_bare(sources, config)
             .parse()
             .expect("parse failed")
@@ -236,7 +235,12 @@ pub mod tests {
         // Exported and reachable declarations are in the interface.
         let open = named("Open").expect("Open exported");
         assert!(module.types.catalog.structs.contains_key(&open));
-        assert!(module.types.schemes.contains_key(&named("make").expect("make exported")));
+        assert!(
+            module
+                .types
+                .schemes
+                .contains_key(&named("make").expect("make exported"))
+        );
         // Unrelated private declarations are not.
         assert_eq!(named("Unrelated"), None, "private struct leaked");
         assert_eq!(named("helper"), None, "private helper leaked");
@@ -597,7 +601,7 @@ pub mod tests {
             ),
             (
                 "types::types_alloc",
-                "@unsafe { let x: RawPtr = __IR(\"$? = alloc int 1\"); x; () }",
+                "#unsafe { let x: RawPtr = __IR(\"$? = alloc int 1\"); x; () }",
                 true,
                 false,
             ),
@@ -1473,37 +1477,37 @@ pub mod tests {
             ),
             (
                 "effects::types_handlers",
-                "\n            effect 'fizz(x: Int, y: Bool) -> Int\n\n            @handle 'fizz { a, b in\n                'continue 0\n            }\n            ",
+                "\n            effect 'fizz(x: Int, y: Bool) -> Int\n\n            #handle 'fizz { a, b in\n                'continue 0\n            }\n            ",
                 true,
                 false,
             ),
             (
                 "effects::checks_handler_args",
-                "\n            effect 'fizz(x: Int, y: Bool) -> Bool\n\n            @handle 'fizz { a in\n                true\n            }\n            ",
+                "\n            effect 'fizz(x: Int, y: Bool) -> Bool\n\n            #handle 'fizz { a in\n                true\n            }\n            ",
                 false,
                 false,
             ),
             (
                 "effects::bare_continue_checks_unit_against_effect_return_type",
-                "\n            effect 'fizz() -> Int\n\n            @handle 'fizz {\n                'continue\n            }\n            ",
+                "\n            effect 'fizz() -> Int\n\n            #handle 'fizz {\n                'continue\n            }\n            ",
                 false,
                 false,
             ),
             (
                 "effects::bare_continue_in_unit_handler_checks_clean",
-                "\n            effect 'fizz() -> ()\n\n            @handle 'fizz {\n                'continue\n            }\n            ",
+                "\n            effect 'fizz() -> ()\n\n            #handle 'fizz {\n                'continue\n            }\n            ",
                 true,
                 false,
             ),
             (
                 "effects::continue_in_handler_uses_effect_return_type",
-                "\n            effect 'fizz() -> Int\n\n            @handle 'fizz {\n                'continue 123\n            }\n            ",
+                "\n            effect 'fizz() -> Int\n\n            #handle 'fizz {\n                'continue 123\n            }\n            ",
                 true,
                 false,
             ),
             (
                 "effects::continue_in_handler_checks_return_type",
-                "\n            effect 'fizz() -> Int\n\n            @handle 'fizz {\n                'continue true\n            }\n            ",
+                "\n            effect 'fizz() -> Int\n\n            #handle 'fizz {\n                'continue true\n            }\n            ",
                 false,
                 false,
             ),
@@ -1515,13 +1519,13 @@ pub mod tests {
             ),
             (
                 "effects::dupe_handlers_warn",
-                "\n                effect 'fizz() -> Int\n\n                @handle 'fizz { 'continue 0 }\n                @handle 'fizz { 'continue 1 }\n\n                'fizz()\n                ",
+                "\n                effect 'fizz() -> Int\n\n                #handle 'fizz { 'continue 0 }\n                #handle 'fizz { 'continue 1 }\n\n                'fizz()\n                ",
                 false,
                 false,
             ),
             (
                 "effects::handler_removes_effect_from_enclosing_func",
-                "\n          effect 'fizz() -> Int\n\n          func fizzes() '[] {\n            @handle 'fizz { 'continue 123 }\n\n            'fizz()\n          }\n        ",
+                "\n          effect 'fizz() -> Int\n\n          func fizzes() '[] {\n            #handle 'fizz { 'continue 123 }\n\n            'fizz()\n          }\n        ",
                 true,
                 false,
             ),
@@ -1533,37 +1537,37 @@ pub mod tests {
             ),
             (
                 "effects::generic_effect_call_with_type_arg",
-                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in 'continue v }\n            'state<Int>(value: 42)\n        ",
+                "\n            effect 'state<T>(value: T) -> T\n            #handle 'state { v in 'continue v }\n            'state<Int>(value: 42)\n        ",
                 true,
                 false,
             ),
             (
                 "effects::generic_effect_call_inferred",
-                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in 'continue v }\n            'state(value: 42)\n        ",
+                "\n            effect 'state<T>(value: T) -> T\n            #handle 'state { v in 'continue v }\n            'state(value: 42)\n        ",
                 true,
                 false,
             ),
             (
                 "effects::generic_effect_type_mismatch",
-                "\n            effect 'state<T>(value: T) -> T\n            @handle 'state { v in 'continue v }\n            'state<Int>(value: true)\n        ",
+                "\n            effect 'state<T>(value: T) -> T\n            #handle 'state { v in 'continue v }\n            'state<Int>(value: true)\n        ",
                 false,
                 false,
             ),
             (
                 "effects::generic_effect_multiple_params",
-                "\n            effect 'pair<A, B>(first: A, second: B) -> (A, B)\n            @handle 'pair { a, b in 'continue (a, b) }\n            'pair<Int, Bool>(first: 42, second: true)\n        ",
+                "\n            effect 'pair<A, B>(first: A, second: B) -> (A, B)\n            #handle 'pair { a, b in 'continue (a, b) }\n            'pair<Int, Bool>(first: 42, second: true)\n        ",
                 true,
                 false,
             ),
             (
                 "effects::call_under_handler_discharges_callee_row",
-                "\n            effect 'e() -> Never\n\n            func f() {\n                'e()\n            }\n\n            func g() '[] {\n                @handle 'e { () }\n                f()\n            }\n        ",
+                "\n            effect 'e() -> Never\n\n            func f() {\n                'e()\n            }\n\n            func g() '[] {\n                #handle 'e { () }\n                f()\n            }\n        ",
                 true,
                 false,
             ),
             (
                 "effects::perform_before_handler_escapes",
-                "\n            effect 'e() -> Never\n\n            func g() '[] {\n                'e()\n                @handle 'e { () }\n            }\n        ",
+                "\n            effect 'e() -> Never\n\n            func g() '[] {\n                'e()\n                #handle 'e { () }\n            }\n        ",
                 false,
                 false,
             ),
@@ -1581,31 +1585,31 @@ pub mod tests {
             ),
             (
                 "effects::top_level_call_before_handler_errors",
-                "\n            effect 'e() -> Never\n\n            func f() {\n                'e()\n            }\n\n            f()\n            @handle 'e { () }\n        ",
+                "\n            effect 'e() -> Never\n\n            func f() {\n                'e()\n            }\n\n            f()\n            #handle 'e { () }\n        ",
                 false,
                 false,
             ),
             (
                 "effects::top_level_let_before_handler_errors",
-                "\n            effect 'e() -> Int\n\n            func f() -> Int {\n                'e()\n            }\n\n            let x = f()\n            @handle 'e { 'continue 1 }\n            x\n        ",
+                "\n            effect 'e() -> Int\n\n            func f() -> Int {\n                'e()\n            }\n\n            let x = f()\n            #handle 'e { 'continue 1 }\n            x\n        ",
                 false,
                 false,
             ),
             (
                 "effects::one_handler_covers_two_instantiations",
-                "\n            effect 'state<T>(value: T) -> T\n\n            func g() '[] {\n                @handle 'state { v in 'continue v }\n                'state(value: 1)\n                'state(value: true)\n                ()\n            }\n        ",
+                "\n            effect 'state<T>(value: T) -> T\n\n            func g() '[] {\n                #handle 'state { v in 'continue v }\n                'state(value: 1)\n                'state(value: true)\n                ()\n            }\n        ",
                 true,
                 false,
             ),
             (
                 "effects::inner_handler_absorbs_all_occurrences",
-                "\n            effect 'e() -> Never\n\n            func leaf() {\n                'e()\n            }\n\n            func mid() '[] {\n                @handle 'e { () }\n                leaf()\n            }\n\n            func top() '[] {\n                @handle 'e { () }\n                mid()\n            }\n        ",
+                "\n            effect 'e() -> Never\n\n            func leaf() {\n                'e()\n            }\n\n            func mid() '[] {\n                #handle 'e { () }\n                leaf()\n            }\n\n            func top() '[] {\n                #handle 'e { () }\n                mid()\n            }\n        ",
                 true,
                 false,
             ),
             (
                 "effects::top_level_let_after_handler_is_clean",
-                "\n            effect 'e() -> Int\n\n            func f() -> Int {\n                'e()\n            }\n\n            @handle 'e { 'continue 1 }\n            let x = f()\n            x\n        ",
+                "\n            effect 'e() -> Int\n\n            func f() -> Int {\n                'e()\n            }\n\n            #handle 'e { 'continue 1 }\n            let x = f()\n            x\n        ",
                 true,
                 false,
             ),
@@ -2528,7 +2532,7 @@ pub mod tests {
     #[test]
     fn effect_where_clause_constrains_perform_type_arguments() {
         let t = check(
-            "// no-core\nprotocol P {}\nextend Int: P {}\neffect 'choose<T>(value: T) -> T where T: P\n@handle 'choose { v in 'continue v }\n'choose(value: true)",
+            "// no-core\nprotocol P {}\nextend Int: P {}\neffect 'choose<T>(value: T) -> T where T: P\n#handle 'choose { v in 'continue v }\n'choose(value: true)",
         );
         let errors = type_errors(&t);
         assert!(
@@ -2568,6 +2572,20 @@ pub mod tests {
             "// no-core\nprotocol P {\n\tassociated Item where Item == Int\n\tfunc item() -> Item\n}\nfunc f<T: P>(x: T) -> Int {\n\tx.item()\n}",
         );
         assert_clean(&t);
+    }
+
+    #[test]
+    fn conformance_must_satisfy_associated_type_equalities() {
+        let t = check(
+            "// no-core\nprotocol Producer {\n\tassociated Element\n\tfunc get() -> Element\n}\nprotocol Source {\n\tassociated Element\n\tassociated Provider: Producer where Provider.Element == Element\n\tfunc provider() -> Provider\n}\nstruct IntProducer {}\nextend IntProducer: Producer<Int> {\n\tfunc get() -> Int { 1 }\n}\nstruct BadSource {}\nextend BadSource: Source<Bool, IntProducer> {\n\tfunc provider() -> IntProducer { IntProducer() }\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("requires Int") && error.contains("has type Bool")),
+            "expected associated-type equality error, got {errors:?}"
+        );
     }
 
     #[test]
@@ -3427,7 +3445,7 @@ pub mod tests {
     #[test]
     fn inline_ir_arithmetic_on_an_unsupported_scalar_is_rejected() {
         let t = check(
-            "// no-core\nfunc bad() -> Bool {\n\t@unsafe { @_ir { %? = add Bool true false } }\n}",
+            "// no-core\nfunc bad() -> Bool {\n\t#unsafe { #_ir { %? = add Bool true false } }\n}",
         );
         assert!(
             type_errors(&t)
@@ -3441,7 +3459,7 @@ pub mod tests {
     #[test]
     fn inline_ir_comparison_on_an_unsupported_scalar_is_rejected() {
         let t = check(
-            "// no-core\nstruct S {\n\tlet n: Int\n}\nfunc bad() -> Bool {\n\t@unsafe { @_ir { %? = cmp S 1 < 2 } }\n}",
+            "// no-core\nstruct S {\n\tlet n: Int\n}\nfunc bad() -> Bool {\n\t#unsafe { #_ir { %? = cmp S 1 < 2 } }\n}",
         );
         assert!(
             type_errors(&t)
@@ -3454,7 +3472,7 @@ pub mod tests {
 
     #[test]
     fn inline_ir_infers_the_intrinsic_unsafe_effect() {
-        let t = check("// no-core\nfunc raw() -> Int {\n\t@_ir { %? = add Int 1 2 }\n}");
+        let t = check("// no-core\nfunc raw() -> Int {\n\t#_ir { %? = add Int 1 2 }\n}");
         assert_clean(&t);
         let raw = ty_of(&t, "raw");
         assert!(
@@ -3466,7 +3484,7 @@ pub mod tests {
     #[test]
     fn unsafe_block_masks_the_intrinsic_effect() {
         let t = check(
-            "// no-core\nfunc safe() -> Int {\n\t@unsafe { @_ir { %? = add Int 1 2 } }\n}\nlet value = safe()",
+            "// no-core\nfunc safe() -> Int {\n\t#unsafe { #_ir { %? = add Int 1 2 } }\n}\nlet value = safe()",
         );
         assert_clean(&t);
         let safe = ty_of(&t, "safe");
@@ -3494,7 +3512,7 @@ pub mod tests {
         // The wrapper's own type is checked in the outer context: a RawPtr
         // cannot escape merely by being the block's result.
         let t =
-            check("// no-core\nlet pointer: RawPtr = @unsafe { __IR(\"$? = alloc int 1\") }\n()");
+            check("// no-core\nlet pointer: RawPtr = #unsafe { __IR(\"$? = alloc int 1\") }\n()");
         assert!(
             type_errors(&t)
                 .iter()
@@ -3510,7 +3528,7 @@ pub mod tests {
         // nested function literals: their `'unsafe` stays in the scheme, so
         // an escaped function still demands authority at its call site.
         let t = check(
-            "// no-core\nlet f = @unsafe {\n\tfunc inner() -> Int {\n\t\t@_ir { %? = add Int 1 2 }\n\t}\n\tinner\n}\nlet n = f()\n()",
+            "// no-core\nlet f = #unsafe {\n\tfunc inner() -> Int {\n\t\t#_ir { %? = add Int 1 2 }\n\t}\n\tinner\n}\nlet n = f()\n()",
         );
         assert!(
             type_errors(&t)
@@ -3532,7 +3550,7 @@ pub mod tests {
             type_errors(&performed)
         );
 
-        let handled = check("// no-core\n@handle 'unsafe { () }");
+        let handled = check("// no-core\n#handle 'unsafe { () }");
         assert!(
             type_errors(&handled)
                 .iter()
@@ -3546,10 +3564,10 @@ pub mod tests {
     fn performed_effects_stay_in_the_row_until_a_handler_extent() {
         // Dynamic-extent semantics: a perform always joins the function's
         // latent row; discharge happens where a call meets a handler's
-        // extent (here, the prescanned top-level `@handle`), not at the
+        // extent (here, the prescanned top-level `#handle`), not at the
         // perform site.
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(e: 1)\n\t2\n}\nsafe()",
+            "// no-core\neffect 'oops(e) -> Never\n#handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(e: 1)\n\t2\n}\nsafe()",
         );
         assert_clean(&t);
         let safe = ty_of(&t, "safe");
@@ -3567,7 +3585,7 @@ pub mod tests {
         // catalog signature, which the lowerer builds capability types
         // from.
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\n@handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(e: 1)\n\t2\n}\nfunc outer() {\n\tsafe()\n}\nouter()",
+            "// no-core\neffect 'oops(e) -> Never\n#handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(e: 1)\n\t2\n}\nfunc outer() {\n\tsafe()\n}\nouter()",
         );
         assert_clean(&t);
         let safe = ty_of(&t, "safe");
@@ -3634,7 +3652,7 @@ pub mod tests {
         // row and is discharged where the call meets the handler's
         // extent, never escaping the caller.
         let t = check(
-            "// no-core\neffect 'throw(ret) -> ()\nfunc this_is_fine() {\n\t@handle 'throw { err in () }\n\tthis_is_not_fine()\n}\nfunc this_is_not_fine() {\n\t'throw(ret: 1)\n\t()\n}\nthis_is_fine()",
+            "// no-core\neffect 'throw(ret) -> ()\nfunc this_is_fine() {\n\t#handle 'throw { err in () }\n\tthis_is_not_fine()\n}\nfunc this_is_not_fine() {\n\t'throw(ret: 1)\n\t()\n}\nthis_is_fine()",
         );
         assert_clean(&t);
         let callee = ty_of(&t, "this_is_not_fine");
@@ -3826,7 +3844,7 @@ pub mod tests {
     #[test]
     fn generic_effect_call_with_type_arg() {
         let t = check(
-            "// no-core\neffect 'state<T>(value: T) -> T\n@handle 'state { v in\n\t'continue v\n}\n'state<Int>(value: 42)",
+            "// no-core\neffect 'state<T>(value: T) -> T\n#handle 'state { v in\n\t'continue v\n}\n'state<Int>(value: 42)",
         );
         assert_clean(&t);
     }
@@ -3834,7 +3852,7 @@ pub mod tests {
     #[test]
     fn generic_effect_call_inferred() {
         let t = check(
-            "// no-core\neffect 'state<T>(value: T) -> T\n@handle 'state { v in\n\t'continue v\n}\n'state(value: 42)",
+            "// no-core\neffect 'state<T>(value: T) -> T\n#handle 'state { v in\n\t'continue v\n}\n'state(value: 42)",
         );
         assert_clean(&t);
     }
@@ -3842,7 +3860,7 @@ pub mod tests {
     #[test]
     fn generic_effect_type_mismatch() {
         let t = check(
-            "// no-core\neffect 'state<T>(value: T) -> T\n@handle 'state { v in\n\t'continue v\n}\n'state<Int>(value: true)",
+            "// no-core\neffect 'state<T>(value: T) -> T\n#handle 'state { v in\n\t'continue v\n}\n'state<Int>(value: true)",
         );
         assert!(
             !type_errors(&t).is_empty(),
@@ -3853,7 +3871,7 @@ pub mod tests {
     #[test]
     fn generic_effect_multiple_params() {
         let t = check(
-            "// no-core\neffect 'pair<A, B>(first: A, second: B) -> (A, B)\n@handle 'pair { a, b in\n\t'continue (a, b)\n}\n'pair<Int, Bool>(first: 42, second: true)",
+            "// no-core\neffect 'pair<A, B>(first: A, second: B) -> (A, B)\n#handle 'pair { a, b in\n\t'continue (a, b)\n}\n'pair<Int, Bool>(first: 42, second: true)",
         );
         assert_clean(&t);
     }
@@ -3863,7 +3881,7 @@ pub mod tests {
         // `'continue v` resumes the perform: v must have the effect's
         // declared return type.
         let t = check(
-            "// no-core\neffect 'ask(p: Int) -> Int\n@handle 'ask { p in\n\t'continue true\n}\n'ask(p: 1)",
+            "// no-core\neffect 'ask(p: Int) -> Int\n#handle 'ask { p in\n\t'continue true\n}\n'ask(p: 1)",
         );
         let errors = type_errors(&t);
         assert!(
@@ -4360,7 +4378,7 @@ pub mod tests {
     fn panic_can_be_handled_as_an_abortive_effect() {
         let t = Driver::new(
             vec![Source::from(
-                "func recovered() -> Int {\n\t@handle 'panic { message in 42 }\n\tunreachable\n}",
+                "func recovered() -> Int {\n\t#handle 'panic { message in 42 }\n\tunreachable\n}",
             )],
             DriverConfig::new("HandledPanic"),
         )
@@ -4376,7 +4394,7 @@ pub mod tests {
     #[test]
     fn continue_payload_in_a_handler_checks_clean() {
         let t = check(
-            "// no-core\neffect 'ask(p: Int) -> Int\n@handle 'ask { p in\n\t'continue p\n}\n'ask(p: 1)",
+            "// no-core\neffect 'ask(p: Int) -> Int\n#handle 'ask { p in\n\t'continue p\n}\n'ask(p: 1)",
         );
         assert_clean(&t);
     }
@@ -4450,7 +4468,7 @@ pub mod tests {
         // handler's parameter meet in the effect signature's shared
         // placeholder, so both get Int here.
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\nfunc wants(i: Int) { i }\n@handle 'oops { e in wants(i: e) }\n'oops(e: 123)",
+            "// no-core\neffect 'oops(e) -> Never\nfunc wants(i: Int) { i }\n#handle 'oops { e in wants(i: e) }\n'oops(e: 123)",
         );
         assert_clean(&t);
     }
@@ -4458,7 +4476,7 @@ pub mod tests {
     #[test]
     fn handler_parameter_type_conflicts_error() {
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\nfunc wants(i: Int) { i }\n@handle 'oops { e in wants(i: e) }\n'oops(e: 1.5)",
+            "// no-core\neffect 'oops(e) -> Never\nfunc wants(i: Int) { i }\n#handle 'oops { e in wants(i: e) }\n'oops(e: 1.5)",
         );
         assert_eq!(type_errors(&t).len(), 1, "{:?}", type_errors(&t));
     }
@@ -5563,9 +5581,9 @@ mod with_core {
         // stack (ADR 0039): user handlers may intercept 'io, 'alloc, and
         // 'async alike; unhandled performs reach the host fallback.
         for source in [
-            "@handle 'io { request in\n\t'continue 0\n}\n1",
-            "@handle 'alloc { allocation in\n\t'continue\n}\n1",
-            "@handle 'async {\n\t'continue\n}\n'async()\n1",
+            "#handle 'io { request in\n\t'continue 0\n}\n1",
+            "#handle 'alloc { allocation in\n\t'continue\n}\n1",
+            "#handle 'async {\n\t'continue\n}\n'async()\n1",
         ] {
             let t = check_with_core(Source::from(source));
             let errors = type_errors(&t);
@@ -5787,6 +5805,48 @@ mod with_core {
             .map(|(sym, _)| *sym)
             .expect("v scheme");
         assert_eq!(typed.phase.program.types().schemes[&v].render(), "Int");
+    }
+
+    #[test]
+    fn associated_type_equalities_complete_conformance_rows_across_modules() {
+        use crate::compiling::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
+
+        let id_a = ModuleId::External(0);
+        let module_a = compile_library(
+            "A",
+            id_a,
+            "// no-core\npub protocol Producer {\n\tassociated Element\n\tfunc get() -> Element\n}\npub protocol Source {\n\tassociated Element\n\tassociated Provider: Producer where Provider.Element == Element\n\tfunc provider() -> Provider\n}\npub struct IntProducer {}\nextend IntProducer: Producer {\n\tpub func get() -> Int { 1 }\n}\npub struct IntSource {}\nextend IntSource: Source {\n\tpub func provider() -> IntProducer { IntProducer() }\n}\npub func apply<V: Source>(value: V, body: (V.Element) -> Int) -> Int {\n\tbody(value.provider().get())\n}",
+            ModuleEnvironment::default(),
+        );
+
+        let mut modules = ModuleEnvironment::default();
+        modules.import_compiled(module_a, id_a).unwrap();
+        let config = crate::compiling::driver::DriverConfig {
+            module_id: ModuleId::Main,
+            modules: Rc::new(modules),
+            mode: crate::compiling::driver::CompilationMode::Library,
+            module_name: "B".to_string(),
+            parse_mode: crate::compiling::driver::ParseMode::Strict,
+            preserve_comments: false,
+            workspace_root: None,
+            source_root: None,
+            libraries: Vec::new(),
+        };
+        let typed = Driver::new(
+            vec![Source::from(
+                "// no-core\nuse A::{ IntSource, apply }\nlet result: Int = apply(value: IntSource()) { element in element }",
+            )],
+            config,
+        )
+        .parse()
+        .unwrap()
+        .resolve_names()
+        .unwrap()
+        .type_check();
+
+        let errors = type_errors(&typed);
+        assert!(errors.is_empty(), "{errors:?}");
     }
 
     #[test]
@@ -6268,7 +6328,7 @@ mod with_core {
         // deinit body could never receive its handler — the conformance
         // must reject a user effect in the hook's row.
         let t = check_with_core(Source::from(
-            "effect 'noise() -> Void\n@handle 'noise { 'continue () }\nstruct Loud {\n\tlet s: String\n}\nextend Loud: Deinit {\n\tconsuming func deinit() -> Void {\n\t\t'noise()\n\t}\n}",
+            "effect 'noise() -> Void\n#handle 'noise { 'continue () }\nstruct Loud {\n\tlet s: String\n}\nextend Loud: Deinit {\n\tconsuming func deinit() -> Void {\n\t\t'noise()\n\t}\n}",
         ));
         let errors = type_errors(&t);
         assert!(
@@ -6283,7 +6343,7 @@ mod with_core {
         // under it — the hook's row stays pure at the conformance
         // boundary, so drop glue needs no capabilities.
         let t = check_with_core(Source::from(
-            "effect 'noise() -> Void\nstruct Loud {\n\tlet s: String\n}\nextend Loud: Deinit {\n\tconsuming func deinit() -> Void {\n\t\t@handle 'noise { 'continue () }\n\t\t'noise()\n\t}\n}",
+            "effect 'noise() -> Void\nstruct Loud {\n\tlet s: String\n}\nextend Loud: Deinit {\n\tconsuming func deinit() -> Void {\n\t\t#handle 'noise { 'continue () }\n\t\t'noise()\n\t}\n}",
         ));
         assert_no_errors(&t);
     }
@@ -6306,7 +6366,7 @@ mod with_core {
         // scope with its value: an Int-valued handler over a ()-valued
         // scope must be a type error, not a lowering panic.
         let t = check_with_core(Source::from(
-            "effect 'oops(e) -> Never\n@handle 'oops { e in\n\t42\n}\nfunc boom() 'oops -> () {\n\t'oops(e: \"x\")\n}\nboom()",
+            "effect 'oops(e) -> Never\n#handle 'oops { e in\n\t42\n}\nfunc boom() 'oops -> () {\n\t'oops(e: \"x\")\n}\nboom()",
         ));
         let errors = type_errors(&t);
         assert!(
@@ -6318,7 +6378,7 @@ mod with_core {
     #[test]
     fn aborting_handler_body_must_match_the_function_return_type() {
         let t = check_with_core(Source::from(
-            "effect 'oops(e) -> Never\nfunc f() -> Int {\n\t@handle 'oops { e in\n\t\t\"nope\"\n\t}\n\t'oops(e: \"x\")\n\t42\n}\nf()",
+            "effect 'oops(e) -> Never\nfunc f() -> Int {\n\t#handle 'oops { e in\n\t\t\"nope\"\n\t}\n\t'oops(e: \"x\")\n\t42\n}\nf()",
         ));
         let errors = type_errors(&t);
         assert!(
@@ -6332,7 +6392,7 @@ mod with_core {
         // An aborting handler whose value matches the scope, and an
         // always-resuming handler (Never body), both check clean.
         let t = check_with_core(Source::from(
-            "effect 'oops(e) -> Never\neffect 'ask(q) -> Int\n@handle 'oops { e in\n\t0\n}\n@handle 'ask { q in\n\t'continue 1\n}\nfunc go() '[oops, ask] -> Int {\n\t'ask(q: \"?\")\n}\ngo()",
+            "effect 'oops(e) -> Never\neffect 'ask(q) -> Int\n#handle 'oops { e in\n\t0\n}\n#handle 'ask { q in\n\t'continue 1\n}\nfunc go() '[oops, ask] -> Int {\n\t'ask(q: \"?\")\n}\ngo()",
         ));
         assert_no_errors(&t);
     }
@@ -7380,7 +7440,7 @@ struct Shrunk<static N: Int> where 0 < N {
         let t = super::tests::check(
             "// no-core
 effect 'tag<static N: Int>(value: Int) -> Int
-@handle 'tag { value in
+#handle 'tag { value in
 	'continue value
 }
 'tag<4>(value: 1)",
@@ -7393,7 +7453,7 @@ effect 'tag<static N: Int>(value: Int) -> Int
         let t = super::tests::check(
             "// no-core
 effect 'tag<static N: Int>(value: Int) -> Int
-@handle 'tag { value in
+#handle 'tag { value in
 	'continue value
 }
 'tag<Bool>(value: 1)",
@@ -7676,7 +7736,7 @@ width<0 - 1>()
         let effect = super::tests::check(
             "// no-core
 effect 'tag<static N: Int>(value: Int) -> Int
-@handle 'tag { value in
+#handle 'tag { value in
 	'continue value
 }
 'tag<0 - 1>(value: 1)
@@ -8516,12 +8576,12 @@ mod nested_types {
         // Effect names are non-overloadable but their calls obey the same
         // parameter label rules (ADR 0041).
         let t = check(
-            "// no-core\neffect 'ask(prompt: Int) -> Int\n@handle 'ask { v in 'continue v }\n'ask(prompt: 1)",
+            "// no-core\neffect 'ask(prompt: Int) -> Int\n#handle 'ask { v in 'continue v }\n'ask(prompt: 1)",
         );
         assert_clean(&t);
 
         let t = check(
-            "// no-core\neffect 'ask(prompt: Int) -> Int\n@handle 'ask { v in 'continue v }\n'ask(1)",
+            "// no-core\neffect 'ask(prompt: Int) -> Int\n#handle 'ask { v in 'continue v }\n'ask(1)",
         );
         let errors = type_errors(&t);
         assert!(

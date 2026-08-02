@@ -41,7 +41,7 @@ pub struct Directory {
 	pub let path: Path
 
 	pub func entries() -> Array<DirectoryEntry> {
-		@unsafe {
+		#unsafe {
 			let path_string = self.path.to_string()
 			let path_buf = _alloc<Byte>(count: path_string.byte_count + 1)
 			_copy(from: path_string.storage.base, to: path_buf, length: path_string.byte_count)

@@ -56,13 +56,13 @@ Freestanding invocations use fixed, parser-known delimiters. The initial
 expression spelling is:
 
 ```tlk
-#name(argument, ...)
+@name(argument, ...)
 ```
 
-The `#` sigil is sufficient to distinguish macro use, so macro names do not
-need a leading underscore and do not compete with value names. Macros occupy a
-separate namespace and are imported explicitly when exported macro artifacts
-are implemented.
+The `@` sigil distinguishes macro use, so macro names do not need a leading
+underscore and do not compete with value names. Macros occupy a separate
+namespace and exported macros follow ordinary package import selection and
+aliasing.
 
 Expansion runs after all reachable source files have parsed and before the
 existing desugaring and name-resolution phases:
@@ -159,7 +159,7 @@ The first implementation intentionally proves only the expansion seam:
 
 - file-local expression template declarations;
 - one fixed-arity rule per declaration, with overloads selected by arity;
-- `#name(...)` expression invocations;
+- `@name(...)` expression invocations;
 - fresh node identities, recursive expansion limits, formatter/highlighter
   support, and structured diagnostics; and
 - hygiene by construction: templates may splice expression parameters and use
@@ -171,14 +171,14 @@ The initial source form is deliberately smaller than the final quotation API:
 ```tlk
 macro choose($condition, $yes, $no) = if $condition { $yes } else { $no }
 
-let value = #choose(flag, 1, 2)
+let value = @choose(flag, 1, 2)
 ```
 
 The first slice also reserves one compiler-provided source-reflecting macro for
 the test system:
 
 ```tlk
-#assert(user.is_active())
+@assert(user.is_active())
 ```
 
 It expands to one call of `testing::assert_message`, passing the condition once
@@ -191,9 +191,72 @@ ordinary templates unrestricted source or compiler access.
 
 Rejecting template identifiers and binders keeps this slice genuinely
 capture-free until syntax contexts land; it is not permission to ship an
-unhygienic general transformer. Cross-file exports, pattern/type/declaration
-categories, attached roles, repetition, explicit duplication, the
-source/expanded analysis map, and procedural transformers are follow-ups.
+unhygienic general transformer.
+
+The first procedural follow-up is now implemented for expression macros. Sorted
+`*.macro.tlk` units compile as a restricted Talk service; public functions
+receive `MacroInput`, a use-site context, and a quotation context and return
+`SyntaxResult<Expr>`. Freestanding invocations accept one arbitrary balanced
+`()`, `[]`, or `{}` tree. Expression `quote { ... }` syntax captures canonical
+tokens and supports named `$value` antiquotation without re-lexing. Expansion
+uses fixed VM budgets, validates the already-parsed result and hygiene metadata
+at the ABI boundary, and runs before desugaring and name resolution. Macro
+units reject inline IR and `#unsafe`, and exported effects are limited to
+deterministic allocation and the reserved diagnostic capability.
+
+A library module serializes its macro service bytecode, ABI schema, and sorted
+public macro export map beside its runtime interface. Ordinary package `use`
+declarations import those macros into a separate compile-time namespace;
+named imports, aliases, and import-all use the same spelling rules as runtime
+symbols. Imported quotations carry a definition-module scope, so generated
+identifiers resolve against the defining library's public runtime interface
+rather than capturing names at the invocation site. Dependency compilation
+loads and validates the service artifact instead of recompiling its macro
+sources.
+
+The bundled `html` stdlib module is the first production procedural macro.
+It uses Maud-style syntax adapted to Talk expressions:
+
+```tlk
+use html::{ html, PreEscaped }
+
+let names = ["Ada", "Grace"]
+let title: String? = .some("People")
+let page = @html {
+    @let section = "people";
+    main #(section) .page.featured[names.count > 0]
+        title=[title] contenteditable[true] {
+        @if let .some(heading) = title {
+            h1 { (heading) }
+        } @else if names.count == 0 {
+            p { "Nobody is here." }
+        }
+        @for name in names { p { (name) } }
+        @match title {
+            .some(_) -> { small { "Named page" } },
+            .none -> small { "Untitled page" }
+        }
+        (PreEscaped(value: "<hr>"))
+    }
+}
+```
+
+String literals and parenthesized interpolations are HTML-escaped. `Markup`
+and `PreEscaped` render without a second escaping pass. Elements use braced
+content, void elements end in `;`, and empty attributes may use either `name`
+or legacy `name?`. Attributes support literal and parenthesized values,
+braced concatenation, boolean toggles (`name[condition]`), and optional values
+(`name=[optional]`). Class and ID shortcuts support static names, quoted names,
+parenthesized values, and braced concatenation; classes may be toggled.
+`@if`, `@else if`, `@if let`, `@for`, `@let`, and `@match` use Talk expressions
+and patterns. `@for` accepts any Talk `Iterable`; the compiler completes
+associated-type bindings from protocol equalities such as
+`Iterator.Element == Iterable.Element`, preserving those bindings in exported
+conformance rows so generic stdlib helpers specialize correctly downstream.
+
+Pattern/type/declaration invocation positions, attached roles, repetition,
+explicit duplication, persistent expansion caching, and the complete
+source/expanded analysis map remain follow-ups.
 
 ## Consequences
 
@@ -205,8 +268,8 @@ source/expanded analysis map, and procedural transformers are follow-ups.
   and editor grammar dynamically extensible.
 - Type-aware generation, unrestricted compile-time evaluation, and static-value
   equality remain separate features.
-- Module interfaces and incremental analysis eventually gain a macro artifact
-  and expansion-dependency surface.
+- Module interfaces carry macro artifacts; incremental analysis still needs a
+  persisted expansion-dependency and cache-key surface.
 
 ## Alternatives rejected
 

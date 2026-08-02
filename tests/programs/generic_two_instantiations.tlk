@@ -5,7 +5,7 @@ func probe<T>(consume x: T) -> T {
 }
 
 func run() -> Int {
-	@handle 'ask { v in 'continue v }
+	#handle 'ask { v in 'continue v }
 	let n = probe(x: 21)
 	let b = probe(x: true)
 	let direct = 'ask(value: n + n)

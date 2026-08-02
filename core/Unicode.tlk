@@ -393,7 +393,7 @@ extend Character: Equatable {
 		loop idx < self.byte_count {
 			let lhs_byte: Byte = self.storage.get(self.start + idx)
 			let rhs_byte: Byte = rhs.storage.get(rhs.start + idx)
-			let same: Bool = @_ir(lhs_byte, rhs_byte) { %? = cmp Byte $0 == $1 }
+			let same: Bool = #_ir(lhs_byte, rhs_byte) { %? = cmp Byte $0 == $1 }
 			if same == false { return false }
 			idx = idx + 1
 		}

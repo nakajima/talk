@@ -12,7 +12,7 @@
 // and the previous-before-newline cursor is recovered by scanning
 // backward past newline tokens.
 
-use package::Lexer::{ Token, TokenKind, ScanResult, Comment, scan, kind_spelling, append, append_int }
+use package::Lexer::{ Token, TokenKind, TokenRange, ScanResult, Comment, scan, kind_spelling, append, append_int }
 use package::Ast::{
 	Expr, ExprKind, CallArg, MemberLabel, Parameter, Block, RecordField,
 	Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind,
@@ -24,7 +24,8 @@ use package::Ast::{
 	Stmt, StmtKind, Item, MatchArm, ArgMode, IRValue, IRInstruction,
 	ParamMode, ParamLabel, CaptureMode, CaptureSpec, GenericDecl,
 	WherePredicateKind, WherePredicate, WhereClause,
-	Func, FuncSignature, Body, TypeApplication, ReceiverMode
+	Func, FuncSignature, Body, TypeApplication, ReceiverMode,
+	MacroToken, macro_token
 }
 
 // A function-type parameter's ownership-mode prefix (ADR 0018), held
@@ -298,7 +299,7 @@ func max_bound_var_in_expr(expr: &Expr) -> Int {
 			}
 			best
 		},
-		.macro_call(_, _, _, args) -> max_bound_var_in_exprs(exprs: args),
+		.macro_call(_, _, _, _, _, _, args) -> max_bound_var_in_exprs(exprs: args),
 		_ -> -1
 	}
 }
@@ -740,11 +741,68 @@ func is_borrow_annotation(annotation: &TypeAnnotation) -> Bool {
 	}
 }
 
+func macro_argument_expr(source: String, consume tokens: [Token]) -> Expr? {
+	if tokens.count == 0 { return .none }
+	let input = TokenRange(
+		tokens: tokens,
+		span: tokens[0].span.lower..<tokens[tokens.count - 1].span.upper
+	)
+	let outcome = parse_expr_tokens(source: source.clone(), input: input)
+	if let .some(_) = outcome.failure { return .none }
+	if outcome.items.count != 1 { return .none }
+	for item in outcome.items {
+		match item {
+			.expr_item(expr) -> return .some(expr),
+			_ -> return .none
+		}
+	}
+	.none
+}
+
+func string_array_contains(items: &[String], candidate: String) -> Bool {
+	for item in items {
+		if item == candidate { return true }
+	}
+	false
+}
+
+func macro_expression_arguments(source: String, consume tokens: [Token]) -> [Expr]? {
+	if tokens.count == 0 { return .some([]) }
+	let args: [Expr] = []
+	let segment: [Token] = []
+	let depth = 0
+	for token in tokens {
+		if token.kind == .left_paren || token.kind == .left_bracket || token.kind == .left_brace {
+			depth = depth + 1
+		}
+		if token.kind == .comma && depth == 0 {
+			if segment.count == 0 { return .none }
+			if let .some(expr) = macro_argument_expr(source: source, tokens: segment) {
+				args.push(expr)
+			} else { return .none }
+			segment = []
+			continue
+		}
+		segment.push(Token(kind: token.kind, span: token.span.lower..<token.span.upper, lexeme: token.lexeme.lower..<token.lexeme.upper))
+		if token.kind == .right_paren || token.kind == .right_bracket || token.kind == .right_brace {
+			depth = depth - 1
+		}
+	}
+	if segment.count > 0 {
+		if let .some(expr) = macro_argument_expr(source: source, tokens: segment) {
+			args.push(expr)
+		} else { return .none }
+	}
+	.some(args)
+}
+
 struct Parser {
 	let tokens: [Token]
 	let token_count: Int
 	let source: String
-	let source_len: Int
+	// The source extent owned by this parse. Token-range parses retain
+	// original byte offsets and place synthetic EOF at this range's end.
+	let input_span: Range<Int>
 	let pos: Int
 	// A `>>` closing nested generics is split: when set, `current()`
 	// synthesizes the second `>` in place (the reference replaces its
@@ -783,7 +841,7 @@ struct Parser {
 			let t = self.tokens[index]
 			return Token(kind: t.kind, span: t.span, lexeme: t.lexeme)
 		}
-		Token(kind: .eof, span: self.source_len..<self.source_len, lexeme: self.source_len..<self.source_len)
+		Token(kind: .eof, span: self.input_span.upper..<self.input_span.upper, lexeme: self.input_span.upper..<self.input_span.upper)
 	}
 
 	func current() -> Token {
@@ -832,7 +890,7 @@ struct Parser {
 	// non-newline token already consumed (the EOF sentinel counts once
 	// the stream has advanced past the end).
 	func span_end() -> Int {
-		if self.pos - 1 >= self.token_count { return self.source_len }
+		if self.pos - 1 >= self.token_count { return self.input_span.upper }
 		let i = self.pos - 1
 		loop i >= 0 {
 			let t = self.tokens[i]
@@ -843,7 +901,7 @@ struct Parser {
 			}
 		}
 		if self.pos > 0 { return self.token_at(index: self.pos - 1).span.upper }
-		0
+		self.input_span.lower
 	}
 
 	func lexeme(token: Token) -> String {
@@ -1140,6 +1198,7 @@ struct Parser {
 		let k = self.current().kind
 		if k == .int_number || k == .float_number || k == .string_literal || k == .character_literal { return self.literal() }
 		if k == .keyword_true || k == .keyword_false { return self.literal() }
+		if k == .identifier && self.lexeme(token: self.current()) == "quote" && self.next_kind() == .left_brace { return self.syntax_quote() }
 		if k == .identifier { return self.variable(can_assign: can_assign) }
 		if k == .minus || k == .bang || k == .tilde { return self.unary() }
 		if k == .dot { return self.member_prefix(can_assign: can_assign) }
@@ -1149,11 +1208,11 @@ struct Parser {
 		if k == .keyword_if { return self.if_expr_prefix() }
 		if k == .keyword_match { return self.match_expr_prefix() }
 		if k == .keyword_func { return self.func_expr_prefix() }
-		if k == .attribute { return self.attribute_prefix() }
+		if k == .attribute { return self.macro_call() }
 		if k == .bound_var { return self.bound_var_expr() }
 		if k == .effect_name { return self.effect_callee() }
 		if k == .keyword_unreachable { return self.unreachable_prefix() }
-		if k == .hash { return self.macro_call() }
+		if k == .hash { return self.compiler_prefix() }
 		// Unreachable while has_prefix stays in sync with the arms above;
 		// fail like the caller's gate if they ever drift.
 		self.advance()
@@ -1167,25 +1226,143 @@ struct Parser {
 		Expr(kind: .unreachable_expr, start: tok.span.lower, end: self.span_end())
 	}
 
-	// `#name(args)`.
+	// An @macro owns one arbitrary balanced token tree. Parenthesized trees that
+	// are also ordinary comma-separated Talk expressions retain their parsed
+	// arguments for the legacy declarative expander.
 	mut func macro_call() -> Expr {
-		let start_tok = self.current()
-		self.consume(kind: .hash)
-		let name_tok = self.identifier_token()
+		let name_tok = self.current()
 		let name = self.lexeme(token: name_tok)
+		self.consume(kind: .attribute)
 		if self.is_failed() { return dummy_expr() }
-		self.consume(kind: .left_paren)
-		if self.is_failed() { return dummy_expr() }
-		let args: [Expr] = []
-		loop self.did_match(kind: .right_paren) == false {
-			if self.is_failed() { return dummy_expr() }
-			args.push(self.require_expr(e: self.expr_with_precedence(prec: prec_assignment)))
-			if self.is_failed() { return dummy_expr() }
-			if self.did_match(kind: .right_paren) { break }
-			self.consume(kind: .comma)
-			if self.is_failed() { return dummy_expr() }
+
+		let open = self.current()
+		let outer_close: TokenKind
+		match open.kind {
+			.left_paren -> outer_close = .right_paren,
+			.left_bracket -> outer_close = .right_bracket,
+			.left_brace -> outer_close = .right_brace,
+			_ -> {
+				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected a macro delimiter, got " + describe_kind(kind: open.kind))
+				return dummy_expr()
+			}
 		}
-		Expr(kind: .macro_call(name, name_tok.lexeme.lower, name_tok.lexeme.upper, args), start: start_tok.span.lower, end: self.span_end())
+		self.advance()
+		let expected: [TokenKind] = [outer_close]
+		let inner: [Token] = []
+		let close = open
+		loop expected.count > 0 {
+			let token = self.current()
+			if token.kind == .eof {
+				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected a closing macro delimiter, got EOF")
+				return dummy_expr()
+			}
+			let nested_close: TokenKind?
+			match token.kind {
+				.left_paren -> nested_close = .some(.right_paren),
+				.left_bracket -> nested_close = .some(.right_bracket),
+				.left_brace -> nested_close = .some(.right_brace),
+				_ -> nested_close = .none
+			}
+			if let .some(kind) = nested_close {
+				expected.push(kind)
+				inner.push(token)
+				self.advance()
+				continue
+			}
+			if token.kind == .right_paren || token.kind == .right_bracket || token.kind == .right_brace {
+				let wanted = expected.pop()
+				if let .some(kind) = wanted {
+					if token.kind != kind {
+						self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected " + describe_kind(kind: kind) + ", got " + describe_kind(kind: token.kind))
+						return dummy_expr()
+					}
+				}
+				close = token
+				self.advance()
+				if expected.count == 0 { break }
+				inner.push(token)
+				continue
+			}
+			inner.push(token)
+			self.advance()
+		}
+
+		let canonical: [MacroToken] = [macro_token(token: open)]
+		for token in inner { canonical.push(macro_token(token: token)) }
+		canonical.push(macro_token(token: close))
+		let args: [Expr] = []
+		if open.kind == .left_paren {
+			let parsed = macro_expression_arguments(source: self.source, tokens: inner)
+			if let .some(values) = parsed { args = values }
+		}
+		Expr(
+			kind: .macro_call(name, name_tok.lexeme.lower, name_tok.lexeme.upper, open.span.lower, close.span.upper, canonical, args),
+			start: name_tok.span.lower,
+			end: self.span_end()
+		)
+	}
+
+	// Opaque expression quotation for procedural macro units. Canonical tokens
+	// are retained in the AST so lowering can embed them without re-lexing.
+	mut func syntax_quote() -> Expr {
+		let start = self.current()
+		self.advance()
+		let open = self.current()
+		self.consume(kind: .left_brace)
+		if self.is_failed() { return dummy_expr() }
+		let expected: [TokenKind] = [.right_brace]
+		let inner: [Token] = []
+		let close = open
+		loop expected.count > 0 {
+			let token = self.current()
+			if token.kind == .eof {
+				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected a closing quotation delimiter, got EOF")
+				return dummy_expr()
+			}
+			let nested_close: TokenKind?
+			match token.kind {
+				.left_paren -> nested_close = .some(.right_paren),
+				.left_bracket -> nested_close = .some(.right_bracket),
+				.left_brace -> nested_close = .some(.right_brace),
+				_ -> nested_close = .none
+			}
+			if let .some(kind) = nested_close {
+				expected.push(kind)
+				inner.push(token)
+				self.advance()
+				continue
+			}
+			if token.kind == .right_paren || token.kind == .right_bracket || token.kind == .right_brace {
+				let wanted = expected.pop()
+				if let .some(kind) = wanted {
+					if token.kind != kind {
+						self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected " + describe_kind(kind: kind) + ", got " + describe_kind(kind: token.kind))
+						return dummy_expr()
+					}
+				}
+				close = token
+				self.advance()
+				if expected.count == 0 { break }
+				inner.push(token)
+				continue
+			}
+			inner.push(token)
+			self.advance()
+		}
+		let canonical: [MacroToken] = [macro_token(token: open)]
+		let splices: [String] = []
+		for token in inner {
+			canonical.push(macro_token(token: token))
+			if token.kind == .bound_var {
+				let name = self.source.utf8().slice(start: token.lexeme.lower, byte_count: token.lexeme.upper - token.lexeme.lower).to_string()
+				let first = name.utf8().at(index: 0)._toInt()
+				if (first < 48 || first > 57) && string_array_contains(items: splices, candidate: name) == false {
+					splices.push(name)
+				}
+			}
+		}
+		canonical.push(macro_token(token: close))
+		Expr(kind: .syntax_quote(self.source.clone(), canonical, splices), start: start.span.lower, end: self.span_end())
 	}
 
 	// `'effect(args)`: an effect call. The node's span includes the sigil;
@@ -3648,29 +3825,33 @@ struct Parser {
 		captures
 	}
 
-	// MARK: Attributes
+	// MARK: Compiler forms
 
-	mut func attribute_prefix() -> Expr {
-		let attr_tok = self.current()
-		self.advance()
-		let attr = self.lexeme(token: attr_tok)
-		if attr == "_ir" {
-			return self.inline_ir(start: attr_tok.span.lower)
+	mut func compiler_prefix() -> Expr {
+		let hash_tok = self.current()
+		self.consume(kind: .hash)
+		let name_tok = self.current()
+		if name_tok.kind != .identifier {
+			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected a compiler form name, got " + describe_kind(kind: name_tok.kind))
+			return dummy_expr()
 		}
-		if attr == "unsafe" {
+		self.advance()
+		let name = self.lexeme(token: name_tok)
+		if name == "_ir" {
+			return self.inline_ir(start: hash_tok.span.lower)
+		}
+		if name == "unsafe" {
 			let block = self.block(context: .plain, consumes_left_brace: true)
 			if self.is_failed() { return dummy_expr() }
-			return Expr(kind: .unsafe_expr(block), start: attr_tok.span.lower, end: self.span_end())
+			return Expr(kind: .unsafe_expr(block), start: hash_tok.span.lower, end: self.span_end())
 		}
-		// The reference rejects other expression attributes with the
-		// cannot-assign error (its own recovery TODO).
-		self.fail_cannot_assign()
+		self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected #unsafe or #_ir, got #" + name)
 		dummy_expr()
 	}
 
-	// `@_ir { %d = instr … }`: only the `cmp` operator error path is
+	// `#_ir { %d = instr … }`: only the `cmp` operator error path is
 	// exercised by the corpus; instruction success stays unported.
-	// `@_ir(binds…) { %d = instr … }` (the reference `inline_ir`). The
+	// `#_ir(binds…) { %d = instr … }` (the reference `inline_ir`). The
 	// node's span ends before the closing brace: the reference saves the
 	// instruction's meta, then consumes the `}`.
 	mut func inline_ir(start: Int) -> Expr {
@@ -3719,7 +3900,7 @@ struct Parser {
 			if instr == "free" { value_count = 1 }
 		}
 		if value_count < 0 {
-			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected supported @_ir instr, got " + instr)
+			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected supported #_ir instr, got " + instr)
 			return dummy_expr()
 		}
 		let ty: TypeAnnotation? = .none
@@ -3980,10 +4161,11 @@ struct Parser {
 		self.reject_pub(what: "a local declaration")
 	}
 
-	// `@handle 'effect { body }`: the statement span includes the `@`;
+	// `#handle 'effect { body }`: the statement span includes the `#`;
 	// the recorded effect-name span uses the token's lexeme.
 	mut func effect_handler() -> Stmt {
 		let start_tok = self.current()
+		self.advance()
 		self.advance()
 		let name_tok = self.current()
 		if name_tok.kind == .effect_name {
@@ -4011,7 +4193,7 @@ struct Parser {
 			self.consume(kind: .keyword_break)
 			return Stmt(kind: .break_stmt, start: start_tok.span.lower, end: self.span_end())
 		}
-		if k == .attribute && self.lexeme(token: cur) == "handle" {
+		if k == .hash && self.next_kind() == .identifier && self.lexeme(token: self.token_at(index: self.pos + 1)) == "handle" {
 			return self.effect_handler()
 		}
 		if k == .effect_name && self.lexeme(token: cur) == "continue" {
@@ -4097,6 +4279,22 @@ struct Parser {
 		self.require_end_of_input()
 	}
 
+	// The declaration category used by procedural macros: exactly one
+	// declaration owning the complete token range.
+	mut func parse_decl_root() -> Void {
+		self.skip_semicolons_and_newlines()
+		let root = self.next_root()
+		if self.is_failed() { return () }
+		match root {
+			.decl_item(decl) -> self.items.push(.decl_item(decl)),
+			_ -> {
+				self.fail(code: "parser.expected-declaration", message: "Expected a declaration")
+				return ()
+			}
+		}
+		self.require_end_of_input()
+	}
+
 	// A single-category parse owns the whole input: anything after the
 	// category (beyond trailing newlines) is an error.
 	mut func require_end_of_input() -> Void {
@@ -4135,9 +4333,14 @@ struct Parser {
 	}
 }
 
-func make_parser(source: String, tokens: [Token], lex_error: String?) -> Parser {
-	let source_len = source.utf8().count()
-	let token_count = tokens.count
+func make_parser(source: String, tokens: [Token], input_span: Range<Int>, lex_error: String?) -> Parser {
+	let owned_tokens: [Token] = []
+	for token in tokens {
+		owned_tokens.push(Token(kind: token.kind, span: token.span.lower..<token.span.upper, lexeme: token.lexeme.lower..<token.lexeme.upper))
+	}
+	let owned_error: String? = .none
+	if let .some(message) = lex_error { owned_error = .some(message.clone()) }
+	let token_count = owned_tokens.count
 	let no_fail: Fail? = .none
 	let no_diags: [Fail] = []
 	let no_items: [Item] = []
@@ -4145,7 +4348,7 @@ func make_parser(source: String, tokens: [Token], lex_error: String?) -> Parser 
 	let assign_slot: [Stmt] = []
 	let no_log: [Token] = []
 	let no_probe: [Bool] = []
-	Parser(tokens: tokens, token_count: token_count, source: source, source_len: source_len, pos: 0, split_greater: false, failed: no_fail, diags: no_diags, items: no_items, contexts: contexts, assign_slot: assign_slot, angle_adjacency: false, lex_error_message: lex_error, id_log: no_log, id_log_probe: no_probe)
+	Parser(tokens: owned_tokens, token_count: token_count, source: source.clone(), input_span: input_span.lower..<input_span.upper, pos: 0, split_greater: false, failed: no_fail, diags: no_diags, items: no_items, contexts: contexts, assign_slot: assign_slot, angle_adjacency: false, lex_error_message: owned_error, id_log: no_log, id_log_probe: no_probe)
 }
 
 // A scan failure pre-renders its message; the token list is truncated
@@ -4155,7 +4358,15 @@ func scan_parser(source: String, consume result: ScanResult) -> Parser {
 	if let .some(message) = result.error {
 		lex_error = .some(lexer_error_message(source: source, pos: result.error_pos, message: message))
 	}
-	make_parser(source: source, tokens: result.tokens, lex_error: lex_error)
+	let source_len = source.utf8().count()
+	make_parser(source: source, tokens: result.tokens, input_span: 0..<source_len, lex_error: lex_error)
+}
+
+// Build a parser over canonical tokens without lexing or rebuilding text.
+// `input.span` supplies the owned extent, including EOF placement for an
+// empty group body.
+func token_parser(source: String, input: TokenRange) -> Parser {
+	make_parser(source: source, tokens: input.tokens, input_span: input.span, lex_error: Optional.none)
 }
 
 // Parse a whole input as a file (ADR 0043 file category): block items
@@ -4201,6 +4412,55 @@ pub func parse_type_source(source: String) -> ParseOutcome {
 	let comments = result.comments
 	let parser = scan_parser(source: source, result: result)
 	parser.parse_type_root()
+	parser.finish(comments: comments)
+}
+
+// Parse pre-tokenized source ranges. These are the macro-facing category
+// entry points; tokens keep their use-site byte ranges and comments have
+// already been removed by the canonical scanner.
+pub func parse_file_tokens(source: String, input: TokenRange) -> ParseOutcome {
+	let parser = token_parser(source: source, input: input)
+	parser.parse_items(allow_imports: true)
+	parser.finish(comments: [])
+}
+
+pub func parse_block_items_tokens(source: String, input: TokenRange) -> ParseOutcome {
+	let parser = token_parser(source: source, input: input)
+	parser.parse_items(allow_imports: false)
+	parser.finish(comments: [])
+}
+
+pub func parse_expr_tokens(source: String, input: TokenRange) -> ParseOutcome {
+	let parser = token_parser(source: source, input: input)
+	parser.parse_expr_root()
+	parser.finish(comments: [])
+}
+
+pub func parse_pattern_tokens(source: String, input: TokenRange) -> ParseOutcome {
+	let parser = token_parser(source: source, input: input)
+	parser.parse_pattern_root()
+	parser.finish(comments: [])
+}
+
+pub func parse_type_tokens(source: String, input: TokenRange) -> ParseOutcome {
+	let parser = token_parser(source: source, input: input)
+	parser.parse_type_root()
+	parser.finish(comments: [])
+}
+
+pub func parse_decl_tokens(source: String, input: TokenRange) -> ParseOutcome {
+	let parser = token_parser(source: source, input: input)
+	parser.parse_decl_root()
+	parser.finish(comments: [])
+}
+
+// Convenience source entry for the declaration category. Production macro
+// expansion uses `parse_decl_tokens` after balanced capture.
+pub func parse_decl_source(source: String) -> ParseOutcome {
+	let result = scan(source: source)
+	let comments = result.comments
+	let parser = scan_parser(source: source, result: result)
+	parser.parse_decl_root()
 	parser.finish(comments: comments)
 }
 
@@ -4998,7 +5258,7 @@ func meta_expr(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: 
 			claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: ir_slot, start: expr.start, end: expr.end)
 			copy_from = ir_slot
 		},
-		.macro_call(_, _, _, args) -> {
+		.macro_call(_, _, _, _, _, _, args) -> {
 			for e in args {
 				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
 			}

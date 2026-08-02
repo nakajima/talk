@@ -89,7 +89,7 @@ The raw-pointer storage implementation is still temporary. `RawPtr`
 remains visible in core storage, arrays, strings, and IO internals, but
 safe user sources cannot mention raw pointer types or inline IR unless
 the operation is covered by the intrinsic `'unsafe` effect, usually discharged
-lexically with `@unsafe { ... }`.
+lexically with `#unsafe { ... }`.
 
 ## Source Model
 
@@ -246,7 +246,7 @@ capture, it rejects the program instead of inferring an implicit heap box
 or reference count. Borrowed values should not be storable in owned heap
 data until the lifetime model is explicit enough to describe that
 soundly. Safe sources also reject `RawPtr` and inline IR; raw pointer
-tests and low-level examples must scope those operations with `@unsafe`. The evaluator and
+tests and low-level examples must scope those operations with `#unsafe`. The evaluator and
 VM now track allocation records, reject double-free and use-after-free,
 and treat frees of static storage as no-ops. Drop lowering uses dynamic
 flags for conditional/open obligations so it can free more paths without

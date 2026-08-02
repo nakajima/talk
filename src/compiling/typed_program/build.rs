@@ -372,8 +372,8 @@ impl TypedTreeBuilder<'_> {
             expr::ExprKind::Unreachable => {
                 unreachable!("unreachable expressions are desugared to the panic effect")
             }
-            expr::ExprKind::MacroCall { .. } => {
-                unreachable!("macro calls are expanded before typed-program build")
+            expr::ExprKind::MacroCall { .. } | expr::ExprKind::SyntaxQuote { .. } => {
+                unreachable!("macro syntax is eliminated before typed-program build")
             }
             expr::ExprKind::InlineIR(ir) => {
                 // Typing validated the instruction and published its

@@ -277,7 +277,7 @@ fn handler_clause_binders_carry_their_checked_types() {
     // Clause binders take the effect's declared parameter types; the
     // typed tree publishes them on the parameter nodes (ADR 0038) so
     // lowering never reloads the effect signature for binder types.
-    let source = "// no-core\neffect 'ask(question: Int) -> Int\n@handle 'ask { q in\n\t'continue q\n}\n'ask(question: 1)\n()";
+    let source = "// no-core\neffect 'ask(question: Int) -> Int\n#handle 'ask { q in\n\t'continue q\n}\n'ask(question: 1)\n()";
     let mut clause_param_tys = vec![];
     for (_, hir_nodes) in lower(source) {
         let mut collect = derive_visitor::visitor_enter_fn(|stmt: &typed_ast::Stmt| {
@@ -389,7 +389,7 @@ fn effect_sites_carry_their_contracts() {
     // Perform sites and handlers both carry the effect's checked
     // contract (ADR 0038): declared parameter types and the type-generic
     // layout, so lowering never reloads effect signatures.
-    let source = "// no-core\neffect 'ask(question: Int) -> Int\n@handle 'ask { q in\n\t'continue q\n}\n'ask(question: 1)\n()";
+    let source = "// no-core\neffect 'ask(question: Int) -> Int\n#handle 'ask { q in\n\t'continue q\n}\n'ask(question: 1)\n()";
     let mut call_contracts = vec![];
     let mut handler_contracts = vec![];
     for (_, hir_nodes) in lower(source) {

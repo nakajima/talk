@@ -893,7 +893,7 @@ test(\"ok\") {\n\tassert(1 + 1 == 2)\n}\n",
         let project = temp_project("assertion-source-test-runner");
         std::fs::write(
             project.join("math.test.tlk"),
-            "test(\"bad\") {\n\t#assert(1 + 1 == 3)\n}\n",
+            "test(\"bad\") {\n\t@assert(1 + 1 == 3)\n}\n",
         )
         .expect("test file");
 

@@ -14,6 +14,11 @@ pub enum MacroError {
         name: String,
         span: crate::parsing::span::Span,
     },
+    AmbiguousProceduralMacro {
+        name: String,
+        packages: Vec<String>,
+        span: crate::parsing::span::Span,
+    },
     MacroArityMismatch {
         name: String,
         actual: usize,
@@ -29,6 +34,17 @@ pub enum MacroError {
         name: String,
         span: crate::parsing::span::Span,
     },
+    ProceduralMacroFailure {
+        name: String,
+        code: String,
+        message: String,
+        span: crate::parsing::span::Span,
+    },
+    InvalidProceduralExpansion {
+        name: String,
+        reason: String,
+        span: crate::parsing::span::Span,
+    },
 }
 
 impl MacroError {
@@ -36,9 +52,12 @@ impl MacroError {
         match self {
             Self::DuplicateMacroRule { .. } => "macro.duplicate-rule",
             Self::UndefinedMacro { .. } => "macro.undefined",
+            Self::AmbiguousProceduralMacro { .. } => "macro.ambiguous-procedural",
             Self::MacroArityMismatch { .. } => "macro.arity-mismatch",
             Self::InvalidMacroTemplate { .. } => "macro.invalid-template",
             Self::MacroExpansionLimit { .. } => "macro.expansion-limit",
+            Self::ProceduralMacroFailure { .. } => "macro.procedural-failure",
+            Self::InvalidProceduralExpansion { .. } => "macro.invalid-procedural-expansion",
         }
     }
 }
@@ -47,9 +66,14 @@ impl std::fmt::Display for MacroError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::DuplicateMacroRule { name, arity, .. } => {
-                write!(f, "Duplicate macro rule `#{name}` with {arity} argument(s)")
+                write!(f, "Duplicate macro rule `@{name}` with {arity} argument(s)")
             }
-            Self::UndefinedMacro { name, .. } => write!(f, "Undefined macro `#{name}`"),
+            Self::UndefinedMacro { name, .. } => write!(f, "Undefined macro `@{name}`"),
+            Self::AmbiguousProceduralMacro { name, packages, .. } => write!(
+                f,
+                "Macro `@{name}` is ambiguous between {}",
+                packages.join(", ")
+            ),
             Self::MacroArityMismatch {
                 name,
                 actual,
@@ -57,7 +81,7 @@ impl std::fmt::Display for MacroError {
                 ..
             } => write!(
                 f,
-                "Macro `#{name}` received {actual} argument(s); available arities: {}",
+                "Macro `@{name}` received {actual} argument(s); available arities: {}",
                 expected
                     .iter()
                     .map(usize::to_string)
@@ -69,8 +93,17 @@ impl std::fmt::Display for MacroError {
             }
             Self::MacroExpansionLimit { name, .. } => write!(
                 f,
-                "Macro expansion exceeded its work limit while expanding `#{name}`"
+                "Macro expansion exceeded its work limit while expanding `@{name}`"
             ),
+            Self::ProceduralMacroFailure {
+                name,
+                code,
+                message,
+                ..
+            } => write!(f, "Macro `@{name}` failed ({code}): {message}"),
+            Self::InvalidProceduralExpansion { name, reason, .. } => {
+                write!(f, "Macro `@{name}` returned an invalid expansion: {reason}")
+            }
         }
     }
 }
@@ -123,10 +156,18 @@ pub fn expand_macros(asts: &mut [AST<Parsed>]) -> Vec<AnyDiagnostic> {
 }
 
 /// Expand macros with the original source text available to source-reflecting
-/// built-ins such as `#assert`.
+/// built-ins such as `@assert`.
 pub fn expand_macros_with_sources(
     asts: &mut [AST<Parsed>],
     sources: &HashMap<FileID, String>,
+) -> Vec<AnyDiagnostic> {
+    expand_macros_with_sources_and_service(asts, sources, None)
+}
+
+pub fn expand_macros_with_sources_and_service(
+    asts: &mut [AST<Parsed>],
+    sources: &HashMap<FileID, String>,
+    procedural: Option<&crate::procedural_macros::ProceduralMacroEnvironment>,
 ) -> Vec<AnyDiagnostic> {
     let mut definitions = HashMap::new();
     let mut diagnostics = Vec::new();
@@ -210,6 +251,9 @@ pub fn expand_macros_with_sources(
     }
 
     for ast in asts {
+        let procedural_bindings = procedural
+            .map(|environment| environment.bindings_for(ast))
+            .unwrap_or_default();
         let node_ids = std::mem::take(&mut ast.node_ids);
         let mut expander = MacroExpander {
             file_id: ast.file_id,
@@ -219,6 +263,9 @@ pub fn expand_macros_with_sources(
             expansions: 0,
             changed: false,
             source: sources.get(&ast.file_id).map(String::as_str),
+            procedural: &procedural_bindings,
+            generated_sources: HashMap::new(),
+            emitted_metadata: Vec::new(),
         };
         loop {
             expander.changed = false;
@@ -230,6 +277,7 @@ pub fn expand_macros_with_sources(
             }
         }
         ast.node_ids = expander.node_ids;
+        ast.syntax.identifiers.extend(expander.emitted_metadata);
         diagnostics.extend(expander.diagnostics);
     }
 
@@ -343,6 +391,9 @@ struct MacroExpander<'a> {
     expansions: usize,
     changed: bool,
     source: Option<&'a str>,
+    procedural: &'a crate::procedural_macros::ProceduralMacroBindings,
+    generated_sources: HashMap<NodeID, String>,
+    emitted_metadata: Vec<crate::hygiene::MaterializedIdentifier>,
 }
 
 impl MacroExpander<'_> {
@@ -457,10 +508,161 @@ impl MacroExpander<'_> {
         self.changed = true;
     }
 
+    fn expand_procedural(
+        &mut self,
+        expr: &mut Expr,
+        visible_name: String,
+        binding: &crate::procedural_macros::ProceduralMacroBinding,
+        input_span: crate::parsing::span::Span,
+        input_tokens: &[crate::node_kinds::expr::MacroToken],
+    ) {
+        let source = self
+            .generated_sources
+            .get(&expr.id)
+            .map(String::as_str)
+            .or(self.source);
+        let Some(source) = source else {
+            self.error(
+                expr.id,
+                MacroError::InvalidProceduralExpansion {
+                    name: visible_name,
+                    reason: "invocation source is unavailable".into(),
+                    span: expr.span,
+                },
+            );
+            self.replace_with_unit(expr);
+            return;
+        };
+        let namespace = (u64::from(self.file_id.0) << 32) | u64::from(expr.id.1);
+        let ordinal = self.expansions as u64 + 1;
+        let expansion = match binding.service.expand(
+            &binding.exported_name,
+            self.file_id,
+            source,
+            input_span.start,
+            input_span.end,
+            input_tokens,
+            binding.definition_module,
+            namespace,
+            ordinal,
+        ) {
+            Ok(expansion) => expansion,
+            Err(message) => {
+                self.error(
+                    expr.id,
+                    MacroError::ProceduralMacroFailure {
+                        name: visible_name,
+                        code: "macro.execution".into(),
+                        message,
+                        span: expr.span,
+                    },
+                );
+                self.replace_with_unit(expr);
+                return;
+            }
+        };
+        if let Some(failure) = expansion.failure {
+            self.error(
+                expr.id,
+                MacroError::ProceduralMacroFailure {
+                    name: visible_name,
+                    code: failure.code,
+                    message: failure.message,
+                    span: expr.span,
+                },
+            );
+            self.replace_with_unit(expr);
+            return;
+        }
+        let Some(mut parsed) = expansion.parse else {
+            self.error(
+                expr.id,
+                MacroError::InvalidProceduralExpansion {
+                    name: visible_name,
+                    reason: "successful result contains no parsed expression".into(),
+                    span: expr.span,
+                },
+            );
+            self.replace_with_unit(expr);
+            return;
+        };
+        let parse_failure = parsed
+            .failure
+            .take()
+            .or_else(|| parsed.diags.drain(..).next());
+        if let Some(failure) = parse_failure {
+            self.error(
+                expr.id,
+                MacroError::ProceduralMacroFailure {
+                    name: visible_name,
+                    code: failure.code,
+                    message: failure.message,
+                    span: expr.span,
+                },
+            );
+            self.replace_with_unit(expr);
+            return;
+        }
+        expansion.metadata.apply(&mut parsed.roots);
+        self.emitted_metadata.extend(expansion.metadata.identifiers);
+        if parsed.roots.len() != 1 {
+            self.error(
+                expr.id,
+                MacroError::InvalidProceduralExpansion {
+                    name: visible_name,
+                    reason: format!("expected one expression, got {} roots", parsed.roots.len()),
+                    span: expr.span,
+                },
+            );
+            self.replace_with_unit(expr);
+            return;
+        }
+        let root = parsed.roots.remove(0);
+        let mut expanded = match root {
+            Node::Expr(expanded) => expanded,
+            Node::Stmt(Stmt {
+                kind: StmtKind::Expr(expanded),
+                ..
+            }) => expanded,
+            _ => {
+                self.error(
+                    expr.id,
+                    MacroError::InvalidProceduralExpansion {
+                        name: visible_name,
+                        reason: "result root is not an expression".into(),
+                        span: expr.span,
+                    },
+                );
+                self.replace_with_unit(expr);
+                return;
+            }
+        };
+        expanded.drive_mut(&mut NodeIdRemapper {
+            file_id: self.file_id,
+            node_ids: &mut self.node_ids,
+        });
+        let mut nested = Vec::new();
+        let mut collector = derive_visitor::visitor_enter_fn(|candidate: &Expr| {
+            if matches!(candidate.kind, ExprKind::MacroCall { .. }) {
+                nested.push(candidate.id);
+            }
+        });
+        expanded.drive(&mut collector);
+        drop(collector);
+        for id in nested {
+            self.generated_sources.insert(id, expansion.source.clone());
+        }
+        *expr = expanded;
+        self.expansions += 1;
+        self.changed = true;
+    }
+
     fn enter_expr(&mut self, expr: &mut Expr) {
         let ExprKind::MacroCall {
             name,
             name_span,
+            input_span,
+            input_tokens,
             args,
         } = expr.kind.clone()
         else {
@@ -477,6 +679,26 @@ impl MacroExpander<'_> {
             );
             self.replace_with_unit(expr);
             return;
+        }
+
+        match self.procedural.resolve(&name) {
+            crate::procedural_macros::ProceduralMacroResolution::Found(binding) => {
+                self.expand_procedural(expr, name, binding, input_span, &input_tokens);
+                return;
+            }
+            crate::procedural_macros::ProceduralMacroResolution::Ambiguous(packages) => {
+                self.error(
+                    expr.id,
+                    MacroError::AmbiguousProceduralMacro {
+                        name,
+                        packages,
+                        span: name_span,
+                    },
+                );
+                self.replace_with_unit(expr);
+                return;
+            }
+            crate::procedural_macros::ProceduralMacroResolution::Missing => {}
         }
 
         if name == "assert" {
@@ -652,8 +874,49 @@ mod tests {
     };
 
     #[test]
+    fn parser_captures_non_talk_macro_token_trees() {
+        let ast = parse("@html { div class=@card { <not talk> } }");
+        let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {
+            panic!("expected expression statement");
+        };
+        let ExprKind::MacroCall {
+            name,
+            input_span,
+            args,
+            ..
+        } = &expr.kind
+        else {
+            panic!("expected macro call");
+        };
+        assert_eq!(name, "html");
+        assert_eq!(
+            &"@html { div class=@card { <not talk> } }"
+                [input_span.start as usize..input_span.end as usize],
+            "{ div class=@card { <not talk> } }"
+        );
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn parser_captures_expression_quote_tokens_and_splices() {
+        let ast = parse("quote { helper(value: $item) }");
+        let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {
+            panic!("expected expression statement");
+        };
+        let ExprKind::SyntaxQuote {
+            tokens, splices, ..
+        } = &expr.kind
+        else {
+            panic!("expected syntax quote");
+        };
+        assert_eq!(splices, &["item"]);
+        assert_eq!(tokens.first().map(|token| token.span_start), Some(6));
+        assert_eq!(tokens.last().map(|token| token.span_end), Some(30));
+    }
+
+    #[test]
     fn assert_expands_with_the_asserted_source_text() {
-        let source = "#assert(left == \"right\")";
+        let source = "@assert(left == \"right\")";
         let mut ast = parse(source);
         let invocation_id = ast.roots[0].as_stmt().clone().as_expr().id;
         let sources = HashMap::from([(ast.file_id, source.to_string())]);
@@ -682,7 +945,7 @@ mod tests {
     #[test]
     fn expands_expression_template_and_removes_definition() {
         let mut ast = parse(
-            "macro choose($condition, $yes, $no) = if $condition { $yes } else { $no }\n#choose(true, 1, 2)",
+            "macro choose($condition, $yes, $no) = if $condition { $yes } else { $no }\n@choose(true, 1, 2)",
         );
         let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -695,7 +958,7 @@ mod tests {
 
     #[test]
     fn selects_rules_by_arity() {
-        let mut ast = parse("macro pick($one) = $one\nmacro pick($one, $two) = $two\n#pick(1, 2)");
+        let mut ast = parse("macro pick($one) = $one\nmacro pick($one, $two) = $two\n@pick(1, 2)");
         let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {
@@ -707,7 +970,7 @@ mod tests {
     #[test]
     fn recursively_expands_macros_emitted_by_templates() {
         let mut ast =
-            parse("macro inner($value) = $value\nmacro outer($value) = #inner($value)\n#outer(7)");
+            parse("macro inner($value) = $value\nmacro outer($value) = @inner($value)\n@outer(7)");
         let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {
@@ -718,7 +981,7 @@ mod tests {
 
     #[test]
     fn rejects_type_annotations_nested_in_templates() {
-        let mut ast = parse("macro invoke($value) = $value.map<Int>()\n#invoke([1])");
+        let mut ast = parse("macro invoke($value) = $value.map<Int>()\n@invoke([1])");
         let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
         assert!(diagnostics.iter().any(|diagnostic| matches!(
             diagnostic,
@@ -731,7 +994,7 @@ mod tests {
 
     #[test]
     fn rejects_free_template_identifiers() {
-        let mut ast = parse("macro bad($value) = helper($value)\n#bad(1)");
+        let mut ast = parse("macro bad($value) = helper($value)\n@bad(1)");
         let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
         assert_eq!(diagnostics.len(), 2);
         assert!(matches!(
@@ -754,7 +1017,7 @@ mod tests {
 
     #[test]
     fn reports_arity_mismatch() {
-        let mut ast = parse("macro one($value) = $value\n#one(1, 2)");
+        let mut ast = parse("macro one($value) = $value\n@one(1, 2)");
         let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
         assert!(diagnostics.iter().any(|diagnostic| matches!(
             diagnostic,
@@ -767,7 +1030,7 @@ mod tests {
 
     #[test]
     fn bounds_recursive_expansion() {
-        let mut ast = parse("macro recurse($value) = #recurse($value)\n#recurse(1)");
+        let mut ast = parse("macro recurse($value) = @recurse($value)\n@recurse(1)");
         let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
         assert!(diagnostics.iter().any(|diagnostic| matches!(
             diagnostic,
@@ -784,7 +1047,7 @@ mod tests {
 
         let driver = Driver::new_bare(
             vec![Source::from(
-                "macro choose($condition, $yes, $no) = if $condition { $yes } else { $no }\nlet answer = #choose(true, 1, 2)",
+                "macro choose($condition, $yes, $no) = if $condition { $yes } else { $no }\nlet answer = @choose(true, 1, 2)",
             )],
             DriverConfig::new("MacroTest"),
         );
@@ -803,7 +1066,7 @@ mod tests {
 
     #[test]
     fn gives_each_template_node_a_fresh_id() {
-        let mut ast = parse("macro one($value) = 1 + $value\n(#one(2), #one(3))");
+        let mut ast = parse("macro one($value) = 1 + $value\n(@one(2), @one(3))");
         let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {

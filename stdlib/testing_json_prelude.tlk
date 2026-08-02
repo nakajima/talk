@@ -55,7 +55,7 @@ func __talktalk_event_end(status: String) {
 	print(status)
 }
 
-@handle 'registerTest { testCase in
+#handle 'registerTest { testCase in
 	if __talktalk_filter_enabled {
 		if testCase.name == __talktalk_filter_name {
 			__talktalk_tests.push(TestCase(name: testCase.name.to_string(), block: testCase.block))
@@ -66,7 +66,7 @@ func __talktalk_event_end(status: String) {
 	'continue ()
 }
 
-@handle 'fail { message in
+#handle 'fail { message in
 	__talktalk_event_failure(message: message.to_string())
 	__talktalk_failures.push(
 		Failure(test_name: __talktalk_current_test.to_string(), assertion: message)

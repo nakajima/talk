@@ -1,7 +1,7 @@
 effect 'throw(ret: String) -> ()
 
 func this_is_fine() {
-	@handle 'throw { err in print(err) }
+	#handle 'throw { err in print(err) }
 	this_is_not_fine()
 	print("this should not print")
 }

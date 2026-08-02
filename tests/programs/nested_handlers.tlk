@@ -6,13 +6,13 @@ func emit(n: Int) {
 }
 
 func inner_scope() {
-	@handle 'signal { n in print("inner caught") }
+	#handle 'signal { n in print("inner caught") }
 	emit(n: 1)
 	print("inner after")
 }
 
 func outer_scope() {
-	@handle 'signal { n in print("outer caught") }
+	#handle 'signal { n in print("outer caught") }
 	inner_scope()
 	emit(n: 2)
 	print("outer after")

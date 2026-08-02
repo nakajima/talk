@@ -1,5 +1,5 @@
 effect 'oops(error) -> Never
-@handle 'oops { err in
+#handle 'oops { err in
 	let local = "x" + "y"
 	local.byte_count
 }

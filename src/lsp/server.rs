@@ -2466,7 +2466,7 @@ mod tests {
 
     #[test]
     fn rename_renames_effect_declaration_and_uses() {
-        let code = "effect 'boom(message: String) -> ()\nfunc emit() 'boom -> () {\n  'boom(\"x\")\n}\n@handle 'boom { message in emit() }\n";
+        let code = "effect 'boom(message: String) -> ()\nfunc emit() 'boom -> () {\n  'boom(\"x\")\n}\n#handle 'boom { message in emit() }\n";
         let uri =
             Url::from_file_path(std::env::temp_dir().join("rename_effect.tlk")).expect("file uri");
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
@@ -2477,7 +2477,7 @@ mod tests {
         assert!(rewritten.contains("effect 'zap"), "{rewritten}");
         assert!(rewritten.contains("func emit() 'zap"), "{rewritten}");
         assert!(rewritten.contains("'zap(\"x\")"), "{rewritten}");
-        assert!(rewritten.contains("@handle 'zap"), "{rewritten}");
+        assert!(rewritten.contains("#handle 'zap"), "{rewritten}");
     }
 
     #[test]
@@ -2956,7 +2956,7 @@ extend Person {
     fn goto_definition_on_effect_call() {
         let code = r#"effect 'fizz() -> Int
 
-@handle 'fizz { 0 }
+#handle 'fizz { 0 }
 
 'fizz()
 "#;
@@ -2973,7 +2973,7 @@ extend Person {
     fn goto_definition_on_effect_handler() {
         let code = r#"effect 'fizz() -> Int
 
-@handle 'fizz { 0 }
+#handle 'fizz { 0 }
 "#;
         let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_effect_handler.tlk"))
             .expect("file uri");
@@ -3139,10 +3139,10 @@ func foo() 'fizz -> Int {
 
     #[test]
     fn goto_definition_on_handler_effect_tick() {
-        // Clicking on the ' in '@handle 'fizz' should still navigate to the effect
+        // Clicking on the ' in '#handle 'fizz' should still navigate to the effect
         let code = r#"effect 'fizz() -> Int
 
-@handle 'fizz { 0 }
+#handle 'fizz { 0 }
 "#;
         let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_handler_tick.tlk"))
             .expect("file uri");

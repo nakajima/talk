@@ -2,7 +2,7 @@ effect 'ask(prompt) -> Int
 struct Wrapper {
 	let f: () -> Int
 }
-@handle 'ask { p in
+#handle 'ask { p in
 	print(p)
 	'continue 42
 }

@@ -12,30 +12,30 @@ pub effect 'panic(message: String) -> Never
 // arm here.
 func _io_host(request: IORequest) -> Int {
 	match request {
-		.read(fd, buf, count) -> @_ir(fd, buf, count) { %? = io 0 $0 $1 $2 },
-		.write(fd, buf, count) -> @_ir(fd, buf, count) { %? = io 1 $0 $1 $2 },
-		.open(path, flags, mode) -> @_ir(path, flags, mode) { %? = io 2 $0 $1 $2 },
-		.close(fd) -> @_ir(fd) { %? = io 3 $0 0 0 },
-		.sleep(ms) -> @_ir(ms) { %? = io 4 $0 0 0 },
-		.poll(fds, count, timeout) -> @_ir(fds, count, timeout) { %? = io 5 $0 $1 $2 },
-		.ctl(fd, op, arg) -> @_ir(fd, op, arg) { %? = io 6 $0 $1 $2 },
-		.socket(domain, socktype, proto) -> @_ir(domain, socktype, proto) { %? = io 7 $0 $1 $2 },
-		.bind(fd, addr, port) -> @_ir(fd, addr, port) { %? = io 8 $0 $1 $2 },
-		.listen(fd, backlog) -> @_ir(fd, backlog) { %? = io 9 $0 $1 0 },
-		.connect(fd, addr, port) -> @_ir(fd, addr, port) { %? = io 10 $0 $1 $2 },
-		.accept(fd) -> @_ir(fd) { %? = io 11 $0 0 0 },
-		.cwd_len -> @_ir { %? = io 12 0 0 0 },
-		.cwd_copy(buf) -> @_ir(buf) { %? = io 13 $0 0 0 },
-		.getenv_len(name, name_len) -> @_ir(name, name_len) { %? = io 14 $0 $1 0 },
-		.getenv_copy(name, name_len, buf) -> @_ir(name, name_len, buf) { %? = io 15 $0 $1 $2 },
-		.argc -> @_ir { %? = io 16 0 0 0 },
-		.arg_len(index) -> @_ir(index) { %? = io 17 $0 0 0 },
-		.arg_copy(index, buf) -> @_ir(index, buf) { %? = io 18 $0 $1 0 },
-		.dir_count(path) -> @_ir(path) { %? = io 19 $0 0 0 },
-		.dir_entry_kind(path, index) -> @_ir(path, index) { %? = io 20 $0 $1 0 },
-		.dir_entry_len(path, index) -> @_ir(path, index) { %? = io 21 $0 $1 0 },
-		.dir_entry_copy(path, index, buf) -> @_ir(path, index, buf) { %? = io 22 $0 $1 $2 },
-		.exit(code) -> @_ir(code) { %? = io 23 $0 0 0 }
+		.read(fd, buf, count) -> #_ir(fd, buf, count) { %? = io 0 $0 $1 $2 },
+		.write(fd, buf, count) -> #_ir(fd, buf, count) { %? = io 1 $0 $1 $2 },
+		.open(path, flags, mode) -> #_ir(path, flags, mode) { %? = io 2 $0 $1 $2 },
+		.close(fd) -> #_ir(fd) { %? = io 3 $0 0 0 },
+		.sleep(ms) -> #_ir(ms) { %? = io 4 $0 0 0 },
+		.poll(fds, count, timeout) -> #_ir(fds, count, timeout) { %? = io 5 $0 $1 $2 },
+		.ctl(fd, op, arg) -> #_ir(fd, op, arg) { %? = io 6 $0 $1 $2 },
+		.socket(domain, socktype, proto) -> #_ir(domain, socktype, proto) { %? = io 7 $0 $1 $2 },
+		.bind(fd, addr, port) -> #_ir(fd, addr, port) { %? = io 8 $0 $1 $2 },
+		.listen(fd, backlog) -> #_ir(fd, backlog) { %? = io 9 $0 $1 0 },
+		.connect(fd, addr, port) -> #_ir(fd, addr, port) { %? = io 10 $0 $1 $2 },
+		.accept(fd) -> #_ir(fd) { %? = io 11 $0 0 0 },
+		.cwd_len -> #_ir { %? = io 12 0 0 0 },
+		.cwd_copy(buf) -> #_ir(buf) { %? = io 13 $0 0 0 },
+		.getenv_len(name, name_len) -> #_ir(name, name_len) { %? = io 14 $0 $1 0 },
+		.getenv_copy(name, name_len, buf) -> #_ir(name, name_len, buf) { %? = io 15 $0 $1 $2 },
+		.argc -> #_ir { %? = io 16 0 0 0 },
+		.arg_len(index) -> #_ir(index) { %? = io 17 $0 0 0 },
+		.arg_copy(index, buf) -> #_ir(index, buf) { %? = io 18 $0 $1 0 },
+		.dir_count(path) -> #_ir(path) { %? = io 19 $0 0 0 },
+		.dir_entry_kind(path, index) -> #_ir(path, index) { %? = io 20 $0 $1 0 },
+		.dir_entry_len(path, index) -> #_ir(path, index) { %? = io 21 $0 $1 0 },
+		.dir_entry_copy(path, index, buf) -> #_ir(path, index, buf) { %? = io 22 $0 $1 $2 },
+		.exit(code) -> #_ir(code) { %? = io 23 $0 0 0 }
 	}
 }
 
@@ -46,21 +46,21 @@ func _io_host(request: IORequest) -> Int {
 // signature rather than naming any effect itself. Resumable fallbacks
 // continue; panic is the abortive process-termination fallback.
 pub func _with_host(consume body: () '[io, alloc, async, panic] -> ()) -> () {
-	@handle 'io { request in
+	#handle 'io { request in
 		'continue _io_host(request: request)
 	}
 	// Allocation bookkeeping is carried by the 'unsafe intrinsics; a
 	// bare 'alloc perform asks the host for nothing.
-	@handle 'alloc { allocation in
+	#handle 'alloc { allocation in
 		'continue
 	}
 	// The reference host has no scheduler: a yield resumes immediately.
-	@handle 'async {
+	#handle 'async {
 		'continue
 	}
 	// Panic is an ordinary abortive effect. User handlers may intercept it;
 	// delegation reaches this outer fallback, which reports and terminates.
-	@handle 'panic { message in
+	#handle 'panic { message in
 		write_string(fd: STDERR_FD, s: message)
 		write_string(fd: STDERR_FD, s: "\n")
 		_io_host(request: .exit(1))

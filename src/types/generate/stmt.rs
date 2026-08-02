@@ -262,7 +262,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 if effect_name.symbol() == Ok(Symbol::Unsafe) {
                     self.unsupported(
                         stmt.id,
-                        "the intrinsic `'unsafe` effect cannot be handled; use `@unsafe { ... }`",
+                        "the intrinsic `'unsafe` effect cannot be handled; use `#unsafe { ... }`",
                     );
                     return StmtValue::Unit;
                 }
@@ -500,6 +500,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 .iter()
                 .any(|arg| Self::expr_breaks_current_loop(&arg.value)),
             ExprKind::Incomplete(_)
+            | ExprKind::SyntaxQuote { .. }
             | ExprKind::InlineIR(_)
             | ExprKind::LiteralInt(_)
             | ExprKind::LiteralFloat(_)
@@ -633,6 +634,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 .iter()
                 .any(|arg| Self::expr_exits_mut_iteration(&arg.value, loop_depth)),
             ExprKind::Incomplete(_)
+            | ExprKind::SyntaxQuote { .. }
             | ExprKind::InlineIR(_)
             | ExprKind::LiteralInt(_)
             | ExprKind::LiteralFloat(_)

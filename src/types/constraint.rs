@@ -194,7 +194,7 @@ pub enum Constraint {
     },
     /// A handler extent's row boundary (label-scoped elimination —
     /// docs/effects.md): every occurrence of `effects`'
-    /// labels in `inner` is discharged by the covering `@handle`s; the
+    /// labels in `inner` is discharged by the covering `#handle`s; the
     /// remaining occurrences and `inner`'s residual tail flow to `outer`.
     /// Processed after the group's solve quiesces, when the extent's row
     /// content has surfaced.

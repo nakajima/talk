@@ -10,7 +10,7 @@
 // the lexer's token trees: `binary` carries `[lhs, rhs]`, `call`
 // carries its callee as a one-element array.
 
-use package::Lexer::{ TokenKind }
+use package::Lexer::{ Token, TokenKind }
 
 // A token carried in node meta (ADR 0043 option A): the reference
 // token shape with line/col stamped at the token's END (0-based line,
@@ -330,7 +330,7 @@ pub enum ExprKind {
 	case subscript_expr([Expr])
 	// A `func` literal in expression position.
 	case func_expr(Func)
-	// `@unsafe { … }`.
+	// `#unsafe { … }`.
 	case unsafe_expr(Block)
 	// A conditional in expression position (and the desugared form of
 	// pattern-bearing if statements): condition as a one-element array,
@@ -352,11 +352,37 @@ pub enum ExprKind {
 	// `{ label: value, ...spread }`: the fields, then the spread
 	// expression as a zero- or one-element array.
 	case record_literal([RecordField], [Expr])
-	// `@_ir(binds…) { %d = instr … }`: the bind expressions, then the
+	// `#_ir(binds…) { %d = instr … }`: the bind expressions, then the
 	// instruction. Only the binds render in the dump.
 	case inline_ir([Expr], IRInstruction)
-	// `#name(args)`: the name and its token span.
-	case macro_call(String, Int, Int, [Expr])
+	// `@name(...)`, `@name[...]`, or `@name {...}`: the name and its
+	// lexeme span, the complete delimited input span, its canonical tokens,
+	// and legacy expression arguments when the parenthesized payload consists
+	// only of expressions.
+	case macro_call(String, Int, Int, Int, Int, [MacroToken], [Expr])
+	// `quote { ... }` in a macro unit: the original source, canonical group
+	// tokens, and the named expression antiquotations encountered in the tree.
+	case syntax_quote(String, [MacroToken], [String])
+}
+
+// A flattened canonical token carried by a macro invocation. Flattening the
+// ranges keeps the parse-result ABI simple; no token text is reconstructed.
+pub struct MacroToken {
+	pub let kind: TokenKind
+	pub let span_start: Int
+	pub let span_end: Int
+	pub let lexeme_start: Int
+	pub let lexeme_end: Int
+}
+
+pub func macro_token(token: Token) -> MacroToken {
+	MacroToken(
+		kind: token.kind,
+		span_start: token.span.lower,
+		span_end: token.span.upper,
+		lexeme_start: token.lexeme.lower,
+		lexeme_end: token.lexeme.upper
+	)
 }
 
 // An inline-IR value operand.
@@ -370,7 +396,7 @@ pub enum IRValue {
 	case bind(Int)
 }
 
-// One @_ir instruction: its name, optional destination register lexeme
+// One #_ir instruction: its name, optional destination register lexeme
 // (`?` requests a fresh one), optional operand type, value operands in
 // instruction order, and the `cmp` comparator.
 pub struct IRInstruction {
@@ -540,7 +566,7 @@ pub enum StmtKind {
 	case continue_stmt
 	// `'continue expr?` — resumes the enclosing effect handler.
 	case resume_stmt(Expr?)
-	// `@handle 'effect { body }` — the effect name (sigil excluded), its
+	// `#handle 'effect { body }` — the effect name (sigil excluded), its
 	// lexeme span, and the handler block.
 	case handle_stmt(String, Int, Int, Block)
 }

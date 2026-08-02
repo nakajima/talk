@@ -30,12 +30,12 @@ implementation corrections.
 Everything about ADR 0011's capability passing is monomorphic: a
 function's row names the effects it performs, `demand` turns each row
 entry into one capability parameter with a concrete payload type, and
-`@handle` builds one capability closure. Generic effects break the chain
+`#handle` builds one capability closure. Generic effects break the chain
 at the representation: **effect rows carry labels, not instantiations**
 (`EffectRow.effects: BTreeSet<Symbol>`). A row saying `'state` does not
 say `'state<Int>`, so a capability parameter for `'state` has no
 determined domain type, one row entry may stand for `'state<Int>` *and*
-`'state<Bool>` in the same function, and an `@handle` cannot know which
+`'state<Bool>` in the same function, and an `#handle` cannot know which
 instantiations its extent sends through its capability.
 
 Two facts make the full design reachable without staging tricks:
@@ -64,7 +64,7 @@ Three pieces, landed in order, each green:
    labels still serve their Koka purpose: unification stays principal
    and terminating without lacks constraints.
 
-2. **`@handle` is label-scoped elimination: it discharges *every*
+2. **`#handle` is label-scoped elimination: it discharges *every*
    occurrence of its label in the extent's row.** The extent is checked
    under a fresh ambient row `?inner`, and the `Handling` site emits a
    new row constraint `HandleEffect { inner, effect, outer }`: when the
@@ -74,8 +74,8 @@ Three pieces, landed in order, each green:
    entries plus `inner`'s residual tail flow to `outer`. This replaces
    `Ctx::with_handled_effect` wholesale — non-generic effects are the
    degenerate case (entries with empty args) — and the top-level
-   progressive walk uses the same constraint per `@handle` statement.
-   One `@handle 'log` therefore covers `'log<Int>` and `'log<String>`
+   progressive walk uses the same constraint per `#handle` statement.
+   One `#handle 'log` therefore covers `'log<Int>` and `'log<String>`
    in one extent; an inner same-effect handler absorbs *all*
    occurrences, so an outer one is dead for that label (matching the
    runtime's nearest-capability-wins exactly).
@@ -156,13 +156,13 @@ Handlers keep inserting a bare `(effect, [])`-style entry this step
 
 Tests:
 - `effects::one_handler_covers_two_instantiations` — `func g() '[] {
-  @handle 'state { v in continue v }\n 'state(1)\n 'state(true)\n () }`
+  #handle 'state { v in continue v }\n 'state(1)\n 'state(true)\n () }`
   → clean (the heart of the feature).
 - `effects::inner_handler_absorbs_all_occurrences` — nested same-effect
   handlers: the outer's extent row shows nothing for the label; program
   clean, and (given Step 3) routing goes to the inner.
 - `effects::handler_extent_still_delimits` — perform before the
-  `@handle` in a `'[]` function still errors (extent boundary intact).
+  `#handle` in a `'[]` function still errors (extent boundary intact).
 - Re-run the whole Stage-1 (ADR 0011) row suite — discharge behavior
   for non-generic effects must be byte-identical.
 

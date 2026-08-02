@@ -23,7 +23,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         // effects core's `_with_host` wrapper discharges around the
         // program (ADR 0039), read from its callback's declared row —
         // the compiler names no effect anywhere. Programs without core
-        // have no wrapper and no ambient effects. Top-level `@handle`s
+        // have no wrapper and no ambient effects. Top-level `#handle`s
         // widen it positionally — a computation sees only the handlers
         // installed before it in source order, matching what the runtime
         // will actually have installed when it runs.
@@ -62,7 +62,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             self.body().check_local_decl(decl, &ctx);
         }
         // Statements check under a progressively narrowed extent: each
-        // `@handle` opens a fresh ambient row for the statements after it,
+        // `#handle` opens a fresh ambient row for the statements after it,
         // filtered into the previous one — the same label-scoped boundary
         // the block walkers give it inside functions.
         let mut top_ctx = Ctx::root().with_ret_eff(top_ret.clone(), self.closed_base());
@@ -121,7 +121,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
     }
 
     /// The ambient row for top-level computation positioned at `pos`: a
-    /// fresh row whose occurrences of the labels handled by `@handle`s
+    /// fresh row whose occurrences of the labels handled by `#handle`s
     /// BEFORE that point are discharged, the rest spilling into the
     /// closed base — a `let` running before a handler cannot use it (its
     /// rhs runs in source order at runtime).
@@ -459,7 +459,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         // The ambient effect row for top-level right-hand-side computation
         // is not part of any binder's type: it is the closed top-level
         // set as of the group's earliest binder — a `let` running before
-        // a top-level `@handle` cannot use it (its rhs runs in source
+        // a top-level `#handle` cannot use it (its rhs runs in source
         // order at runtime; group checking is otherwise order-blind).
         let group_pos = binders
             .iter()

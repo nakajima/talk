@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn macro_names_use_the_macro_token_type() {
-        let tokens = tokens_for("macro identity($value) = $value\n#identity(1)");
+        let tokens = tokens_for("macro identity($value) = $value\n@identity(1)");
         assert_eq!(
             tokens
                 .iter()

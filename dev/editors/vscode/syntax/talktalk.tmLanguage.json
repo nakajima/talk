@@ -24,13 +24,13 @@
   "repository": {
     "quoted-identifiers": {
       "name": "variable.other.quoted.talktalk",
-      "match": "@\"[^\"\\\\\\r\\n]+\"",
+      "match": "#\"[^\"\\\\\\r\\n]+\"",
       "captures": {
         "0": {
           "patterns": [
             {
               "name": "punctuation.definition.identifier.talktalk",
-              "match": "@\"|\""
+              "match": "#\"|\""
             }
           ]
         }

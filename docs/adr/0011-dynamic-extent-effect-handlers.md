@@ -5,7 +5,7 @@ Status: superseded by ADR 0031 (2026-07-13)
 ## Context
 
 Handler routing was decided **lexically at name resolution**: a perform
-routed to a handler only when the `@handle` sat in an ancestor lexical
+routed to a handler only when the `#handle` sat in an ancestor lexical
 scope (`lookup_handler_in_scope`), recorded per perform node in
 `resolved.effect_handlers`. A handler installed in a *caller* never
 covered a perform in a callee — `examples/Throwsies.tlk` fell through to
@@ -29,13 +29,13 @@ Effects are **dynamic-extent**, compiled in capability-passing style:
 
 - **Typing.** A perform always joins the ambient effect row; unannotated
   functions infer their latent effects (rows propagate through calls as
-  before). `@handle 'e` delimits *the rest of its block*: the remaining
+  before). `#handle 'e` delimits *the rest of its block*: the remaining
   statements check under the ambient row extended with `e`, so a callee
   row's `e` is absorbed at the handler boundary and never escapes the
   installing function (`Ctx::with_handled_effect`; the block walkers in
   `generate/func.rs`). Top-level ambient rows are **closed** over the
   core effects ('io, 'async, 'alloc — the runtime's implicit handler,
-  identified by `ModuleId::Core`) plus the top-level `@handle`s
+  identified by `ModuleId::Core`) plus the top-level `#handle`s
   installed before the computation's source position;
   a user effect reaching a closed row is `TypeError::UnhandledEffect` at
   the node where it tried to flow in. The zonked scheme rows are the
@@ -45,7 +45,7 @@ Effects are **dynamic-extent**, compiled in capability-passing style:
   user effect in its row (sorted; between source params and `k` —
   `demand`/`lower_function`), and call sites supply them from `ctx.caps`
   (`lower_call`); a monomorphized evidence vector in the sense of Xie &
-  Leijen. `@handle` builds the capability closure in the installing
+  Leijen. `#handle` builds the capability closure in the installing
   frame — its dom comes from `cap_dom_items`, shared with `demand`, so
   the types cannot drift — capturing the handled scope's return
   continuation (`ctx.raw_ret_k`) as its delimiter. The capability's
@@ -105,11 +105,11 @@ splitter (`try_mir_effect_split`, `rest_mir_closure`), `HandlerCap` /
   whose Rule-B owner is not reflected by `needs_drop`, materialize before
   performs and suspension-capable ordinary calls; emitted drops and region
   releases run before delimiter delivery. This is not an unrestricted claim: abort during an
-  active abort unwind traps, `@handle` inside a nested block remains
+  active abort unwind traps, `#handle` inside a nested block remains
   unsupported, and the normal-path balance verifier does not independently
   analyze abort/unwind paths.
 - Top-level ambient rows are position-aware: a computation (statement or
-  `let` rhs, by its group's earliest binder) sees only the `@handle`s
+  `let` rhs, by its group's earliest binder) sees only the `#handle`s
   installed before it in source order — use-before-install is
   `UnhandledEffect` at typing, matching what the runtime would have
   installed. `ambient_row_before` in `generate/groups.rs`.
@@ -122,9 +122,9 @@ splitter (`try_mir_effect_split`, `rest_mir_closure`), `HandlerCap` /
   (docs/effects.md, same day): effect rows carry
   instantiations as inert entries (`EffectEntry { effect, args }`,
   duplicate labels allowed, no cross-entry argument unification);
-  `@handle` is a label-scoped elimination constraint (`HandleEffect`,
+  `#handle` is a label-scoped elimination constraint (`HandleEffect`,
   processed at solve quiescence in data-flow order) discharging every
-  occurrence of its label; and the lowerer holds each `@handle` as a
+  occurrence of its label; and the lowerer holds each `#handle` as a
   `HandlerTemplate`, materializing one capability closure per demanded
   instantiation with the effect's generics bound in θ — the
   generic-function specialization machinery applied to a handler block.

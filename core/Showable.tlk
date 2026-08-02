@@ -23,7 +23,7 @@ func _digit(d: Int) -> String {
 
 extend Float {
 	pub func _trunc() -> Int {
-		@_ir { %? = trunc %0 }
+		#_ir { %? = trunc %0 }
 	}
 
 	func _frac() -> Float {
@@ -34,7 +34,7 @@ extend Float {
 
 extend Int {
 	func _toFloat() -> Float {
-		@_ir { %? = itof %0 }
+		#_ir { %? = itof %0 }
 	}
 }
 

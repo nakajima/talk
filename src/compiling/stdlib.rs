@@ -15,6 +15,7 @@ pub const STDLIB_SOURCE_NAMES: &[&str] = &[
     "testing.tlk",
     "Package.tlk",
     "syntax/Dump.tlk",
+    "html/Html.tlk",
 ];
 
 const STDLIB_MODULES: &[(&str, &str, &str)] = &[
@@ -34,6 +35,11 @@ const STDLIB_MODULES: &[(&str, &str, &str)] = &[
         "syntax",
         "syntax/Dump.tlk",
         include_str!("../../stdlib/syntax/Dump.tlk"),
+    ),
+    (
+        "html",
+        "html/Html.tlk",
+        include_str!("../../stdlib/html/Html.tlk"),
     ),
 ];
 
@@ -58,11 +64,21 @@ const STDLIB_FILES: &[(&str, &str)] = &[
         "syntax/Parser.tlk",
         include_str!("../../stdlib/syntax/Parser.tlk"),
     ),
+    (
+        "syntax/Syntax.tlk",
+        include_str!("../../stdlib/syntax/Syntax.tlk"),
+    ),
+    ("html/Html.tlk", include_str!("../../stdlib/html/Html.tlk")),
+    (
+        "html/html.macro.tlk",
+        include_str!("../../stdlib/html/html.macro.tlk"),
+    ),
 ];
 
 static STDLIB: OnceLock<Vec<CompiledStdlib>> = OnceLock::new();
-// The parser is much larger than the other stdlib modules. Compile it only
-// when source imports `syntax`, so ordinary compiler startup stays unchanged.
+// The syntax runtime module remains lazy for ordinary source imports. A
+// stdlib-owned procedural macro may still compile against the syntax sources
+// while its owning module artifact is built.
 static SYNTAX: OnceLock<CompiledStdlib> = OnceLock::new();
 
 pub fn path_override() -> Option<PathBuf> {
@@ -254,19 +270,15 @@ fn cache_key() -> Option<[u8; 32]> {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     if let Some(stdlib_dir) = path_override() {
-        for (path, _) in STDLIB_FILES
-            .iter()
-            .filter(|(path, _)| !Path::new(path).starts_with("syntax"))
-        {
+        // The html module's macro service compiles against the syntax source
+        // set, so those sources are inputs to the ordinary stdlib cache too.
+        for (path, _) in STDLIB_FILES {
             let content = std::fs::read(stdlib_dir.join(path)).ok()?;
             hasher.update(path.as_bytes());
             hasher.update(&content);
         }
     } else {
-        for (path, content) in STDLIB_FILES
-            .iter()
-            .filter(|(path, _)| !Path::new(path).starts_with("syntax"))
-        {
+        for (path, content) in STDLIB_FILES {
             hasher.update(path.as_bytes());
             hasher.update(content.as_bytes());
         }
@@ -520,6 +532,9 @@ fn compile_driver(name: &'static str, sources: Vec<Source>, module_id: ModuleId)
     config.module_id = module_id;
     config.mode = CompilationMode::Library;
     config.modules = Rc::new(modules);
+    if name == "html" {
+        config.workspace_root = Some(active_stdlib_dir().join("html"));
+    }
 
     let driver = Driver::new_bare(sources, config);
 

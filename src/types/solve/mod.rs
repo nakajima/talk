@@ -1019,7 +1019,7 @@ impl<'s> Solver<'s> {
 
     /// Discharge handler-extent boundaries once the group's solve has
     /// quiesced: every occurrence of the covered labels in the extent's
-    /// row is eliminated (label-scoped handling — one `@handle` covers
+    /// row is eliminated (label-scoped handling — one `#handle` covers
     /// every instantiation of its effect); the remaining occurrences and
     /// the residual tail flow to the outer row. Boundaries are processed
     /// innermost-first by data flow: one whose extent row is fed by

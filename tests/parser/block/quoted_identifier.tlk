@@ -1,2 +1,2 @@
-let @"let" = 1
-print(@"let")
+let #"let" = 1
+print(#"let")

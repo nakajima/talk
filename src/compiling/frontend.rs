@@ -394,6 +394,7 @@ fn parse_ast_with_comments_in(
             path: path.to_string(),
             roots: bridged.roots,
             meta,
+            syntax: Default::default(),
             phase: crate::ast::Parsed,
             node_ids: crate::common::id_generator::IDGenerator {
                 last: bridged.next_node_id,
@@ -425,6 +426,7 @@ pub fn parse_ast_lenient(
                 path: path.to_string(),
                 roots: vec![],
                 meta: Default::default(),
+                syntax: Default::default(),
                 phase: crate::ast::Parsed,
                 node_ids: Default::default(),
                 file_id,
@@ -465,6 +467,365 @@ mod tests {
         for thread in threads {
             assert_eq!(thread.join().expect("session thread"), expected);
         }
+    }
+
+    #[test]
+    fn macro_syntax_api_preserves_ranges_categories_and_hygiene() {
+        let mut probe_sources = sources(repo_root()).expect("frontend sources load");
+        probe_sources.push((
+            "MacroTokenApiProbe.tlk".into(),
+            r#"
+use package::Lexer::{ TokenTree, TokenRange, MacroInput, scan, capture_token_trees, group_contents }
+use package::Parser::{ parse_expr_tokens }
+use package::Ast::{ Expr, Pattern, TypeAnnotation, Decl, Item }
+use package::Syntax::{
+    Syntax, SyntaxOrigin, MaterializedSyntax, SyntaxMetadataOutput,
+    lexical_scope, expansion_scope, empty_syntax_context, syntax_context_with_scope,
+    quote_context, capture_expr, capture_pattern, capture_type, capture_decl,
+    splice, quote_expr, quote_pattern, quote_type, quote_decl,
+    materialize_expr_syntax, materialize_pattern_syntax,
+    materialize_type_syntax, materialize_decl_syntax,
+    syntax_metadata_output, syntax_identifiers, same_syntax_context, syntax_text
+}
+
+func has_expected_expr(item: Item) -> Bool {
+    match item {
+        .expr_item(expr) -> expr.start == 9 && expr.end == 21,
+        _ -> false
+    }
+}
+
+func lexeme_ranges_are_distinct() -> Bool {
+    let ranged = scan(source: "@for $value 'io %0 #\"foo\"").tokens
+    ranged.count == 5
+        && ranged[0].span.lower == 0 && ranged[0].span.upper == 4
+        && ranged[0].lexeme.lower == 1 && ranged[0].lexeme.upper == 4
+        && ranged[1].span.lower == 5 && ranged[1].lexeme.lower == 6
+        && ranged[2].span.lower == 12 && ranged[2].lexeme.lower == 13
+        && ranged[3].span.lower == 16 && ranged[3].lexeme.lower == 17
+        && ranged[4].span.lower == 19 && ranged[4].span.upper == 25
+        && ranged[4].lexeme.lower == 21 && ranged[4].lexeme.upper == 24
+}
+
+func materialized_root_is_star(item: Item) -> Bool {
+    match item {
+        .expr_item(expr) -> if let .binary(.star, _) = expr.kind { true } else { false },
+        _ -> false
+    }
+}
+
+func syntax_materialization_probe() -> Int {
+    let source = "left + right"
+    let scanned = scan(source: source)
+    let captured = capture_expr(
+        source_id: 100,
+        source: source,
+        input: TokenRange(tokens: scanned.tokens, span: 0..<12),
+        context: empty_syntax_context()
+    )
+    let captured_value: Syntax<Expr>? = captured.into_value()
+    if let .some(value) = captured_value {
+        let quote_source = "{ $item * scale }"
+        let trees = capture_token_trees(tokens: scan(source: quote_source).tokens)
+        let quoted = quote_expr(
+            input: MacroInput(source_id: 200, source: quote_source, tree: trees.trees[0]),
+            splices: [splice(name: "item", syntax: consume value)],
+            context: quote_context(
+                definition_site: empty_syntax_context(),
+                expansion_scope: expansion_scope(namespace: 50, ordinal: 1)
+            )
+        )
+        let quoted_value: Syntax<Expr>? = quoted.into_value()
+        if let .some(syntax) = quoted_value {
+            let result = materialize_expr_syntax(syntax: syntax)
+            let expanded: MaterializedSyntax<Expr>? = result.into_value()
+            if let .some(materialized) = expanded {
+                if materialized.source != " (left + right) * scale " { return 310 }
+                if materialized.identifiers.count != 3 { return 320 }
+                if materialized.identifiers[0].text != "left" || materialized.identifiers[1].text != "right" || materialized.identifiers[2].text != "scale" { return 330 }
+                if materialized.outcome.items.count != 1 { return 340 }
+                if materialized_root_is_star(item: materialized.outcome.items[0]) == false { return 350 }
+                return 0
+            }
+        }
+    }
+    360
+}
+
+func syntax_category_probe() -> Int {
+    let pattern_source = "left"
+    let pattern_scan = scan(source: pattern_source)
+    let captured_pattern = capture_pattern(
+        source_id: 101,
+        source: pattern_source,
+        input: TokenRange(tokens: pattern_scan.tokens, span: 0..<4),
+        context: empty_syntax_context()
+    )
+    let pattern_value: Syntax<Pattern>? = captured_pattern.into_value()
+    if let .some(syntax) = pattern_value {
+        let quote_source = "{ ($item, right) }"
+        let trees = capture_token_trees(tokens: scan(source: quote_source).tokens)
+        let quoted = quote_pattern(
+            input: MacroInput(source_id: 202, source: quote_source, tree: trees.trees[0]),
+            splices: [splice(name: "item", syntax: consume syntax)],
+            context: quote_context(
+                definition_site: empty_syntax_context(),
+                expansion_scope: expansion_scope(namespace: 40, ordinal: 1)
+            )
+        )
+        let result: Syntax<Pattern>? = quoted.into_value()
+        if let .some(output) = result {
+            if syntax_text(syntax: output) != " (left, right) " { return 220 }
+            let materialized: MaterializedSyntax<Pattern>? = materialize_pattern_syntax(syntax: output).into_value()
+            if let .none = materialized { return 225 }
+        } else { return 230 }
+    } else { return 240 }
+
+    let type_source = "Input"
+    let type_scan = scan(source: type_source)
+    let captured_type = capture_type(
+        source_id: 102,
+        source: type_source,
+        input: TokenRange(tokens: type_scan.tokens, span: 0..<5),
+        context: empty_syntax_context()
+    )
+    let type_value: Syntax<TypeAnnotation>? = captured_type.into_value()
+    if let .some(syntax) = type_value {
+        let quote_source = "{ Result<$item, Error> }"
+        let trees = capture_token_trees(tokens: scan(source: quote_source).tokens)
+        let quoted = quote_type(
+            input: MacroInput(source_id: 203, source: quote_source, tree: trees.trees[0]),
+            splices: [splice(name: "item", syntax: consume syntax)],
+            context: quote_context(
+                definition_site: empty_syntax_context(),
+                expansion_scope: expansion_scope(namespace: 40, ordinal: 2)
+            )
+        )
+        let result: Syntax<TypeAnnotation>? = quoted.into_value()
+        if let .some(output) = result {
+            if syntax_text(syntax: output) != " Result<Input, Error> " { return 250 }
+            let materialized: MaterializedSyntax<TypeAnnotation>? = materialize_type_syntax(syntax: output).into_value()
+            if let .none = materialized { return 255 }
+        } else { return 260 }
+    } else { return 270 }
+
+    let decl_source = "let original = 1"
+    let decl_scan = scan(source: decl_source)
+    let captured_decl = capture_decl(
+        source_id: 103,
+        source: decl_source,
+        input: TokenRange(tokens: decl_scan.tokens, span: 0..<16),
+        context: empty_syntax_context()
+    )
+    let decl_value: Syntax<Decl>? = captured_decl.into_value()
+    if let .some(syntax) = decl_value {
+        let quote_source = "{ $item }"
+        let trees = capture_token_trees(tokens: scan(source: quote_source).tokens)
+        let quoted = quote_decl(
+            input: MacroInput(source_id: 204, source: quote_source, tree: trees.trees[0]),
+            splices: [splice(name: "item", syntax: consume syntax)],
+            context: quote_context(
+                definition_site: empty_syntax_context(),
+                expansion_scope: expansion_scope(namespace: 40, ordinal: 3)
+            )
+        )
+        let result: Syntax<Decl>? = quoted.into_value()
+        if let .some(output) = result {
+            if syntax_text(syntax: output) != " let original = 1 " { return 280 }
+            let materialized: MaterializedSyntax<Decl>? = materialize_decl_syntax(syntax: output).into_value()
+            if let .none = materialized { return 285 }
+        } else { return 290 }
+    } else { return 300 }
+    0
+}
+
+func syntax_hygiene_probe() -> Int {
+    let use_context = syntax_context_with_scope(
+        context: empty_syntax_context(),
+        scope: lexical_scope(file_id: 10, node_id: 1)
+    )
+    let captured_scan = scan(source: "caller")
+    let captured = capture_expr(
+        source_id: 104,
+        source: "caller",
+        input: TokenRange(tokens: captured_scan.tokens, span: 0..<6),
+        context: use_context
+    )
+    let captured_value: Syntax<Expr>? = captured.into_value()
+    if let .none = captured_value { return 100 }
+    if let .some(value) = captured_value {
+        let quote_source = "{ { let temp = $value\n helper(temp) } }"
+        let quote_scan = scan(source: quote_source)
+        let quote_trees = capture_token_trees(tokens: quote_scan.tokens)
+        if quote_trees.trees.count != 1 { return 110 }
+        let definition = syntax_context_with_scope(
+            context: empty_syntax_context(),
+            scope: lexical_scope(file_id: 20, node_id: 1)
+        )
+        let context = quote_context(
+            definition_site: definition,
+            expansion_scope: expansion_scope(namespace: 30, ordinal: 1)
+        )
+        let quoted = quote_expr(
+            input: MacroInput(source_id: 201, source: quote_source, tree: quote_trees.trees[0]),
+            splices: [splice(name: "value", syntax: consume value)],
+            context: context
+        )
+        let quoted_value: Syntax<Expr>? = quoted.into_value()
+        if let .none = quoted_value { return 120 }
+        if let .some(syntax) = quoted_value {
+            let identifiers = syntax_identifiers(syntax: syntax)
+            if identifiers.count != 4 { return 130 }
+            if identifiers[0].text != "temp" || identifiers[1].text != "caller" || identifiers[2].text != "helper" || identifiers[3].text != "temp" { return 140 }
+            if same_syntax_context(a: identifiers[0].context, b: identifiers[2].context) == false { return 150 }
+            if same_syntax_context(a: identifiers[0].context, b: identifiers[3].context) == false { return 160 }
+            if same_syntax_context(a: identifiers[0].context, b: identifiers[1].context) { return 170 }
+            let first_origin: SyntaxOrigin = identifiers[0].origin
+            if let .definition_site = first_origin {} else { return 180 }
+            let second_origin: SyntaxOrigin = identifiers[1].origin
+            if let .use_site = second_origin {} else { return 190 }
+            if syntax_text(syntax: syntax) != " { let temp = caller\n helper(temp) } " { return 200 }
+            return 0
+        }
+    }
+    210
+}
+
+pub func probe_metadata() -> SyntaxMetadataOutput {
+    let use_context = syntax_context_with_scope(
+        context: empty_syntax_context(),
+        scope: lexical_scope(file_id: 7, node_id: 11)
+    )
+    let captured_scan = scan(source: "caller")
+    let captured = capture_expr(
+        source_id: 7,
+        source: "caller",
+        input: TokenRange(tokens: captured_scan.tokens, span: 0..<6),
+        context: use_context
+    )
+    let captured_value: Syntax<Expr>? = captured.into_value()
+    if let .some(value) = captured_value {
+        let quote_source = "{ helper($item) }"
+        let trees = capture_token_trees(tokens: scan(source: quote_source).tokens)
+        let definition = syntax_context_with_scope(
+            context: empty_syntax_context(),
+            scope: lexical_scope(file_id: 8, node_id: 22)
+        )
+        let quoted = quote_expr(
+            input: MacroInput(source_id: 8, source: quote_source, tree: trees.trees[0]),
+            splices: [splice(name: "item", syntax: consume value)],
+            context: quote_context(
+                definition_site: definition,
+                expansion_scope: expansion_scope(namespace: 60, ordinal: 1)
+            )
+        )
+        let quoted_value: Syntax<Expr>? = quoted.into_value()
+        if let .some(syntax) = quoted_value {
+            let materialized: MaterializedSyntax<Expr>? = materialize_expr_syntax(syntax: syntax).into_value()
+            if let .some(output) = materialized {
+                return syntax_metadata_output(materialized: output)
+            }
+        }
+    }
+    SyntaxMetadataOutput(identifiers: [])
+}
+
+pub func probe() -> Int {
+    if lexeme_ranges_are_distinct() == false { return 5 }
+    let source = "prefix { alpha + beta } suffix"
+    let scanned = scan(source: source)
+    let captured = capture_token_trees(tokens: scanned.tokens)
+    if captured.trees.count != 3 { return 10 }
+    let tree: TokenTree = captured.trees[1]
+    match tree {
+        .group(group) -> {
+            let input = group_contents(group: group)
+            if input.span.lower != 8 || input.span.upper != 22 { return 20 }
+            if input.tokens.count != 3 { return 30 }
+            if input.tokens[0].span.lower != 9 || input.tokens[2].span.upper != 21 { return 40 }
+            let parsed = parse_expr_tokens(source: source, input: input)
+            if parsed.items.count != 1 { return 50 }
+            if has_expected_expr(item: parsed.items[0]) {
+                let hygiene = syntax_hygiene_probe()
+                if hygiene != 0 { return hygiene }
+                let categories = syntax_category_probe()
+                if categories != 0 { return categories }
+                return syntax_materialization_probe()
+            }
+            60
+        },
+        _ -> 70
+    }
+}
+"#
+            .into(),
+        ));
+        let outcome = bootstrap(
+            &probe_sources,
+            &["probe".into(), "probe_metadata".into()],
+            &["alloc".into(), "panic".into()],
+            Some("SyntaxMetadataOutput"),
+        )
+        .expect("macro token API probe bootstraps");
+        let module = talk_runtime::Module::decode_bytecode(&outcome.image)
+            .expect("macro token API probe decodes");
+        let mut io = talk_runtime::io::CaptureIO::default();
+        let run = talk_runtime::interp::run_export(
+            &module,
+            "probe",
+            &[],
+            crate::backend::string_shape(),
+            talk_runtime::interp::Budgets::default(),
+            &mut io,
+        )
+        .expect("macro token API probe runs");
+        assert_eq!(run.value, talk_runtime::interp::Value::I64(0));
+
+        let metadata_run = talk_runtime::interp::run_export(
+            &module,
+            "probe_metadata",
+            &[],
+            crate::backend::string_shape(),
+            talk_runtime::interp::Budgets::default(),
+            &mut io,
+        )
+        .expect("syntax metadata probe runs");
+        let abi = outcome.abi.expect("syntax metadata ABI is generated");
+        let schema = crate::compiling::abi::parse_schema(&abi)
+            .expect("syntax metadata ABI parses");
+        let metadata = crate::compiling::bridge::adapt_syntax_metadata(
+            &metadata_run,
+            &schema,
+            crate::node_id::FileID(99),
+        )
+        .expect("syntax metadata bridges");
+        assert_eq!(metadata.identifiers.len(), 2);
+        assert_eq!(metadata.identifiers[0].text, "helper");
+        assert_eq!(metadata.identifiers[0].source_span.file_id, crate::node_id::FileID(8));
+        assert_eq!(metadata.identifiers[1].text, "caller");
+        assert_eq!(metadata.identifiers[1].source_span.file_id, crate::node_id::FileID(7));
+        assert_eq!(metadata.identifiers[0].lexeme.file_id, crate::node_id::FileID(99));
+
+        let (mut ast, _) = parse_ast(
+            " helper((caller)) ",
+            crate::node_id::FileID(99),
+            "materialized.tlk",
+        )
+        .expect("materialized syntax parses");
+        ast.apply_syntax_metadata(metadata);
+        let mut contextual = 0;
+        let mut collector = derive_visitor::visitor_enter_fn(
+            |expr: &crate::node_kinds::expr::Expr| {
+                if matches!(expr.kind, crate::node_kinds::expr::ExprKind::Variable(crate::name::Name::Syntax(..))) {
+                    contextual += 1;
+                }
+            },
+        );
+        for root in &ast.roots {
+            derive_visitor::Drive::drive(root, &mut collector);
+        }
+        drop(collector);
+        assert_eq!(contextual, 2);
     }
 
     #[test]

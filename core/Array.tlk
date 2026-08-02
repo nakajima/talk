@@ -36,7 +36,7 @@ pub struct Array<Element> {
 
 	pub func get(_ index: Int) -> &Element {
 		self._check_index(index: index)
-		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
+		let ptr: RawPtr = #_ir(self.storage.base, index) { %? = gep Element $0 $1 }
 		_load<Element>(ptr: ptr)
 	}
 
@@ -64,7 +64,7 @@ pub struct Array<Element> {
 	pub mut func set(index: Int, consume value: Element) -> Void {
 		self._check_index(index: index)
 		self.uniqued_storage()
-		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
+		let ptr: RawPtr = #_ir(self.storage.base, index) { %? = gep Element $0 $1 }
 		let old: Element = _load<Element>(ptr: ptr)
 		_store<Element>(ptr: ptr, value: value)
 	}
@@ -73,7 +73,7 @@ pub struct Array<Element> {
 	// slot): nothing to drop, and the caller has already uniqued the
 	// buffer.
 	mut func _init_slot(index: Int, consume value: Element) -> Void {
-		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
+		let ptr: RawPtr = #_ir(self.storage.base, index) { %? = gep Element $0 $1 }
 		_store<Element>(ptr: ptr, value: value)
 	}
 
@@ -82,8 +82,8 @@ pub struct Array<Element> {
 		self._check_index(index: j)
 		if i == j { return () }
 		let storage = self.uniqued_storage()
-		let a: RawPtr = @_ir(storage.base, i) { %? = gep Element $0 $1 }
-		let b: RawPtr = @_ir(storage.base, j) { %? = gep Element $0 $1 }
+		let a: RawPtr = #_ir(storage.base, i) { %? = gep Element $0 $1 }
+		let b: RawPtr = #_ir(storage.base, j) { %? = gep Element $0 $1 }
 		_swap<Element>(a: a, b: b)
 	}
 
@@ -120,8 +120,8 @@ pub struct Array<Element> {
 		let source_survives = _is_unique(ptr: self.storage.base) == false
 		let i = 0
 		loop i < self.count {
-			let from: RawPtr = @_ir(self.storage.base, i) { %? = gep Element $0 $1 }
-			let to: RawPtr = @_ir(fresh.base, i) { %? = gep Element $0 $1 }
+			let from: RawPtr = #_ir(self.storage.base, i) { %? = gep Element $0 $1 }
+			let to: RawPtr = #_ir(fresh.base, i) { %? = gep Element $0 $1 }
 			if source_survives { _retain<Element>(value: self.get(i)) }
 			_store<Element>(ptr: to, value: _load<Element>(ptr: from))
 			i = i + 1
@@ -141,7 +141,7 @@ pub struct Array<Element> {
 		if self.count == 0 { return Optional.none }
 		self.uniqued_storage()
 		let index = self.count - 1
-		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep Element $0 $1 }
+		let ptr: RawPtr = #_ir(self.storage.base, index) { %? = gep Element $0 $1 }
 		let element: Element = _load<Element>(ptr: ptr)
 		self.count = index
 		Optional.some(element)
@@ -200,7 +200,7 @@ extend<Element> Array<Element>: Deinit {
 		if _is_unique(ptr: self.storage.base) {
 			let i = 0
 			loop i < self.count {
-				let ptr: RawPtr = @_ir(self.storage.base, i) { %? = gep Element $0 $1 }
+				let ptr: RawPtr = #_ir(self.storage.base, i) { %? = gep Element $0 $1 }
 				let element: Element = _load<Element>(ptr: ptr)
 				i = i + 1
 			}
@@ -275,7 +275,7 @@ extend<T> ArrayIntoIterator<T>: Iterator {
 		if self.position > self.count - 1 { return Optional.none }
 		let index = self.position
 		self.position = self.position + 1
-		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep T $0 $1 }
+		let ptr: RawPtr = #_ir(self.storage.base, index) { %? = gep T $0 $1 }
 		let element: T = _load<T>(ptr: ptr)
 		return .some(element)
 	}
@@ -285,7 +285,7 @@ extend<T> ArrayIntoIterator<T>: Deinit {
 	consuming func deinit() -> Void {
 		let i = self.position
 		loop i < self.count {
-			let ptr: RawPtr = @_ir(self.storage.base, i) { %? = gep T $0 $1 }
+			let ptr: RawPtr = #_ir(self.storage.base, i) { %? = gep T $0 $1 }
 			let element: T = _load<T>(ptr: ptr)
 			i = i + 1
 		}
@@ -314,13 +314,13 @@ extend<T> ArrayMutIterator<T> {
 		if self.position > self.count - 1 { return Optional.none }
 		let index = self.position
 		self.position = self.position + 1
-		let ptr: RawPtr = @_ir(self.storage.base, index) { %? = gep T $0 $1 }
+		let ptr: RawPtr = #_ir(self.storage.base, index) { %? = gep T $0 $1 }
 		let element: T = _load<T>(ptr: ptr)
 		return .some(element)
 	}
 
 	pub mut func _store_current(consume value: T) -> Void {
-		let ptr: RawPtr = @_ir(self.storage.base, self.position - 1) { %? = gep T $0 $1 }
+		let ptr: RawPtr = #_ir(self.storage.base, self.position - 1) { %? = gep T $0 $1 }
 		_store<T>(ptr: ptr, value: value)
 	}
 }

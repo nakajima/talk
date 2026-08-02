@@ -1,5 +1,5 @@
 effect 'ask(prompt) -> Int
-@handle 'ask { p in
+#handle 'ask { p in
 	'continue 7
 }
 func query() 'ask -> Int {

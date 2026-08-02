@@ -14,6 +14,37 @@ use crate::{
     token_kind::TokenKind,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct MacroToken {
+    /// The canonical Talk `TokenKind` variant tag from the frontend ABI.
+    pub kind_tag: u32,
+    pub span_start: u32,
+    pub span_end: u32,
+    pub lexeme_start: u32,
+    pub lexeme_end: u32,
+}
+
+impl MacroToken {
+    /// Encode fixed-width canonical token records for the Talk macro service.
+    pub fn encode_all(tokens: &[Self]) -> String {
+        use std::fmt::Write as _;
+
+        let mut encoded = String::with_capacity(tokens.len() * 40);
+        for token in tokens {
+            let _ = write!(
+                encoded,
+                "{:08x}{:08x}{:08x}{:08x}{:08x}",
+                token.kind_tag,
+                token.span_start,
+                token.span_end,
+                token.lexeme_start,
+                token.lexeme_end
+            );
+        }
+        encoded
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum ExprKind {
     // These first expressions only exist to assist with LSP operations
@@ -28,7 +59,24 @@ pub enum ExprKind {
         name: String,
         #[drive(skip)]
         name_span: Span,
+        /// The complete balanced input, including its outer delimiters.
+        #[drive(skip)]
+        input_span: Span,
+        /// Canonical invocation tokens, including the outer delimiters.
+        #[drive(skip)]
+        input_tokens: Vec<MacroToken>,
+        /// Parsed only for the legacy parenthesized declarative form.
         args: Vec<Expr>,
+    },
+
+    /// Opaque expression syntax quotation used while compiling macro units.
+    SyntaxQuote {
+        #[drive(skip)]
+        source: String,
+        #[drive(skip)]
+        tokens: Vec<MacroToken>,
+        #[drive(skip)]
+        splices: Vec<String>,
     },
 
     CallEffect {
@@ -64,7 +112,7 @@ pub enum ExprKind {
     Tuple(Vec<Expr>),
     Block(Block),
     /// A lexical acknowledgement of the compiler-known `'unsafe` effect.
-    /// Unlike `@handle`, this installs no runtime handler.
+    /// Unlike `#handle`, this installs no runtime handler.
     Unsafe(Block),
     Call {
         callee: Box<Expr>,
@@ -128,6 +176,7 @@ impl ExprKind {
             // matters when it comes to generalization.
             ExprKind::If(..)
             | ExprKind::MacroCall { .. }
+            | ExprKind::SyntaxQuote { .. }
             | ExprKind::Block(..)
             | ExprKind::Unsafe(..)
             | ExprKind::Match(..)

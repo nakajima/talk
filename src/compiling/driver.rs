@@ -46,6 +46,7 @@ pub struct Parsed {
     pub asts: IndexMap<Source, AST<ast::Parsed>>,
     pub source_texts: std::collections::HashMap<FileID, String>,
     pub diagnostics: Vec<AnyDiagnostic>,
+    pub procedural_macros: crate::procedural_macros::ProceduralMacroEnvironment,
 }
 
 /// Exported names, each carrying its full overload set (ADR 0041):
@@ -59,6 +60,7 @@ pub struct NameResolved {
     pub symbols: Symbols,
     pub resolved_names: ResolvedNames,
     pub diagnostics: Vec<AnyDiagnostic>,
+    pub procedural_macros: Option<crate::procedural_macros::ProceduralMacroArtifact>,
 }
 
 impl DriverPhase for Typed {}
@@ -67,12 +69,14 @@ pub struct Typed {
     /// facts. The frontend performs no ownership analysis or code generation.
     pub program: crate::compiling::typed_program::TypedProgram,
     pub diagnostics: Vec<AnyDiagnostic>,
+    pub procedural_macros: Option<crate::procedural_macros::ProceduralMacroArtifact>,
 }
 
 #[derive(Debug)]
 pub enum CompileError {
     IO(io::Error),
     Parsing(ParserError),
+    Macro(String),
     ImportOutsideWorkspace {
         source: String,
         import_path: String,
@@ -450,6 +454,20 @@ impl Driver {
         }
         let local_modules =
             LocalModulePaths::new(self.config.source_root.clone().unwrap_or_default());
+        let procedural_macros = if self.config.module_name != "PackageMacros" {
+            let local = self
+                .config
+                .workspace_root
+                .as_deref()
+                .map(crate::procedural_macros::ProceduralMacroService::discover)
+                .transpose()
+                .map_err(CompileError::Macro)?
+                .flatten();
+            crate::procedural_macros::ProceduralMacroEnvironment::load(local, &self.config.modules)
+                .map_err(CompileError::Macro)?
+        } else {
+            Default::default()
+        };
         let mut asts: IndexMap<Source, AST<_>> = IndexMap::default();
         let mut source_texts = std::collections::HashMap::new();
         let mut diagnostics = vec![];
@@ -561,6 +579,7 @@ impl Driver {
                 asts,
                 source_texts,
                 diagnostics,
+                procedural_macros,
             },
         })
     }
@@ -576,13 +595,15 @@ impl Driver<Parsed> {
             self.config.source_root.clone().unwrap_or_default(),
         );
 
+        let procedural_macros = self.phase.procedural_macros.local_artifact();
         let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
-        self.phase
-            .diagnostics
-            .extend(crate::macro_expansion::expand_macros_with_sources(
+        self.phase.diagnostics.extend(
+            crate::macro_expansion::expand_macros_with_sources_and_service(
                 &mut asts,
                 &self.phase.source_texts,
-            ));
+                Some(&self.phase.procedural_macros),
+            ),
+        );
         crate::desugar::desugar(&mut asts);
         let (asts, resolved) = resolver.resolve(asts);
         let asts = paths.into_iter().zip(asts).collect();
@@ -596,6 +617,7 @@ impl Driver<Parsed> {
                 symbols: resolver.symbols,
                 resolved_names: resolved,
                 diagnostics: self.phase.diagnostics,
+                procedural_macros,
             },
         })
     }
@@ -679,12 +701,14 @@ impl Driver<NameResolved> {
         let name = name.into();
         let exports = self.phase.resolved_names.exports();
         Module {
-            id: StableModuleId::generate(&name, &exports, &Default::default()),
+            id: StableModuleId::generate(&name, &exports, &Default::default(), &[]),
             name,
             symbol_names: self.phase.resolved_names.symbol_names,
             exports,
             types: ModuleTypes::default(),
+            procedural_macros: None,
         }
+        .with_procedural_macros(self.phase.procedural_macros)
     }
 
     /// Type check: generate constraints and solve them per SCC binding group
@@ -697,6 +721,7 @@ impl Driver<NameResolved> {
             mut symbols,
             resolved_names,
             mut diagnostics,
+            procedural_macros,
         } = self.phase;
 
         let (types, type_diagnostics) = crate::types::generate::check_types(
@@ -721,6 +746,7 @@ impl Driver<NameResolved> {
             phase: Typed {
                 program,
                 diagnostics,
+                procedural_macros,
             },
         }
     }
@@ -843,7 +869,19 @@ impl Driver<Typed> {
         run: impl FnOnce(&[crate::backend::ProgramInput<'_>], crate::backend::Entry<'_>) -> R,
     ) -> R {
         let core = crate::compiling::core::typed_program();
-        let stdlib = crate::compiling::stdlib::typed_programs();
+        // Bare services, including the service used to compile stdlib-owned
+        // macros, carry no stdlib modules. Avoid initializing the global
+        // stdlib just to produce an empty backend input set; doing so while a
+        // stdlib module is itself compiling would recursively enter its
+        // OnceLock.
+        let has_stdlib = crate::compiling::stdlib::stdlib_sources()
+            .iter()
+            .any(|(name, _)| self.config.modules.get_module_id_by_name(name).is_some());
+        let stdlib = if has_stdlib {
+            crate::compiling::stdlib::typed_programs()
+        } else {
+            Vec::new()
+        };
         // Absolute identity at mint (ADR 0038): every program's symbols
         // already carry their real module stamp.
         let user_module = self.config.module_id;
@@ -936,12 +974,15 @@ impl Driver<Typed> {
                 &name,
                 &exports,
                 &interface.types.catalog.callable_contracts,
+                &[],
             ),
             name,
             symbol_names: interface.symbol_names,
             exports,
             types: interface.types,
+            procedural_macros: None,
         }
+        .with_procedural_macros(self.phase.procedural_macros)
     }
 }
 
@@ -1561,6 +1602,113 @@ pub mod tests {
             .unwrap()
             .type_check();
         assert!(!checked.has_errors(), "{:?}", checked.diagnostics());
+    }
+
+    #[test]
+    fn executes_stdlib_html_macro() {
+        let source = r#"
+use html::{ html, PreEscaped }
+let name = "<Ada & friends>"
+let rendered = @html {
+    DOCTYPE;
+    main #content .page.primary data-name=(name) hidden {
+        h1 { "Hello, " (name) }
+        @if true { p { "visible" } } @else { p { "hidden" } }
+        @for number in [1, 2, 3] { span { (number) } }
+        (PreEscaped(value: "<b>raw</b>"))
+        br;
+    }
+}
+print_raw(rendered.into_string())
+0
+"#;
+        let typed = Driver::new(
+            vec![Source::from(source)],
+            DriverConfig::new("HtmlMacroTest").executable(),
+        )
+        .parse()
+        .expect("HTML source parses")
+        .resolve_names()
+        .expect("HTML source resolves")
+        .type_check();
+        assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+
+        let executable = typed
+            .compile_executable(None)
+            .expect("HTML source compiles");
+        let mut io = talk_runtime::io::CaptureIO::default();
+        let value = execute_module(&executable, &mut io).expect("HTML source executes");
+        assert_eq!(value.as_deref(), Some("0"));
+        assert_eq!(
+            String::from_utf8(io.out).expect("HTML output is UTF-8"),
+            "<!DOCTYPE html><main id=\"content\" class=\"page primary\" data-name=\"&lt;Ada &amp; friends&gt;\" hidden><h1>Hello, &lt;Ada &amp; friends&gt;</h1><p>visible</p><span>1</span><span>2</span><span>3</span><b>raw</b><br></main>"
+        );
+    }
+
+    #[test]
+    fn executes_maud_compatible_html_controls_and_attributes() {
+        let source = r#"
+use html::{ html }
+enum State {
+    case ready(String)
+    case waiting
+}
+let state = State.ready("go")
+let title: String? = .some("tip")
+let missing: String? = .none
+let enabled = true
+let disabled = false
+let identifier = "panel"
+let severity = "critical"
+let rendered = @html {
+    @let local: String = "local";
+    div #(identifier) .base."quoted-class".active[enabled].hidden[disabled].{ "severity-" (severity) }
+        contenteditable[enabled] draggable[disabled] readonly?
+        title=[title] data-missing=[missing]
+        href={ "/users/" (identifier) } {
+        @if false {
+            p { "wrong" }
+        } @else if true {
+            p { "else-if" }
+        } @else {
+            p { "also wrong" }
+        }
+        @if let .some(heading) = title {
+            span { (heading) }
+        }
+        @match state {
+            .ready(message) -> { strong { (message) } },
+            .waiting -> em { "waiting" }
+        }
+        @for number in 0..<3 { i { (number) } }
+        @for character in "ab" { u { (character) } }
+        (local)
+    }
+}
+print_raw(rendered.into_string())
+0
+"#;
+        let typed = Driver::new(
+            vec![Source::from(source)],
+            DriverConfig::new("HtmlCompatibilityTest").executable(),
+        )
+        .parse()
+        .expect("HTML compatibility source parses")
+        .resolve_names()
+        .expect("HTML compatibility source resolves")
+        .type_check();
+        assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+
+        let executable = typed
+            .compile_executable(None)
+            .expect("HTML compatibility source compiles");
+        let mut io = talk_runtime::io::CaptureIO::default();
+        let value = execute_module(&executable, &mut io).expect("HTML compatibility source executes");
+        assert_eq!(value.as_deref(), Some("0"));
+        assert_eq!(
+            String::from_utf8(io.out).expect("HTML output is UTF-8"),
+            "<div id=\"panel\" class=\"base quoted-class active severity-critical\" contenteditable readonly title=\"tip\" href=\"/users/panel\"><p>else-if</p><span>tip</span><strong>go</strong><i>0</i><i>1</i><i>2</i><u>a</u><u>b</u>local</div>"
+        );
     }
 
     #[test]

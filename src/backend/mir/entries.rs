@@ -567,7 +567,7 @@ impl<'a> ProgramBuilder<'a> {
                     // The capability gate: the export's latent row must
                     // stay within the service's allowed effects. Typing
                     // guarantees the body cannot perform outside its row
-                    // (a local `@handle`'s clauses are row-checked too),
+                    // (a local `#handle`'s clauses are row-checked too),
                     // so this subset check is the whole denial.
                     // The AST node's scheme is the declared one; the
                     // inferred row lives in typing's published scheme

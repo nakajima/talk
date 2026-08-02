@@ -1,7 +1,7 @@
-@handle 'io { request in
+#handle 'io { request in
 	'continue host(request: request)
 }
-@handle 'async {
+#handle 'async {
 	'continue
 }
 loop {}

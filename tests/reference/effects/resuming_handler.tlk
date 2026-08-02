@@ -1,5 +1,5 @@
 effect 'ask(prompt) -> Int
-@handle 'ask { p in
+#handle 'ask { p in
 	print(p)
 	'continue 42
 }

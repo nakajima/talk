@@ -71,7 +71,7 @@ They derive visitors so passes can walk the tree without hand-written
 traversals.
 
 The AST is a surface tree. It includes first-cut macro declarations and
-`#name(...)` expression placeholders; `src/macro_expansion.rs` removes or
+`@name(...)` expression placeholders; `src/macro_expansion.rs` removes or
 expands them before desugaring. The desugaring pass in `src/desugar` then
 mutates the tree before name resolution while preserving node identity where a
 source node still represents the same source construct and minting fresh ids

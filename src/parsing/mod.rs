@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod dump;
 pub mod formatter;
+pub mod hygiene;
 pub mod label;
 pub mod lexing;
 pub mod name;

@@ -98,7 +98,7 @@ impl<'a> Higlighter<'a> {
     fn collect_lexed_tokens(&mut self, lexed: &[crate::token::Token]) -> Vec<HighlightToken> {
         let mut tokens: Vec<HighlightToken> = vec![];
 
-        for tok in lexed {
+        for (index, tok) in lexed.iter().enumerate() {
             match tok.kind {
                 TokenKind::Continue => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::SingleQuote => (),
@@ -110,7 +110,21 @@ impl<'a> Higlighter<'a> {
                 TokenKind::BoundVar => self.make(tok, Kind::VARIABLE, &mut tokens),
                 TokenKind::Percent => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::IRRegister => self.make(tok, Kind::PARAMETER, &mut tokens),
-                TokenKind::Attribute => self.make(tok, Kind::DECORATOR, &mut tokens),
+                TokenKind::Attribute => tokens.push(HighlightToken::new(
+                    Kind::OPERATOR,
+                    tok.start,
+                    tok.start + 1,
+                )),
+                TokenKind::Identifier
+                    if index > 0
+                        && lexed[index - 1].kind == TokenKind::Hash
+                        && self
+                            .source
+                            .get(tok.start as usize..tok.end as usize)
+                            .is_some_and(|name| matches!(name, "unsafe" | "_ir" | "handle")) =>
+                {
+                    self.make(tok, Kind::KEYWORD, &mut tokens)
+                }
                 TokenKind::Any => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::As => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::At => self.make(tok, Kind::DECORATOR, &mut tokens),
@@ -511,7 +525,7 @@ impl<'a> Higlighter<'a> {
                 }
             },
             Node::Expr(expr) => match &expr.kind {
-                ExprKind::Incomplete(..) => (),
+                ExprKind::Incomplete(..) | ExprKind::SyntaxQuote { .. } => (),
                 ExprKind::MacroCall {
                     name_span, args, ..
                 } => {

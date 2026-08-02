@@ -10,8 +10,8 @@ while fixing several type-checker and lexer correctness bugs.
 ### Added
 
 - **Effect-tracked `unreachable` and postfix force unwrap.** The `unreachable` expression performs Core's public abortive `'panic(message: String) -> Never` effect. Functions infer `'panic`, user handlers may intercept it, and Core's outer host fallback reports unhandled panics and terminates the process. On the same two-variant enums supported by postfix `?`, `value!` extracts the first variant's payload shape and evaluates `unreachable` for the second variant instead of returning it.
-- **Lexical unsafe boundaries.** Raw-pointer expressions and `@_ir` now carry
-  the compiler-known `'unsafe` effect. `@unsafe { ... }` discharges it
+- **Lexical unsafe boundaries.** Raw-pointer expressions and `#_ir` now carry
+  the compiler-known `'unsafe` effect. `#unsafe { ... }` discharges it
   lexically without installing a runtime handler, replacing the file-wide
   `// unsafe` pragma.
 - **Talk source tests run with the Rust test suite.** `cargo test` now invokes
@@ -704,7 +704,7 @@ and every test in the suite now asserts exact allocation balance.
   intermediate accumulator.
 - **Raw allocations can be freed.** `_free(ptr)` releases an `_alloc`
   buffer (one reference; statics are unmanaged), backed by a new
-  `@_ir { free $0 }` instruction. `open_path` now frees its
+  `#_ir { free $0 }` instruction. `open_path` now frees its
   NUL-terminated path copy, and the raw-io examples free their buffers.
 
 ## Unreleased (2026-07-04) — Neovim setup
@@ -955,7 +955,7 @@ reach through calls, effects are inferred, and generic effects work end
 to end. Compiled capability-passing style (ADR 0011); no runtime handler
 search.
 
-- **Handlers cover their dynamic extent.** `@handle 'throw { err in
+- **Handlers cover their dynamic extent.** `#handle 'throw { err in
   print(err) }` covers everything sequenced after it — including
   performs inside functions it calls, however deep. A handler body that
   finishes **aborts** the handled scope with its value; `continue v`
@@ -969,11 +969,11 @@ search.
 - **Unhandled effects are compile errors.** A user effect reaching the
   top level reports `No handler for 'e` at the node where it escapes —
   position-aware, so calling an effectful function *before* its
-  top-level `@handle` is the same error. Only the core effects (`'io`,
+  top-level `#handle` is the same error. Only the core effects (`'io`,
   `'async`, `'alloc`) are implicitly handled by the runtime.
 - **Generic effects.** `effect 'state<T>(value: T) -> T` handles like
   anything else: rows carry instantiations (`! <'state<Int>>`), and one
-  `@handle 'state` covers *every* instantiation flowing through its
+  `#handle 'state` covers *every* instantiation flowing through its
   extent — the handler body is generic over `T` (declared bounds like
   `T: Showable` apply), and each instantiation gets its own specialized
   capability behind the scenes.
@@ -1062,11 +1062,11 @@ core-IR plan, C1–C6):
   row (the zonked scheme rows are the single routing truth — the
   resolver's lexical handler routing, the checker's four capability side
   tables, and the whole abort-capable calling convention are deleted).
-  `@handle` holds a capability *template*; closures materialize per
+  `#handle` holds a capability *template*; closures materialize per
   instantiation with the effect's generics bound in θ — the
   generic-function specialization machinery applied to a handler block.
   Effect rows carry instantiations as inert entries (duplicate labels
-  allowed, arguments never unified across entries); `@handle` is a
+  allowed, arguments never unified across entries); `#handle` is a
   label-scoped elimination constraint processed at solve quiescence
   (docs/effects.md).
 - **`lower/` is decomposed by concern** (demand/monomorphization,

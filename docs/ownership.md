@@ -98,7 +98,7 @@ Semantic rules:
      `Borrowed`-marked structs, `mut`-marker parameter rules, and the
      other type-shape checks — unchanged.
    - **The unsafe gate.** `_alloc` and friends require the intrinsic
-     `'unsafe` effect outside core. A lexical `@unsafe { ... }` block
+     `'unsafe` effect outside core. A lexical `#unsafe { ... }` block
      discharges that effect without installing a runtime handler.
 
 The reject pins this retires are a deliberate language change: those

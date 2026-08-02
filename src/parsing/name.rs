@@ -1,6 +1,9 @@
 use std::fmt::Display;
 
-use crate::name_resolution::{name_resolver::NameResolverError, symbol::Symbol};
+use crate::{
+    hygiene::SyntaxContext,
+    name_resolution::{name_resolver::NameResolverError, symbol::Symbol},
+};
 
 #[derive(
     Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
@@ -9,12 +12,15 @@ pub enum Name {
     Raw(String),
     Resolved(Symbol, String),
     SelfType(Symbol),
+    // Appended to preserve the serialized tags of the established variants.
+    Syntax(String, SyntaxContext),
 }
 
 impl Display for Name {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Raw(name) => write!(f, "@{}", name),
+            Self::Syntax(name, context) => write!(f, "@{name}#{context:?}"),
             Self::Resolved(sym, name) => write!(f, "@{name}:{sym}"),
             Self::SelfType(id) => write!(f, "Self({id})"),
         }
@@ -24,10 +30,21 @@ impl Display for Name {
 impl Name {
     pub fn name_str(&self) -> String {
         match self {
-            Name::Raw(name_str) => name_str.into(),
+            Name::Raw(name_str) | Name::Syntax(name_str, _) => name_str.into(),
             Name::Resolved(_symbol_id, name_str) => name_str.into(),
             Name::SelfType(..) => "Self".to_string(),
         }
+    }
+
+    pub fn syntax_context(&self) -> Option<&SyntaxContext> {
+        match self {
+            Name::Syntax(_, context) => Some(context),
+            Name::Raw(_) | Name::Resolved(..) | Name::SelfType(..) => None,
+        }
+    }
+
+    pub fn is_unresolved(&self) -> bool {
+        matches!(self, Name::Raw(_) | Name::Syntax(..))
     }
 
     pub fn symbol(&self) -> Result<Symbol, NameResolverError> {

@@ -1,5 +1,5 @@
 effect 'oops(error) -> Never
-@handle 'oops { err in print(err) }
+#handle 'oops { err in print(err) }
 func boom() 'oops -> () {
 	'oops(error: "bang")
 }

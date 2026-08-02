@@ -142,6 +142,9 @@ fn element_addr(base: Pointer, index: usize, stride: u64) -> Result<Pointer, Str
 // reference.
 
 use crate::common::id_generator::IDGenerator;
+use crate::hygiene::{
+    MaterializedIdentifier, SyntaxContext, SyntaxMetadata, SyntaxOrigin, SyntaxScope,
+};
 use crate::node::Node;
 use crate::node_id::{FileID, NodeID};
 use crate::node_kinds::block::Block;
@@ -151,7 +154,7 @@ use crate::node_kinds::decl::{
     Decl, DeclKind, Import, ImportPath, ImportedSymbol, ImportedSymbols, MacroParameter,
     ReceiverMode, Visibility,
 };
-use crate::node_kinds::expr::{Expr, ExprKind};
+use crate::node_kinds::expr::{Expr, ExprKind, MacroToken};
 use crate::node_kinds::func::{
     CaptureMode, CaptureSpec, EffectSet, Func, FuncOrigin,
 };
@@ -200,6 +203,13 @@ pub struct BridgedParse {
     /// The highest node id minted; consumers continue their own
     /// minting (desugaring, typing) above it.
     pub next_node_id: u32,
+}
+
+pub struct BridgedExprMacro {
+    pub source: String,
+    pub parse: Option<BridgedParse>,
+    pub metadata: SyntaxMetadata,
+    pub failure: Option<BridgedFail>,
 }
 
 /// Decode a `lex_tokens` result: the token stream (comments included
@@ -258,6 +268,78 @@ pub fn lex_tokens(run: &RunOutcome, schema: &AbiSchema) -> Result<(Vec<Token>, b
     Ok((tokens, complete))
 }
 
+/// Decode the bridge-facing identifier table emitted by
+/// `Syntax.syntax_metadata_output`. The materialized file owns virtual spans;
+/// every record carries its separate originating file identity.
+pub fn adapt_syntax_metadata(
+    run: &RunOutcome,
+    schema: &AbiSchema,
+    materialized_file: FileID,
+) -> Result<SyntaxMetadata, String> {
+    let adapter = ResultAdapter {
+        v: ResultValidator::new(run, schema)?,
+        boxed: AbiTy::Named("boxed".into()),
+        ids: IDGenerator::default(),
+        meta: NodeMetaStorage::default(),
+        metas: Vec::new(),
+        meta_cursor: 0,
+        file_id: materialized_file,
+    };
+    adapter.syntax_metadata(&run.value)
+}
+
+/// Decode one procedural expression macro result. Its nested ParseOutcome is
+/// adapted directly; materialized source is never sent through another lexer.
+pub fn adapt_expr_macro(
+    run: &RunOutcome,
+    schema: &AbiSchema,
+    materialized_file: FileID,
+) -> Result<BridgedExprMacro, String> {
+    let mut adapter = ResultAdapter {
+        v: ResultValidator::new(run, schema)?,
+        boxed: AbiTy::Named("boxed".into()),
+        ids: IDGenerator::default(),
+        meta: NodeMetaStorage::default(),
+        metas: Vec::new(),
+        meta_cursor: 0,
+        file_id: materialized_file,
+    };
+    let mut output = adapter.record(&run.value, "ExprMacroOutput")?;
+    let source = adapter.string(&take(&mut output, "source")?)?;
+    let outcome = adapter.opt(&take(&mut output, "outcome")?)?;
+    let metadata_value = take(&mut output, "metadata")?;
+    let code = adapter
+        .opt(&take(&mut output, "failure_code")?)?
+        .map(|value| adapter.string(&value))
+        .transpose()?;
+    let message = adapter
+        .opt(&take(&mut output, "failure_message")?)?
+        .map(|value| adapter.string(&value))
+        .transpose()?;
+    let failure_start = int(&take(&mut output, "failure_start")?)?;
+    let failure_end = int(&take(&mut output, "failure_end")?)?;
+    let failure = match (code, message) {
+        (Some(code), Some(message)) => Some(BridgedFail {
+            code,
+            message,
+            span: Some(adapter.span(failure_start, failure_end)?),
+            expected: None,
+        }),
+        (None, None) => None,
+        _ => return Err("macro failure code and message must both be present or absent".into()),
+    };
+    let metadata = adapter.syntax_metadata(&metadata_value)?;
+    let parse = outcome
+        .map(|value| adapter.parse_outcome(&value))
+        .transpose()?;
+    Ok(BridgedExprMacro {
+        source,
+        parse,
+        metadata,
+        failure,
+    })
+}
+
 pub fn adapt(
     run: &RunOutcome,
     schema: &AbiSchema,
@@ -274,39 +356,7 @@ pub fn adapt(
         meta_cursor: 0,
         file_id,
     };
-    let mut outcome = adapter.record(&run.value.clone(), "ParseOutcome")?;
-    for meta in adapter.array(&take(&mut outcome, "metas")?)? {
-        let decoded = adapter.node_meta(&meta)?;
-        adapter.metas.push(decoded);
-    }
-    let failure = adapter
-        .opt(&take(&mut outcome, "failure")?)?
-        .map(|fail| adapter.fail(&fail))
-        .transpose()?;
-    let mut diags = Vec::new();
-    for fail in adapter.array(&take(&mut outcome, "diags")?)? {
-        diags.push(adapter.fail(&fail)?);
-    }
-    let mut comments = Vec::new();
-    for comment in adapter.array(&take(&mut outcome, "comments")?)? {
-        let mut fields = adapter.record(&comment, "Comment")?;
-        comments.push((
-            position(&take(&mut fields, "start")?)?,
-            position(&take(&mut fields, "end")?)?,
-        ));
-    }
-    let mut roots = Vec::new();
-    for item in adapter.array(&take(&mut outcome, "items")?)? {
-        roots.push(adapter.item(&item)?);
-    }
-    Ok(BridgedParse {
-        roots,
-        meta: adapter.meta,
-        comments,
-        failure,
-        diags,
-        next_node_id: adapter.ids.last,
-    })
+    adapter.parse_outcome(&run.value)
 }
 
 struct ResultAdapter<'a, 'io> {
@@ -468,6 +518,124 @@ fn token_kind(name: &str) -> Result<TokenKind, String> {
 }
 
 impl ResultAdapter<'_, '_> {
+    fn parse_outcome(&mut self, value: &Value) -> Result<BridgedParse, String> {
+        let mut outcome = self.record(value, "ParseOutcome")?;
+        for meta in self.array(&take(&mut outcome, "metas")?)? {
+            let decoded = self.node_meta(&meta)?;
+            self.metas.push(decoded);
+        }
+        let failure = self
+            .opt(&take(&mut outcome, "failure")?)?
+            .map(|fail| self.fail(&fail))
+            .transpose()?;
+        let mut diags = Vec::new();
+        for fail in self.array(&take(&mut outcome, "diags")?)? {
+            diags.push(self.fail(&fail)?);
+        }
+        let mut comments = Vec::new();
+        for comment in self.array(&take(&mut outcome, "comments")?)? {
+            let mut fields = self.record(&comment, "Comment")?;
+            comments.push((
+                position(&take(&mut fields, "start")?)?,
+                position(&take(&mut fields, "end")?)?,
+            ));
+        }
+        let mut roots = Vec::new();
+        for item in self.array(&take(&mut outcome, "items")?)? {
+            roots.push(self.item(&item)?);
+        }
+        Ok(BridgedParse {
+            roots,
+            meta: std::mem::take(&mut self.meta),
+            comments,
+            failure,
+            diags,
+            next_node_id: self.ids.last,
+        })
+    }
+
+    fn syntax_metadata(&self, value: &Value) -> Result<SyntaxMetadata, String> {
+        let mut output = self.record(value, "SyntaxMetadataOutput")?;
+        let mut identifiers = Vec::new();
+        for value in self.array(&take(&mut output, "identifiers")?)? {
+            let mut fields = self.record(&value, "SyntaxIdentifierRecord")?;
+            let text = self.string(&take(&mut fields, "text")?)?;
+            let virtual_span = |start: Value, end: Value| -> Result<Span, String> {
+                Ok(Span {
+                    file_id: self.file_id,
+                    start: position(&start)?,
+                    end: position(&end)?,
+                })
+            };
+            let span = virtual_span(
+                take(&mut fields, "span_start")?,
+                take(&mut fields, "span_end")?,
+            )?;
+            let lexeme = virtual_span(
+                take(&mut fields, "lexeme_start")?,
+                take(&mut fields, "lexeme_end")?,
+            )?;
+            let mut scopes = Vec::new();
+            for value in self.array(&take(&mut fields, "scopes")?)? {
+                let mut scope = self.record(&value, "SyntaxScopeRecord")?;
+                let (kind, _) = self.variant(&take(&mut scope, "kind")?, "SyntaxScopeKind")?;
+                let namespace = u64::try_from(int(&take(&mut scope, "namespace")?)?)
+                    .map_err(|_| "syntax scope namespace out of range")?;
+                let ordinal = u64::try_from(int(&take(&mut scope, "ordinal")?)?)
+                    .map_err(|_| "syntax scope ordinal out of range")?;
+                scopes.push(match kind.as_str() {
+                    "lexical" => SyntaxScope::Lexical(NodeID(
+                        FileID(
+                            u32::try_from(namespace).map_err(|_| "lexical file id out of range")?,
+                        ),
+                        u32::try_from(ordinal).map_err(|_| "lexical node id out of range")?,
+                    )),
+                    "expansion" => SyntaxScope::Expansion { namespace, ordinal },
+                    "module" => {
+                        if ordinal != 0 {
+                            return Err("module syntax scope ordinal must be zero".into());
+                        }
+                        SyntaxScope::Module(crate::compiling::module::ModuleId(
+                            u16::try_from(namespace)
+                                .map_err(|_| "module syntax scope id out of range")?,
+                        ))
+                    }
+                    other => return Err(format!("unknown SyntaxScopeKind variant `{other}`")),
+                });
+            }
+            let (origin, _) = self.variant(&take(&mut fields, "origin")?, "SyntaxOrigin")?;
+            let origin = match origin.as_str() {
+                "use_site" => SyntaxOrigin::UseSite,
+                "definition_site" => SyntaxOrigin::DefinitionSite,
+                other => return Err(format!("unknown SyntaxOrigin variant `{other}`")),
+            };
+            let source_file = FileID(
+                u32::try_from(int(&take(&mut fields, "source_id")?)?)
+                    .map_err(|_| "syntax source file id out of range")?,
+            );
+            let source_span = Span {
+                file_id: source_file,
+                start: position(&take(&mut fields, "source_span_start")?)?,
+                end: position(&take(&mut fields, "source_span_end")?)?,
+            };
+            let source_lexeme = Span {
+                file_id: source_file,
+                start: position(&take(&mut fields, "source_lexeme_start")?)?,
+                end: position(&take(&mut fields, "source_lexeme_end")?)?,
+            };
+            identifiers.push(MaterializedIdentifier {
+                text,
+                span,
+                lexeme,
+                context: SyntaxContext::new(scopes),
+                origin,
+                source_span,
+                source_lexeme,
+            });
+        }
+        Ok(SyntaxMetadata::new(identifiers))
+    }
+
     fn id(&mut self) -> NodeID {
         NodeID(self.file_id, self.ids.next_id())
     }
@@ -861,11 +1029,53 @@ impl ResultAdapter<'_, '_> {
             "macro_call" => ExprKind::MacroCall {
                 name: self.string(&p[0])?,
                 name_span: self.span(int(&p[1])?, int(&p[2])?)?,
-                args: self.exprs(&p[3])?,
+                input_span: self.span(int(&p[3])?, int(&p[4])?)?,
+                input_tokens: self.macro_tokens(&p[5])?,
+                args: self.exprs(&p[6])?,
+            },
+            "syntax_quote" => ExprKind::SyntaxQuote {
+                source: self.string(&p[0])?,
+                tokens: self.macro_tokens(&p[1])?,
+                splices: self
+                    .array(&p[2])?
+                    .iter()
+                    .map(|value| self.string(value))
+                    .collect::<Result<_, _>>()?,
             },
             other => return Err(format!("unknown ExprKind variant `{other}`")),
         };
         Ok(Expr { id, kind, span })
+    }
+
+    fn macro_tokens(&self, value: &Value) -> Result<Vec<MacroToken>, String> {
+        self.array(value)?
+            .iter()
+            .map(|value| {
+                let mut fields = self.record(value, "MacroToken")?;
+                let kind = take(&mut fields, "kind")?;
+                let view = self.v.run.aggregate(&kind)?;
+                if view.symbol != Some(self.v.symbols["TokenKind"]) {
+                    return Err(format!("expected a TokenKind, got {kind:?}"));
+                }
+                let Some(kind_tag) = view.tag else {
+                    return Err(format!("expected a TokenKind, got {kind:?}"));
+                };
+                if view.len != 0 {
+                    return Err("TokenKind unexpectedly carries payloads".into());
+                }
+                let coordinate = |value: Value| -> Result<u32, String> {
+                    u32::try_from(int(&value)?)
+                        .map_err(|_| "macro token coordinate out of range".into())
+                };
+                Ok(MacroToken {
+                    kind_tag: kind_tag.into(),
+                    span_start: coordinate(take(&mut fields, "span_start")?)?,
+                    span_end: coordinate(take(&mut fields, "span_end")?)?,
+                    lexeme_start: coordinate(take(&mut fields, "lexeme_start")?)?,
+                    lexeme_end: coordinate(take(&mut fields, "lexeme_end")?)?,
+                })
+            })
+            .collect()
     }
 
     fn receiver(&mut self, value: &Value) -> Result<Option<Box<Expr>>, String> {
@@ -1069,7 +1279,7 @@ impl ResultAdapter<'_, '_> {
                 token_kind(&variant)
             })
             .transpose()?;
-        let missing = |what: &str| format!("@_ir `{name}` is missing its {what}");
+        let missing = |what: &str| format!("#_ir `{name}` is missing its {what}");
         let mut values = values.into_iter();
         let mut next = |what: &str| values.next().ok_or_else(|| missing(what));
         let require_dest = dest.clone().ok_or_else(|| missing("destination"));
@@ -1129,7 +1339,7 @@ impl ResultAdapter<'_, '_> {
                 length: next("length")?,
             },
             "swap" => InlineIRInstructionKind::Swap { ty: require_ty?, a: next("a")?, b: next("b")? },
-            other => return Err(format!("unknown @_ir instruction `{other}`")),
+            other => return Err(format!("unknown #_ir instruction `{other}`")),
         };
         Ok(InlineIRInstruction {
             id: { let id = self.id(); self.put_meta(id, meta); id },

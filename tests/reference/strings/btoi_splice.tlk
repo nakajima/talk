@@ -1,6 +1,6 @@
 func first_byte(s: String) -> Int {
 	let b: Byte = s.utf8().at(index: 0)
-	@unsafe { @_ir(b) { %? = btoi $0 } }
+	#unsafe { #_ir(b) { %? = btoi $0 } }
 }
 print(first_byte(s: "A"))
 print("é".utf8().at(index: 0)._toInt())

@@ -10,6 +10,9 @@ pub mod tests {
         ast::{AST, NameResolved},
         compiling::module::{ModuleEnvironment, ModuleId},
         diagnostic::{AnyDiagnostic, Diagnostic, Severity},
+        hygiene::{
+            MaterializedIdentifier, SyntaxContext, SyntaxMetadata, SyntaxOrigin, SyntaxScope,
+        },
         label::Label,
         name::Name,
         name_resolution::{
@@ -159,6 +162,155 @@ pub mod tests {
         crate::desugar::desugar(&mut parseds);
         let (asts, resolved) = name_resolver.resolve(parseds);
         (asts[0].clone(), resolved)
+    }
+
+    #[test]
+    fn hygienic_bindings_do_not_capture_use_site_references() {
+        let source = "let x = 1\n{\n\tlet x = 2\n\tlet generated = x\n\tlet caller = x\n}\n";
+        let mut parsed = parse(source);
+        let file_id = parsed.file_id;
+        let root_scope = NodeID(file_id, 0);
+        let introduced = SyntaxContext::lexical(root_scope).with_scope(
+            SyntaxScope::Expansion {
+                namespace: 7,
+                ordinal: 1,
+            },
+        );
+        let use_site = SyntaxContext::lexical(root_scope);
+        let positions: Vec<usize> = source.match_indices('x').map(|(offset, _)| offset).collect();
+        assert_eq!(positions.len(), 4);
+        let identifier = |offset: usize, context: SyntaxContext| MaterializedIdentifier {
+            text: "x".into(),
+            span: Span {
+                file_id,
+                start: offset as u32,
+                end: offset as u32 + 1,
+            },
+            lexeme: Span {
+                file_id,
+                start: offset as u32,
+                end: offset as u32 + 1,
+            },
+            context,
+            origin: SyntaxOrigin::DefinitionSite,
+            source_span: Span {
+                file_id,
+                start: offset as u32,
+                end: offset as u32 + 1,
+            },
+            source_lexeme: Span {
+                file_id,
+                start: offset as u32,
+                end: offset as u32 + 1,
+            },
+        };
+        parsed.apply_syntax_metadata(SyntaxMetadata::new(vec![
+            identifier(positions[1], introduced.clone()),
+            identifier(positions[2], introduced),
+            MaterializedIdentifier {
+                origin: SyntaxOrigin::UseSite,
+                ..identifier(positions[3], use_site)
+            },
+        ]));
+
+        let modules = ModuleEnvironment::default();
+        let mut resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
+        let mut parseds = vec![parsed];
+        crate::desugar::desugar(&mut parseds);
+        let (asts, resolved) = resolver.resolve(parseds);
+        assert!(resolved.diagnostics.is_empty(), "{:?}", resolved.diagnostics);
+
+        let outer = match &asts[0].roots[0] {
+            crate::node::Node::Decl(Decl {
+                kind: DeclKind::Let { lhs, .. },
+                ..
+            }) => lhs.kind.clone(),
+            other => panic!("expected outer let, got {other:?}"),
+        };
+        let PatternKind::Bind(Name::Resolved(outer_symbol, _)) = outer else {
+            panic!("outer binding was not resolved")
+        };
+
+        let mut references = Vec::new();
+        let mut collector = derive_visitor::visitor_enter_fn(|expr: &Expr| {
+            if let ExprKind::Variable(Name::Resolved(symbol, name)) = &expr.kind
+                && name == "x"
+            {
+                references.push(*symbol);
+            }
+        });
+        for root in &asts[0].roots {
+            derive_visitor::Drive::drive(root, &mut collector);
+        }
+        drop(collector);
+        assert_eq!(references.len(), 2);
+        assert_ne!(references[0], outer_symbol, "introduced reference missed its binder");
+        assert_eq!(references[1], outer_symbol, "use-site reference was captured");
+    }
+
+    #[test]
+    fn definition_site_reference_ignores_use_site_shadowing() {
+        let source = "let helper = 1\n{\n\tlet helper = 2\n\tlet result = helper\n}\n";
+        let mut parsed = parse(source);
+        let file_id = parsed.file_id;
+        let root_scope = NodeID(file_id, 0);
+        let context = SyntaxContext::lexical(root_scope).with_scope(
+            SyntaxScope::Expansion {
+                namespace: 9,
+                ordinal: 1,
+            },
+        );
+        let positions: Vec<usize> = source
+            .match_indices("helper")
+            .map(|(offset, _)| offset)
+            .collect();
+        assert_eq!(positions.len(), 3);
+        let start = positions[2] as u32;
+        let span = Span {
+            file_id,
+            start,
+            end: start + "helper".len() as u32,
+        };
+        parsed.apply_syntax_metadata(SyntaxMetadata::new(vec![MaterializedIdentifier {
+            text: "helper".into(),
+            span,
+            lexeme: span,
+            context,
+            origin: SyntaxOrigin::DefinitionSite,
+            source_span: span,
+            source_lexeme: span,
+        }]));
+
+        let modules = ModuleEnvironment::default();
+        let mut resolver = NameResolver::new(Rc::new(modules), ModuleId::Current);
+        let mut parseds = vec![parsed];
+        crate::desugar::desugar(&mut parseds);
+        let (asts, resolved) = resolver.resolve(parseds);
+        assert!(resolved.diagnostics.is_empty(), "{:?}", resolved.diagnostics);
+
+        let outer = match &asts[0].roots[0] {
+            crate::node::Node::Decl(Decl {
+                kind: DeclKind::Let { lhs, .. },
+                ..
+            }) => lhs.kind.clone(),
+            other => panic!("expected outer let, got {other:?}"),
+        };
+        let PatternKind::Bind(Name::Resolved(outer_symbol, _)) = outer else {
+            panic!("outer helper was not resolved")
+        };
+        let mut references = Vec::new();
+        let mut collector = derive_visitor::visitor_enter_fn(|expr: &Expr| {
+            if let ExprKind::Variable(Name::Resolved(symbol, name)) = &expr.kind
+                && name == "helper"
+            {
+                references.push(*symbol);
+            }
+        });
+        for root in &asts[0].roots {
+            derive_visitor::Drive::drive(root, &mut collector);
+        }
+        drop(collector);
+        assert_eq!(references, vec![outer_symbol]);
     }
 
     #[test]
@@ -1980,7 +2132,7 @@ pub mod tests {
         let resolved = resolve(
             "
         effect 'fizz(x: Int) -> ()
-        @handle 'fizz { x in
+        #handle 'fizz { x in
             'continue x
         }
         ",

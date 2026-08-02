@@ -28,6 +28,58 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         // bindings can be written back into the conformance row (the
         // lowerer specializes default bodies from it).
         let mut inferred_assoc: Vec<(ConformanceId, Symbol, Ty)> = vec![];
+        let mut conformance_assoc: FxHashMap<(ConformanceId, Symbol), Ty> = FxHashMap::default();
+        for (protocol, row_id) in &work.rows {
+            let declared = self
+                .catalog
+                .conformance(*row_id)
+                .map(|row| row.assoc.clone())
+                .unwrap_or_default();
+            let associated: Vec<Symbol> = self
+                .catalog
+                .protocols
+                .get(&protocol.protocol)
+                .map(|info| info.assoc.values().copied().collect())
+                .unwrap_or_default();
+            for assoc in associated {
+                let binding = declared.get(&assoc).cloned().unwrap_or_else(|| {
+                    let var = Ty::Var(self.store.fresh_ty(self.level, work.decl.id));
+                    inferred_assoc.push((*row_id, assoc, var.clone()));
+                    var
+                });
+                conformance_assoc.insert((*row_id, assoc), binding);
+            }
+        }
+
+        // A protocol's associated-type bounds and equalities constrain every
+        // conformance, not only generic code inside its requirements. Solve
+        // them with the row's shared associated variables so one witness can
+        // determine another associated type transitively (for example,
+        // `Iter.Element == Element`). The solved bindings are then part of the
+        // exported conformance row and concrete projections normalize in
+        // downstream modules.
+        for (protocol, row_id) in &work.rows {
+            let Some(info) = self.catalog.protocols.get(&protocol.protocol).cloned() else {
+                continue;
+            };
+            let mut tys = FxHashMap::default();
+            tys.insert(protocol.protocol, work.self_ty.clone());
+            for (param, arg) in info.params.iter().zip(protocol.args.iter().cloned()) {
+                tys.insert(param.symbol, arg);
+            }
+            for assoc in info.assoc.values() {
+                if let Some(binding) = conformance_assoc.get(&(*row_id, *assoc)) {
+                    tys.insert(*assoc, binding.clone());
+                }
+            }
+            let origin = CtOrigin::new(work.decl.id, CtReason::Annotation);
+            self.wanteds.extend(info.predicates.iter().map(|predicate| {
+                predicate
+                    .substitute(&tys, &Default::default(), &Default::default())
+                    .into_constraint(origin)
+            }));
+        }
+
         for member in &body.decls {
             let DeclKind::Method { func, .. } = &member.kind else {
                 continue;
@@ -103,12 +155,6 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                 else {
                     continue;
                 };
-                let bindings = self
-                    .catalog
-                    .conformance(row_id)
-                    .map(|row| row.assoc.clone())
-                    .unwrap_or_default();
-
                 let mut tys: FxHashMap<Symbol, Ty> = FxHashMap::default();
                 tys.insert(owner.protocol, work.self_ty.clone());
                 if let Some(info) = self.catalog.protocols.get(&owner.protocol) {
@@ -125,14 +171,15 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     );
                 }
                 for assoc in assoc_symbols {
-                    let binding = match bindings.get(&assoc) {
-                        Some(bound) => bound.clone(),
-                        None => {
+                    let binding = conformance_assoc
+                        .get(&(row_id, assoc))
+                        .cloned()
+                        .unwrap_or_else(|| {
                             let var = Ty::Var(self.store.fresh_ty(self.level, member.id));
                             inferred_assoc.push((row_id, assoc, var.clone()));
+                            conformance_assoc.insert((row_id, assoc), var.clone());
                             var
-                        }
-                    };
+                        });
                     tys.insert(assoc, binding);
                 }
                 let mut effs = FxHashMap::default();

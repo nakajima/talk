@@ -1,6 +1,5 @@
 tokens:
-  Hash @0..1 "#"
-  Identifier @1..10 "stringify"
+  Attribute @0..10 "@stringify"
   LeftParen @10..11 "("
   Identifier @11..12 "a"
   Plus @13..14 "+"
@@ -10,7 +9,7 @@ tokens:
   RightParen @19..20 ")"
   Newline @20..21
 tree:
-  Expr::MacroCall @0..20 "#stringify(a + 1, b)"
+  Expr::MacroCall @0..20 "@stringify(a + 1, b)"
     Expr::Binary @11..16 "a + 1"
       Expr::Variable @11..12 "a"
       Expr::LiteralInt @15..16 "1"

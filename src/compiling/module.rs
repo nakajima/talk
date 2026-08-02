@@ -28,6 +28,7 @@ impl StableModuleId {
         name: &str,
         exports: &Exports,
         contracts: &rustc_hash::FxHashMap<Symbol, crate::types::callables::CallableContract>,
+        procedural_macro_exports: &[String],
     ) -> Self {
         let mut hasher = Sha256::new();
         hasher.update(name.as_bytes());
@@ -40,6 +41,11 @@ impl StableModuleId {
                     hasher.update(contract.name.to_string().as_bytes());
                 }
             }
+            hasher.update([0]);
+        }
+        for name in procedural_macro_exports {
+            hasher.update(b"macro\0");
+            hasher.update(name.as_bytes());
             hasher.update([0]);
         }
         Self(hasher.finalize().into())
@@ -258,4 +264,31 @@ pub struct Module {
     pub exports: Exports,
     #[serde(default)]
     pub types: ModuleTypes,
+    #[serde(default)]
+    pub procedural_macros: Option<crate::procedural_macros::ProceduralMacroArtifact>,
+}
+
+impl Module {
+    pub fn with_procedural_macros(
+        mut self,
+        artifact: Option<crate::procedural_macros::ProceduralMacroArtifact>,
+    ) -> Self {
+        let names = artifact
+            .as_ref()
+            .map(|artifact| {
+                artifact
+                    .exported_names()
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        self.id = StableModuleId::generate(
+            &self.name,
+            &self.exports,
+            &self.types.catalog.callable_contracts,
+            &names,
+        );
+        self.procedural_macros = artifact;
+        self
+    }
 }

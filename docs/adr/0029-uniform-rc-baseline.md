@@ -16,7 +16,7 @@ session and then reverted, on two findings the proposal got wrong:
    optimizer that would recover it is exactly the precision machinery the
    ADR claimed could wait.
 2. **The migration cost concentrated in hand-balanced core.**
-   `core/Array.tlk`, the for-loop machinery, and the `@_ir` idioms
+   `core/Array.tlk`, the for-loop machinery, and the `#_ir` idioms
    (`Memory.replace`'s take-then-restore) were written against the flow
    schedule's precision; rebalancing them is per-construct design work,
    not mechanical cleanup — the per-construct surface the ADR set out to

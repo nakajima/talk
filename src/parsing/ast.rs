@@ -1,6 +1,7 @@
 use derive_visitor::{Drive, Visitor};
 
 use crate::{
+    hygiene::SyntaxMetadata,
     id_generator::IDGenerator,
     node::Node,
     node_id::{FileID, NodeID},
@@ -32,6 +33,7 @@ impl From<AST<Parsed>> for AST<NameResolved> {
             path: value.path,
             roots: value.roots,
             meta: value.meta,
+            syntax: value.syntax,
             phase: NameResolved {},
             node_ids: value.node_ids,
             file_id: value.file_id,
@@ -45,6 +47,7 @@ pub struct AST<Phase: ASTPhase = NewAST> {
     pub path: String,
     pub roots: Vec<Node>,
     pub meta: NodeMetaStorage,
+    pub syntax: SyntaxMetadata,
     pub phase: Phase,
     pub node_ids: IDGenerator,
     pub file_id: FileID,
@@ -52,6 +55,11 @@ pub struct AST<Phase: ASTPhase = NewAST> {
 }
 
 impl<Phase: ASTPhase> AST<Phase> {
+    pub fn apply_syntax_metadata(&mut self, metadata: SyntaxMetadata) {
+        metadata.apply(&mut self.roots);
+        self.syntax = metadata;
+    }
+
     pub fn find(&self, node_id: NodeID) -> Option<Node> {
         for root in &self.roots {
             let mut visitor = ASTNodeFinder {

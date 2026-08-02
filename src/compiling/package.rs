@@ -1793,7 +1793,7 @@ impl PackageProject {
             let test_source = tests_directory.join(format!("{name}.test.tlk"));
             fs::write(
                 &test_source,
-                "test(\"example\") {\n    #assert(1 + 1 == 2)\n}\n",
+                "test(\"example\") {\n    @assert(1 + 1 == 2)\n}\n",
             )
             .map_err(|source| PackageError::Io {
                 context: format!("failed to write {}", test_source.display()),
@@ -2637,6 +2637,77 @@ mod tests {
     }
 
     #[test]
+    fn imports_and_executes_a_path_dependency_macro() {
+        let temporary = std::env::temp_dir().join(format!(
+            "talk-package-macro-test-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let dependency = temporary.join("dependency");
+        let root = temporary.join("root");
+        fs::create_dir_all(dependency.join("src")).expect("create dependency source");
+        fs::create_dir_all(root.join("src")).expect("create root source");
+        fs::write(
+            dependency.join(MANIFEST_FILE),
+            "Package(name: \"macro-lib\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+        )
+        .expect("write dependency manifest");
+        fs::write(
+            dependency.join("src/lib.tlk"),
+            "pub func double(value: Int) -> Int { value + value }\n",
+        )
+        .expect("write dependency library");
+        fs::write(
+            dependency.join("src/twice.macro.tlk"),
+            r#"
+use package::Lexer::{ MacroInput, group_contents }
+use package::Ast::{ Expr }
+use package::Syntax::{ SyntaxResult, SyntaxContext, QuoteContext, capture_expr }
+
+pub func twice(input: MacroInput, use_site: SyntaxContext, context: QuoteContext) -> SyntaxResult<Expr> {
+    match input.tree {
+        .group(group) -> {
+            let captured = capture_expr(
+                source_id: input.source_id,
+                source: input.source,
+                input: group_contents(group: group),
+                context: use_site
+            )
+            if let .some(value) = captured.value {
+                return quote { double(value: $value) }
+            }
+            SyntaxResult<Expr>(value: .none, failure: captured.failure)
+        },
+        .leaf(token) -> unreachable
+    }
+}
+"#,
+        )
+        .expect("write dependency macro");
+        fs::write(
+            root.join(MANIFEST_FILE),
+            "Package(name: \"root\", version: \"0.1.0\", builds: [.bin(named: \"main\", from: \"src/main.tlk\")], dependencies: [.path(package: \"macro-lib\", path: \"../dependency\")])",
+        )
+        .expect("write root manifest");
+        fs::write(
+            root.join("src/main.tlk"),
+            "use macro_lib::{ twice as duplicate }\n@duplicate { 21 }\n",
+        )
+        .expect("write root binary");
+
+        PackageProject::install_at(&root, true, false).expect("install path dependency");
+        let project = PackageProject::open_at(&root, true).expect("open package project");
+        let executable = project
+            .compile_binary(None)
+            .expect("compile imported macro");
+        let mut io = talk_runtime::io::CaptureIO::default();
+        let value = crate::compiling::driver::execute_module(&executable, &mut io)
+            .expect("execute imported macro expansion");
+        assert_eq!(value.as_deref(), Some("42"));
+        fs::remove_dir_all(temporary).expect("remove temporary directory");
+    }
+
+    #[test]
     fn installs_a_gzip_tar_dependency_from_a_source_provider() {
         use flate2::{Compression, write::GzEncoder};
 
@@ -2676,10 +2747,7 @@ mod tests {
                 "remote-lib/package.tlk",
                 "Package(name: \"remote-lib\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
             ),
-            (
-                "remote-lib/src/lib.tlk",
-                "pub func answer() -> Int { 42 }",
-            ),
+            ("remote-lib/src/lib.tlk", "pub func answer() -> Int { 42 }"),
         ] {
             let mut header = tar::Header::new_gnu();
             header.set_size(source.len() as u64);
