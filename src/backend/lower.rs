@@ -15,7 +15,7 @@ use super::mir::layout::{FieldRepr, Layout, Shape};
 use super::mir::{
     BlockData, CmpKind, Constant, Function, Inst, Operand, Program, ScalarOp, Term,
 };
-use crate::name_resolution::symbol::Symbol as CompilerSymbol;
+use crate::backend::mir::MirSymbol;
 
 fn mem_kind(kind: super::mir::layout::SlotKind) -> MemKind {
     use super::mir::layout::SlotKind;
@@ -30,19 +30,16 @@ fn mem_kind(kind: super::mir::layout::SlotKind) -> MemKind {
 }
 use crate::parsing::span::Span;
 
-/// Compiler symbols carried into runtime values (aggregate identity
-/// and display) use the runtime's own symbol type; the layout table
-/// only ever names declared aggregates, so everything else folds to
-/// the library fallback.
-pub(crate) fn runtime_symbol(
-    symbol: crate::name_resolution::symbol::Symbol,
-) -> talk_vm::symbol::Symbol {
-    use crate::name_resolution::symbol::Symbol as C;
+/// Aggregate identities carried by the layout table map structurally to
+/// the runtime's own symbol type; anything else folds to the library
+/// fallback.
+pub(crate) fn vm_symbol(symbol: crate::backend::mir::MirSymbol) -> talk_vm::symbol::Symbol {
+    use crate::backend::mir::MirSymbolKind as K;
     use talk_vm::symbol::{ModuleId, ModuleSymbolId, Symbol as R};
-    let module = |id: crate::compiling::module::ModuleId| ModuleId(id.0);
-    match symbol {
-        C::Struct(id) => R::Struct(ModuleSymbolId::new(module(id.module_id), id.local_id)),
-        C::Enum(id) => R::Enum(ModuleSymbolId::new(module(id.module_id), id.local_id)),
+    let id = ModuleSymbolId::new(ModuleId(symbol.module), symbol.local);
+    match symbol.kind {
+        K::Struct => R::Struct(id),
+        K::Enum => R::Enum(id),
         _ => R::Library,
     }
 }
@@ -116,7 +113,7 @@ fn published_layouts(table: &[Layout]) -> Vec<LayoutDesc> {
         .collect()
 }
 
-fn shape_desc(symbol: Option<CompilerSymbol>, shape: &Shape) -> LayoutDesc {
+fn shape_desc(symbol: Option<MirSymbol>, shape: &Shape) -> LayoutDesc {
     let unshaped = LayoutDesc {
         symbol: None,
         width: 0,
@@ -164,7 +161,7 @@ fn shape_desc(symbol: Option<CompilerSymbol>, shape: &Shape) -> LayoutDesc {
         }
     };
     LayoutDesc {
-        symbol: symbol.map(runtime_symbol),
+        symbol: symbol.map(vm_symbol),
         width,
         body,
     }

@@ -322,12 +322,12 @@ fn emit_layout_table(
 /// The display table, indexed by the ids handed out while emitting. Slot
 /// zero is the anonymous product, so `symbol` zero renders as a tuple.
 fn emit_type_table(out: &mut String, emitter: &Emitter, display: &DisplayNames) {
-    let mut ordered: Vec<(&CompilerSymbol, &u32)> = emitter.display_ids.iter().collect();
+    let mut ordered: Vec<_> = emitter.display_ids.iter().collect();
     ordered.sort_by_key(|(_, id)| **id);
     for (symbol, id) in &ordered {
         let members = display
             .entries
-            .get(symbol)
+            .get(&symbol.to_source())
             .map(|(_, _, members)| members.as_slice())
             .unwrap_or_default();
         if members.is_empty() {
@@ -350,7 +350,7 @@ fn emit_type_table(out: &mut String, emitter: &Emitter, display: &DisplayNames) 
             let _ = writeln!(out, "    {{ \"\", TALK_TYPE_EXISTENTIAL, 0, NULL }},");
             continue;
         }
-        let (name, kind, members) = match display.entries.get(symbol) {
+        let (name, kind, members) = match display.entries.get(&symbol.to_source()) {
             Some(entry) => entry,
             // A symbol with no catalog entry renders structurally.
             None => {
@@ -392,7 +392,7 @@ struct Emitter {
     widest_arity: usize,
     /// Struct and enum symbols numbered densely from one; zero is the
     /// anonymous product.
-    display_ids: FxHashMap<CompilerSymbol, u32>,
+    display_ids: FxHashMap<crate::backend::mir::MirSymbol, u32>,
     /// Of those, the ids belonging to protocol existentials, which have
     /// no catalog entry and render as their payload.
     existential_ids: rustc_hash::FxHashSet<u32>,
@@ -404,7 +404,7 @@ impl Emitter {
         *self.effects.entry(symbol).or_insert(next)
     }
 
-    fn display_id(&mut self, symbol: CompilerSymbol) -> u32 {
+    fn display_id(&mut self, symbol: crate::backend::mir::MirSymbol) -> u32 {
         let next = u32::try_from(self.display_ids.len() + 1).unwrap_or(1);
         *self.display_ids.entry(symbol).or_insert(next)
     }
@@ -790,7 +790,7 @@ impl Emitter {
                 } else {
                     // The tagged fallback carries String's display
                     // identity so it renders as quoted text.
-                    let string_symbol = self.display_id(CompilerSymbol::String);
+                    let string_symbol = self.display_id(crate::backend::mir::MirSymbol::string());
                     let _ = writeln!(out, "    {{");
                     let _ = writeln!(
                         out,
@@ -843,7 +843,7 @@ impl Emitter {
             } => {
                 // Carries the protocol's display identity so a result
                 // renders as its payload, not as the witness table.
-                let symbol = self.display_id(protocol.to_source());
+                let symbol = self.display_id(*protocol);
                 self.existential_ids.insert(symbol);
                 // Payload first, witnesses after, in one aggregate: slot 0
                 // drop, slot 1 retain, requirements from 2.
@@ -1618,7 +1618,7 @@ fn box_native_layouts(table: &[Layout], structs: &[bool]) -> Vec<bool> {
             };
             structs.get(id).copied().unwrap_or(false)
                 && matches!(shape, Shape::Product { .. })
-                && *symbol != Some(CompilerSymbol::InlineArray)
+                && *symbol != Some(crate::backend::mir::MirSymbol::inline_array())
         })
         .collect()
 }
@@ -2505,11 +2505,15 @@ mod tests {
     use crate::compiling::module::ModuleId;
     use crate::name_resolution::symbol::StructId;
 
-    fn sym(id: u32) -> CompilerSymbol {
-        CompilerSymbol::Struct(StructId::new(ModuleId(9), id))
+    fn sym(id: u32) -> crate::backend::mir::MirSymbol {
+        crate::backend::mir::MirSymbol {
+            kind: crate::backend::mir::MirSymbolKind::Struct,
+            module: 9,
+            local: id,
+        }
     }
 
-    fn flat_pair(symbol: CompilerSymbol) -> Layout {
+    fn flat_pair(symbol: crate::backend::mir::MirSymbol) -> Layout {
         Layout::Inline(
             Some(symbol),
             Shape::Product {
@@ -2779,7 +2783,10 @@ mod tests {
             ],
             Term::Return(Operand::Local(3)),
         );
-        let out = emitted(vec![entry], vec![flat_pair(CompilerSymbol::InlineArray)]);
+        let out = emitted(
+            vec![entry],
+            vec![flat_pair(crate::backend::mir::MirSymbol::inline_array())],
+        );
         assert!(!out.contains("TalkL0 x1"), "{out}");
         assert!(out.contains("l[1] = built;"), "{out}");
     }

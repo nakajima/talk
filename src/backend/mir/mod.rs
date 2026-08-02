@@ -71,9 +71,6 @@ pub(crate) enum MirSymbolKind {
     Enum,
     Effect,
     Protocol,
-    /// A well-known compiler identity that reaches layouts without naming
-    /// a declared aggregate (for example InlineArray's pseudo-identity).
-    Builtin,
 }
 
 impl std::fmt::Debug for MirSymbol {
@@ -92,7 +89,6 @@ impl MirSymbol {
             Symbol::Enum(id) => (MirSymbolKind::Enum, id.module_id, id.local_id),
             Symbol::Effect(id) => (MirSymbolKind::Effect, id.module_id, id.local_id),
             Symbol::Protocol(id) => (MirSymbolKind::Protocol, id.module_id, id.local_id),
-            Symbol::Builtin(id) => (MirSymbolKind::Builtin, id.module_id, id.local_id),
             _ => return None,
         };
         Some(MirSymbol {
@@ -100,6 +96,21 @@ impl MirSymbol {
             module: module_id.0,
             local: local_id,
         })
+    }
+
+    /// Well-known identities targets must recognize structurally: the
+    /// runtime aggregates String and Storage (their well-known core ids)
+    /// and the InlineArray pseudo-identity layout construction declares.
+    pub(crate) fn string() -> MirSymbol {
+        executable(Symbol::String)
+    }
+
+    pub(crate) fn storage() -> MirSymbol {
+        executable(Symbol::Storage)
+    }
+
+    pub(crate) fn inline_array() -> MirSymbol {
+        executable(Symbol::InlineArray)
     }
 
     /// Rebuild the source symbol. Transitional: the codegen projection and
@@ -126,12 +137,6 @@ impl MirSymbol {
                     local_id: self.local,
                 })
             }
-            MirSymbolKind::Builtin => {
-                Symbol::Builtin(crate::name_resolution::symbol::BuiltinId {
-                    module_id,
-                    local_id: self.local,
-                })
-            }
         }
     }
 }
@@ -139,7 +144,7 @@ impl MirSymbol {
 /// The executable identity a source symbol carries into finalized MIR.
 /// Emission sites only ever name declared effects and protocols, so a
 /// miss is a compiler bug, not a source error.
-fn executable(symbol: Symbol) -> MirSymbol {
+pub(crate) fn executable(symbol: Symbol) -> MirSymbol {
     MirSymbol::from_source(symbol).expect("only executable identities reach finalized MIR")
 }
 

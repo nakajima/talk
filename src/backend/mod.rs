@@ -20,7 +20,19 @@ mod optimize;
 /// The compiler-to-runtime symbol mapping, for the frontend result
 /// bridge (ADR 0043 §5): the identities in a returned value graph are
 /// runtime symbols.
-pub(crate) use lower::runtime_symbol;
+pub(crate) use lower::vm_symbol;
+
+/// Source-symbol-to-runtime-symbol mapping for host bridges: executable
+/// identities map structurally; anything else folds to the library
+/// fallback.
+pub(crate) fn runtime_symbol(
+    symbol: crate::name_resolution::symbol::Symbol,
+) -> talk_vm::symbol::Symbol {
+    match mir::MirSymbol::from_source(symbol) {
+        Some(mir) => lower::vm_symbol(mir),
+        None => talk_vm::symbol::Symbol::Library,
+    }
+}
 mod mir;
 mod regalloc;
 
@@ -148,7 +160,7 @@ impl Executable {
 /// The core String record symbol, for fabricating host string
 /// arguments (layout owned by core/String.tlk; parity tests pin it).
 pub(crate) fn string_shape() -> talk_vm::symbol::Symbol {
-    lower::runtime_symbol(crate::name_resolution::symbol::Symbol::String)
+    runtime_symbol(crate::name_resolution::symbol::Symbol::String)
 }
 
 /// A backend rejection: either a source construct no wave supports yet, or
@@ -285,7 +297,7 @@ fn display_names(programs: &[ProgramInput<'_>]) -> ValueNames {
         let types = input.program.types();
         let resolved = input.program.resolved_names();
         for (symbol, def) in &types.catalog.enums {
-            let runtime = lower::runtime_symbol(*symbol);
+            let runtime = runtime_symbol(*symbol);
             if let Some(name) = resolved.symbol_names.get(symbol) {
                 names.types.insert(runtime, name.clone());
             }
@@ -294,7 +306,7 @@ fn display_names(programs: &[ProgramInput<'_>]) -> ValueNames {
                 .insert(runtime, def.variants.keys().cloned().collect());
         }
         for (symbol, def) in &types.catalog.structs {
-            let runtime = lower::runtime_symbol(*symbol);
+            let runtime = runtime_symbol(*symbol);
             if let Some(name) = resolved.symbol_names.get(symbol) {
                 names.types.insert(runtime, name.clone());
             }
@@ -303,9 +315,7 @@ fn display_names(programs: &[ProgramInput<'_>]) -> ValueNames {
                 .insert(runtime, def.fields.keys().cloned().collect());
         }
     }
-    names.string_struct = Some(lower::runtime_symbol(
-        crate::name_resolution::symbol::Symbol::String,
-    ));
+    names.string_struct = Some(runtime_symbol(crate::name_resolution::symbol::Symbol::String));
     names
 }
 

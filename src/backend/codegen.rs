@@ -174,10 +174,10 @@ impl Projection {
         match layout {
             source::layout::Layout::Slot => crate::codegen::Layout::Slot,
             source::layout::Layout::Inline(symbol, shape) => {
-                crate::codegen::Layout::Inline(*symbol, Self::shape(shape))
+                crate::codegen::Layout::Inline(symbol.map(|s| s.to_source()), Self::shape(shape))
             }
             source::layout::Layout::Boxed(symbol, shape) => {
-                crate::codegen::Layout::Boxed(*symbol, Self::shape(shape))
+                crate::codegen::Layout::Boxed(symbol.map(|s| s.to_source()), Self::shape(shape))
             }
             source::layout::Layout::Opaque => crate::codegen::Layout::Opaque,
         }

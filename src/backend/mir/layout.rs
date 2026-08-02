@@ -17,7 +17,7 @@
 use rustc_hash::FxHashMap;
 
 use super::visit::{Slot, visit_inst};
-use super::{Function, Inst, LocalId, Operand, Term};
+use super::{Function, Inst, LocalId, MirSymbol, Operand, Term, executable as executable_identity};
 use crate::name_resolution::symbol::Symbol;
 use crate::types::catalog::{Enum, StructInfo, TypeCatalog};
 use crate::types::ty::{StaticValue, Ty};
@@ -45,10 +45,10 @@ pub(crate) enum Layout {
     /// existential package, a `'heap` object, a buffer handle.
     Slot,
     /// A finite aggregate stored flat in its container.
-    Inline(Option<Symbol>, Shape),
+    Inline(Option<MirSymbol>, Shape),
     /// An aggregate behind one reference slot, because recursion (rule 2)
     /// or width (rule 3) forced it. The shape describes the pointee.
-    Boxed(Option<Symbol>, Shape),
+    Boxed(Option<MirSymbol>, Shape),
     /// The type mentions a rigid parameter or projection: legal to build
     /// and ownership-verify in check-only rigid instances, rejected at
     /// emission (ADR 0045 rule 6).
@@ -194,7 +194,7 @@ impl Shape {
 impl Layout {
     /// One-line rendering for the `talk mir` dump.
     pub(crate) fn render(&self) -> String {
-        let identity = |symbol: &Option<Symbol>| match symbol {
+        let identity = |symbol: &Option<MirSymbol>| match symbol {
             Some(symbol) => format!("{symbol:?} "),
             None => String::new(),
         };
@@ -292,6 +292,7 @@ impl<'a> Layouts<'a> {
     /// declared. Interning is identity-separated, so both views coexist
     /// in the table and agree on every offset.
     pub(crate) fn shaped_id(&mut self, ty: &Ty, identity: Option<Symbol>) -> LayoutId {
+        let identity = identity.map(executable_identity);
         let layout = match self.shaped(ty) {
             Layout::Inline(_, shape) => Layout::Inline(identity, shape),
             Layout::Boxed(_, shape) => Layout::Boxed(identity, shape),
@@ -331,7 +332,7 @@ impl<'a> Layouts<'a> {
                 payloads.push(instantiate(&def.params, args, declared.into_iter()));
             }
             return match self.sum_shape(&payloads) {
-                Some(shape) => Layout::Boxed(Some(symbol), shape),
+                Some(shape) => Layout::Boxed(Some(executable_identity(symbol)), shape),
                 None => Layout::Opaque,
             };
         }
@@ -439,9 +440,9 @@ impl<'a> Layouts<'a> {
             return Layout::Opaque;
         };
         if self.is_cyclic(symbol) || shape.width() > INLINE_WIDTH_LIMIT {
-            Layout::Boxed(Some(symbol), shape)
+            Layout::Boxed(Some(executable_identity(symbol)), shape)
         } else {
-            Layout::Inline(Some(symbol), shape)
+            Layout::Inline(Some(executable_identity(symbol)), shape)
         }
     }
 
@@ -585,9 +586,9 @@ impl<'a> Layouts<'a> {
         // identity must agree between a spliced embedding and the value
         // built into it.
         if shape.width() > INLINE_WIDTH_LIMIT {
-            Layout::Boxed(Some(Symbol::InlineArray), shape)
+            Layout::Boxed(Some(MirSymbol::inline_array()), shape)
         } else {
-            Layout::Inline(Some(Symbol::InlineArray), shape)
+            Layout::Inline(Some(MirSymbol::inline_array()), shape)
         }
     }
 
@@ -923,6 +924,14 @@ mod tests {
         Symbol::Struct(StructId::new(ModuleId(9), id))
     }
 
+    fn msym(id: u32) -> crate::backend::mir::MirSymbol {
+        crate::backend::mir::MirSymbol {
+            kind: crate::backend::mir::MirSymbolKind::Struct,
+            module: 9,
+            local: id,
+        }
+    }
+
     fn int() -> Ty {
         Ty::Nominal(Symbol::Int, Vec::new())
     }
@@ -1005,7 +1014,7 @@ mod tests {
         let kinds = vec![SlotKind::Int; usize::try_from(width).unwrap_or_default()];
         let reprs = vec![FieldRepr::Slot(SlotKind::Int); offsets.len()];
         Layout::Inline(
-            symbol,
+            symbol.map(crate::backend::mir::executable),
             Shape::Product {
                 width,
                 offsets,
@@ -1062,7 +1071,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&nominal(rect)),
             Layout::Inline(
-                Some(rect),
+                Some(crate::backend::mir::executable(rect)),
                 Shape::Product {
                     width: 4,
                     offsets: vec![0, 2],
@@ -1156,7 +1165,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&nominal(five)),
             Layout::Boxed(
-                Some(five),
+                Some(crate::backend::mir::executable(five)),
                 Shape::Product {
                     width: 5,
                     offsets: vec![0, 1, 2, 3, 4],
@@ -1183,7 +1192,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&nominal(list)),
             Layout::Boxed(
-                Some(list),
+                Some(crate::backend::mir::executable(list)),
                 Shape::Sum {
                     width: 3,
                     payloads: vec![vec![1, 2], Vec::new()],
@@ -1209,7 +1218,7 @@ mod tests {
         fixture.structs.insert(b, strukt(&[("a", nominal(a))]));
         let boxed_one = |symbol| {
             Layout::Boxed(
-                Some(symbol),
+                Some(crate::backend::mir::executable(symbol)),
                 Shape::Product {
                     width: 1,
                     offsets: vec![0],
@@ -1236,7 +1245,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&opt_int),
             Layout::Inline(
-                Some(opt),
+                Some(crate::backend::mir::executable(opt)),
                 Shape::Sum {
                     width: 2,
                     payloads: vec![vec![1], Vec::new()],
@@ -1252,7 +1261,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&opt_opt_int),
             Layout::Inline(
-                Some(opt),
+                Some(crate::backend::mir::executable(opt)),
                 Shape::Sum {
                     width: 3,
                     payloads: vec![vec![1], Vec::new()],
@@ -1314,7 +1323,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&three_points),
             Layout::Boxed(
-                Some(Symbol::InlineArray),
+                Some(crate::backend::mir::MirSymbol::inline_array()),
                 Shape::Product {
                     width: 6,
                     offsets: vec![0, 2, 4],
@@ -1379,7 +1388,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&nominal(text)),
             Layout::Inline(
-                Some(text),
+                Some(crate::backend::mir::executable(text)),
                 Shape::Product {
                     width: 2,
                     offsets: vec![0, 1],
@@ -1418,7 +1427,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&nominal(flags)),
             Layout::Inline(
-                Some(flags),
+                Some(crate::backend::mir::executable(flags)),
                 Shape::Product {
                     width: 2,
                     offsets: vec![0, 1],
@@ -1433,7 +1442,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&nominal(mixed)),
             Layout::Inline(
-                Some(mixed),
+                Some(crate::backend::mir::executable(mixed)),
                 Shape::Sum {
                     width: 2,
                     payloads: vec![vec![1], vec![1]],
