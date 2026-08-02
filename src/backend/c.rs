@@ -592,6 +592,8 @@ impl Emitter {
     ) -> Result<(), BackendError> {
         match inst {
             Inst::Copy { dest, src } => {
+                // Register reuse can unify a copy's endpoints; a self-copy is
+                // a no-op, and clang rejects it under -Wself-assign.
                 if let Some(layout) = frame.class_of(*dest) {
                     // The derivation only classes a local when every
                     // definition agrees, so a native destination's source
@@ -602,8 +604,10 @@ impl Emitter {
                     if frame.class_of(*src) != Some(layout) {
                         return Err(internal("a native local copied across layout classes"));
                     }
-                    let _ = writeln!(out, "    x{dest} = x{src};");
-                } else {
+                    if dest != src {
+                        let _ = writeln!(out, "    x{dest} = x{src};");
+                    }
+                } else if !matches!(src, Operand::Local(src) if src == dest) {
                     let _ = writeln!(out, "    l[{dest}] = {};", frame.value(*src)?);
                 }
             }
