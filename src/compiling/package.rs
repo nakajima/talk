@@ -20,6 +20,7 @@ use tar::Archive;
 use crate::{
     label::Label,
     lexing::unescape,
+    name_resolution::symbol::Symbol,
     node::Node,
     node_id::FileID,
     node_kinds::{
@@ -29,7 +30,7 @@ use crate::{
     },
 };
 
-use super::driver::{Driver, DriverConfig, Source};
+use super::driver::{Driver, DriverConfig, Source, Typed};
 
 const MANIFEST_FILE: &str = "package.tlk";
 const LOCK_FILE: &str = "package.lock";
@@ -2099,6 +2100,23 @@ impl PackageProject {
         requested: Option<&str>,
         entry: Option<&str>,
     ) -> Result<crate::compiling::driver::Executable, PackageError> {
+        self.typecheck_binary(requested)?
+            .compile_executable(entry)
+            .map_err(PackageError::Compile)
+    }
+
+    /// Produce optimized target-neutral codegen input for a package binary.
+    pub fn codegen_binary(
+        &self,
+        requested: Option<&str>,
+        entry: Option<&str>,
+    ) -> Result<crate::codegen::Compilation<Symbol>, PackageError> {
+        self.typecheck_binary(requested)?
+            .codegen(entry)
+            .map_err(PackageError::Compile)
+    }
+
+    fn typecheck_binary(&self, requested: Option<&str>) -> Result<Driver<Typed>, PackageError> {
         let graph = self.compile_graph()?;
         let binary = self.manifest.binary(requested)?;
         let PackageArtifact::Binary { from, .. } = binary else {
@@ -2119,12 +2137,12 @@ impl PackageProject {
             .values()
             .map(|library| (library.module_id, library.typed.clone()))
             .collect();
-        // The root package's own sources re-parse into the test compile
+        // The root package's own sources re-parse into the final compile
         // (workspace imports), so they live in the same module-id space as
-        // the tests; injecting the root library's compiled program here
+        // the binary; injecting the root library's compiled program here
         // would duplicate every declaration in a second id space and
-        // conflate symbols across the spaces. Only locked dependencies —
-        // whose sources are outside the source root and never re-parsed —
+        // conflate symbols across the spaces. Only locked dependencies,
+        // whose sources are outside the source root and never re-parsed,
         // ride along precompiled.
         let source = self.manifest.source_path(&self.root, from)?;
         let workspace_root =
@@ -2161,9 +2179,7 @@ impl PackageProject {
                     .join("\n"),
             ));
         }
-        typed
-            .compile_executable(entry)
-            .map_err(PackageError::Compile)
+        Ok(typed)
     }
 
     /// Discover and run the package's `.test.tlk` suites with the locked

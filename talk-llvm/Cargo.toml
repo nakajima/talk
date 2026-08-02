@@ -1,0 +1,14 @@
+[package]
+name = "talk-llvm"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+talk = { path = "..", default-features = false }
+
+[dev-dependencies]
+talk-runtime = { path = "../talk-runtime" }
+
+[lints.clippy]
+approx_constant = "allow"

@@ -807,6 +807,21 @@ impl Driver<Typed> {
         .map_err(|error| self.locate_backend_error(&error))
     }
 
+    /// Produce the optimized input consumed by an external code generator.
+    pub fn codegen(
+        &self,
+        entry: Option<&str>,
+    ) -> Result<crate::codegen::Compilation<crate::name_resolution::symbol::Symbol>, String> {
+        let entry = match entry {
+            Some(name) => crate::backend::Entry::Named(name),
+            None => crate::backend::Entry::Script,
+        };
+        self.with_backend_inputs(entry, |programs, entry| {
+            crate::backend::codegen(programs, entry)
+        })
+        .map_err(|error| self.locate_backend_error(&error))
+    }
+
     /// Emit C source for a service: the same export wrappers
     /// `compile_service` builds, translated to C instead of bytecode.
     pub fn render_c_service(

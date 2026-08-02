@@ -24,6 +24,7 @@ pub mod analysis;
 pub(crate) mod backend;
 pub mod common;
 pub mod compiling;
+pub mod codegen;
 pub use common::*;
 pub mod desugar;
 pub mod macro_expansion;

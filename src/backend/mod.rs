@@ -14,6 +14,7 @@
 mod c;
 mod c_escape;
 mod checked_indexed_load;
+mod codegen;
 mod lower;
 mod optimize;
 
@@ -239,6 +240,19 @@ pub(crate) fn render_c(
         regalloc::reuse_locals(function);
     }
     c::emit(&program, &escaping_parameters, &c::display_names(programs))
+}
+
+/// Project optimized MIR into the public model consumed by external backends.
+pub(crate) fn codegen(
+    programs: &[ProgramInput<'_>],
+    entry: Entry,
+) -> Result<crate::codegen::Compilation<crate::name_resolution::symbol::Symbol>, BackendError> {
+    let mut program = mir::build(programs, entry, false)?;
+    optimize::run(&mut program);
+    for function in &mut program.functions {
+        regalloc::reuse_locals(function);
+    }
+    Ok(codegen::project(&program, programs))
 }
 
 /// Render the middle representation for inspection (TOOL-10).
