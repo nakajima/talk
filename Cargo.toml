@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "wasm", "www", "talk-runtime", "talk-static", "talk-c", "talk-llvm"]
+members = [".", "wasm", "www", "talk-vm", "talk-static", "talk-c", "talk-llvm"]
 default-members = ["."]
 resolver = "2"
 
@@ -47,7 +47,7 @@ bincode = "1.3"
 flate2 = "1.1.5"
 tar = { version = "0.4.44", default-features = false }
 ignore = { version = "0.4", optional = true }
-talk-runtime = { path = "talk-runtime" }
+talk-vm = { path = "talk-vm" }
 num-bigint = { version = "0.5.1", features = ["serde"] }
 profiling = { version = "1.0.18", default-features = false }
 tracy-client = { version = "0.18.4", default-features = false, features = ["timer-fallback"], optional = true }
@@ -67,7 +67,7 @@ cli = [
 profile-tracy = [
   "dep:tracy-client",
   "profiling/profile-with-tracy",
-  "talk-runtime/profile-tracy",
+  "talk-vm/profile-tracy",
 ]
 
 [profile.release]

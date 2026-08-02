@@ -2000,7 +2000,7 @@ dependencies = [
  "rustyline",
  "serde",
  "sha2",
- "talk-runtime",
+ "talk-vm",
  "tar",
  "tokio",
  "tower",
@@ -2015,7 +2015,7 @@ name = "talk-c"
 version = "0.1.0"
 dependencies = [
  "talk",
- "talk-runtime",
+ "talk-vm",
 ]
 
 [[package]]
@@ -2023,11 +2023,11 @@ name = "talk-llvm"
 version = "0.1.0"
 dependencies = [
  "talk",
- "talk-runtime",
+ "talk-vm",
 ]
 
 [[package]]
-name = "talk-runtime"
+name = "talk-vm"
 version = "0.1.0"
 dependencies = [
  "libc",
@@ -2040,7 +2040,7 @@ dependencies = [
 name = "talk-static"
 version = "0.1.0"
 dependencies = [
- "talk-runtime",
+ "talk-vm",
 ]
 
 [[package]]

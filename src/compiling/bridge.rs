@@ -8,9 +8,9 @@
 
 use crate::compiling::abi::{AbiSchema, AbiTy, AbiTypeKind};
 use std::collections::HashMap;
-use talk_runtime::interp::{RunOutcome, Value};
-use talk_runtime::memory::Pointer;
-use talk_runtime::symbol::Symbol;
+use talk_vm::interp::{RunOutcome, Value};
+use talk_vm::memory::Pointer;
+use talk_vm::symbol::Symbol;
 
 pub struct ResultValidator<'a, 'io> {
     run: &'a RunOutcome<'io>,

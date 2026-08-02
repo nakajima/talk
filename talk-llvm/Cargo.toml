@@ -8,7 +8,7 @@ publish = false
 talk = { path = "..", default-features = false }
 
 [dev-dependencies]
-talk-runtime = { path = "../talk-runtime" }
+talk-vm = { path = "../talk-vm" }
 
 [lints.clippy]
 approx_constant = "allow"

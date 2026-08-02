@@ -5,7 +5,7 @@
 //! with jump patching. Semantic decisions all happened in MIR.
 
 use rustc_hash::FxHashMap;
-use talk_runtime::{
+use talk_vm::{
     Chunk, CmpOp, Constant as RuntimeConstant, FieldShape, Insn, IoOp, LayoutBody, LayoutDesc,
     MemKind, Module, NO_LAYOUT,
 };
@@ -36,9 +36,9 @@ use crate::parsing::span::Span;
 /// the library fallback.
 pub(crate) fn runtime_symbol(
     symbol: crate::name_resolution::symbol::Symbol,
-) -> talk_runtime::symbol::Symbol {
+) -> talk_vm::symbol::Symbol {
     use crate::name_resolution::symbol::Symbol as C;
-    use talk_runtime::symbol::{ModuleId, ModuleSymbolId, Symbol as R};
+    use talk_vm::symbol::{ModuleId, ModuleSymbolId, Symbol as R};
     let module = |id: crate::compiling::module::ModuleId| ModuleId(id.0);
     match symbol {
         C::Struct(id) => R::Struct(ModuleSymbolId::new(module(id.module_id), id.local_id)),
@@ -523,9 +523,9 @@ impl Lowering<'_> {
         if let Operand::Const(constant) = operand {
             let k = self.consts.intern(constant);
             if let Ok(index) = u16::try_from(k)
-                && index <= talk_runtime::RK_INDEX
+                && index <= talk_vm::RK_INDEX
             {
-                return index | talk_runtime::RK_CONST;
+                return index | talk_vm::RK_CONST;
             }
         }
         self.reg(operand)
@@ -582,10 +582,10 @@ impl Lowering<'_> {
     /// A position that only takes a register: materialize an RK
     /// constant field back into one.
     fn demote_rk(&mut self, field: u16) -> u16 {
-        if field & talk_runtime::RK_CONST == 0 {
+        if field & talk_vm::RK_CONST == 0 {
             return field;
         }
-        let k = u32::from(field & talk_runtime::RK_INDEX);
+        let k = u32::from(field & talk_vm::RK_INDEX);
         if let Some(&cached) = self.block_consts.get(&k) {
             return cached;
         }

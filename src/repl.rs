@@ -140,7 +140,7 @@ impl ReplSession {
             Ok(executable) => executable,
             Err(message) => return ReplEvalResult::Error(message),
         };
-        let mut io = talk_runtime::io::CaptureIO::default();
+        let mut io = talk_vm::io::CaptureIO::default();
         match execute_module(&executable, &mut io) {
             Ok(value) => ReplEvalResult::Output {
                 stdout: String::from_utf8_lossy(&io.out).into_owned(),

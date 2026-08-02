@@ -1051,7 +1051,7 @@ impl PackageRunner {
         let executable = project
             .compile_binary(binary_name.as_deref())
             .map_err(|error| ApiError::failed(error.to_string()))?;
-        let mut io = talk_runtime::io::CaptureIO::default();
+        let mut io = talk_vm::io::CaptureIO::default();
         match talk::compiling::driver::execute_module(&executable, &mut io) {
             Ok(value) => Ok(TalkEvalResult::from_repl_result(
                 HandleStatus::ok(),

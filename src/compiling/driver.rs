@@ -634,9 +634,9 @@ pub use crate::backend::{
 /// before execution (ADR 0034's trust seam).
 pub fn execute_image(
     bytes: &[u8],
-    io: &mut dyn talk_runtime::io::IO,
+    io: &mut dyn talk_vm::io::IO,
 ) -> Result<Option<String>, String> {
-    let module = talk_runtime::Module::decode_bytecode(bytes)
+    let module = talk_vm::Module::decode_bytecode(bytes)
         .map_err(|error| format!("invalid bytecode image: {error:?}"))?;
     let executable = crate::backend::Executable {
         module,
@@ -651,7 +651,7 @@ pub fn execute_image(
 /// resource leaks come back as the error message.
 pub fn execute_module(
     executable: &Executable,
-    io: &mut dyn talk_runtime::io::IO,
+    io: &mut dyn talk_vm::io::IO,
 ) -> Result<Option<String>, String> {
     crate::backend::execute(executable, io)
 }
@@ -1006,8 +1006,8 @@ pub mod tests {
     use super::*;
     use crate::compiling::module::ModuleId;
     use std::path::PathBuf;
-    use talk_runtime::interp::{Budgets, HostValue, Value};
-    use talk_runtime::io::CaptureIO;
+    use talk_vm::interp::{Budgets, HostValue, Value};
+    use talk_vm::io::CaptureIO;
 
     fn service_with_effects(
         source: &str,
@@ -1368,9 +1368,9 @@ pub mod tests {
         let exe = service_executable("pub func double(n: Int) -> Int { n * 2 }\n", &["double"])
             .expect("service compiles");
         let encoded = exe.encode_bytecode().expect("encode");
-        let decoded = talk_runtime::Module::decode_bytecode(&encoded).expect("decode");
+        let decoded = talk_vm::Module::decode_bytecode(&encoded).expect("decode");
         let mut io = CaptureIO::default();
-        let outcome = talk_runtime::interp::run_export(
+        let outcome = talk_vm::interp::run_export(
             &decoded,
             "double",
             &[HostValue::Int(21)],
@@ -1651,7 +1651,7 @@ print_raw(rendered.into_string())
         let executable = typed
             .compile_executable(None)
             .expect("HTML source compiles");
-        let mut io = talk_runtime::io::CaptureIO::default();
+        let mut io = talk_vm::io::CaptureIO::default();
         let value = execute_module(&executable, &mut io).expect("HTML source executes");
         assert_eq!(value.as_deref(), Some("0"));
         assert_eq!(
@@ -1717,7 +1717,7 @@ print_raw(rendered.into_string())
         let executable = typed
             .compile_executable(None)
             .expect("HTML compatibility source compiles");
-        let mut io = talk_runtime::io::CaptureIO::default();
+        let mut io = talk_vm::io::CaptureIO::default();
         let value = execute_module(&executable, &mut io).expect("HTML compatibility source executes");
         assert_eq!(value.as_deref(), Some("0"));
         assert_eq!(

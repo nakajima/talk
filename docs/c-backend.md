@@ -268,7 +268,7 @@ reclaimed — so an allocate/free loop grew memory forever even with every
 buffer correctly freed and the exit balance satisfied. `'heap` objects
 were worse, at roughly 175 bytes per object against 24 per buffer.
 
-Both are fixed in `talk-runtime`, and both are now flat:
+Both are fixed in `talk-vm`, and both are now flat:
 
 | | before | after |
 | --- | ---: | ---: |
@@ -330,7 +330,7 @@ arithmetic, `'heap` objects with merge-only regions, the host IO table,
 and result rendering for aggregates. Coverage is complete: every MIR
 instruction is translated.
 
-**Settled: no new dependence on `talk-runtime`.** Buffers use machine
+**Settled: no new dependence on `talk-vm`.** Buffers use machine
 pointers with a reference-counted header rather than the VM's simulated
 byte memory, and the 24 `Io` operations are POSIX wrappers in the prelude
 — which is where they are most natural anyway. Result rendering needs the

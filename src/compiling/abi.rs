@@ -43,8 +43,8 @@ pub struct AbiSymbol {
 }
 
 impl AbiSymbol {
-    pub fn runtime(&self) -> Result<talk_runtime::symbol::Symbol, String> {
-        use talk_runtime::symbol::{ModuleId, ModuleSymbolId, Symbol};
+    pub fn runtime(&self) -> Result<talk_vm::symbol::Symbol, String> {
+        use talk_vm::symbol::{ModuleId, ModuleSymbolId, Symbol};
         let module = u16::try_from(self.module)
             .map_err(|_| format!("ABI symbol module {} out of range", self.module))?;
         let id = ModuleSymbolId::new(ModuleId(module), self.local);

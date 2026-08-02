@@ -48,7 +48,7 @@ pub fn artifact_digest(image: &[u8]) -> String {
 impl ArtifactManifest {
     pub fn compute(sources: &[(String, String)], image: &[u8], abi: Option<&str>) -> Self {
         Self {
-            format_version: talk_runtime::bytecode::FORMAT_VERSION,
+            format_version: talk_vm::bytecode::FORMAT_VERSION,
             source_digest: source_digest(sources),
             artifact_digest: artifact_digest(image),
             abi_digest: abi.map(|text| artifact_digest(text.as_bytes())),
@@ -74,11 +74,11 @@ impl ArtifactManifest {
         image: &[u8],
         abi: Option<&str>,
     ) -> Result<(), String> {
-        if !talk_runtime::bytecode::supports_format(self.format_version) {
+        if !talk_vm::bytecode::supports_format(self.format_version) {
             return Err(format!(
                 "artifact manifest records unsupported bytecode format {}; this compiler writes format {}; regenerate the artifact",
                 self.format_version,
-                talk_runtime::bytecode::FORMAT_VERSION
+                talk_vm::bytecode::FORMAT_VERSION
             ));
         }
         let actual = artifact_digest(image);

@@ -27,10 +27,10 @@ mod regalloc;
 pub(crate) use mir::{Entry, ProgramInput};
 
 use crate::parsing::span::Span;
-use talk_runtime::interp::{ValueNames, run_displayed_counted};
+use talk_vm::interp::{ValueNames, run_displayed_counted};
 
-pub use talk_runtime::VmStats;
-pub use talk_runtime::interp::{Budgets, HostValue, RunOutcome};
+pub use talk_vm::VmStats;
+pub use talk_vm::interp::{Budgets, HostValue, RunOutcome};
 
 /// The number of concrete rewrites performed by one optimization pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,7 +78,7 @@ impl ExecutableStats {
 /// A compiled program: the runtime module plus the display metadata that
 /// renders results Talk-style (enum case names, struct fields).
 pub struct Executable {
-    pub(crate) module: talk_runtime::Module,
+    pub(crate) module: talk_vm::Module,
     pub(crate) names: ValueNames,
     pub(crate) optimizations: OptimizationStats,
 }
@@ -86,7 +86,7 @@ pub struct Executable {
 impl Executable {
     /// Serialize the executable module (TOOL-13). Display metadata is not
     /// part of the wire format; an image renders values with symbols only.
-    pub fn encode_bytecode(&self) -> Result<Vec<u8>, talk_runtime::bytecode::EncodeError> {
+    pub fn encode_bytecode(&self) -> Result<Vec<u8>, talk_vm::bytecode::EncodeError> {
         self.module.encode_bytecode()
     }
 
@@ -116,9 +116,9 @@ impl Executable {
         name: &str,
         args: &[HostValue],
         budgets: Budgets,
-        io: &'io mut dyn talk_runtime::io::IO,
+        io: &'io mut dyn talk_vm::io::IO,
     ) -> Result<RunOutcome<'io>, String> {
-        talk_runtime::interp::run_export(&self.module, name, args, string_shape(), budgets, io)
+        talk_vm::interp::run_export(&self.module, name, args, string_shape(), budgets, io)
     }
 
     /// Run an export while collecting exact VM instruction counts.
@@ -127,13 +127,13 @@ impl Executable {
         name: &str,
         args: &[HostValue],
         budgets: Budgets,
-        io: &'io mut dyn talk_runtime::io::IO,
+        io: &'io mut dyn talk_vm::io::IO,
         stats: &mut ExecutableStats,
     ) -> Result<RunOutcome<'io>, String> {
         if stats.optimizations != self.optimizations {
             return Err("statistics collector belongs to a different executable".into());
         }
-        talk_runtime::interp::run_export_with_stats(
+        talk_vm::interp::run_export_with_stats(
             &self.module,
             name,
             args,
@@ -147,7 +147,7 @@ impl Executable {
 
 /// The core String record symbol, for fabricating host string
 /// arguments (layout owned by core/String.tlk; parity tests pin it).
-pub(crate) fn string_shape() -> talk_runtime::symbol::Symbol {
+pub(crate) fn string_shape() -> talk_vm::symbol::Symbol {
     lower::runtime_symbol(crate::name_resolution::symbol::Symbol::String)
 }
 
@@ -314,7 +314,7 @@ fn display_names(programs: &[ProgramInput<'_>]) -> ValueNames {
 /// at exit is a failure, not a warning.
 pub(crate) fn execute(
     executable: &Executable,
-    io: &mut dyn talk_runtime::io::IO,
+    io: &mut dyn talk_vm::io::IO,
 ) -> Result<Option<String>, String> {
     crate::profile::init();
     profiling::scope!("backend.execute");
@@ -338,7 +338,7 @@ pub(crate) fn execute(
         ));
     }
     Ok(match value {
-        talk_runtime::interp::Value::Void => None,
+        talk_vm::interp::Value::Void => None,
         _ => Some(rendered),
     })
 }

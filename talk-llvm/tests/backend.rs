@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use talk::compiling::driver::{Driver, DriverConfig, Source, execute_module};
-use talk_runtime::io::CaptureIO;
+use talk_vm::io::CaptureIO;
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

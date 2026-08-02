@@ -5,7 +5,7 @@
 //! an exact copy of the original sequence as the source-owned failure path.
 
 use rustc_hash::FxHashSet;
-use talk_runtime::{Chunk, CmpOp, Constant, Insn, MemKind, Module};
+use talk_vm::{Chunk, CmpOp, Constant, Insn, MemKind, Module};
 
 #[derive(Clone, Copy)]
 struct BoundsHelper {
@@ -27,12 +27,12 @@ struct CheckedLoadMatch {
 }
 
 fn constant_is(module: &Module, field: u16, expected: Constant) -> bool {
-    if field & talk_runtime::RK_CONST == 0 {
+    if field & talk_vm::RK_CONST == 0 {
         return false;
     }
     module
         .consts
-        .get(usize::from(field & talk_runtime::RK_INDEX))
+        .get(usize::from(field & talk_vm::RK_INDEX))
         .is_some_and(|constant| *constant == expected)
 }
 
@@ -200,11 +200,11 @@ fn checked_load_match(
     let scale_matches = module.consts.get(*k as usize) == Some(&Constant::I64(width));
     let multiply_matches =
         (*mul_a == *index && *mul_b == *scale) || (*mul_b == *index && *mul_a == *scale);
-    if collection & talk_runtime::RK_CONST != 0
-        || index & talk_runtime::RK_CONST != 0
+    if collection & talk_vm::RK_CONST != 0
+        || index & talk_vm::RK_CONST != 0
         // `base` is one slot at a container offset; a spliced member
         // would need materialization.
-        || *base_layout != talk_runtime::NO_LAYOUT
+        || *base_layout != talk_vm::NO_LAYOUT
         || base_owner != collection
         || !scale_matches
         || !multiply_matches
@@ -270,13 +270,13 @@ pub(super) fn run(module: &mut Module) -> u64 {
                 dest: length_reg,
                 src: matched.collection,
                 offset: matched.length_field,
-                layout: talk_runtime::NO_LAYOUT,
+                layout: talk_vm::NO_LAYOUT,
             };
             module.chunks[chunk_index].code[matched.start + 1] = Insn::Field {
                 dest: base_reg,
                 src: matched.collection,
                 offset: matched.base_offset,
-                layout: talk_runtime::NO_LAYOUT,
+                layout: talk_vm::NO_LAYOUT,
             };
             module.chunks[chunk_index].code[matched.start + 2] = Insn::CheckedIndexedLoad {
                 dest: matched.dest,
@@ -313,7 +313,7 @@ mod tests {
                     dest: 0,
                     src: 0,
                     offset: 0,
-                    layout: talk_runtime::NO_LAYOUT,
+                    layout: talk_vm::NO_LAYOUT,
                 },
                 Insn::Const { dest: 3, k: 3 },
                 Insn::Mul {
@@ -343,7 +343,7 @@ mod tests {
                 Insn::Cmp {
                     dest: 2,
                     a: 1,
-                    b: talk_runtime::RK_CONST,
+                    b: talk_vm::RK_CONST,
                     op: CmpOp::Lt,
                 },
                 Insn::Branch {
@@ -357,7 +357,7 @@ mod tests {
                     dest: 4,
                     src: 0,
                     offset: 1,
-                    layout: talk_runtime::NO_LAYOUT,
+                    layout: talk_vm::NO_LAYOUT,
                 },
                 Insn::Cmp {
                     dest: 3,
@@ -405,7 +405,7 @@ mod tests {
                 dest: 6,
                 src: 0,
                 offset: 0,
-                layout: talk_runtime::NO_LAYOUT,
+                layout: talk_vm::NO_LAYOUT,
             }
         ));
         assert!(matches!(

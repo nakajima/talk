@@ -5,7 +5,7 @@
 # separately so reductions cannot be manufactured by moving lines between
 # them (docs/adr/0034-lean-bytecode-backend-architecture.md):
 #   1. backend modules (src/backend);
-#   2. reused runtime (talk-runtime/src);
+#   2. reused runtime (talk-vm/src);
 #   3. seam additions since the frontend-only base a1d20d27 (driver, CLI,
 #      core cache, embeddings) — added lines only, from a read-only git diff.
 #
@@ -38,12 +38,12 @@ read -r prod_split test_split <<<"$(split_tests src/backend)"
 echo "code=$prod (production=$prod_split, in-file tests=$test_split) comments=$comments blanks=$blanks"
 backend=$prod_split
 
-echo "== reused runtime (talk-runtime/src) =="
-read -r rprod rcomments rblanks <<<"$(count_files talk-runtime/src)"
+echo "== reused runtime (talk-vm/src) =="
+read -r rprod rcomments rblanks <<<"$(count_files talk-vm/src)"
 echo "code=$rprod comments=$rcomments blanks=$rblanks"
 
 echo "== seam additions since $BASE (non-backend, non-test .rs) =="
-seams=$(git diff "$BASE" --numstat -- 'src/bin' 'src/cli' 'src/compiling' 'src/repl.rs' 'wasm/src' 'talk-c/src' 'talk-runtime/src' \
+seams=$(git diff "$BASE" --numstat -- 'src/bin' 'src/cli' 'src/compiling' 'src/repl.rs' 'wasm/src' 'talk-c/src' 'talk-vm/src' \
   | awk '{a+=$1} END{print a+0}')
 echo "added_lines=$seams (includes comments/blanks; upper bound)"
 

@@ -7,7 +7,7 @@ edition = "2024"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-talk-runtime = { path = "../talk-runtime" }
+talk-vm = { path = "../talk-vm" }
 
 [lints.clippy]
 approx_constant = "allow"

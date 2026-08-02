@@ -150,8 +150,8 @@ pub fn bootstrap(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use talk_runtime::interp::{Budgets, HostValue, Value};
-    use talk_runtime::io::CaptureIO;
+    use talk_vm::interp::{Budgets, HostValue, Value};
+    use talk_vm::io::CaptureIO;
 
     fn frontendish_sources() -> Vec<(String, String)> {
         vec![(
@@ -222,9 +222,9 @@ mod tests {
             "fixed-point stages should perform the same rewrites"
         );
 
-        let module = talk_runtime::Module::decode_bytecode(&outcome.image).expect("image decodes");
+        let module = talk_vm::Module::decode_bytecode(&outcome.image).expect("image decodes");
         let mut io = CaptureIO::default();
-        let result = talk_runtime::interp::run_export(
+        let result = talk_vm::interp::run_export(
             &module,
             "double",
             &[HostValue::Int(21)],

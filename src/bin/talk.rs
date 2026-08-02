@@ -502,7 +502,7 @@ async fn main() {
                             std::process::exit(1);
                         }
                     };
-                let mut io = talk_runtime::io::StdioIO;
+                let mut io = talk_vm::io::StdioIO;
                 match execute_module(&executable, &mut io) {
                     Ok(Some(rendered)) => println!("{rendered}"),
                     Ok(None) => {}
@@ -545,7 +545,7 @@ async fn main() {
                     std::process::exit(1);
                 }
             };
-            let mut io = talk_runtime::io::StdioIO;
+            let mut io = talk_vm::io::StdioIO;
             match execute_module(&module, &mut io) {
                 Ok(Some(rendered)) => println!("{rendered}"),
                 Ok(None) => {}
@@ -864,7 +864,7 @@ async fn main() {
                     std::process::exit(1);
                 }
             };
-            let mut io = talk_runtime::io::StdioIO;
+            let mut io = talk_vm::io::StdioIO;
             match execute_image(&bytes, &mut io) {
                 Ok(Some(rendered)) => println!("{rendered}"),
                 Ok(None) => {}
