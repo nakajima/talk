@@ -1258,9 +1258,13 @@ fn flatten_into(
         .get(child as usize)
         .ok_or("vm: spliced field of an unknown layout")?;
     let start = usize::from(offset);
-    let span = slots
-        .get_mut(start..start + usize::from(desc.width))
-        .ok_or("vm: spliced field out of range")?;
+    let total = slots.len();
+    let span = slots.get_mut(start..start + usize::from(desc.width)).ok_or_else(|| {
+        format!(
+            "vm: spliced field out of range (child layout {child} width {} at offset {start}, container has {total} slots)",
+            desc.width,
+        )
+    })?;
     match value {
         Value::Agg(id, child_slots) if id == child => {
             span.clone_from_slice(&child_slots);
@@ -1292,9 +1296,12 @@ fn read_slots(
                 .ok_or("vm: spliced field of an unknown layout")?
                 .width;
             let start = usize::from(offset);
-            let span = slots
-                .get(start..start + usize::from(width))
-                .ok_or("vm: spliced field out of range")?;
+            let span = slots.get(start..start + usize::from(width)).ok_or_else(|| {
+                format!(
+                    "vm: spliced field out of range (child layout {child} width {width} at offset {start}, container has {} slots)",
+                    slots.len(),
+                )
+            })?;
             Ok(Value::Agg(child, Rc::new(span.to_vec())))
         }
     }

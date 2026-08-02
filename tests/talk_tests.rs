@@ -192,6 +192,21 @@ fn syntax_stdlib_exposes_the_self_hosted_parser() {
 }
 
 #[test]
+fn borrowed_iteration_over_copy_inline_elements() {
+    // The checker erases `&T` to `T` for Copy-grade types ("the same type
+    // up to representation"), so `Optional<&Scope>` — what borrowed array
+    // iteration returns — and `Optional<Scope>` — what the loop's reads
+    // are laid out against — must share one flat layout. An inline Copy
+    // pointee narrower than a borrow slot used to shear the two, and the
+    // loop trapped with "spliced field out of range".
+    assert_runs(
+        b"enum ScopeKind {\n\tcase lexical\n\tcase expansion\n\tcase module\n}\nstruct Scope {\n\tlet kind: ScopeKind\n\tlet namespace: Int\n\tlet ordinal: Int\n}\nextend Scope: Copy {}\nfunc contains_scope(scopes: &Array<Scope>, namespace: Int) -> Bool {\n\tfor candidate in scopes {\n\t\tif candidate.namespace == namespace { return true }\n\t}\n\tfalse\n}\nlet scopes = [Scope(kind: ScopeKind.expansion, namespace: 1, ordinal: 2)]\nif contains_scope(scopes: scopes, namespace: 1) {\n\tprint(\"found\")\n} else {\n\tprint(\"missing\")\n}\n",
+        &[],
+        b"found\n",
+    );
+}
+
+#[test]
 fn conditional_deinit_row_requires_its_context() {
     // ADR 0036: a conditional Deinit row is evidence only where its context
     // holds. Box<S> (S: Marker false) must NOT run the destructor; Box<M>
@@ -2843,7 +2858,7 @@ fn abort_through_an_init_unwinds_the_assigned_fields_only() {
           \tlet h = Holder(n: 1)\n\
           \th.data.count\n\
           }\n\
-          @handle 'bail { err in\n\
+          #handle 'bail { err in\n\
           \tprint(\"bailed\")\n\
           }\n\
           print(build())\n",
@@ -2868,7 +2883,7 @@ fn abort_through_an_init_unwinds_the_assigned_fields_only() {
           \tlet p = Pair2(n: 2)\n\
           \tp.left.count + p.right.count\n\
           }\n\
-          @handle 'bail { err in\n\
+          #handle 'bail { err in\n\
           \tprint(\"bailed\")\n\
           }\n\
           print(build())\n",

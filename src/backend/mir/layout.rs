@@ -364,6 +364,22 @@ impl<'a> Layouts<'a> {
     fn compute(&mut self, ty: &Ty) -> Layout {
         match ty {
             Ty::Unique(inner) => self.of(inner),
+            // Typing erases `&T` to `T` for Copy-grade nominals ("the same
+            // type up to representation" — they unify in any position), so
+            // the two spellings must intern one layout: a borrow of an
+            // inline Copy pointee is the same flat value the owned
+            // spelling splices, never a one-slot reference. Every other
+            // pointee is one slot under both spellings.
+            Ty::Borrow(_, inner)
+                if matches!(&**inner, Ty::Nominal(symbol, args)
+                    if self.catalog.grade_of_application(*symbol, args)
+                        == crate::types::catalog::Grade::Copy) =>
+            {
+                match self.of(inner) {
+                    inline @ Layout::Inline(_, _) => inline,
+                    _ => Layout::Slot,
+                }
+            }
             // A borrow is a reference regardless of its pointee's shape.
             Ty::Borrow(_, _) => Layout::Slot,
             Ty::Func(_, _, _) | Ty::Any { .. } => Layout::Slot,

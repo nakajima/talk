@@ -5828,6 +5828,7 @@ mod with_core {
             mode: crate::compiling::driver::CompilationMode::Library,
             module_name: "B".to_string(),
             parse_mode: crate::compiling::driver::ParseMode::Strict,
+            parser: None,
             preserve_comments: false,
             workspace_root: None,
             source_root: None,

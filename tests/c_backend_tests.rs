@@ -123,7 +123,7 @@ func run(n: Int) 'step -> Int {
 	total
 }
 pub func bench() -> Int {
-	@handle 'step { v in 'continue v + 1 }
+	#handle 'step { v in 'continue v + 1 }
 	run(n: 1000)
 }
 ";
@@ -140,7 +140,7 @@ func inner(n: Int) 'bail -> Int {
 	n
 }
 pub func bench() -> Int {
-	@handle 'bail { n in n * 10 }
+	#handle 'bail { n in n * 10 }
 	inner(n: 7)
 }
 ";
@@ -154,11 +154,11 @@ func emit(n: Int) 'sig -> Int {
 	'sig(n: n) + 1
 }
 func middle(n: Int) 'sig -> Int {
-	@handle 'sig { v in 'continue v * 2 }
+	#handle 'sig { v in 'continue v * 2 }
 	emit(n: n) + 100
 }
 pub func bench() -> Int {
-	@handle 'sig { v in 'continue v * 3 }
+	#handle 'sig { v in 'continue v * 3 }
 	middle(n: 5) + emit(n: 5)
 }
 ";
