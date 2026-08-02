@@ -3,6 +3,8 @@ use talk::compiling::driver::DriverConfig;
 #[cfg(feature = "cli")]
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    use std::ffi::OsString;
+
     use clap::{Args, CommandFactory, Parser, Subcommand, ValueHint};
     use clap_complete::{Shell, generate};
 
@@ -212,6 +214,8 @@ async fn main() {
         },
         /// Language? Server. Protocol!
         Lsp(LspArgs),
+        #[command(external_subcommand)]
+        External(Vec<OsString>),
     }
 
     #[derive(Subcommand, Debug)]
@@ -242,6 +246,7 @@ async fn main() {
     // You can check for the existence of subcommands, and if found use their
     // matches just as you would the top level cmd
     match &cli.command {
+        Commands::External(arguments) => run_external_command(arguments),
         Commands::Parse { filename } => {
             use talk::compiling::driver::Driver;
 
@@ -1471,6 +1476,38 @@ fn input_text(filename: Option<&str>) -> String {
         },
         _ => read_stdin(),
     }
+}
+
+#[cfg(feature = "cli")]
+fn run_external_command(arguments: &[std::ffi::OsString]) -> ! {
+    let Some((name, arguments)) = arguments.split_first() else {
+        eprintln!("error: missing external command name");
+        std::process::exit(1);
+    };
+    let mut executable = std::ffi::OsString::from("talk-");
+    executable.push(name);
+    let status = match std::process::Command::new(&executable)
+        .args(arguments)
+        .status()
+    {
+        Ok(status) => status,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!(
+                "error: `{}` is not a talk command; `{}` was not found in PATH",
+                name.to_string_lossy(),
+                executable.to_string_lossy()
+            );
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!(
+                "error: failed to run `{}`: {error}",
+                executable.to_string_lossy()
+            );
+            std::process::exit(1);
+        }
+    };
+    std::process::exit(status.code().unwrap_or(1));
 }
 
 #[cfg(not(feature = "cli"))]

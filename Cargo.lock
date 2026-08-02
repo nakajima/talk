@@ -2019,6 +2019,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "talk-llvm"
+version = "0.1.0"
+dependencies = [
+ "talk",
+ "talk-runtime",
+]
+
+[[package]]
 name = "talk-runtime"
 version = "0.1.0"
 dependencies = [
