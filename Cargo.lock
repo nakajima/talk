@@ -2000,6 +2000,7 @@ dependencies = [
  "rustyline",
  "serde",
  "sha2",
+ "talk-mir",
  "talk-vm",
  "tar",
  "tokio",
@@ -2035,6 +2036,10 @@ dependencies = [
  "rustc-hash",
  "tracy-client",
 ]
+
+[[package]]
+name = "talk-mir"
+version = "0.1.0"
 
 [[package]]
 name = "talk-static"

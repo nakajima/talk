@@ -57,8 +57,11 @@ pub(crate) fn parameter_summaries(program: &Program) -> Vec<Vec<bool>> {
 /// Read from the register-allocated function. Slot reuse can only make
 /// this more conservative: a slot shared with an escaping value is
 /// treated as escaping.
-fn frame_sites(function: &Function, summaries: &[Vec<bool>]) -> FxHashSet<(usize, usize)> {
-    let mut sites = FxHashSet::default();
+fn frame_sites(
+    function: &Function,
+    summaries: &[Vec<bool>],
+) -> std::collections::HashSet<(usize, usize)> {
+    let mut sites = std::collections::HashSet::default();
     let escaping = escaping_locals(function, summaries);
     for (block_index, block) in function.blocks.iter().enumerate() {
         for (instruction_index, inst) in block.insts.iter().enumerate() {
@@ -82,7 +85,10 @@ fn frame_sites(function: &Function, summaries: &[Vec<bool>]) -> FxHashSet<(usize
 /// this frame (a `next`-style callee returning its evolved parameter
 /// inside the writeback tuple would otherwise hand its caller a pointer
 /// into a dead frame).
-fn frame_local_values(function: &Function, sites: &FxHashSet<(usize, usize)>) -> Vec<bool> {
+fn frame_local_values(
+    function: &Function,
+    sites: &std::collections::HashSet<(usize, usize)>,
+) -> Vec<bool> {
     enum Origin {
         Site(u16, bool),
         From(u16, u16),

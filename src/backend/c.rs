@@ -327,7 +327,7 @@ fn emit_type_table(out: &mut String, emitter: &Emitter, display: &DisplayNames) 
     for (symbol, id) in &ordered {
         let members = display
             .entries
-            .get(&symbol.to_source())
+            .get(&crate::backend::mir::to_source(**symbol))
             .map(|(_, _, members)| members.as_slice())
             .unwrap_or_default();
         if members.is_empty() {
@@ -350,7 +350,7 @@ fn emit_type_table(out: &mut String, emitter: &Emitter, display: &DisplayNames) 
             let _ = writeln!(out, "    {{ \"\", TALK_TYPE_EXISTENTIAL, 0, NULL }},");
             continue;
         }
-        let (name, kind, members) = match display.entries.get(&symbol.to_source()) {
+        let (name, kind, members) = match display.entries.get(&crate::backend::mir::to_source(**symbol)) {
             Some(entry) => entry,
             // A symbol with no catalog entry renders structurally.
             None => {
@@ -790,7 +790,7 @@ impl Emitter {
                 } else {
                     // The tagged fallback carries String's display
                     // identity so it renders as quoted text.
-                    let string_symbol = self.display_id(crate::backend::mir::MirSymbol::string());
+                    let string_symbol = self.display_id(crate::backend::mir::mir_string());
                     let _ = writeln!(out, "    {{");
                     let _ = writeln!(
                         out,
@@ -1618,7 +1618,7 @@ fn box_native_layouts(table: &[Layout], structs: &[bool]) -> Vec<bool> {
             };
             structs.get(id).copied().unwrap_or(false)
                 && matches!(shape, Shape::Product { .. })
-                && *symbol != Some(crate::backend::mir::MirSymbol::inline_array())
+                && *symbol != Some(crate::backend::mir::mir_inline_array())
         })
         .collect()
 }
@@ -2502,8 +2502,6 @@ fn escape(text: &str) -> String {
 mod tests {
     use super::*;
     use crate::backend::mir::{BlockData, Constant, Function, Inst, Operand, Program, Term};
-    use crate::compiling::module::ModuleId;
-    use crate::name_resolution::symbol::StructId;
 
     fn sym(id: u32) -> crate::backend::mir::MirSymbol {
         crate::backend::mir::MirSymbol {
@@ -2785,7 +2783,7 @@ mod tests {
         );
         let out = emitted(
             vec![entry],
-            vec![flat_pair(crate::backend::mir::MirSymbol::inline_array())],
+            vec![flat_pair(crate::backend::mir::mir_inline_array())],
         );
         assert!(!out.contains("TalkL0 x1"), "{out}");
         assert!(out.contains("l[1] = built;"), "{out}");

@@ -17,7 +17,10 @@
 use rustc_hash::FxHashMap;
 
 use super::visit::{Slot, visit_inst};
-use super::{Function, Inst, LocalId, MirSymbol, Operand, Term, executable as executable_identity};
+use super::{
+    Function, Inst, LocalId, Operand, Term, executable as executable_identity,
+    mir_inline_array,
+};
 use crate::name_resolution::symbol::Symbol;
 use crate::types::catalog::{Enum, StructInfo, TypeCatalog};
 use crate::types::ty::{StaticValue, Ty};
@@ -28,186 +31,7 @@ use crate::types::ty::{StaticValue, Ty};
 /// typing never reads it, which is what keeps it unobservable.
 pub(crate) const INLINE_WIDTH_LIMIT: u32 = 4;
 
-/// An interned layout: an index into the program's layout table. The
-/// aggregate instructions carry one so a backend reads the shape it must
-/// produce instead of inferring it.
-pub(crate) type LayoutId = u32;
-
-/// How a value of one type occupies storage. Inline and boxed aggregates
-/// carry the nominal they came from (`None` for tuples, closed records,
-/// and inline arrays), so a backend holding only a `LayoutId` can still
-/// give a reabstracted value its display identity. Interning therefore
-/// separates same-shaped nominals: `Pair` and `Point` may agree on every
-/// slot and still get distinct ids.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum Layout {
-    /// One slot: a scalar, or a reference — a borrow, a closure, an
-    /// existential package, a `'heap` object, a buffer handle.
-    Slot,
-    /// A finite aggregate stored flat in its container.
-    Inline(Option<MirSymbol>, Shape),
-    /// An aggregate behind one reference slot, because recursion (rule 2)
-    /// or width (rule 3) forced it. The shape describes the pointee.
-    Boxed(Option<MirSymbol>, Shape),
-    /// The type mentions a rigid parameter or projection: legal to build
-    /// and ownership-verify in check-only rigid instances, rejected at
-    /// emission (ADR 0045 rule 6).
-    Opaque,
-}
-
-/// The native representation of one slot, so a backend can emit untagged
-/// storage (ADR 0045 native layout). Int, Bool, and Byte are all one
-/// 64-bit word natively (no sub-word packing in the slot model) but stay
-/// distinct kinds so a backend can re-tag a word exactly when a value
-/// crosses back into tagged representation. `Value` is a tagged runtime
-/// value, for everything whose native form is not pinned yet (references
-/// to boxed aggregates, closures, existentials, borrows, heap objects).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum SlotKind {
-    Int,
-    Bool,
-    Byte,
-    F64,
-    Ptr,
-    Value,
-}
-
-impl SlotKind {
-    fn render(self) -> &'static str {
-        match self {
-            SlotKind::Int => "int",
-            SlotKind::Bool => "bool",
-            SlotKind::Byte => "byte",
-            SlotKind::F64 => "f64",
-            SlotKind::Ptr => "ptr",
-            SlotKind::Value => "value",
-        }
-    }
-}
-
-/// How one product field or one sum payload element occupies its slots:
-/// one typed slot, or a nested inline aggregate spliced across several.
-/// The distinction is what lets a backend reabstract — a spliced field
-/// crossing into uniform representation must become that aggregate again
-/// (by its own interned layout), not a bare word.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum FieldRepr {
-    Slot(SlotKind),
-    Spliced(LayoutId),
-}
-
-impl FieldRepr {
-    fn render(self) -> String {
-        match self {
-            FieldRepr::Slot(kind) => kind.render().to_string(),
-            FieldRepr::Spliced(layout) => format!("L{layout}"),
-        }
-    }
-}
-
-/// The flat shape of an aggregate: total width in slots, where each
-/// field starts, how each field is represented, and what each slot
-/// natively is. `kinds` is the flattened per-slot view (spliced fields
-/// expanded); `reprs` is the per-field structural view a backend needs to
-/// move one field between native and tagged representation.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum Shape {
-    /// Structs, tuples, and closed records (label-sorted, matching the
-    /// row's canonical order): one offset and repr per field in
-    /// declaration order.
-    Product {
-        width: u32,
-        offsets: Vec<u32>,
-        reprs: Vec<FieldRepr>,
-        kinds: Vec<SlotKind>,
-    },
-    /// Enums: the tag at slot 0, then each variant's payload offsets and
-    /// reprs in tag order. Width is the tag plus the widest variant; a
-    /// slot whose kind differs across variants is a tagged `Value`.
-    Sum {
-        width: u32,
-        payloads: Vec<Vec<u32>>,
-        reprs: Vec<Vec<FieldRepr>>,
-        kinds: Vec<SlotKind>,
-    },
-}
-
-impl Shape {
-    pub(crate) fn width(&self) -> u32 {
-        match self {
-            Shape::Product { width, .. } | Shape::Sum { width, .. } => *width,
-        }
-    }
-
-    pub(crate) fn kinds(&self) -> &[SlotKind] {
-        match self {
-            Shape::Product { kinds, .. } | Shape::Sum { kinds, .. } => kinds,
-        }
-    }
-
-    fn render(&self) -> String {
-        let kinds = |kinds: &[SlotKind]| {
-            kinds
-                .iter()
-                .map(|kind| kind.render())
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let fields = |offsets: &[u32], reprs: &[FieldRepr]| {
-            offsets
-                .iter()
-                .zip(reprs)
-                .map(|(offset, repr)| format!("{offset}:{}", repr.render()))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        match self {
-            Shape::Product {
-                width,
-                offsets,
-                reprs,
-                kinds: slot_kinds,
-            } => format!(
-                "width {width}, fields [{}], kinds [{}]",
-                fields(offsets, reprs),
-                kinds(slot_kinds)
-            ),
-            Shape::Sum {
-                width,
-                payloads,
-                reprs,
-                kinds: slot_kinds,
-            } => format!(
-                "width {width}, payloads [{}], kinds [{}]",
-                payloads
-                    .iter()
-                    .zip(reprs)
-                    .map(|(offsets, reprs)| format!("[{}]", fields(offsets, reprs)))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                kinds(slot_kinds)
-            ),
-        }
-    }
-}
-
-impl Layout {
-    /// One-line rendering for the `talk mir` dump.
-    pub(crate) fn render(&self) -> String {
-        let identity = |symbol: &Option<MirSymbol>| match symbol {
-            Some(symbol) => format!("{symbol:?} "),
-            None => String::new(),
-        };
-        match self {
-            Layout::Slot => "slot".into(),
-            Layout::Inline(symbol, shape) => {
-                format!("inline {}{}", identity(symbol), shape.render())
-            }
-            Layout::Boxed(symbol, shape) => format!("boxed {}{}", identity(symbol), shape.render()),
-            Layout::Opaque => "opaque".into(),
-        }
-    }
-}
+pub(crate) use talk_mir::layout::{FieldRepr, Layout, LayoutId, ParamRepr, Shape, SlotKind};
 
 /// The layout table: computes and caches one layout per type against the
 /// program's nominal declarations.
@@ -586,9 +410,9 @@ impl<'a> Layouts<'a> {
         // identity must agree between a spliced embedding and the value
         // built into it.
         if shape.width() > INLINE_WIDTH_LIMIT {
-            Layout::Boxed(Some(MirSymbol::inline_array()), shape)
+            Layout::Boxed(Some(mir_inline_array()), shape)
         } else {
-            Layout::Inline(Some(MirSymbol::inline_array()), shape)
+            Layout::Inline(Some(mir_inline_array()), shape)
         }
     }
 
@@ -742,30 +566,6 @@ pub(super) fn instantiate<'t>(
 /// aggregate may pass its pointee by value: aggregates have pure value
 /// semantics (`SetField` copies; parameter mutation returns through the
 /// writeback tuple), so a callee can never mutate through the reference.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ParamRepr {
-    Uniform,
-    Value(LayoutId),
-    Borrow(LayoutId),
-}
-
-impl ParamRepr {
-    pub(crate) fn layout(self) -> Option<LayoutId> {
-        match self {
-            ParamRepr::Uniform => None,
-            ParamRepr::Value(layout) | ParamRepr::Borrow(layout) => Some(layout),
-        }
-    }
-
-    pub(crate) fn render(self) -> String {
-        match self {
-            ParamRepr::Uniform => "uniform".into(),
-            ParamRepr::Value(layout) => format!("L{layout}"),
-            ParamRepr::Borrow(layout) => format!("&L{layout}"),
-        }
-    }
-}
-
 /// Per-local value layout for one function, derived from its published
 /// signature and its instructions: parameters seed their published
 /// layout, the destination of an inline-classified construction holds
@@ -1323,7 +1123,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&three_points),
             Layout::Boxed(
-                Some(crate::backend::mir::MirSymbol::inline_array()),
+                Some(crate::backend::mir::mir_inline_array()),
                 Shape::Product {
                     width: 6,
                     offsets: vec![0, 2, 4],

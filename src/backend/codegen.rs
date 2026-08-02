@@ -174,10 +174,10 @@ impl Projection {
         match layout {
             source::layout::Layout::Slot => crate::codegen::Layout::Slot,
             source::layout::Layout::Inline(symbol, shape) => {
-                crate::codegen::Layout::Inline(symbol.map(|s| s.to_source()), Self::shape(shape))
+                crate::codegen::Layout::Inline(symbol.map(|s| crate::backend::mir::to_source(s)), Self::shape(shape))
             }
             source::layout::Layout::Boxed(symbol, shape) => {
-                crate::codegen::Layout::Boxed(symbol.map(|s| s.to_source()), Self::shape(shape))
+                crate::codegen::Layout::Boxed(symbol.map(|s| crate::backend::mir::to_source(s)), Self::shape(shape))
             }
             source::layout::Layout::Opaque => crate::codegen::Layout::Opaque,
         }
@@ -402,7 +402,7 @@ impl Projection {
                 clause,
                 cont,
             } => crate::codegen::Inst::PushHandler {
-                effect: effect.to_source(),
+                effect: source::to_source(*effect),
                 clause: Self::operand(*clause),
                 cont: Self::operand(*cont),
             },
@@ -415,7 +415,7 @@ impl Projection {
                 clause: *clause,
                 cont: *cont,
                 index: *index,
-                effect: effect.to_source(),
+                effect: source::to_source(*effect),
             },
             source::Inst::GetFloor { dest } => crate::codegen::Inst::GetFloor { dest: *dest },
             source::Inst::SetFloor { src } => crate::codegen::Inst::SetFloor {
@@ -436,7 +436,7 @@ impl Projection {
                 witnesses,
             } => crate::codegen::Inst::ExistentialPack {
                 dest: *dest,
-                protocol: protocol.to_source(),
+                protocol: source::to_source(*protocol),
                 payload: Self::operand(*payload),
                 witnesses: Self::operands(witnesses),
             },
