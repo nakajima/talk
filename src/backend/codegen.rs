@@ -402,7 +402,7 @@ impl Projection {
                 clause,
                 cont,
             } => crate::codegen::Inst::PushHandler {
-                effect: *effect,
+                effect: effect.to_source(),
                 clause: Self::operand(*clause),
                 cont: Self::operand(*cont),
             },
@@ -415,7 +415,7 @@ impl Projection {
                 clause: *clause,
                 cont: *cont,
                 index: *index,
-                effect: *effect,
+                effect: effect.to_source(),
             },
             source::Inst::GetFloor { dest } => crate::codegen::Inst::GetFloor { dest: *dest },
             source::Inst::SetFloor { src } => crate::codegen::Inst::SetFloor {
@@ -436,7 +436,7 @@ impl Projection {
                 witnesses,
             } => crate::codegen::Inst::ExistentialPack {
                 dest: *dest,
-                protocol: *protocol,
+                protocol: protocol.to_source(),
                 payload: Self::operand(*payload),
                 witnesses: Self::operands(witnesses),
             },

@@ -54,6 +54,95 @@ pub(crate) enum Operand {
     Const(Constant),
 }
 
+/// Executable identity carried by finalized MIR instructions: the only
+/// source-symbol facts that survive to targets (ADR 0047). `module` and
+/// `local` mirror the source symbol's cross-module id. Display names are
+/// metadata, never identity.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) struct MirSymbol {
+    pub kind: MirSymbolKind,
+    pub module: u16,
+    pub local: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(crate) enum MirSymbolKind {
+    Struct,
+    Enum,
+    Effect,
+    Protocol,
+    /// A well-known compiler identity that reaches layouts without naming
+    /// a declared aggregate (for example InlineArray's pseudo-identity).
+    Builtin,
+}
+
+impl std::fmt::Debug for MirSymbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "@{:?}({}:{})", self.kind, self.module, self.local)
+    }
+}
+
+impl MirSymbol {
+    /// The executable identity of a source symbol, when one exists: only
+    /// Struct, Enum, Effect, Protocol, and Builtin identities survive to
+    /// targets.
+    pub(crate) fn from_source(symbol: Symbol) -> Option<MirSymbol> {
+        let (kind, module_id, local_id) = match symbol {
+            Symbol::Struct(id) => (MirSymbolKind::Struct, id.module_id, id.local_id),
+            Symbol::Enum(id) => (MirSymbolKind::Enum, id.module_id, id.local_id),
+            Symbol::Effect(id) => (MirSymbolKind::Effect, id.module_id, id.local_id),
+            Symbol::Protocol(id) => (MirSymbolKind::Protocol, id.module_id, id.local_id),
+            Symbol::Builtin(id) => (MirSymbolKind::Builtin, id.module_id, id.local_id),
+            _ => return None,
+        };
+        Some(MirSymbol {
+            kind,
+            module: module_id.0,
+            local: local_id,
+        })
+    }
+
+    /// Rebuild the source symbol. Transitional: the codegen projection and
+    /// the C display table still key on source symbols until stage 3B moves
+    /// layout and metadata identities onto `MirSymbol`.
+    pub(crate) fn to_source(self) -> Symbol {
+        let module_id = crate::compiling::module::ModuleId(self.module);
+        match self.kind {
+            MirSymbolKind::Struct => Symbol::Struct(crate::name_resolution::symbol::StructId {
+                module_id,
+                local_id: self.local,
+            }),
+            MirSymbolKind::Enum => Symbol::Enum(crate::name_resolution::symbol::EnumId {
+                module_id,
+                local_id: self.local,
+            }),
+            MirSymbolKind::Effect => Symbol::Effect(crate::name_resolution::symbol::EffectId {
+                module_id,
+                local_id: self.local,
+            }),
+            MirSymbolKind::Protocol => {
+                Symbol::Protocol(crate::name_resolution::symbol::ProtocolId {
+                    module_id,
+                    local_id: self.local,
+                })
+            }
+            MirSymbolKind::Builtin => {
+                Symbol::Builtin(crate::name_resolution::symbol::BuiltinId {
+                    module_id,
+                    local_id: self.local,
+                })
+            }
+        }
+    }
+}
+
+/// The executable identity a source symbol carries into finalized MIR.
+/// Emission sites only ever name declared effects and protocols, so a
+/// miss is a compiler bug, not a source error.
+fn executable(symbol: Symbol) -> MirSymbol {
+    MirSymbol::from_source(symbol).expect("only executable identities reach finalized MIR")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CmpKind {
     Eq,
@@ -338,7 +427,7 @@ pub(crate) enum Inst {
     },
     /// Install a deep handler for the effect.
     PushHandler {
-        effect: Symbol,
+        effect: MirSymbol,
         clause: Operand,
         cont: Operand,
     },
@@ -347,7 +436,7 @@ pub(crate) enum Inst {
         clause: LocalId,
         cont: LocalId,
         index: LocalId,
-        effect: Symbol,
+        effect: MirSymbol,
     },
     GetFloor {
         dest: LocalId,
@@ -371,7 +460,7 @@ pub(crate) enum Inst {
     /// slot 1 retain, requirements from 2 — the archived convention).
     ExistentialPack {
         dest: LocalId,
-        protocol: Symbol,
+        protocol: MirSymbol,
         payload: Operand,
         witnesses: Vec<Operand>,
     },
@@ -5152,7 +5241,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     let packed = self.fresh_local();
                     self.push(Inst::ExistentialPack {
                         dest: packed,
-                        protocol,
+                        protocol: executable(protocol),
                         payload: Operand::Local(updated),
                         witnesses,
                     });
@@ -9222,7 +9311,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             let dest = self.fresh_local();
             self.push(Inst::ExistentialPack {
                 dest,
-                protocol: protocol.protocol,
+                protocol: executable(protocol.protocol),
                 payload,
                 witnesses,
             });
@@ -9258,7 +9347,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let dest = self.fresh_local();
         self.push(Inst::ExistentialPack {
             dest,
-            protocol: protocol.protocol,
+            protocol: executable(protocol.protocol),
             payload,
             witnesses,
         });
@@ -9425,7 +9514,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             env,
         });
         self.push(Inst::PushHandler {
-            effect,
+            effect: executable(effect),
             clause: Operand::Local(clause),
             cont: Operand::Local(cont),
         });
@@ -9452,7 +9541,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             clause,
             cont,
             index,
-            effect,
+            effect: executable(effect),
         });
         (clause, index)
     }

@@ -382,7 +382,7 @@ fn emit_type_table(out: &mut String, emitter: &Emitter, display: &DisplayNames) 
 struct Emitter {
     /// Effect symbols numbered densely, the way `lower`'s `EffectPool`
     /// numbers them for the VM.
-    effects: FxHashMap<CompilerSymbol, u32>,
+    effects: FxHashMap<crate::backend::mir::MirSymbol, u32>,
     /// Immortal literal bytes, deduplicated as `lower`'s `StaticsPool`
     /// deduplicates them.
     statics: Vec<u8>,
@@ -399,7 +399,7 @@ struct Emitter {
 }
 
 impl Emitter {
-    fn effect(&mut self, symbol: CompilerSymbol) -> u32 {
+    fn effect(&mut self, symbol: crate::backend::mir::MirSymbol) -> u32 {
         let next = u32::try_from(self.effects.len()).unwrap_or_default();
         *self.effects.entry(symbol).or_insert(next)
     }
@@ -843,7 +843,7 @@ impl Emitter {
             } => {
                 // Carries the protocol's display identity so a result
                 // renders as its payload, not as the witness table.
-                let symbol = self.display_id(*protocol);
+                let symbol = self.display_id(protocol.to_source());
                 self.existential_ids.insert(symbol);
                 // Payload first, witnesses after, in one aggregate: slot 0
                 // drop, slot 1 retain, requirements from 2.

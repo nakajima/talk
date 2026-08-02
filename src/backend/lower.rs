@@ -233,11 +233,11 @@ impl StaticsPool {
 /// Effect symbols interned to runtime effect ids.
 #[derive(Default)]
 struct EffectPool {
-    ids: FxHashMap<CompilerSymbol, u32>,
+    ids: FxHashMap<crate::backend::mir::MirSymbol, u32>,
 }
 
 impl EffectPool {
-    fn intern(&mut self, effect: CompilerSymbol) -> u32 {
+    fn intern(&mut self, effect: crate::backend::mir::MirSymbol) -> u32 {
         let next = u32::try_from(self.ids.len()).unwrap_or_default();
         *self.ids.entry(effect).or_insert(next)
     }
