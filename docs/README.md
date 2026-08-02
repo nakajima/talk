@@ -7,6 +7,9 @@ code and tests.
 
 ## Current documents
 
+- [Backend crate extraction plan](backend-crate-extraction-plan.md) - staged
+  migration to public MIR and separate bytecode, VM, C, LLVM, native-runtime,
+  FFI, and Swift modules.
 - [Ownership](ownership.md) - implicit-sharing semantics and MIR ownership
   dataflow.
 - [Effects](effects.md) - generic effect rows, handlers, and effect parameters
