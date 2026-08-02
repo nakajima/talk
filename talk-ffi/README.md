@@ -1,22 +1,34 @@
-# talk-c
+# talk-ffi
 
-C ABI facade for embedding Talk in Swift/iOS and other C-compatible hosts.
+Language-neutral C ABI for embedding the Talk compiler, bytecode adapter,
+and VM in Swift, C, and other C-compatible hosts. TalkSwift is one binding
+over this interface, not its owner.
+
+The public C header is `include/talk_ffi.h`. Its preamble is the interface
+contract: the ABI version, status and error conventions, the exact free
+function matching every returned buffer and opaque handle, how long
+borrowed `TalkStringRef` and view data remain valid, synchronous-callback
+rules, thread affinity, UTF-8 requirements, and panic containment. Read it
+before writing a new binding.
+
+`tests/smoke.c` is a minimal C client that exercises representative
+one-shot and handle APIs and frees every result; `cargo test -p talk-ffi`
+compiles, links, and runs it against the host static library. Use it as
+the template for future bindings.
 
 Build for the host:
 
 ```sh
-cargo build -p talk-c --release
+cargo build -p talk-ffi --release
 ```
 
 Build for iOS after installing the targets:
 
 ```sh
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim
-cargo build -p talk-c --release --target aarch64-apple-ios
-cargo build -p talk-c --release --target aarch64-apple-ios-sim
+cargo build -p talk-ffi --release --target aarch64-apple-ios
+cargo build -p talk-ffi --release --target aarch64-apple-ios-sim
 ```
-
-The public C header is `include/talk_c.h`.
 
 Most language-service APIs return typed opaque result handles, not JSON:
 

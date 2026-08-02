@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "wasm", "www", "talk-vm", "talk-static", "talk-c", "talk-llvm"]
+members = [".", "wasm", "www", "talk-vm", "talk-static", "talk-ffi", "talk-llvm"]
 default-members = ["."]
 resolver = "2"
 

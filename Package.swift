@@ -4,33 +4,33 @@ import Foundation
 import PackageDescription
 
 let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-let localXCFrameworkPath = packageDirectory.appendingPathComponent("talk-swift/Artifacts/TalkC.xcframework").path
-let localDebugArchivePath = packageDirectory.appendingPathComponent("target/debug/libtalk_c.a").path
-let localReleaseArchivePath = packageDirectory.appendingPathComponent("target/release/libtalk_c.a").path
+let localXCFrameworkPath = packageDirectory.appendingPathComponent("talk-swift/Artifacts/TalkFFI.xcframework").path
+let localDebugArchivePath = packageDirectory.appendingPathComponent("target/debug/libtalk_ffi.a").path
+let localReleaseArchivePath = packageDirectory.appendingPathComponent("target/release/libtalk_ffi.a").path
 let hasLocalXCFramework = FileManager.default.fileExists(atPath: localXCFrameworkPath)
 let hasLocalArchive = FileManager.default.fileExists(atPath: localDebugArchivePath)
     || FileManager.default.fileExists(atPath: localReleaseArchivePath)
 
 // The release workflow rewrites these constants in the tagged release commit.
-let talkCReleaseURL = "https://github.com/nakajima/talk/releases/download/0.0.0/TalkC.xcframework.zip"
-let talkCReleaseChecksum = "0000000000000000000000000000000000000000000000000000000000000000"
+let talkFFIReleaseURL = "https://github.com/nakajima/talk/releases/download/0.0.0/TalkFFI.xcframework.zip"
+let talkFFIReleaseChecksum = "0000000000000000000000000000000000000000000000000000000000000000"
 
 let cTarget: Target
 if hasLocalXCFramework {
     cTarget = .binaryTarget(
-        name: "CTalkC",
-        path: "talk-swift/Artifacts/TalkC.xcframework"
+        name: "CTalkFFI",
+        path: "talk-swift/Artifacts/TalkFFI.xcframework"
     )
 } else if hasLocalArchive {
     cTarget = .systemLibrary(
-        name: "CTalkC",
-        path: "talk-swift/Sources/CTalkC"
+        name: "CTalkFFI",
+        path: "talk-swift/Sources/CTalkFFI"
     )
 } else {
     cTarget = .binaryTarget(
-        name: "CTalkC",
-        url: talkCReleaseURL,
-        checksum: talkCReleaseChecksum
+        name: "CTalkFFI",
+        url: talkFFIReleaseURL,
+        checksum: talkFFIReleaseChecksum
     )
 }
 
@@ -47,7 +47,7 @@ let package = Package(
         cTarget,
         .target(
             name: "TalkSwift",
-            dependencies: ["CTalkC"],
+            dependencies: ["CTalkFFI"],
             path: "talk-swift/Sources/TalkSwift"
         ),
         .testTarget(

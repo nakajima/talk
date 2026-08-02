@@ -1,19 +1,19 @@
 # TalkSwift
 
-Swift package wrapper around the `talk-c` C ABI facade. The repository root `Package.swift` is the canonical package manifest for both local development and remote SwiftPM consumption.
+Swift package wrapper around the `talk-ffi` C ABI facade. The repository root `Package.swift` is the canonical package manifest for both local development and remote SwiftPM consumption.
 
-Version tags produced by the release workflow point the root package at the matching `TalkC.xcframework.zip` asset and checksum on the same GitHub release.
+Version tags produced by the release workflow point the root package at the matching `TalkFFI.xcframework.zip` asset and checksum on the same GitHub release.
 
 The package has three dependency resolution modes:
 
-1. If `talk-swift/Artifacts/TalkC.xcframework` exists, it consumes the local binary target.
-2. Otherwise, if a host `talk-c` archive exists under `target/debug` or `target/release`, it imports `talk-c/include/talk_c.h` and links that archive.
+1. If `talk-swift/Artifacts/TalkFFI.xcframework` exists, it consumes the local binary target.
+2. Otherwise, if a host `talk-ffi` archive exists under `target/debug` or `target/release`, it imports `talk-ffi/include/talk_ffi.h` and links that archive.
 3. Version-tagged packages without local artifacts download the matching XCFramework from the GitHub release.
 
 For local development on the host, run these commands from the repository root:
 
 ```sh
-cargo build -p talk-c
+cargo build -p talk-ffi
 swift test -Xlinker -L -Xlinker "$PWD/target/debug"
 ```
 

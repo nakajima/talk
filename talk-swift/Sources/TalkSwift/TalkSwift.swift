@@ -1,4 +1,4 @@
-import CTalkC
+import CTalkFFI
 import Foundation
 
 public enum TalkError: Error, LocalizedError, Equatable {
@@ -399,7 +399,7 @@ public final class Workspace {
 
     public init() throws {
         guard let handle = talk_workspace_new() else {
-            throw TalkError.nullHandle("talk-c returned a null workspace handle")
+            throw TalkError.nullHandle("talk-ffi returned a null workspace handle")
         }
         self.handle = handle
     }
@@ -547,7 +547,7 @@ public final class ReplSession {
 
     public init() throws {
         guard let handle = talk_repl_new() else {
-            throw TalkError.nullHandle("talk-c returned a null REPL handle")
+            throw TalkError.nullHandle("talk-ffi returned a null REPL handle")
         }
         self.handle = handle
     }
@@ -630,7 +630,7 @@ private func withPackageProvider<R>(
         talkPackageFetchTar,
         bridge.toOpaque()
     ) else {
-        throw TalkError.nullHandle("talk-c returned a null package source provider handle")
+        throw TalkError.nullHandle("talk-ffi returned a null package source provider handle")
     }
     defer { talk_package_provider_free(handle) }
     return try body(handle)
@@ -677,7 +677,7 @@ private func withBytes<R>(_ value: String, _ body: (UnsafePointer<UInt8>?, Int) 
 
 private func requireHandle(_ handle: OpaquePointer?, name: String) throws -> OpaquePointer {
     guard let handle else {
-        throw TalkError.nullHandle("talk-c returned a null \(name) handle")
+        throw TalkError.nullHandle("talk-ffi returned a null \(name) handle")
     }
     return handle
 }

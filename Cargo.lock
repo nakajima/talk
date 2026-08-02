@@ -2011,7 +2011,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "talk-c"
+name = "talk-ffi"
 version = "0.1.0"
 dependencies = [
  "talk",

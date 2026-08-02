@@ -1,9 +1,86 @@
-#ifndef TALK_C_H
-#define TALK_C_H
+#ifndef TALK_FFI_H
+#define TALK_FFI_H
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+
+/*
+ * talk_ffi: language-neutral C ABI for embedding the Talk compiler,
+ * bytecode adapter, and VM.
+ *
+ * Interface version
+ * -----------------
+ * TALK_FFI_ABI_VERSION identifies this interface, independently of the
+ * compiler version returned by talk_version_utf8. It changes only when an
+ * exported signature, result layout, ownership rule, or lifetime rule
+ * changes. talk_ffi_abi_version() returns the same value at run time.
+ *
+ * Status and error conventions
+ * ----------------------------
+ * Functions returning TalkResult report TALK_STATUS_OK,
+ * TALK_STATUS_INVALID_INPUT, TALK_STATUS_FAILED, or TALK_STATUS_PANIC in
+ * `status`; on non-OK status, `error` holds a UTF-8 message. Functions
+ * returning opaque handles report status through the handle's
+ * `talk_*_status` and `talk_*_error` accessors.
+ *
+ * Ownership
+ * ---------
+ * Every returned value is freed by its matching free function, exactly
+ * once:
+ *   TalkResult                 -> talk_result_free
+ *   TalkBuffer                 -> talk_buffer_free
+ *   TalkDiagnostics *          -> talk_diagnostics_free
+ *   TalkHover *                -> talk_hover_free
+ *   TalkCompletions *          -> talk_completions_free
+ *   TalkInlayHints *           -> talk_inlay_hints_free
+ *   TalkHighlightTokens *      -> talk_highlight_tokens_free
+ *   TalkLocationResult *       -> talk_location_free
+ *   TalkWorkspaceEditResult *  -> talk_workspace_edit_free
+ *   TalkEvalResult *           -> talk_eval_result_free
+ *   TalkTestResult *           -> talk_test_result_free
+ *   TalkReplCompletions *      -> talk_repl_completions_free
+ *   TalkWorkspace *            -> talk_workspace_free
+ *   TalkReplSession *          -> talk_repl_free
+ *   TalkPackageProvider *      -> talk_package_provider_free
+ * Freeing NULL is allowed. A TalkResult's `data` and `error` buffers are
+ * owned by the TalkResult and freed by talk_result_free; do not free them
+ * separately.
+ *
+ * Borrowed data
+ * -------------
+ * TalkStringRef and view structs (TalkDiagnosticView, TalkHoverView, and
+ * the other *View types) borrow from the handle they were read from. They
+ * remain valid only until that handle is freed or, for TalkWorkspace and
+ * TalkReplSession handles, until the next mutating call on the same
+ * handle. Copy anything that must outlive the handle.
+ *
+ * Callbacks
+ * ---------
+ * TalkPackageFetchTarCallback is invoked synchronously on the calling
+ * thread during a package operation and must finish or fail the supplied
+ * TalkPackageArchiveSink before returning. The callback's `context`,
+ * `url`, and `sha256` arguments are valid only for the duration of the
+ * call.
+ *
+ * Threading
+ * ---------
+ * Distinct handles may be used on distinct threads. One handle (and the
+ * views borrowed from it) is confined to one thread at a time; handles
+ * carry no internal synchronization.
+ *
+ * Strings
+ * -------
+ * All input strings are UTF-8; functions are named `_utf8` accordingly.
+ * Invalid UTF-8 yields TALK_STATUS_INVALID_INPUT.
+ *
+ * Panics
+ * ------
+ * Rust panics are contained at every exported entry point and surface as
+ * TALK_STATUS_PANIC; no unwind crosses the C boundary.
+ */
+
+#define TALK_FFI_ABI_VERSION 1
 
 #ifdef __cplusplus
 extern "C" {
@@ -194,6 +271,7 @@ typedef void (*TalkPackageFetchTarCallback)(
 void talk_result_free(TalkResult result);
 void talk_buffer_free(TalkBuffer buffer);
 
+uint32_t talk_ffi_abi_version(void);
 TalkResult talk_version_utf8(void);
 TalkResult talk_format_utf8(const uint8_t *source_ptr, size_t source_len);
 TalkResult talk_highlight_html_utf8(const uint8_t *source_ptr, size_t source_len);

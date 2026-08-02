@@ -43,7 +43,7 @@ read -r rprod rcomments rblanks <<<"$(count_files talk-vm/src)"
 echo "code=$rprod comments=$rcomments blanks=$rblanks"
 
 echo "== seam additions since $BASE (non-backend, non-test .rs) =="
-seams=$(git diff "$BASE" --numstat -- 'src/bin' 'src/cli' 'src/compiling' 'src/repl.rs' 'wasm/src' 'talk-c/src' 'talk-vm/src' \
+seams=$(git diff "$BASE" --numstat -- 'src/bin' 'src/cli' 'src/compiling' 'src/repl.rs' 'wasm/src' 'talk-ffi/src' 'talk-vm/src' \
   | awk '{a+=$1} END{print a+0}')
 echo "added_lines=$seams (includes comments/blanks; upper bound)"
 

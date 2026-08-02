@@ -1336,6 +1336,11 @@ pub extern "C" fn talk_buffer_free(buffer: TalkBuffer) {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn talk_ffi_abi_version() -> u32 {
+    1
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn talk_version_utf8() -> TalkResult {
     TalkResult::ok_string(env!("CARGO_PKG_VERSION").to_string())
 }
