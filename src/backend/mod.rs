@@ -259,9 +259,7 @@ pub(crate) fn codegen(
 ) -> Result<crate::codegen::Compilation<crate::name_resolution::symbol::Symbol>, BackendError> {
     let mut program = mir::build(programs, entry, false)?;
     optimize::run(&mut program);
-    for function in &mut program.functions {
-        regalloc::reuse_locals(function);
-    }
+    allocate_registers(&mut program);
     Ok(codegen::project(&program, programs))
 }
 

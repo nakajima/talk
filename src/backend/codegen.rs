@@ -27,6 +27,7 @@ impl Projection {
             functions: program.functions.iter().map(Self::function).collect(),
             entry: program.entry,
             global_slots: program.global_slots,
+            layouts: program.layout_table.iter().map(Self::layout).collect(),
         }
     }
 
@@ -34,7 +35,7 @@ impl Projection {
         crate::codegen::Function {
             name: function.name.clone(),
             arity: function.arity,
-            n_locals: function.n_locals,
+            n_locals: function.n_locals(),
             blocks: function.blocks.iter().map(Self::block).collect(),
         }
     }
@@ -117,14 +118,68 @@ impl Projection {
         }
     }
 
-    fn memory(kind: source::MemTy) -> crate::codegen::MemTy {
+    fn slot_kind(kind: source::layout::SlotKind) -> crate::codegen::SlotKind {
         match kind {
-            source::MemTy::Byte => crate::codegen::MemTy::Byte,
-            source::MemTy::I64 => crate::codegen::MemTy::I64,
-            source::MemTy::F64 => crate::codegen::MemTy::F64,
-            source::MemTy::Bool => crate::codegen::MemTy::Bool,
-            source::MemTy::Ptr => crate::codegen::MemTy::Ptr,
-            source::MemTy::Boxed => crate::codegen::MemTy::Boxed,
+            source::layout::SlotKind::Int => crate::codegen::SlotKind::Int,
+            source::layout::SlotKind::Bool => crate::codegen::SlotKind::Bool,
+            source::layout::SlotKind::Byte => crate::codegen::SlotKind::Byte,
+            source::layout::SlotKind::F64 => crate::codegen::SlotKind::F64,
+            source::layout::SlotKind::Ptr => crate::codegen::SlotKind::Ptr,
+            source::layout::SlotKind::Value => crate::codegen::SlotKind::Value,
+        }
+    }
+
+    fn field_repr(repr: source::layout::FieldRepr) -> crate::codegen::FieldRepr {
+        match repr {
+            source::layout::FieldRepr::Slot(kind) => {
+                crate::codegen::FieldRepr::Slot(Self::slot_kind(kind))
+            }
+            source::layout::FieldRepr::Spliced(layout) => {
+                crate::codegen::FieldRepr::Spliced(layout)
+            }
+        }
+    }
+
+    fn shape(shape: &source::layout::Shape) -> crate::codegen::Shape {
+        match shape {
+            source::layout::Shape::Product {
+                width,
+                offsets,
+                reprs,
+                kinds,
+            } => crate::codegen::Shape::Product {
+                width: *width,
+                offsets: offsets.clone(),
+                reprs: reprs.iter().copied().map(Self::field_repr).collect(),
+                kinds: kinds.iter().copied().map(Self::slot_kind).collect(),
+            },
+            source::layout::Shape::Sum {
+                width,
+                payloads,
+                reprs,
+                kinds,
+            } => crate::codegen::Shape::Sum {
+                width: *width,
+                payloads: payloads.clone(),
+                reprs: reprs
+                    .iter()
+                    .map(|reprs| reprs.iter().copied().map(Self::field_repr).collect())
+                    .collect(),
+                kinds: kinds.iter().copied().map(Self::slot_kind).collect(),
+            },
+        }
+    }
+
+    fn layout(layout: &source::layout::Layout) -> crate::codegen::Layout<Symbol> {
+        match layout {
+            source::layout::Layout::Slot => crate::codegen::Layout::Slot,
+            source::layout::Layout::Inline(symbol, shape) => {
+                crate::codegen::Layout::Inline(*symbol, Self::shape(shape))
+            }
+            source::layout::Layout::Boxed(symbol, shape) => {
+                crate::codegen::Layout::Boxed(*symbol, Self::shape(shape))
+            }
+            source::layout::Layout::Opaque => crate::codegen::Layout::Opaque,
         }
     }
 
@@ -155,62 +210,84 @@ impl Projection {
                 args: Self::operands(args),
                 unwind: *unwind,
             },
-            source::Inst::Tuple { dest, args } => crate::codegen::Inst::Tuple {
-                dest: *dest,
-                args: Self::operands(args),
-            },
-            source::Inst::TupleGet { dest, src, index } => crate::codegen::Inst::TupleGet {
-                dest: *dest,
-                src: Self::operand(*src),
-                index: *index,
-            },
-            source::Inst::Variant {
+            source::Inst::Aggregate {
                 dest,
-                enum_symbol,
                 tag,
+                layout,
                 args,
-            } => crate::codegen::Inst::Variant {
+            } => crate::codegen::Inst::Aggregate {
                 dest: *dest,
-                enum_symbol: *enum_symbol,
                 tag: *tag,
+                layout: *layout,
                 args: Self::operands(args),
             },
             source::Inst::GetTag { dest, src } => crate::codegen::Inst::GetTag {
                 dest: *dest,
                 src: Self::operand(*src),
             },
-            source::Inst::GetPayload { dest, src, index } => crate::codegen::Inst::GetPayload {
+            source::Inst::Blank { dest, layout } => crate::codegen::Inst::Blank {
                 dest: *dest,
-                src: Self::operand(*src),
-                index: *index,
+                layout: *layout,
             },
-            source::Inst::Record {
+            source::Inst::Field {
                 dest,
-                struct_symbol,
-                args,
-            } => crate::codegen::Inst::Record {
+                src,
+                container,
+                offset,
+                member,
+            } => crate::codegen::Inst::Field {
                 dest: *dest,
-                struct_symbol: *struct_symbol,
-                args: Self::operands(args),
+                src: Self::operand(*src),
+                container: *container,
+                offset: *offset,
+                member: *member,
             },
-            source::Inst::GetField { dest, src, index } => crate::codegen::Inst::GetField {
+            source::Inst::FieldIndex { dest, src, index } => crate::codegen::Inst::FieldIndex {
                 dest: *dest,
                 src: Self::operand(*src),
                 index: *index,
             },
-            source::Inst::GetElement { dest, src, index } => crate::codegen::Inst::GetElement {
+            source::Inst::GetElement {
+                dest,
+                src,
+                element,
+                index,
+            } => crate::codegen::Inst::GetElement {
                 dest: *dest,
                 src: Self::operand(*src),
+                element: *element,
                 index: Self::operand(*index),
             },
-            source::Inst::SetField { rec, src, index } => crate::codegen::Inst::SetField {
+            source::Inst::SetField {
+                rec,
+                src,
+                container,
+                offset,
+                member,
+            } => crate::codegen::Inst::SetField {
                 rec: *rec,
                 src: Self::operand(*src),
-                index: *index,
+                container: *container,
+                offset: *offset,
+                member: *member,
             },
-            source::Inst::StringLit { dest, bytes } => crate::codegen::Inst::StringLit {
+            source::Inst::SetFieldIndex { rec, src, index } => {
+                crate::codegen::Inst::SetFieldIndex {
+                    rec: *rec,
+                    src: Self::operand(*src),
+                    index: *index,
+                }
+            }
+            source::Inst::StringLit {
+                dest,
+                bytes,
+                layout,
+                storage_layout,
+            } => crate::codegen::Inst::StringLit {
                 dest: *dest,
                 bytes: bytes.clone(),
+                layout: *layout,
+                storage_layout: *storage_layout,
             },
             source::Inst::BytesLit { dest, bytes } => crate::codegen::Inst::BytesLit {
                 dest: *dest,
@@ -233,12 +310,12 @@ impl Projection {
             source::Inst::Load { dest, ptr, kind } => crate::codegen::Inst::Load {
                 dest: *dest,
                 ptr: Self::operand(*ptr),
-                kind: Self::memory(*kind),
+                kind: Self::slot_kind(*kind),
             },
             source::Inst::Store { ptr, src, kind } => crate::codegen::Inst::Store {
                 ptr: Self::operand(*ptr),
                 src: Self::operand(*src),
-                kind: Self::memory(*kind),
+                kind: Self::slot_kind(*kind),
             },
             source::Inst::MemCopy { from, to, len } => crate::codegen::Inst::MemCopy {
                 from: Self::operand(*from),

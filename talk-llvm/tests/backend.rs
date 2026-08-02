@@ -164,7 +164,7 @@ fn effects_closures_and_cells_agree_with_the_vm() {
          pub func bench() -> Int {\n\
          \tlet counter = make_counter()\n\
          \tcounter()\n\
-         \t@handle 'step { n in 'continue n * 2 }\n\
+         \t#handle 'step { n in 'continue n * 2 }\n\
          \tcounter() + run(n: 7)\n\
          }\n",
     )

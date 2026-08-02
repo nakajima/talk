@@ -10,6 +10,26 @@
 extern void talk_llvm_dispatch(TalkValue *out, uint32_t function,
                                const TalkValue *env, const TalkValue *args);
 
+static TalkValue talk_native_retag(TalkValue value) {
+    if (value.tag == TALK_NATIVE) {
+        talk_trap("LLVM backend received an unexpected native aggregate");
+    }
+    return value;
+}
+
+static TalkValue talk_rebox(uint32_t layout, TalkValue flat) {
+    (void)layout;
+    return flat;
+}
+
+static void talk_native_scan(TalkValue value, struct TalkObject ***out,
+                             size_t *count, size_t *capacity) {
+    (void)value;
+    (void)out;
+    (void)count;
+    (void)capacity;
+}
+
 static TalkValue talk_dispatch(uint32_t function, const TalkValue *env,
                                const TalkValue *args) {
     TalkValue out = talk_unit();
@@ -61,33 +81,164 @@ void talk_llvm_checked_scalar(TalkValue *out, uint32_t op,
     }
 }
 
-void talk_llvm_agg(TalkValue *out, uint32_t symbol, uint32_t tag, uint32_t len) {
-    *out = talk_agg(symbol, tag, len);
+static const TalkField *talk_llvm_agg_site(uint32_t layout, uint32_t tag,
+                                           uint32_t index) {
+    if (layout >= talk_layout_count) {
+        talk_trap("aggregate references an unknown layout");
+    }
+    const TalkLayoutInfo *shape = &talk_layouts[layout];
+    if (!shape->is_sum) {
+        if (index >= shape->field_count) {
+            talk_trap("aggregate argument index out of range");
+        }
+        return &shape->fields[index];
+    }
+    if (tag >= shape->variant_count) {
+        talk_trap("aggregate tag out of range");
+    }
+    uint32_t start = shape->variant_starts[tag];
+    uint32_t end = shape->variant_starts[tag + 1];
+    if (start + index >= end) {
+        talk_trap("aggregate payload index out of range");
+    }
+    return &shape->fields[start + index];
 }
+
+void talk_llvm_agg(TalkValue *out, uint32_t layout, uint32_t symbol,
+                   uint32_t tag) {
+    if (layout >= talk_layout_count) {
+        talk_trap("aggregate references an unknown layout");
+    }
+    const TalkLayoutInfo *shape = &talk_layouts[layout];
+    *out = talk_agg(layout, symbol, 0, shape->width);
+    for (uint32_t index = 0; index < shape->width; index++) {
+        out->v.agg->fields[index] = talk_unit();
+    }
+    if (shape->is_sum) {
+        if (shape->width == 0) {
+            talk_trap("sum layout has no tag slot");
+        }
+        out->v.agg->fields[0] = talk_int((int64_t)tag);
+    }
+}
+
+void talk_llvm_agg_arg(TalkValue *aggregate, uint32_t layout, uint32_t tag,
+                       uint32_t index, const TalkValue *value) {
+    const TalkField *site = talk_llvm_agg_site(layout, tag, index);
+    if (site->child == UINT32_MAX) {
+        aggregate->v.agg->fields[site->offset] = *value;
+        return;
+    }
+    if (site->width == 0) {
+        return;
+    }
+    TalkValue flat = *value;
+    if (flat.tag == TALK_NATIVE) {
+        flat = talk_native_retag(flat);
+    }
+    memcpy(aggregate->v.agg->fields + site->offset, flat.v.agg->fields,
+           (size_t)site->width * sizeof(TalkValue));
+}
+
+void talk_llvm_dyn_agg(TalkValue *out, uint32_t symbol, uint32_t len) {
+    *out = talk_agg(TALK_DYN, symbol, 0, len);
+}
+
 void talk_llvm_agg_set(TalkValue *aggregate, uint32_t index,
                        const TalkValue *value) {
     aggregate->v.agg->fields[index] = *value;
 }
-void talk_llvm_agg_get(TalkValue *out, const TalkValue *aggregate, uint32_t index) {
-    *out = aggregate->v.agg->fields[index];
+
+void talk_llvm_field(TalkValue *out, const TalkValue *aggregate,
+                     uint32_t container, uint32_t offset, uint32_t member,
+                     uint32_t member_symbol) {
+    (void)container;
+    if (member == UINT32_MAX) {
+        *out = aggregate->v.agg->fields[offset];
+        return;
+    }
+    if (member >= talk_layout_count) {
+        talk_trap("field references an unknown member layout");
+    }
+    uint32_t width = talk_layouts[member].width;
+    if (width == 0) {
+        *out = talk_unit();
+        return;
+    }
+    *out = talk_rebox(member,
+                      talk_slice(*aggregate, offset, width, member, member_symbol));
 }
+
+void talk_llvm_field_index(TalkValue *out, const TalkValue *aggregate,
+                           uint32_t index) {
+    *out = talk_native_field(*aggregate, index);
+}
+
 int64_t talk_llvm_agg_tag(const TalkValue *aggregate) {
-    return (int64_t)aggregate->v.agg->tag;
+    return aggregate->v.agg->fields[0].v.i;
 }
-void talk_llvm_set_field(TalkValue *record, uint32_t index,
-                         const TalkValue *value) {
-    *record = talk_set_field(*record, index, *value);
+
+static void talk_llvm_replace_slots(TalkValue *record, const TalkValue *value,
+                                    uint32_t offset, uint32_t member) {
+    if (member == UINT32_MAX) {
+        *record = talk_set_slots(*record, offset, 1, *value);
+        return;
+    }
+    if (member >= talk_layout_count) {
+        talk_trap("field write references an unknown member layout");
+    }
+    uint32_t span = talk_layouts[member].width;
+    if (span == 0) {
+        return;
+    }
+    TalkValue flat = *value;
+    if (flat.tag == TALK_NATIVE) {
+        flat = talk_native_retag(flat);
+    }
+    TalkAgg *from = record->v.agg;
+    TalkValue copy = talk_agg(from->layout, from->symbol, from->meta, from->len);
+    memcpy(copy.v.agg->fields, from->fields,
+           (size_t)from->len * sizeof(TalkValue));
+    memcpy(copy.v.agg->fields + offset, flat.v.agg->fields,
+           (size_t)span * sizeof(TalkValue));
+    *record = copy;
+}
+
+void talk_llvm_set_field(TalkValue *record, const TalkValue *value,
+                         uint32_t container, uint32_t offset, uint32_t member) {
+    (void)container;
+    talk_llvm_replace_slots(record, value, offset, member);
+}
+
+void talk_llvm_set_field_index(TalkValue *record, const TalkValue *value,
+                               uint32_t index) {
+    if (record->tag == TALK_NATIVE) {
+        *record = talk_native_retag(*record);
+    }
+    uint32_t layout = record->v.agg->layout;
+    if (layout == TALK_DYN || layout >= talk_layout_count) {
+        talk_llvm_replace_slots(record, value, index, UINT32_MAX);
+        return;
+    }
+    if (index >= talk_layouts[layout].field_count) {
+        talk_trap("field write index out of range");
+    }
+    const TalkField *site = &talk_layouts[layout].fields[index];
+    talk_llvm_replace_slots(record, value, site->offset, site->child);
 }
 
 void talk_llvm_string(TalkValue *out, uint32_t offset, uint32_t len,
+                      uint32_t string_layout, uint32_t storage_layout,
                       uint32_t string_symbol, uint32_t storage_symbol) {
-    TalkValue storage = talk_agg(storage_symbol, 0, 1);
-    storage.v.agg->fields[0] = talk_pointer(talk_statics + offset);
-    TalkValue string = talk_agg(string_symbol, 0, 3);
-    string.v.agg->fields[0] = storage;
-    string.v.agg->fields[1] = talk_int((int64_t)len);
-    string.v.agg->fields[2] = talk_int((int64_t)len);
-    *out = string;
+    TalkValue storage;
+    talk_llvm_agg(&storage, storage_layout, storage_symbol, 0);
+    TalkValue pointer = talk_pointer(talk_statics + offset);
+    talk_llvm_agg_arg(&storage, storage_layout, 0, 0, &pointer);
+    talk_llvm_agg(out, string_layout, string_symbol, 0);
+    TalkValue length = talk_int((int64_t)len);
+    talk_llvm_agg_arg(out, string_layout, 0, 0, &storage);
+    talk_llvm_agg_arg(out, string_layout, 0, 1, &length);
+    talk_llvm_agg_arg(out, string_layout, 0, 2, &length);
 }
 void talk_llvm_bytes(TalkValue *out, uint32_t offset) {
     *out = talk_pointer(talk_statics + offset);
@@ -97,7 +248,7 @@ void talk_llvm_closure(TalkValue *out, uint32_t function, uint32_t captured) {
     *out = talk_closure(function, captured);
 }
 uint32_t talk_llvm_closure_function(const TalkValue *closure) {
-    return closure->v.agg->tag;
+    return closure->v.agg->meta;
 }
 const TalkValue *talk_llvm_closure_env(const TalkValue *closure) {
     return closure->v.agg->fields;
@@ -119,8 +270,15 @@ void talk_llvm_existential_witness(TalkValue *out, const TalkValue *value,
     *out = talk_existential_witness(*value, index);
 }
 void talk_llvm_get_element(TalkValue *out, const TalkValue *value,
-                           const TalkValue *index) {
-    *out = talk_get_element(*value, *index);
+                           const TalkValue *index, uint32_t element,
+                           uint32_t element_symbol) {
+    if (element < talk_layout_count && talk_layouts[element].width != 1) {
+        *out = talk_get_element_slice(*value, *index,
+                                      talk_layouts[element].width, element,
+                                      element_symbol);
+    } else {
+        *out = talk_get_element(*value, *index);
+    }
 }
 
 void talk_llvm_alloc(TalkValue *out, const TalkValue *bytes) {

@@ -93,8 +93,9 @@ managed buffers, heap-region cycles, finalizers, globals, and host IO.
   not implemented.
 - There is no LLVM library dependency, target-machine API, object emission API,
   debug metadata, or optimization-pipeline configuration.
-- Aggregate representation still uses the native runtime's boxed arena shape.
-  A production backend should consume MIR layout information directly.
+- Aggregate values consume MIR's published layouts but use the runtime's
+  uniform flat tagged representation. Native layout signatures and unboxed
+  frame storage remain future optimization work.
 - The command emits program entry points, not a stable native service ABI.
 - Source and package CLI policy belongs to `talk-llvm`; the main `talk` binary
   only discovers and executes `talk-<command>` from `PATH`.

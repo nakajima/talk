@@ -9,8 +9,8 @@ use std::fmt;
 use std::hash::Hash;
 
 pub use talk::codegen::{
-    BlockData, CmpKind, Constant, DisplayNames, Function, Inst, MemTy, Operand, Program, ScalarOp,
-    Term, TypeKind,
+    BlockData, CmpKind, Constant, DisplayNames, FieldRepr, Function, Inst, Layout, LayoutId,
+    Operand, Program, ScalarOp, Shape, SlotKind, Term, TypeKind,
 };
 
 pub struct Runtime<'a, S> {

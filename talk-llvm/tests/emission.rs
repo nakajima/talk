@@ -31,6 +31,7 @@ fn emits_a_standalone_language_function_from_the_public_model() {
         }],
         entry: 0,
         global_slots: 0,
+        layouts: vec![],
     };
 
     let artifact = talk_llvm::emit(&program, runtime()).expect("module emits");
@@ -54,6 +55,7 @@ fn rejects_an_entry_that_the_native_process_cannot_call() {
         }],
         entry: 0,
         global_slots: 0,
+        layouts: vec![],
     };
 
     let error = talk_llvm::emit(&program, runtime()).expect_err("entry must be rejected");

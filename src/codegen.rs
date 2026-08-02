@@ -9,6 +9,7 @@ use std::hash::Hash;
 pub type LocalId = u16;
 pub type BlockId = usize;
 pub type FuncId = usize;
+pub type LayoutId = u32;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Constant {
@@ -84,36 +85,28 @@ pub enum Inst<S> {
         args: Vec<Operand>,
         unwind: Option<BlockId>,
     },
-    Tuple {
+    Aggregate {
         dest: LocalId,
-        args: Vec<Operand>,
-    },
-    TupleGet {
-        dest: LocalId,
-        src: Operand,
-        index: u16,
-    },
-    Variant {
-        dest: LocalId,
-        enum_symbol: S,
         tag: u16,
+        layout: LayoutId,
         args: Vec<Operand>,
     },
     GetTag {
         dest: LocalId,
         src: Operand,
     },
-    GetPayload {
+    Blank {
+        dest: LocalId,
+        layout: LayoutId,
+    },
+    Field {
         dest: LocalId,
         src: Operand,
-        index: u16,
+        container: LayoutId,
+        offset: u16,
+        member: Option<LayoutId>,
     },
-    Record {
-        dest: LocalId,
-        struct_symbol: S,
-        args: Vec<Operand>,
-    },
-    GetField {
+    FieldIndex {
         dest: LocalId,
         src: Operand,
         index: u16,
@@ -121,9 +114,17 @@ pub enum Inst<S> {
     GetElement {
         dest: LocalId,
         src: Operand,
+        element: LayoutId,
         index: Operand,
     },
     SetField {
+        rec: LocalId,
+        src: Operand,
+        container: LayoutId,
+        offset: u16,
+        member: Option<LayoutId>,
+    },
+    SetFieldIndex {
         rec: LocalId,
         src: Operand,
         index: u16,
@@ -131,6 +132,8 @@ pub enum Inst<S> {
     StringLit {
         dest: LocalId,
         bytes: Vec<u8>,
+        layout: LayoutId,
+        storage_layout: LayoutId,
     },
     BytesLit {
         dest: LocalId,
@@ -153,12 +156,12 @@ pub enum Inst<S> {
     Load {
         dest: LocalId,
         ptr: Operand,
-        kind: MemTy,
+        kind: SlotKind,
     },
     Store {
         ptr: Operand,
         src: Operand,
-        kind: MemTy,
+        kind: SlotKind,
     },
     MemCopy {
         from: Operand,
@@ -278,14 +281,44 @@ pub enum Inst<S> {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MemTy {
-    Byte,
-    I64,
-    F64,
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SlotKind {
+    Int,
     Bool,
+    Byte,
+    F64,
     Ptr,
-    Boxed,
+    Value,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum FieldRepr {
+    Slot(SlotKind),
+    Spliced(LayoutId),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Shape {
+    Product {
+        width: u32,
+        offsets: Vec<u32>,
+        reprs: Vec<FieldRepr>,
+        kinds: Vec<SlotKind>,
+    },
+    Sum {
+        width: u32,
+        payloads: Vec<Vec<u32>>,
+        reprs: Vec<Vec<FieldRepr>>,
+        kinds: Vec<SlotKind>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Layout<S> {
+    Slot,
+    Inline(Option<S>, Shape),
+    Boxed(Option<S>, Shape),
+    Opaque,
 }
 
 #[derive(Clone, Debug)]
@@ -326,6 +359,7 @@ pub struct Program<S> {
     pub functions: Vec<Function<S>>,
     pub entry: FuncId,
     pub global_slots: u32,
+    pub layouts: Vec<Layout<S>>,
 }
 
 #[derive(Clone, Copy, Debug)]

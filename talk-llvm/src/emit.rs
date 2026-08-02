@@ -14,8 +14,8 @@ use std::fmt::Write as _;
 use std::hash::Hash;
 
 use crate::{
-    Artifact, CmpKind, Constant, DisplayNames, Error, Function, Inst, MemTy, Operand, Program,
-    Runtime, ScalarOp, Term, TypeKind,
+    Artifact, CmpKind, Constant, DisplayNames, Error, FieldRepr, Function, Inst, Layout, LayoutId,
+    Operand, Program, Runtime, ScalarOp, Shape, SlotKind, Term, TypeKind,
 };
 
 const RUNTIME_ABI: &str = include_str!("llvm_runtime.c");
@@ -34,7 +34,11 @@ where
         ));
     }
 
-    let mut emitter = Emitter::new(runtime.string_symbol, runtime.storage_symbol);
+    let mut emitter = Emitter::new(
+        runtime.string_symbol,
+        runtime.storage_symbol,
+        program.layouts.clone(),
+    );
     let mut bodies = String::new();
     for (id, function) in program.functions.iter().enumerate() {
         emitter.function(&mut bodies, id, function)?;
@@ -72,11 +76,15 @@ declare void @talk_llvm_set_floor(ptr)
 declare void @talk_llvm_abort_to(ptr, ptr)
 declare void @talk_llvm_checked_scalar(ptr, i32, ptr, ptr)
 declare void @talk_llvm_agg(ptr, i32, i32, i32)
+declare void @talk_llvm_agg_arg(ptr, i32, i32, i32, ptr)
+declare void @talk_llvm_dyn_agg(ptr, i32, i32)
 declare void @talk_llvm_agg_set(ptr, i32, ptr)
-declare void @talk_llvm_agg_get(ptr, ptr, i32)
+declare void @talk_llvm_field(ptr, ptr, i32, i32, i32, i32)
+declare void @talk_llvm_field_index(ptr, ptr, i32)
 declare i64 @talk_llvm_agg_tag(ptr)
-declare void @talk_llvm_set_field(ptr, i32, ptr)
-declare void @talk_llvm_string(ptr, i32, i32, i32, i32)
+declare void @talk_llvm_set_field(ptr, ptr, i32, i32, i32)
+declare void @talk_llvm_set_field_index(ptr, ptr, i32)
+declare void @talk_llvm_string(ptr, i32, i32, i32, i32, i32, i32)
 declare void @talk_llvm_bytes(ptr, i32)
 declare void @talk_llvm_closure(ptr, i32, i32)
 declare i32 @talk_llvm_closure_function(ptr)
@@ -86,7 +94,7 @@ declare void @talk_llvm_cell_get(ptr, ptr)
 declare void @talk_llvm_cell_set(ptr, ptr)
 declare void @talk_llvm_existential_payload(ptr, ptr)
 declare void @talk_llvm_existential_witness(ptr, ptr, i32)
-declare void @talk_llvm_get_element(ptr, ptr, ptr)
+declare void @talk_llvm_get_element(ptr, ptr, ptr, i32, i32)
 declare void @talk_llvm_alloc(ptr, ptr)
 declare void @talk_llvm_free(ptr)
 declare void @talk_llvm_retain(ptr)
@@ -120,14 +128,15 @@ struct Emitter<S> {
     operand_width: usize,
     string_symbol: S,
     storage_symbol: S,
+    layouts: Vec<Layout<S>>,
 }
 
 impl<S> Emitter<S>
 where
     S: Copy + Eq + Hash,
 {
-    fn new(string_symbol: S, storage_symbol: S) -> Self {
-        Self {
+    fn new(string_symbol: S, storage_symbol: S, layouts: Vec<Layout<S>>) -> Self {
+        let mut emitter = Self {
             effects: HashMap::new(),
             statics: Vec::new(),
             static_offsets: HashMap::new(),
@@ -139,7 +148,20 @@ where
             operand_width: 1,
             string_symbol,
             storage_symbol,
+            layouts,
+        };
+        let symbols: Vec<_> = emitter
+            .layouts
+            .iter()
+            .filter_map(|layout| match layout {
+                Layout::Inline(symbol, _) | Layout::Boxed(symbol, _) => *symbol,
+                Layout::Slot | Layout::Opaque => None,
+            })
+            .collect();
+        for symbol in symbols {
+            emitter.display_id(symbol);
         }
+        emitter
     }
 
     fn fresh(&mut self, prefix: &str) -> String {
@@ -156,6 +178,43 @@ where
     fn display_id(&mut self, symbol: S) -> u32 {
         let next = u32::try_from(self.display_ids.len() + 1).unwrap_or(1);
         *self.display_ids.entry(symbol).or_insert(next)
+    }
+
+    fn layout_display(&mut self, layout: LayoutId) -> Result<u32, Error> {
+        let index = usize::try_from(layout)
+            .map_err(|_| internal("an instruction references an unaddressable layout"))?;
+        let symbol = match self.layouts.get(index) {
+            Some(Layout::Inline(symbol, _) | Layout::Boxed(symbol, _)) => *symbol,
+            Some(Layout::Slot | Layout::Opaque) => None,
+            None => return Err(internal("an instruction references a missing layout")),
+        };
+        Ok(symbol.map(|symbol| self.display_id(symbol)).unwrap_or(0))
+    }
+
+    fn published_display(&self, layout: LayoutId) -> u32 {
+        usize::try_from(layout)
+            .ok()
+            .and_then(|index| self.layouts.get(index))
+            .and_then(|layout| match layout {
+                Layout::Inline(symbol, _) | Layout::Boxed(symbol, _) => *symbol,
+                Layout::Slot | Layout::Opaque => None,
+            })
+            .and_then(|symbol| self.display_ids.get(&symbol).copied())
+            .unwrap_or(0)
+    }
+
+    fn layout_width(&self, layout: LayoutId) -> u32 {
+        usize::try_from(layout)
+            .ok()
+            .and_then(|index| self.layouts.get(index))
+            .map(|layout| match layout {
+                Layout::Inline(_, Shape::Product { width, .. })
+                | Layout::Inline(_, Shape::Sum { width, .. })
+                | Layout::Boxed(_, Shape::Product { width, .. })
+                | Layout::Boxed(_, Shape::Sum { width, .. }) => *width,
+                Layout::Slot | Layout::Opaque => 1,
+            })
+            .unwrap_or(1)
     }
 
     fn intern_static(&mut self, bytes: &[u8]) -> u32 {
@@ -192,10 +251,7 @@ where
             .iter()
             .flat_map(|block| &block.insts)
             .filter_map(|inst| match inst {
-                Inst::Tuple { args, .. }
-                | Inst::Record { args, .. }
-                | Inst::Variant { args, .. }
-                | Inst::ObjectNew { args, .. } => Some(args.len()),
+                Inst::Aggregate { args, .. } | Inst::ObjectNew { args, .. } => Some(args.len()),
                 Inst::MakeClosure { env, .. } => Some(env.len()),
                 Inst::ExistentialPack { witnesses, .. } => Some(witnesses.len() + 1),
                 _ => None,
@@ -385,33 +441,12 @@ where
                 );
                 self.unwind_check(out, *unwind, identified);
             }
-            Inst::Tuple { dest, args } => self.aggregate(out, *dest, 0, 0, args),
-            Inst::Record {
+            Inst::Aggregate {
                 dest,
-                struct_symbol,
-                args,
-            } => {
-                let symbol = self.display_id(*struct_symbol);
-                self.aggregate(out, *dest, symbol, 0, args);
-            }
-            Inst::Variant {
-                dest,
-                enum_symbol,
                 tag,
+                layout,
                 args,
-            } => {
-                let symbol = self.display_id(*enum_symbol);
-                self.aggregate(out, *dest, symbol, *tag, args);
-            }
-            Inst::TupleGet { dest, src, index }
-            | Inst::GetField { dest, src, index }
-            | Inst::GetPayload { dest, src, index } => {
-                let src = self.operand(out, *src);
-                let _ = writeln!(
-                    out,
-                    "  call void @talk_llvm_agg_get(ptr %l{dest}, ptr {src}, i32 {index})"
-                );
-            }
+            } => self.aggregate(out, *dest, *layout, *tag, args)?,
             Inst::GetTag { dest, src } => {
                 let src = self.operand(out, *src);
                 let tag = self.fresh("tag");
@@ -419,20 +454,65 @@ where
                 let value = self.tagged_value(out, 2, &format!("i64 {tag}"));
                 let _ = writeln!(out, "  store %TalkValue {value}, ptr %l{dest}, align 8");
             }
-            Inst::SetField { rec, src, index } => {
+            Inst::Blank { dest, layout } => self.aggregate(out, *dest, *layout, 0, &[])?,
+            Inst::Field {
+                dest,
+                src,
+                container,
+                offset,
+                member,
+            } => {
+                let src = self.operand(out, *src);
+                let symbol = match member {
+                    Some(member) => self.layout_display(*member)?,
+                    None => 0,
+                };
+                let member = member.unwrap_or(u32::MAX);
+                let _ = writeln!(
+                    out,
+                    "  call void @talk_llvm_field(ptr %l{dest}, ptr {src}, i32 {container}, i32 {offset}, i32 {member}, i32 {symbol})"
+                );
+            }
+            Inst::FieldIndex { dest, src, index } => {
                 let src = self.operand(out, *src);
                 let _ = writeln!(
                     out,
-                    "  call void @talk_llvm_set_field(ptr %l{rec}, i32 {index}, ptr {src})"
+                    "  call void @talk_llvm_field_index(ptr %l{dest}, ptr {src}, i32 {index})"
                 );
             }
-            Inst::StringLit { dest, bytes } => {
+            Inst::SetField {
+                rec,
+                src,
+                container,
+                offset,
+                member,
+            } => {
+                let src = self.operand(out, *src);
+                let member = member.unwrap_or(u32::MAX);
+                let _ = writeln!(
+                    out,
+                    "  call void @talk_llvm_set_field(ptr %l{rec}, ptr {src}, i32 {container}, i32 {offset}, i32 {member})"
+                );
+            }
+            Inst::SetFieldIndex { rec, src, index } => {
+                let src = self.operand(out, *src);
+                let _ = writeln!(
+                    out,
+                    "  call void @talk_llvm_set_field_index(ptr %l{rec}, ptr {src}, i32 {index})"
+                );
+            }
+            Inst::StringLit {
+                dest,
+                bytes,
+                layout,
+                storage_layout,
+            } => {
                 let offset = self.intern_static(bytes);
                 let string = self.display_id(self.string_symbol);
                 let storage = self.display_id(self.storage_symbol);
                 let _ = writeln!(
                     out,
-                    "  call void @talk_llvm_string(ptr %l{dest}, i32 {offset}, i32 {}, i32 {string}, i32 {storage})",
+                    "  call void @talk_llvm_string(ptr %l{dest}, i32 {offset}, i32 {}, i32 {layout}, i32 {storage_layout}, i32 {string}, i32 {storage})",
                     bytes.len()
                 );
             }
@@ -667,7 +747,7 @@ where
                 let values = self.snapshot_operands(out, &values);
                 let _ = writeln!(
                     out,
-                    "  call void @talk_llvm_agg(ptr %l{dest}, i32 {symbol}, i32 0, i32 {})",
+                    "  call void @talk_llvm_dyn_agg(ptr %l{dest}, i32 {symbol}, i32 {})",
                     values.len()
                 );
                 for (index, value) in values.iter().enumerate() {
@@ -728,12 +808,18 @@ where
                 );
                 self.return_unit(out, identified);
             }
-            Inst::GetElement { dest, src, index } => {
+            Inst::GetElement {
+                dest,
+                src,
+                element,
+                index,
+            } => {
                 let src = self.operand(out, *src);
                 let index = self.operand(out, *index);
+                let symbol = self.layout_display(*element)?;
                 let _ = writeln!(
                     out,
-                    "  call void @talk_llvm_get_element(ptr %l{dest}, ptr {src}, ptr {index})"
+                    "  call void @talk_llvm_get_element(ptr %l{dest}, ptr {src}, ptr {index}, i32 {element}, i32 {symbol})"
                 );
             }
         }
@@ -963,19 +1049,27 @@ where
         value
     }
 
-    fn aggregate(&mut self, out: &mut String, dest: u16, symbol: u32, tag: u16, args: &[Operand]) {
+    fn aggregate(
+        &mut self,
+        out: &mut String,
+        dest: u16,
+        layout: LayoutId,
+        tag: u16,
+        args: &[Operand],
+    ) -> Result<(), Error> {
+        let symbol = self.layout_display(layout)?;
         let args = self.snapshot_operands(out, args);
         let _ = writeln!(
             out,
-            "  call void @talk_llvm_agg(ptr %l{dest}, i32 {symbol}, i32 {tag}, i32 {})",
-            args.len()
+            "  call void @talk_llvm_agg(ptr %l{dest}, i32 {layout}, i32 {symbol}, i32 {tag})"
         );
         for (index, arg) in args.iter().enumerate() {
             let _ = writeln!(
                 out,
-                "  call void @talk_llvm_agg_set(ptr %l{dest}, i32 {index}, ptr {arg})"
+                "  call void @talk_llvm_agg_arg(ptr %l{dest}, i32 {layout}, i32 {tag}, i32 {index}, ptr {arg})"
             );
         }
+        Ok(())
     }
 
     fn unwind_check(&mut self, out: &mut String, unwind: Option<usize>, identified: bool) {
@@ -1187,6 +1281,7 @@ where
         out.push_str(native_prelude);
         out.push('\n');
         emit_statics(&mut out, &self.statics);
+        emit_layout_table(&mut out, self);
         emit_type_table(&mut out, self, names);
         let _ = writeln!(
             out,
@@ -1202,6 +1297,11 @@ where
             "    talk_statics_base = talk_statics; talk_statics_len = sizeof talk_statics;\n",
         );
         out.push_str("    talk_types = talk_type_table; talk_type_count = sizeof talk_type_table / sizeof *talk_type_table;\n");
+        let _ = writeln!(
+            out,
+            "    talk_layouts = talk_layout_table; talk_layout_count = {};",
+            self.layouts.len()
+        );
         out.push_str("    TalkValue result = talk_unit(); talk_llvm_entry(&result);\n");
         out.push_str("    int status = talk_print(result); talk_arena_release(); talk_effects_release(); return status;\n}\n");
         out
@@ -1215,6 +1315,95 @@ fn emit_statics(out: &mut String, bytes: &[u8]) {
     }
     if bytes.is_empty() {
         let _ = write!(out, "0");
+    }
+    let _ = writeln!(out, "}};");
+}
+
+fn emit_layout_table<S>(out: &mut String, emitter: &Emitter<S>)
+where
+    S: Copy + Eq + Hash,
+{
+    for (id, layout) in emitter.layouts.iter().enumerate() {
+        let shape = match layout {
+            Layout::Inline(_, shape) | Layout::Boxed(_, shape) => shape,
+            Layout::Slot | Layout::Opaque => continue,
+        };
+        let (offsets, reprs): (Vec<_>, Vec<_>) = match shape {
+            Shape::Product { offsets, reprs, .. } => (offsets.clone(), reprs.clone()),
+            Shape::Sum {
+                payloads, reprs, ..
+            } => (
+                payloads.iter().flatten().copied().collect(),
+                reprs.iter().flatten().copied().collect(),
+            ),
+        };
+        if !reprs.is_empty() {
+            let _ = writeln!(out, "static const TalkField talk_layout_fields_{id}[] = {{");
+            for (offset, repr) in offsets.iter().zip(&reprs) {
+                match repr {
+                    FieldRepr::Slot(_) => {
+                        let _ = writeln!(out, "    {{ {offset}, 1, UINT32_MAX, 0 }},");
+                    }
+                    FieldRepr::Spliced(child) => {
+                        let width = emitter.layout_width(*child);
+                        let symbol = emitter.published_display(*child);
+                        let _ = writeln!(out, "    {{ {offset}, {width}, {child}, {symbol} }},");
+                    }
+                }
+            }
+            let _ = writeln!(out, "}};");
+        }
+        if let Shape::Sum { reprs, .. } = shape {
+            let mut start = 0usize;
+            let _ = write!(
+                out,
+                "static const uint32_t talk_layout_starts_{id}[] = {{ 0"
+            );
+            for variant in reprs {
+                start += variant.len();
+                let _ = write!(out, ", {start}");
+            }
+            let _ = writeln!(out, " }};");
+        }
+    }
+
+    let _ = writeln!(out, "static const TalkLayoutInfo talk_layout_table[] = {{");
+    if emitter.layouts.is_empty() {
+        let _ = writeln!(out, "    {{ 0, 0, NULL, 0, NULL, 0 }},");
+    }
+    for (id, layout) in emitter.layouts.iter().enumerate() {
+        match layout {
+            Layout::Slot | Layout::Opaque => {
+                let _ = writeln!(out, "    {{ 1, 0, NULL, 0, NULL, 0 }},");
+            }
+            Layout::Inline(_, Shape::Product { width, reprs, .. })
+            | Layout::Boxed(_, Shape::Product { width, reprs, .. }) => {
+                let fields = if reprs.is_empty() {
+                    "NULL".to_string()
+                } else {
+                    format!("talk_layout_fields_{id}")
+                };
+                let _ = writeln!(
+                    out,
+                    "    {{ {width}, 0, {fields}, {}, NULL, 0 }},",
+                    reprs.len()
+                );
+            }
+            Layout::Inline(_, Shape::Sum { width, reprs, .. })
+            | Layout::Boxed(_, Shape::Sum { width, reprs, .. }) => {
+                let field_count: usize = reprs.iter().map(Vec::len).sum();
+                let fields = if field_count == 0 {
+                    "NULL".to_string()
+                } else {
+                    format!("talk_layout_fields_{id}")
+                };
+                let _ = writeln!(
+                    out,
+                    "    {{ {width}, 1, {fields}, {field_count}, talk_layout_starts_{id}, {} }},",
+                    reprs.len()
+                );
+            }
+        }
     }
     let _ = writeln!(out, "}};");
 }
@@ -1275,14 +1464,14 @@ where
     let _ = writeln!(out, "}};");
 }
 
-fn mem_kind(kind: MemTy) -> u32 {
+fn mem_kind(kind: SlotKind) -> u32 {
     match kind {
-        MemTy::Byte => 0,
-        MemTy::I64 => 1,
-        MemTy::F64 => 2,
-        MemTy::Bool => 3,
-        MemTy::Ptr => 4,
-        MemTy::Boxed => 5,
+        SlotKind::Byte => 0,
+        SlotKind::Int => 1,
+        SlotKind::F64 => 2,
+        SlotKind::Bool => 3,
+        SlotKind::Ptr => 4,
+        SlotKind::Value => 5,
     }
 }
 
