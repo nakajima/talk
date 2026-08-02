@@ -36,7 +36,7 @@ impl<'a> ProgramBuilder<'a> {
         let id = self.reserve("heap_teardown");
         self.glue.insert((ty.clone(), Glue::HeapTeardown), id);
         let mut fx = FunctionBuilder::new(self, 0, 0);
-        fx.next_local = 1;
+        fx.frame.resize(1, Default::default());
         if let Some((witness, subst)) = deinit {
             let func = fx
                 .program_builder
@@ -58,11 +58,14 @@ impl<'a> ProgramBuilder<'a> {
             });
             fx.drop_value(Operand::Local(field), &field_ty);
         }
-        let (n_locals, blocks) = fx.finish(Operand::Const(Constant::Unit))?;
+        let (n_locals, blocks, _return_repr) = fx.finish(Operand::Const(Constant::Unit))?;
         self.functions[id] = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "heap_teardown".into(),
             arity: 1,
-            n_locals,
+            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(Some(id))
@@ -79,7 +82,7 @@ impl<'a> ProgramBuilder<'a> {
         });
         self.glue.insert((ty.clone(), glue), id);
         let mut fx = FunctionBuilder::new(self, 0, 0);
-        fx.next_local = 1;
+        fx.frame.resize(1, Default::default());
         // Glue over a type that mentions rigid effect-generics reads their
         // full witness blocks from its closure environment — the
         // `[drop, retain]` pair plus each bound protocol's requirement
@@ -137,15 +140,22 @@ impl<'a> ProgramBuilder<'a> {
                 fx.retain_value(Operand::Local(0), &retained, Span::SYNTHESIZED)?;
             }
         }
-        let (n_locals, blocks) = fx.finish(Operand::Const(Constant::Unit))?;
+        let (n_locals, blocks, _return_repr) = fx.finish(Operand::Const(Constant::Unit))?;
+        // The glue's one parameter is the value itself, at its published
+        // layout: scope-exit drops of native locals then pass the struct
+        // straight in instead of boxing at every death.
+        let layout = self.layouts.borrow_mut().id_of(ty);
         self.functions[id] = Function {
+            frame_sites: Default::default(),
+            param_reprs: vec![layout::ParamRepr::Value(layout)],
+            return_repr: None,
             name: match glue {
                 Glue::HeapTeardown => unreachable!("heap teardown has its own builder"),
                 Glue::Drop => "shared_drop".into(),
                 Glue::Retain => "existential_retain".into(),
             },
             arity: 1,
-            n_locals,
+            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(id)
@@ -170,6 +180,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             ));
         };
         let type_name = self.program_builder.display_name(*symbol);
+        let container = self.container_layout(ty);
         if let (Some(payloads), Some(names)) = (
             self.program_builder.variant_payloads(*symbol, args),
             self.program_builder.variant_names(*symbol),
@@ -210,11 +221,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         acc = self.emit_string_concat(acc, comma, span)?;
                     }
                     let payload = self.fresh_local();
-                    self.push(Inst::GetPayload {
-                        dest: payload,
-                        src: value,
-                        index: u16::try_from(index).unwrap_or_default(),
-                    });
+                    self.push_field(payload, value, container, u16::try_from(index).unwrap_or_default(), Some(u16::try_from(variant_tag).unwrap_or_default()));
                     let rendered =
                         self.emit_sub_show(Operand::Local(payload), payload_ty, protocol, span)?;
                     acc = self.emit_string_concat(acc, rendered, span)?;
@@ -252,11 +259,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 };
                 acc = self.emit_string_concat(acc, prefix, span)?;
                 let field = self.fresh_local();
-                self.push(Inst::GetField {
-                    dest: field,
-                    src: value,
-                    index: u16::try_from(index).unwrap_or_default(),
-                });
+                self.push_field(field, value, container, u16::try_from(index).unwrap_or_default(), None);
                 let rendered =
                     self.emit_sub_show(Operand::Local(field), field_ty, protocol, span)?;
                 acc = self.emit_string_concat(acc, rendered, span)?;
@@ -277,10 +280,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         &mut self,
         a: Operand,
         b: Operand,
+        ty: &Ty,
         payloads: Vec<Vec<Ty>>,
         protocol: &crate::types::ty::ProtocolRef,
         span: Span,
     ) -> Result<Operand, BackendError> {
+        let container = self.container_layout(ty);
         let result = self.fresh_local();
         let fail = self.new_block();
         let done = self.new_block();
@@ -327,17 +332,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             self.switch_to(arm);
             for (index, payload_ty) in payload_tys.iter().enumerate() {
                 let pa = self.fresh_local();
-                self.push(Inst::GetPayload {
-                    dest: pa,
-                    src: a,
-                    index: u16::try_from(index).unwrap_or_default(),
-                });
+                self.push_field(pa, a, container, u16::try_from(index).unwrap_or_default(), Some(u16::try_from(variant_tag).unwrap_or_default()));
                 let pb = self.fresh_local();
-                self.push(Inst::GetPayload {
-                    dest: pb,
-                    src: b,
-                    index: u16::try_from(index).unwrap_or_default(),
-                });
+                self.push_field(pb, b, container, u16::try_from(index).unwrap_or_default(), Some(u16::try_from(variant_tag).unwrap_or_default()));
                 let equal = self.emit_equality(
                     Operand::Local(pa),
                     Operand::Local(pb),
@@ -500,9 +497,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             term: Some(Term::Return(Operand::Local(result))),
         };
         self.program_builder.functions[id] = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "requirement_forwarder".into(),
             arity: visible,
-            n_locals: result + 1,
+            locals: crate::backend::mir::LocalInfo::uniform(result + 1),
             blocks: vec![block],
         };
         id

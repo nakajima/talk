@@ -321,7 +321,6 @@ pub fn parse_ast_with_comments(
             node_ids: crate::common::id_generator::IDGenerator {
                 last: bridged.next_node_id,
             },
-            synthsized_ids: crate::common::id_generator::IDGenerator::default(),
             file_id,
             skip_core_prelude: false,
         },
@@ -351,7 +350,6 @@ pub fn parse_ast_lenient(
                 meta: Default::default(),
                 phase: crate::ast::Parsed,
                 node_ids: Default::default(),
-                synthsized_ids: Default::default(),
                 file_id,
                 skip_core_prelude: false,
             },

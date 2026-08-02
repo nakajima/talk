@@ -20,6 +20,7 @@
 
 use rustc_hash::FxHashMap;
 
+use super::mir::layout::{Layout, LayoutId, local_layouts};
 use super::mir::{BlockData, Function, Inst, LocalId, Operand, Slot, Term, visit_inst, visit_term};
 
 /// A block's successors in the flow graph, unwind cleanup entries
@@ -80,7 +81,7 @@ fn fuse_adjacent_copies(function: &mut Function) {
         param_locals.extend(block.params.iter().copied());
         for inst in &mut block.insts {
             visit_inst(inst, &mut |slot, local| {
-                if slot == Slot::Use {
+                if slot.is_use() {
                     *uses.entry(*local).or_insert(0) += 1;
                 }
             });
@@ -237,14 +238,31 @@ fn layout_blocks(function: &mut Function) {
     }
 }
 
-pub(crate) fn reuse_locals(function: &mut Function) {
+pub(crate) fn reuse_locals(
+    function: &mut Function,
+    layout_table: &[Layout],
+    returns: &[Option<LayoutId>],
+) {
     layout_blocks(function);
     fuse_adjacent_copies(function);
     let arity = usize::from(function.arity);
-    let n_locals = usize::from(function.n_locals);
+    let n_locals = usize::from(function.n_locals());
+    // Layout classes (ADR 0045): a register may be reused only by locals
+    // of the same class, so a slot never holds an inline `Point` on one
+    // range and an `Int` on another once storage is shaped. Derived here
+    // once and published on `function.locals` — downstream consumers
+    // (frame shaping, the C emitter) read the stamped classes instead of
+    // re-running the dataflow.
+    let class = local_layouts(function, layout_table, returns);
     if n_locals <= arity + 1 {
+        // Too small to reuse anything: locals keep their own registers,
+        // so the classes publish under the identity numbering.
+        for (local, info) in function.locals.iter_mut().enumerate() {
+            info.layout = class.get(local).copied().flatten();
+        }
         return;
     }
+    let mut register_class: FxHashMap<u16, Option<LayoutId>> = FxHashMap::default();
 
     // Backward liveness to fixpoint, one dense bitset per block —
     // locals are small dense integers, and the hash-set version of
@@ -283,7 +301,7 @@ pub(crate) fn reuse_locals(function: &mut Function) {
                 let mut uses: Vec<LocalId> = Vec::new();
                 visit_inst(inst, &mut |slot, local| match slot {
                     Slot::Def => defs.push(*local),
-                    Slot::Use => uses.push(*local),
+                    Slot::Use(_) => uses.push(*local),
                 });
                 for def in defs {
                     clear(&mut live, def);
@@ -377,7 +395,7 @@ pub(crate) fn reuse_locals(function: &mut Function) {
     // one register). A group member whose interval genuinely overlaps
     // the group's register simply allocates normally — affinity is a
     // preference, never a constraint.
-    let mut affinity: Vec<u16> = (0..function.n_locals).collect();
+    let mut affinity: Vec<u16> = (0..function.n_locals()).collect();
     fn find_group(affinity: &mut [u16], local: u16) -> u16 {
         let parent = affinity[usize::from(local)];
         if parent == local {
@@ -423,7 +441,7 @@ pub(crate) fn reuse_locals(function: &mut Function) {
         .filter(|&local| start[local] != UNSET)
         .collect();
     order.sort_unstable_by_key(|&local| start[local]);
-    let mut map: Vec<LocalId> = (0..function.n_locals).collect::<Vec<u16>>();
+    let mut map: Vec<LocalId> = (0..function.n_locals()).collect::<Vec<u16>>();
     // (interval end, register, holder local), ordered by end as linear
     // scan wants (Poletto & Sarkar 1999): expiry drains the ordered
     // prefix and the group-mate touch below reads the exact-`s` range,
@@ -437,7 +455,7 @@ pub(crate) fn reuse_locals(function: &mut Function) {
     // members); a singleton "group" reserving its register forever
     // would starve ordinary reuse.
     let mut group_size: FxHashMap<u16, u32> = FxHashMap::default();
-    for local in 0..function.n_locals {
+    for local in 0..function.n_locals() {
         *group_size
             .entry(find_group(&mut affinity, local))
             .or_insert(0) += 1;
@@ -450,6 +468,7 @@ pub(crate) fn reuse_locals(function: &mut Function) {
     // sites instead of being rebuilt per interval.
     let mut reserved: rustc_hash::FxHashSet<u16> = rustc_hash::FxHashSet::default();
     for param in 0..function.arity {
+        register_class.insert(param, class[usize::from(param)]);
         let group = find_group(&mut affinity, param);
         if group_size.get(&group).copied().unwrap_or(0) > 1 {
             group_register.entry(group).or_insert_with(|| {
@@ -499,9 +518,13 @@ pub(crate) fn reuse_locals(function: &mut Function) {
                     active.remove(&entry);
                     return Some(wanted);
                 }
-                // Or the register may simply be free.
+                // Or the register may simply be free — and of this
+                // local's layout class.
                 free.iter()
-                    .position(|&register| register == wanted)
+                    .position(|&register| {
+                        register == wanted
+                            && register_class.get(&register).copied().flatten() == class[local]
+                    })
                     .map(|ix| free.swap_remove(ix))
             })
             .unwrap_or_else(|| {
@@ -512,11 +535,15 @@ pub(crate) fn reuse_locals(function: &mut Function) {
                 // loop iteration).
                 let choice = free
                     .iter()
-                    .rposition(|register| !reserved.contains(register))
+                    .rposition(|register| {
+                        !reserved.contains(register)
+                            && register_class.get(register).copied().flatten() == class[local]
+                    })
                     .map(|ix| free.swap_remove(ix));
                 choice.unwrap_or_else(|| {
                     let register = next;
                     next += 1;
+                    register_class.insert(register, class[local]);
                     register
                 })
             });
@@ -546,7 +573,16 @@ pub(crate) fn reuse_locals(function: &mut Function) {
             visit_term(term, &mut |_, local| *local = map[usize::from(*local)]);
         }
     }
-    function.n_locals = next.max(function.arity).max(1);
+    // Publish each register's layout class on the final numbering: a
+    // register's class is by construction the common class of every
+    // local allocated into it.
+    let n_regs = next.max(function.arity).max(1);
+    function.locals = (0..n_regs)
+        .map(|register| crate::backend::mir::LocalInfo {
+            layout: register_class.get(&register).copied().flatten(),
+            frame_local: false,
+        })
+        .collect();
 }
 
 #[cfg(test)]
@@ -577,9 +613,12 @@ mod tests {
 
     fn function(arity: u16, n_locals: u16, blocks: Vec<BlockData>) -> Function {
         Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "test".into(),
             arity,
-            n_locals,
+            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
         }
     }
@@ -601,8 +640,8 @@ mod tests {
                 term: Some(Term::Return(local(2))),
             }],
         );
-        reuse_locals(&mut f);
-        assert!(f.n_locals <= 2, "expected reuse, got {} locals", f.n_locals);
+        reuse_locals(&mut f, &[], &[]);
+        assert!(f.n_locals() <= 2, "expected reuse, got {} locals", f.n_locals());
     }
 
     #[test]
@@ -625,7 +664,7 @@ mod tests {
                 term: Some(Term::Return(result)),
             }],
         );
-        reuse_locals(&mut f);
+        reuse_locals(&mut f, &[], &[]);
         let mut defs = Vec::new();
         for i in 0..usize::from(width) {
             let Inst::Copy { dest, .. } = &f.blocks[0].insts[i] else {
@@ -674,7 +713,7 @@ mod tests {
                 term: Some(Term::Return(local(2))),
             }],
         );
-        reuse_locals(&mut f);
+        reuse_locals(&mut f, &[], &[]);
         let Inst::Copy { dest, src } = &f.blocks[0].insts[2] else {
             panic!("copy changed shape");
         };
@@ -699,7 +738,7 @@ mod tests {
                 term: Some(Term::Return(local(0))),
             }],
         );
-        reuse_locals(&mut f);
+        reuse_locals(&mut f, &[], &[]);
         assert_eq!(
             f.blocks[0].insts.len(),
             2,
@@ -718,9 +757,12 @@ mod tests {
         // dies at the edge, so the parameter takes its register and the
         // edge move lowers to nothing.
         let mut f = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "edge".into(),
             arity: 0,
-            n_locals: 2,
+            locals: crate::backend::mir::LocalInfo::uniform(2),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),
@@ -734,7 +776,7 @@ mod tests {
                 },
             ],
         };
-        reuse_locals(&mut f);
+        reuse_locals(&mut f, &[], &[]);
         let Some(Term::Goto(_, edge_args)) = &f.blocks[0].term else {
             panic!("goto changed shape");
         };
@@ -756,7 +798,7 @@ mod tests {
                 term: Some(Term::Return(local(3))),
             }],
         );
-        reuse_locals(&mut f);
+        reuse_locals(&mut f, &[], &[]);
         let BlockData { insts, .. } = &f.blocks[0];
         let Inst::Scalar { a, b, .. } = &insts[0] else {
             panic!("first inst changed shape");
@@ -799,7 +841,7 @@ mod tests {
                 },
             ],
         );
-        reuse_locals(&mut f);
+        reuse_locals(&mut f, &[], &[]);
         // x and t are simultaneously live inside the loop: they must hold
         // distinct registers.
         let Inst::Scalar { dest, a, .. } = &f.blocks[1].insts[0] else {
@@ -841,7 +883,7 @@ mod tests {
                 },
             ],
         );
-        reuse_locals(&mut f);
+        reuse_locals(&mut f, &[], &[]);
         let Inst::Call { dest, .. } = &f.blocks[0].insts[1] else {
             panic!("call changed shape");
         };
@@ -853,5 +895,78 @@ mod tests {
             *src,
             "call result reused the register of a cleanup-live value"
         );
+    }
+
+    #[test]
+    fn registers_never_cross_layout_classes() {
+        let table = vec![Layout::Inline(
+            None,
+            crate::backend::mir::layout::Shape::Product {
+                width: 2,
+                offsets: vec![0, 1],
+                reprs: vec![
+                    crate::backend::mir::layout::FieldRepr::Slot(
+                        crate::backend::mir::layout::SlotKind::Int
+                    );
+                    2
+                ],
+                kinds: vec![crate::backend::mir::layout::SlotKind::Int; 2],
+            },
+        )];
+        let build = || Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
+            name: String::new(),
+            arity: 1,
+            locals: crate::backend::mir::LocalInfo::uniform(4),
+            blocks: vec![BlockData {
+                params: Vec::new(),
+                insts: vec![
+                    Inst::Aggregate {
+                        tag: 0,
+                        dest: 1,
+                        layout: 0,
+                        args: Vec::new(),
+                    },
+                    copy(2, Operand::Local(1)),
+                    copy(3, Operand::Const(Constant::Unit)),
+                ],
+                term: Some(Term::Return(Operand::Local(3))),
+            }],
+        };
+        let record_register = |f: &Function| {
+            f.blocks[0]
+                .insts
+                .iter()
+                .find_map(|inst| match inst {
+                    Inst::Aggregate { dest, .. } => Some(*dest),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let const_register = |f: &Function| {
+            f.blocks[0]
+                .insts
+                .iter()
+                .find_map(|inst| match inst {
+                    Inst::Copy {
+                        dest,
+                        src: Operand::Const(Constant::Unit),
+                    } => Some(*dest),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        // Without layout classes the record register is recycled for the
+        // uniform local the moment it dies.
+        let mut control = build();
+        reuse_locals(&mut control, &[], &[]);
+        assert_eq!(record_register(&control), const_register(&control));
+        // With classes, an inline-record register never holds a uniform
+        // value.
+        let mut classed = build();
+        reuse_locals(&mut classed, &table, &[]);
+        assert_ne!(record_register(&classed), const_register(&classed));
     }
 }

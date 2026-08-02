@@ -537,7 +537,7 @@ func decl_label(kind: &DeclKind) -> String {
 		.func_decl(_) -> "Decl::Func",
 		.func_signature(_) -> "Decl::FuncSignature",
 		.struct_decl(_, _, _, _, _, _, _, _) -> "Decl::Struct",
-		.enum_decl(_, _, _, _, _, _, _) -> "Decl::Enum",
+		.enum_decl(_, _, _, _, _, _, _, _) -> "Decl::Enum",
 		.protocol_decl(_, _, _, _, _, _, _) -> "Decl::Protocol",
 		.enum_variant(_, _, _, _, _, _, _) -> "Decl::EnumVariant",
 		.extend_decl(_, _, _, _, _) -> "Decl::Extend",
@@ -582,7 +582,7 @@ func render_decl(mut buf: [Byte], view: UTF8View, decl: &Decl, depth: Int) -> Vo
 			render_optional_where(buf: buf, view: view, wc: wc, depth: child)
 			render_body(buf: buf, view: view, body: body, depth: child)
 		},
-		.enum_decl(_, _, _, generics, wc, body, _) -> {
+		.enum_decl(_, _, _, generics, wc, body, _, _) -> {
 			for generic in generics {
 				render_generic_decl(buf: buf, view: view, generic: generic, depth: child)
 			}

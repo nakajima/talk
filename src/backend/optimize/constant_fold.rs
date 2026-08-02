@@ -159,9 +159,12 @@ mod tests {
     #[test]
     fn folds_constant_scalar_chains_and_return_operands() {
         let mut function = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "fold".into(),
             arity: 0,
-            n_locals: 2,
+            locals: crate::backend::mir::LocalInfo::uniform(2),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts: vec![
@@ -199,9 +202,12 @@ mod tests {
     #[test]
     fn does_not_fold_trapping_integer_division() {
         let mut function = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "divide".into(),
             arity: 0,
-            n_locals: 1,
+            locals: crate::backend::mir::LocalInfo::uniform(1),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts: vec![Inst::Scalar {

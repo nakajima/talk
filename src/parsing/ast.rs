@@ -34,7 +34,6 @@ impl From<AST<Parsed>> for AST<NameResolved> {
             meta: value.meta,
             phase: NameResolved {},
             node_ids: value.node_ids,
-            synthsized_ids: value.synthsized_ids,
             file_id: value.file_id,
             skip_core_prelude: value.skip_core_prelude,
         }
@@ -48,7 +47,6 @@ pub struct AST<Phase: ASTPhase = NewAST> {
     pub meta: NodeMetaStorage,
     pub phase: Phase,
     pub node_ids: IDGenerator,
-    pub synthsized_ids: IDGenerator,
     pub file_id: FileID,
     pub skip_core_prelude: bool,
 }

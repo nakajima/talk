@@ -10,7 +10,7 @@ use crate::io::IO;
 use crate::memory::{Allocations, MemoryError, Pointer};
 use crate::objects::{ObjectError, Objects};
 use crate::symbol::Symbol;
-use crate::{Chunk, Constant, Insn, MemKind, Module};
+use crate::{Chunk, Constant, FieldShape, Insn, LayoutBody, LayoutDesc, MemKind, Module};
 use std::rc::Rc;
 
 /// Whether `TALK_TRACE_MEM` is set, read once: the check guards the
@@ -30,17 +30,15 @@ pub enum Value {
     Void,
     /// An address and allocation identity in the VM's byte memory.
     Ptr(Pointer),
-    /// A record value: `Rc` makes copies O(1); field update clones the
-    /// fields first (CoW — mutable value semantics, Racordon et al., JOT
-    /// 2022).
-    Record(Symbol, Rc<Vec<Value>>),
-    /// A tuple value (inout ret pairs, M4 payloads).
-    Tuple(Rc<Vec<Value>>),
-    /// A tagged enum value: enum symbol, variant declaration index, and
-    /// payloads (pure, like records).
-    Variant(Symbol, u16, Rc<Vec<Value>>),
+    /// An aggregate — struct, tuple, record, or enum variant — in the
+    /// one flat representation (ADR 0045): its published layout id and
+    /// its slot vector, nested inline children spliced in place, a sum's
+    /// tag at slot 0. One allocation covers the whole inline tree; `Rc`
+    /// makes copies O(1) and field update clones the slots first (CoW —
+    /// mutable value semantics, Racordon et al., JOT 2022).
+    Agg(u32, Rc<Vec<Value>>),
     /// A protocol existential: hidden payload plus erased witness closures.
-    Existential(Symbol, Rc<Value>, Rc<Vec<Value>>),
+    Existential(Rc<Value>, Rc<Vec<Value>>),
     /// A flat closure: target chunk plus its captured environment
     /// (Cardelli, LFP 1984).
     Closure(u32, Rc<Vec<Value>>),
@@ -201,14 +199,6 @@ pub struct RunBalance {
     pub result_exact: bool,
 }
 
-/// Run and report the allocation balance alongside the value — the VM
-/// counterpart of the reference evaluator's leak fence.
-pub fn run_counted(module: &Module, io: &mut dyn IO) -> Result<(Value, RunBalance), String> {
-    let (value, machine) = run_machine(module, io)?;
-    let balance = machine.balance(&value);
-    Ok((value, balance))
-}
-
 /// `run_displayed` with the allocation balance — the REPL tests' fence.
 pub fn run_displayed_counted(
     module: &Module,
@@ -223,7 +213,8 @@ pub fn run_displayed_counted(
 
 /// Run and render the program value Talk-style while the machine is
 /// still alive (strings point into its byte memory).
-pub fn run_displayed(
+#[cfg(test)]
+pub(crate) fn run_displayed(
     module: &Module,
     io: &mut dyn IO,
     names: &ValueNames,
@@ -247,19 +238,21 @@ pub enum HostValue {
     String(Vec<u8>),
 }
 
-/// The record symbols needed to fabricate a core String value. Symbol
-/// identity is owned by the compiler, so the caller supplies them.
-#[derive(Debug, Clone, Copy)]
-pub struct StringShape {
-    pub string: Symbol,
-    pub storage: Symbol,
-}
-
 /// A finished export call: the result value plus the still-live machine
 /// whose byte memory string results point into.
 pub struct RunOutcome<'io> {
     pub value: Value,
     machine: Machine<'io>,
+}
+
+/// The bridge-facing logical shape of one aggregate value: its display
+/// identity, the live case tag for sums, and how many logical elements
+/// it has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AggregateView {
+    pub symbol: Option<Symbol>,
+    pub tag: Option<u16>,
+    pub len: usize,
 }
 
 impl RunOutcome<'_> {
@@ -294,9 +287,63 @@ impl RunOutcome<'_> {
             .ok_or_else(|| "vm: load of a bad arena handle".into())
     }
 
+    /// The logical view of one aggregate value for the host bridge:
+    /// display identity, case tag for sums, and logical element count.
+    /// Flat values resolve through the module's published layout table —
+    /// the one source of representation truth — so the bridge walks
+    /// logical structure without knowing offsets.
+    pub fn aggregate(&self, value: &Value) -> Result<AggregateView, String> {
+        match value {
+            Value::Agg(layout, slots) => {
+                let desc = self
+                    .machine
+                    .layouts
+                    .get(*layout as usize)
+                    .ok_or("vm: aggregate with an unknown layout")?;
+                match &desc.body {
+                    LayoutBody::Product(fields) => Ok(AggregateView {
+                        symbol: desc.symbol,
+                        tag: None,
+                        len: fields.len(),
+                    }),
+                    LayoutBody::Sum(variants) => {
+                        let Some(Value::I64(tag)) = slots.first() else {
+                            return Err("vm: flat sum without a tag".into());
+                        };
+                        let tag =
+                            u16::try_from(*tag).map_err(|_| "vm: flat sum tag out of range")?;
+                        let len = variants
+                            .get(usize::from(tag))
+                            .ok_or("vm: flat sum tag out of range")?
+                            .len();
+                        Ok(AggregateView {
+                            symbol: desc.symbol,
+                            tag: Some(tag),
+                            len,
+                        })
+                    }
+                    LayoutBody::Unshaped => Err("vm: aggregate with an unshaped layout".into()),
+                }
+            }
+            other => Err(format!("expected an aggregate value, got {other:?}")),
+        }
+    }
+
+    /// One logical element of an aggregate (a record field, tuple item,
+    /// or the live variant's payload element), by index.
+    pub fn element(&self, value: &Value, index: u16) -> Result<Value, String> {
+        match value {
+            Value::Agg(layout, slots) => {
+                let (offset, shape) = field_site(&self.machine.layouts, *layout, slots, index)?;
+                read_slots(&self.machine.layouts, slots, offset, shape)
+            }
+            other => Err(format!("expected an aggregate value, got {other:?}")),
+        }
+    }
+
     /// The UTF-8 bytes of a String-shaped value in this outcome.
     pub fn string_bytes(&self, value: &Value) -> Result<&[u8], String> {
-        let Value::Record(_, fields) = value else {
+        let Value::Agg(_, fields) = value else {
             return Err("not a string value".into());
         };
         let Some((base, len)) = string_bytes(fields) else {
@@ -322,12 +369,12 @@ pub fn run_export<'io>(
     module: &Module,
     name: &str,
     args: &[HostValue],
-    strings: StringShape,
+    string: Symbol,
     budgets: Budgets,
     io: &'io mut dyn IO,
 ) -> Result<RunOutcome<'io>, String> {
     let mut stats = NoStats;
-    run_export_inner(module, name, args, strings, budgets, io, &mut stats)
+    run_export_inner(module, name, args, string, budgets, io, &mut stats)
 }
 
 /// [`run_export`] with exact per-opcode and per-instruction execution counts.
@@ -337,12 +384,12 @@ pub fn run_export_with_stats<'io>(
     module: &Module,
     name: &str,
     args: &[HostValue],
-    strings: StringShape,
+    string: Symbol,
     budgets: Budgets,
     io: &'io mut dyn IO,
     stats: &mut VmStats,
 ) -> Result<RunOutcome<'io>, String> {
-    run_export_inner(module, name, args, strings, budgets, io, stats)
+    run_export_inner(module, name, args, string, budgets, io, stats)
 }
 
 trait StatsSink {
@@ -387,7 +434,7 @@ fn run_export_inner<'io, S: StatsSink>(
     module: &Module,
     name: &str,
     args: &[HostValue],
-    strings: StringShape,
+    string: Symbol,
     budgets: Budgets,
     io: &'io mut dyn IO,
     stats: &mut S,
@@ -410,9 +457,10 @@ fn run_export_inner<'io, S: StatsSink>(
     // string literals: appended after the module statics, before the
     // machine snapshots its static length.
     let mut mem = module.statics.clone();
-    let values: Vec<Value> = args
-        .iter()
-        .map(|arg| match arg {
+    let flat_string = string_layout(module, string)?;
+    let mut values: Vec<Value> = Vec::with_capacity(args.len());
+    for arg in args {
+        values.push(match arg {
             HostValue::Int(v) => Value::I64(*v),
             HostValue::Float(v) => Value::F64(*v),
             HostValue::Bool(v) => Value::Bool(*v),
@@ -421,25 +469,30 @@ fn run_export_inner<'io, S: StatsSink>(
                 let base = mem.len() as u32;
                 mem.extend_from_slice(bytes);
                 let len = bytes.len() as i64;
-                Value::Record(
-                    strings.string,
+                // The flat String its code reads: storage spliced at
+                // slot 0, then byte count and capacity.
+                let Some(layout) = flat_string else {
+                    return Err(
+                        "vm: module publishes no String layout for host string arguments".into(),
+                    );
+                };
+                Value::Agg(
+                    layout,
                     Rc::new(vec![
-                        Value::Record(
-                            strings.storage,
-                            Rc::new(vec![Value::Ptr(Pointer::static_at(base))]),
-                        ),
+                        Value::Ptr(Pointer::static_at(base)),
                         Value::I64(len),
                         Value::I64(len),
                     ]),
                 )
             }
-        })
-        .collect();
+        });
+    }
 
     let mut machine = Machine {
         slots: vec![],
         static_len: mem.len() as u32,
         mem,
+        layouts: module.layouts.clone(),
         allocations: Allocations::default(),
         boxed: vec![Value::Void],
         objects: Objects::default(),
@@ -458,11 +511,28 @@ fn run_export_inner<'io, S: StatsSink>(
     }
 }
 
+/// The published layout of the core String struct, if this module has
+/// one — the shape host string arguments must fabricate. Present but
+/// unexpected is an error: fabricating the wrong width would corrupt the
+/// callee's reads.
+fn string_layout(module: &Module, string: Symbol) -> Result<Option<u32>, String> {
+    for (id, desc) in module.layouts.iter().enumerate() {
+        if desc.symbol == Some(string) && !matches!(desc.body, LayoutBody::Unshaped) {
+            if desc.width != 3 {
+                return Err("vm: string layout has an unexpected shape".into());
+            }
+            return Ok(Some(u32::try_from(id).map_err(|_| "vm: layout table too large")?));
+        }
+    }
+    Ok(None)
+}
+
 fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Machine<'io>), String> {
     let mut machine = Machine {
         slots: vec![],
         mem: module.statics.clone(),
         static_len: module.statics.len() as u32,
+        layouts: module.layouts.clone(),
         allocations: Allocations::default(),
         // Slot 0 is a reserved placeholder (like arg_pool's) so that a
         // zeroed, never-stored cell can't alias a real handle.
@@ -1013,65 +1083,8 @@ fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> Result<
         Value::Byte(v) => Ok(v.to_string()),
         Value::Void => Ok("()".to_string()),
         Value::Ptr(pointer) => Ok(format!("RawPtr({})", pointer.address())),
-        Value::Tuple(items) => {
-            let items: Vec<String> = items
-                .iter()
-                .map(|item| render_value(machine, names, item))
-                .collect::<Result<_, _>>()?;
-            Ok(format!("({})", items.join(", ")))
-        }
-        Value::Record(symbol, field_values) => {
-            if names.string_struct == Some(*symbol)
-                && let Some((base, len)) = string_bytes(field_values)
-            {
-                let bytes = machine.string_display_bytes(base, len)?;
-                return Ok(format!(
-                    "\"{}\"",
-                    escape_string(&String::from_utf8_lossy(bytes))
-                ));
-            }
-            let name = names
-                .types
-                .get(symbol)
-                .cloned()
-                .unwrap_or_else(|| symbol.to_string());
-            let field_names = names.fields.get(symbol);
-            let rendered: Vec<String> = field_values
-                .iter()
-                .enumerate()
-                .map(|(index, field)| {
-                    let value = render_value(machine, names, field)?;
-                    Ok(match field_names.and_then(|fields| fields.get(index)) {
-                        Some(field_name) => format!("{field_name}: {value}"),
-                        None => value,
-                    })
-                })
-                .collect::<Result<_, String>>()?;
-            Ok(format!("{name}({})", rendered.join(", ")))
-        }
-        Value::Variant(symbol, tag, payloads) => {
-            let name = names
-                .types
-                .get(symbol)
-                .cloned()
-                .unwrap_or_else(|| symbol.to_string());
-            let case = names
-                .cases
-                .get(symbol)
-                .and_then(|cases| cases.get(*tag as usize))
-                .cloned()
-                .unwrap_or_else(|| format!("case{tag}"));
-            if payloads.is_empty() {
-                Ok(format!("{name}.{case}"))
-            } else {
-                let payloads: Vec<String> = payloads
-                    .iter()
-                    .map(|payload| render_value(machine, names, payload))
-                    .collect::<Result<_, _>>()?;
-                Ok(format!("{name}.{case}({})", payloads.join(", ")))
-            }
-        }
-        Value::Existential(_, payload, _) => render_value(machine, names, payload),
+        Value::Agg(layout, slots) => render_agg(machine, names, *layout, slots),
+        Value::Existential(payload, _) => render_value(machine, names, payload),
         Value::Closure(..) => Ok("<func>".to_string()),
         Value::Cell(_) => Ok("<cell>".to_string()),
         Value::Cont(..) => Ok("<continuation>".to_string()),
@@ -1080,23 +1093,242 @@ fn render_value(machine: &Machine, names: &ValueNames, value: &Value) -> Result<
     }
 }
 
+/// Render a flat aggregate through its published layout: the descriptor
+/// says where each field lives and what identity to display — static
+/// type information at the point of the value, not headers recovered
+/// from it (ADR 0045).
+fn render_agg(
+    machine: &Machine,
+    names: &ValueNames,
+    layout: u32,
+    slots: &[Value],
+) -> Result<String, String> {
+    let desc = machine
+        .layouts
+        .get(layout as usize)
+        .ok_or("vm: render of an unknown layout")?;
+    if desc.symbol.is_some()
+        && desc.symbol == names.string_struct
+        && let Some((base, len)) = string_bytes(slots)
+    {
+        let bytes = machine.string_display_bytes(base, len)?;
+        return Ok(format!(
+            "\"{}\"",
+            escape_string(&String::from_utf8_lossy(bytes))
+        ));
+    }
+    let type_name = |symbol: &Symbol| {
+        names
+            .types
+            .get(symbol)
+            .cloned()
+            .unwrap_or_else(|| symbol.to_string())
+    };
+    match &desc.body {
+        LayoutBody::Product(fields) => {
+            let field_names = desc.symbol.as_ref().and_then(|symbol| names.fields.get(symbol));
+            let rendered: Vec<String> = fields
+                .iter()
+                .enumerate()
+                .map(|(index, &(offset, shape))| {
+                    let field = read_slots(&machine.layouts, slots, offset, shape)?;
+                    let value = render_value(machine, names, &field)?;
+                    Ok(match field_names.and_then(|fields| fields.get(index)) {
+                        Some(field_name) => format!("{field_name}: {value}"),
+                        None => value,
+                    })
+                })
+                .collect::<Result<_, String>>()?;
+            Ok(match &desc.symbol {
+                Some(symbol) => format!("{}({})", type_name(symbol), rendered.join(", ")),
+                None => format!("({})", rendered.join(", ")),
+            })
+        }
+        LayoutBody::Sum(variants) => {
+            let Some(Value::I64(tag)) = slots.first() else {
+                return Err("vm: flat sum without a tag".into());
+            };
+            let payloads = variants
+                .get(usize::try_from(*tag).unwrap_or(usize::MAX))
+                .ok_or("vm: flat sum tag out of range")?;
+            let symbol = desc.symbol.as_ref().ok_or("vm: flat sum without identity")?;
+            let name = type_name(symbol);
+            let case = names
+                .cases
+                .get(symbol)
+                .and_then(|cases| cases.get(usize::try_from(*tag).unwrap_or(usize::MAX)))
+                .cloned()
+                .unwrap_or_else(|| format!("case{tag}"));
+            if payloads.is_empty() {
+                Ok(format!("{name}.{case}"))
+            } else {
+                let rendered: Vec<String> = payloads
+                    .iter()
+                    .map(|&(offset, shape)| {
+                        let payload = read_slots(&machine.layouts, slots, offset, shape)?;
+                        render_value(machine, names, &payload)
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(format!("{name}.{case}({})", rendered.join(", ")))
+            }
+        }
+        LayoutBody::Unshaped => Err("vm: render of an unshaped layout".into()),
+    }
+}
+
 fn string_bytes(field_values: &[Value]) -> Option<(Pointer, i64)> {
     match field_values {
         [Value::Ptr(base), Value::I64(len), ..] => Some((*base, *len)),
-        [storage, Value::I64(len), ..] => storage_base(storage).map(|base| (base, *len)),
         _ => None,
     }
 }
 
-fn storage_base(value: &Value) -> Option<Pointer> {
-    match value {
-        Value::Ptr(base) => Some(*base),
-        Value::Record(_, fields) => match fields.as_slice() {
-            [Value::Ptr(base), ..] => Some(*base),
-            _ => None,
-        },
-        _ => None,
+/// Build one flat aggregate: a `Void`-filled slot vector of the layout's
+/// width, the tag stamped into slot 0 for sums, and each argument written
+/// through its field's (offset, shape).
+fn build_agg(
+    layouts: &[LayoutDesc],
+    layout: u32,
+    tag: u16,
+    args: Vec<Value>,
+) -> Result<Value, String> {
+    let desc = layouts
+        .get(layout as usize)
+        .ok_or("vm: construction of an unknown layout")?;
+    let mut slots = vec![Value::Void; usize::from(desc.width)];
+    let fields = match &desc.body {
+        LayoutBody::Product(fields) => {
+            if tag != 0 {
+                return Err("vm: construction does not match its layout".into());
+            }
+            fields
+        }
+        LayoutBody::Sum(variants) => {
+            *slots
+                .get_mut(0)
+                .ok_or("vm: sum layout without a tag slot")? = Value::I64(i64::from(tag));
+            variants
+                .get(usize::from(tag))
+                .ok_or("vm: construction tag out of range")?
+        }
+        LayoutBody::Unshaped => {
+            return Err("vm: construction of an unshaped layout".into());
+        }
+    };
+    if fields.len() != args.len() {
+        return Err("vm: construction arity does not match its layout".into());
     }
+    for (&(offset, shape), value) in fields.iter().zip(args) {
+        write_slots(layouts, &mut slots, offset, shape, value)?;
+    }
+    Ok(Value::Agg(layout, Rc::new(slots)))
+}
+
+/// Write one field into a flat slot vector: a slot field takes the value
+/// as-is; a spliced field flattens the child aggregate across its span.
+fn write_slots(
+    layouts: &[LayoutDesc],
+    slots: &mut [Value],
+    offset: u16,
+    shape: FieldShape,
+    value: Value,
+) -> Result<(), String> {
+    match shape {
+        FieldShape::Slot => {
+            *slots
+                .get_mut(usize::from(offset))
+                .ok_or("vm: field offset out of range")? = value;
+            Ok(())
+        }
+        FieldShape::Spliced(child) => flatten_into(layouts, slots, offset, child, value),
+    }
+}
+
+/// Splice one aggregate value flat into `slots[offset..offset+width]`.
+/// A flat child of the right layout copies its slots; `Void` leaves the
+/// span blank (a declared-blank init receiver).
+fn flatten_into(
+    layouts: &[LayoutDesc],
+    slots: &mut [Value],
+    offset: u16,
+    child: u32,
+    value: Value,
+) -> Result<(), String> {
+    let desc = layouts
+        .get(child as usize)
+        .ok_or("vm: spliced field of an unknown layout")?;
+    let start = usize::from(offset);
+    let span = slots
+        .get_mut(start..start + usize::from(desc.width))
+        .ok_or("vm: spliced field out of range")?;
+    match value {
+        Value::Agg(id, child_slots) if id == child => {
+            span.clone_from_slice(&child_slots);
+            Ok(())
+        }
+        // A blank cell (`Inst::Blank`): the spliced child too is all-Void
+        // until the initializer assigns it.
+        Value::Void => Ok(()),
+        _ => Err("vm: spliced value does not match its layout".into()),
+    }
+}
+
+/// Read one field of a flat aggregate: a slot field clones its slot; a
+/// spliced field reconstitutes the child aggregate from its span.
+fn read_slots(
+    layouts: &[LayoutDesc],
+    slots: &[Value],
+    offset: u16,
+    shape: FieldShape,
+) -> Result<Value, String> {
+    match shape {
+        FieldShape::Slot => slots
+            .get(usize::from(offset))
+            .cloned()
+            .ok_or_else(|| "vm: field offset out of range".into()),
+        FieldShape::Spliced(child) => {
+            let width = layouts
+                .get(child as usize)
+                .ok_or("vm: spliced field of an unknown layout")?
+                .width;
+            let start = usize::from(offset);
+            let span = slots
+                .get(start..start + usize::from(width))
+                .ok_or("vm: spliced field out of range")?;
+            Ok(Value::Agg(child, Rc::new(span.to_vec())))
+        }
+    }
+}
+
+/// Resolve a logical field index against a flat aggregate's descriptor:
+/// products index their field list, sums read the live tag from slot 0
+/// and index that variant's payload.
+fn field_site(
+    layouts: &[LayoutDesc],
+    layout: u32,
+    slots: &[Value],
+    index: u16,
+) -> Result<(u16, FieldShape), String> {
+    let desc = layouts
+        .get(layout as usize)
+        .ok_or("vm: field read of an unknown layout")?;
+    let field = match &desc.body {
+        LayoutBody::Product(fields) => fields.get(usize::from(index)),
+        LayoutBody::Sum(variants) => {
+            let Some(Value::I64(tag)) = slots.first() else {
+                return Err("vm: flat sum without a tag".into());
+            };
+            let variant = usize::try_from(*tag).map_err(|_| "vm: flat sum tag out of range")?;
+            variants
+                .get(variant)
+                .ok_or("vm: flat sum tag out of range")?
+                .get(usize::from(index))
+        }
+        LayoutBody::Unshaped => return Err("vm: field read of an unshaped layout".into()),
+    };
+    field
+        .copied()
+        .ok_or_else(|| "vm: field index out of range".into())
 }
 
 fn escape_string(text: &str) -> String {
@@ -1120,6 +1352,10 @@ struct Machine<'io> {
     slots: Vec<Value>,
     mem: Vec<u8>,
     static_len: u32,
+    /// The module's published layout table, kept on the machine so
+    /// rendering can read flat aggregates after the run (the module
+    /// reference itself does not outlive `run_loop`).
+    layouts: Vec<LayoutDesc>,
     allocations: Allocations,
     /// Aggregates stored in raw memory live here; the memory cell holds an
     /// 8-byte index into this arena (Leroy, POPL 1992's mixed
@@ -1168,10 +1404,10 @@ impl Machine<'_> {
                         exact &= record.len < 8;
                     }
                 }
-                Value::Record(_, items) | Value::Tuple(items) | Value::Variant(_, _, items) => {
+                Value::Agg(_, items) => {
                     stack.extend(items.iter().cloned());
                 }
-                Value::Existential(_, payload, witnesses) => {
+                Value::Existential(payload, witnesses) => {
                     stack.push((*payload).clone());
                     stack.extend(witnesses.iter().cloned());
                 }
@@ -1743,68 +1979,75 @@ fn exec_local(
             };
             machine.slots[index] = frame.regs[src as usize].clone();
         }
-        Insn::RecordNew {
+        Insn::AggNew {
             dest,
-            symbol,
-            args_start,
-            args_len,
-        } => {
-            let fields = arg_values(module, frame, args_start, args_len)?;
-            frame.regs[dest as usize] = Value::Record(symbol, Rc::new(fields));
-        }
-        Insn::GetField { dest, rec, index } => {
-            let Value::Record(_, fields) = &frame.regs[rec as usize] else {
-                return Err("vm: get_field on a non-record".into());
-            };
-            let value = fields
-                .get(index as usize)
-                .cloned()
-                .ok_or("vm: field index out of range")?;
-            frame.regs[dest as usize] = value;
-        }
-        Insn::GetElement { dest, rec, index } => {
-            let Value::Record(_, fields) = &frame.regs[rec as usize] else {
-                return Err("vm: inline_get on a non-record".into());
-            };
-            let Value::I64(index) = frame.regs[index as usize] else {
-                return Err("vm: inline_get index is not an Int".into());
-            };
-            let index = usize::try_from(index).map_err(|_| "vm: inline_get index is negative")?;
-            let value = fields
-                .get(index)
-                .cloned()
-                .ok_or("vm: inline_get index out of range")?;
-            frame.regs[dest as usize] = value;
-        }
-        Insn::VariantNew {
-            dest,
-            symbol,
+            layout,
             tag,
             args_start,
             args_len,
         } => {
-            let payloads = arg_values(module, frame, args_start, args_len)?;
-            frame.regs[dest as usize] = Value::Variant(symbol, tag, Rc::new(payloads));
+            let args = arg_values(module, frame, args_start, args_len)?;
+            frame.regs[dest as usize] = build_agg(&module.layouts, layout, tag, args)?;
+        }
+        Insn::Field {
+            dest,
+            src,
+            offset,
+            layout,
+        } => {
+            let Value::Agg(_, slots) = &frame.regs[src as usize] else {
+                return Err("vm: field read on a non-flat aggregate".into());
+            };
+            let shape = crate::member_shape(layout);
+            frame.regs[dest as usize] = read_slots(&module.layouts, slots, offset, shape)?;
+        }
+        Insn::FieldIndex { dest, src, index } => {
+            let Value::Agg(layout, slots) = &frame.regs[src as usize] else {
+                return Err("vm: field read on a non-aggregate".into());
+            };
+            let (offset, shape) = field_site(&module.layouts, *layout, slots, index)?;
+            frame.regs[dest as usize] = read_slots(&module.layouts, slots, offset, shape)?;
+        }
+        Insn::GetElement {
+            dest,
+            rec,
+            index,
+            element,
+        } => {
+            let Value::I64(index) = frame.regs[index as usize] else {
+                return Err("vm: inline_get index is not an Int".into());
+            };
+            let index = u16::try_from(index).map_err(|_| "vm: inline_get index out of range")?;
+            let Value::Agg(_, slots) = &frame.regs[rec as usize] else {
+                return Err("vm: inline_get on a non-flat aggregate".into());
+            };
+            let shape = crate::member_shape(element);
+            let stride = match shape {
+                FieldShape::Slot => 1,
+                FieldShape::Spliced(child) => {
+                    module
+                        .layouts
+                        .get(child as usize)
+                        .ok_or("vm: inline_get with an unknown element layout")?
+                        .width
+                }
+            };
+            let offset = index
+                .checked_mul(stride)
+                .ok_or("vm: inline_get index out of range")?;
+            frame.regs[dest as usize] = read_slots(&module.layouts, slots, offset, shape)?;
         }
         Insn::GetTag { dest, src } => {
-            let Value::Variant(_, tag, _) = &frame.regs[src as usize] else {
+            let Value::Agg(_, slots) = &frame.regs[src as usize] else {
                 return Err("vm: get_tag on a non-variant".into());
             };
-            frame.regs[dest as usize] = Value::I64(*tag as i64);
-        }
-        Insn::GetPayload { dest, src, index } => {
-            let Value::Variant(_, _, payloads) = &frame.regs[src as usize] else {
-                return Err("vm: get_payload on a non-variant".into());
+            let Some(Value::I64(tag)) = slots.first() else {
+                return Err("vm: get_tag on a non-variant".into());
             };
-            let value = payloads
-                .get(index as usize)
-                .cloned()
-                .ok_or("vm: payload index out of range")?;
-            frame.regs[dest as usize] = value;
+            frame.regs[dest as usize] = Value::I64(*tag);
         }
         Insn::ExistentialPack {
             dest,
-            protocol,
             args_start,
             args_len,
         } => {
@@ -1814,10 +2057,10 @@ fn exec_local(
             }
             let payload = values.remove(0);
             frame.regs[dest as usize] =
-                Value::Existential(protocol, Rc::new(payload), Rc::new(values));
+                Value::Existential(Rc::new(payload), Rc::new(values));
         }
         Insn::ExistentialWitness { dest, src, index } => {
-            let Value::Existential(_, _, witnesses) = &frame.regs[src as usize] else {
+            let Value::Existential(_, witnesses) = &frame.regs[src as usize] else {
                 return Err("vm: existential_witness on a non-existential".into());
             };
             let witness = witnesses
@@ -1827,7 +2070,7 @@ fn exec_local(
             frame.regs[dest as usize] = witness;
         }
         Insn::ExistentialPayload { dest, src } => {
-            let Value::Existential(_, payload, _) = &frame.regs[src as usize] else {
+            let Value::Existential(payload, _) = &frame.regs[src as usize] else {
                 return Err("vm: existential_payload on a non-existential".into());
             };
             frame.regs[dest as usize] = (**payload).clone();
@@ -1849,44 +2092,50 @@ fn exec_local(
                 .ok_or("vm: environment index out of range")?;
             frame.regs[dest as usize] = value;
         }
-        Insn::TupleNew {
-            dest,
-            args_start,
-            args_len,
-        } => {
-            let items = arg_values(module, frame, args_start, args_len)?;
-            frame.regs[dest as usize] = Value::Tuple(Rc::new(items));
-        }
-        Insn::Extract { dest, src, index } => {
-            let Value::Tuple(items) = &frame.regs[src as usize] else {
-                return Err("vm: extract from a non-tuple".into());
-            };
-            let value = items
-                .get(index as usize)
-                .cloned()
-                .ok_or("vm: tuple index out of range")?;
-            frame.regs[dest as usize] = value;
-        }
         Insn::SetField {
+            dest,
+            rec,
+            src,
+            offset,
+            layout,
+        } => {
+            let value = frame.regs[src as usize].clone();
+            let Value::Agg(id, slots) = &frame.regs[rec as usize] else {
+                return Err("vm: field write on a non-flat aggregate".into());
+            };
+            // CoW: clone the Rc, mutate the (now possibly unshared) copy.
+            let (id, mut slots) = (*id, slots.clone());
+            let shape = crate::member_shape(layout);
+            write_slots(
+                &module.layouts,
+                Rc::make_mut(&mut slots).as_mut_slice(),
+                offset,
+                shape,
+                value,
+            )?;
+            frame.regs[dest as usize] = Value::Agg(id, slots);
+        }
+        Insn::SetFieldIndex {
             dest,
             rec,
             src,
             index,
         } => {
             let value = frame.regs[src as usize].clone();
-            let Value::Record(symbol, fields) = &frame.regs[rec as usize] else {
+            let Value::Agg(layout, slots) = &frame.regs[rec as usize] else {
                 return Err("vm: set_field on a non-record".into());
             };
             // CoW: clone the Rc, mutate the (now possibly unshared) copy.
-            let (symbol, mut fields) = (*symbol, fields.clone());
-            {
-                let fields = Rc::make_mut(&mut fields);
-                let slot = fields
-                    .get_mut(index as usize)
-                    .ok_or("vm: field index out of range")?;
-                *slot = value;
-            }
-            frame.regs[dest as usize] = Value::Record(symbol, fields);
+            let (layout, mut slots) = (*layout, slots.clone());
+            let (offset, shape) = field_site(&module.layouts, layout, &slots, index)?;
+            write_slots(
+                &module.layouts,
+                Rc::make_mut(&mut slots).as_mut_slice(),
+                offset,
+                shape,
+                value,
+            )?;
+            frame.regs[dest as usize] = Value::Agg(layout, slots);
         }
         Insn::Alloc { dest, count } => {
             let Value::I64(count) = frame.regs[count as usize] else {
@@ -2179,12 +2428,12 @@ fn check_call_shape(target: &Chunk, args_len: u16) -> Result<(), String> {
 fn scan_handles(value: &Value, out: &mut Vec<u32>) {
     match value {
         Value::Object(object) => out.push(*object),
-        Value::Record(_, fields) | Value::Tuple(fields) | Value::Variant(_, _, fields) => {
+        Value::Agg(_, fields) => {
             for field in fields.iter() {
                 scan_handles(field, out);
             }
         }
-        Value::Existential(_, payload, witnesses) => {
+        Value::Existential(payload, witnesses) => {
             scan_handles(payload, out);
             for witness in witnesses.iter() {
                 scan_handles(witness, out);
@@ -2405,6 +2654,7 @@ fn compare(a: OperandValue<'_>, b: OperandValue<'_>, op: CmpOp) -> Result<bool, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::NO_LAYOUT;
     use crate::io::CaptureIO;
     use crate::{Chunk, Module};
 
@@ -2432,22 +2682,23 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         }
     }
 
-    fn export_shape() -> StringShape {
-        let sym = |id| {
-            Symbol::Struct(crate::symbol::ModuleSymbolId::new(
-                crate::symbol::ModuleId(1),
-                id,
-            ))
-        };
-        StringShape {
-            string: sym(1),
-            storage: sym(2),
-        }
+    /// The String record symbol export tests fabricate host strings under;
+    /// the storage child's symbol is `export_sym(2)` by convention.
+    fn export_shape() -> Symbol {
+        export_sym(1)
+    }
+
+    fn export_sym(id: u32) -> Symbol {
+        Symbol::Struct(crate::symbol::ModuleSymbolId::new(
+            crate::symbol::ModuleId(1),
+            id,
+        ))
     }
 
     fn export_module(chunk: Chunk, name: &str) -> Module {
@@ -2738,22 +2989,54 @@ mod tests {
 
     #[test]
     fn run_export_round_trips_string_arg() {
-        let module = export_module(
-            Chunk {
-                name: "id".into(),
-                code: vec![Insn::Ret { src: 0 }],
-                arity: 1,
-                n_regs: 1,
-                unwind: vec![],
-            },
+        // Host strings need the module's published String layout; a
+        // module without one fails closed rather than fabricating a
+        // representation the callee cannot read.
+        let strings = export_shape();
+        let chunk = Chunk {
+            name: "id".into(),
+            code: vec![Insn::Ret { src: 0 }],
+            arity: 1,
+            n_regs: 1,
+            unwind: vec![],
+        };
+        let bare = export_module(chunk, "id");
+        let mut io = CaptureIO::default();
+        let err = run_export(
+            &bare,
             "id",
-        );
+            &[HostValue::String(b"hello".to_vec())],
+            strings,
+            Budgets::default(),
+            &mut io,
+        )
+        .err()
+        .expect("no published String layout");
+        assert!(err.contains("String layout"), "{err}");
+
+        let mut module = bare;
+        module.layouts = vec![
+            LayoutDesc {
+                symbol: Some(export_sym(2)),
+                width: 1,
+                body: LayoutBody::Product(vec![(0, FieldShape::Slot)]),
+            },
+            LayoutDesc {
+                symbol: Some(strings),
+                width: 3,
+                body: LayoutBody::Product(vec![
+                    (0, FieldShape::Spliced(0)),
+                    (1, FieldShape::Slot),
+                    (2, FieldShape::Slot),
+                ]),
+            },
+        ];
         let mut io = CaptureIO::default();
         let outcome = run_export(
             &module,
             "id",
             &[HostValue::String(b"hello".to_vec())],
-            export_shape(),
+            strings,
             Budgets::default(),
             &mut io,
         )
@@ -2922,6 +3205,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![b'x'],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         }
@@ -2959,6 +3243,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -3029,6 +3314,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -3078,6 +3364,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -3113,11 +3400,380 @@ mod tests {
             switch_pool: vec![],
             traps: vec!["vm: resumed past a same-frame abort".into()],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
         let mut io = CaptureIO::default();
         let value = run(&module, &mut io).expect("same-frame CallCont delivers its value");
         assert_eq!(value, Value::I64(7));
+    }
+
+    fn flat_sym(id: u32) -> Symbol {
+        Symbol::Struct(crate::symbol::ModuleSymbolId::new(
+            crate::symbol::ModuleId(7),
+            id,
+        ))
+    }
+
+    fn flat_module(
+        layouts: Vec<LayoutDesc>,
+        code: Vec<Insn>,
+        consts: Vec<Constant>,
+        arg_pool: Vec<u16>,
+    ) -> Module {
+        Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code,
+                arity: 0,
+                n_regs: 8,
+                unwind: vec![],
+            }],
+            consts,
+            arg_pool,
+            layouts,
+            ..Module::default()
+        }
+    }
+
+    fn pair_layout() -> LayoutDesc {
+        LayoutDesc {
+            symbol: Some(flat_sym(1)),
+            width: 2,
+            body: LayoutBody::Product(vec![(0, FieldShape::Slot), (1, FieldShape::Slot)]),
+        }
+    }
+
+    #[test]
+    fn flat_constructions_read_by_offset() {
+        let module = flat_module(
+            vec![pair_layout()],
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Const { dest: 1, k: 1 },
+                Insn::AggNew {
+                    dest: 2,
+                    layout: 0,
+                    tag: 0,
+                    args_start: 0,
+                    args_len: 2,
+                },
+                Insn::Field {
+                    dest: 3,
+                    src: 2,
+                    offset: 1,
+                    layout: NO_LAYOUT,
+                },
+                Insn::Ret { src: 3 },
+            ],
+            vec![Constant::I64(4), Constant::I64(9)],
+            vec![0, 1],
+        );
+        let (value, ..) = run_with_machine(&module);
+        assert_eq!(value, Value::I64(9));
+    }
+
+    #[test]
+    fn spliced_children_share_the_parents_allocation_and_reconstitute() {
+        // Outer { p: Pair, z: Int }: the Pair lives flat inside Outer's
+        // slots. A FieldIndex read of the spliced field reconstitutes
+        // a Pair aggregate through the descriptor.
+        let outer = LayoutDesc {
+            symbol: Some(flat_sym(2)),
+            width: 3,
+            body: LayoutBody::Product(vec![(0, FieldShape::Spliced(0)), (2, FieldShape::Slot)]),
+        };
+        let module = flat_module(
+            vec![pair_layout(), outer],
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Const { dest: 1, k: 1 },
+                Insn::Const { dest: 2, k: 2 },
+                Insn::AggNew {
+                    dest: 3,
+                    layout: 0,
+                    tag: 0,
+                    args_start: 0,
+                    args_len: 2,
+                },
+                Insn::AggNew {
+                    dest: 4,
+                    layout: 1,
+                    tag: 0,
+                    args_start: 2,
+                    args_len: 2,
+                },
+                Insn::Ret { src: 4 },
+            ],
+            vec![Constant::I64(1), Constant::I64(2), Constant::I64(3)],
+            vec![0, 1, 3, 2],
+        );
+        let (value, ..) = run_with_machine(&module);
+        assert_eq!(
+            value,
+            Value::Agg(
+                1,
+                Rc::new(vec![Value::I64(1), Value::I64(2), Value::I64(3)])
+            )
+        );
+    }
+
+    #[test]
+    fn index_reads_translate_through_the_descriptor() {
+        let outer = LayoutDesc {
+            symbol: Some(flat_sym(2)),
+            width: 3,
+            body: LayoutBody::Product(vec![(0, FieldShape::Spliced(0)), (2, FieldShape::Slot)]),
+        };
+        let module = flat_module(
+            vec![pair_layout(), outer],
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Const { dest: 1, k: 1 },
+                Insn::Const { dest: 2, k: 2 },
+                Insn::AggNew {
+                    dest: 3,
+                    layout: 0,
+                    tag: 0,
+                    args_start: 0,
+                    args_len: 2,
+                },
+                Insn::AggNew {
+                    dest: 4,
+                    layout: 1,
+                    tag: 0,
+                    args_start: 2,
+                    args_len: 2,
+                },
+                // Logical index 0 is the spliced Pair; its own field 1
+                // reads by offset out of the reconstituted child.
+                Insn::FieldIndex {
+                    dest: 5,
+                    src: 4,
+                    index: 0,
+                },
+                Insn::Field {
+                    dest: 6,
+                    src: 5,
+                    offset: 1,
+                    layout: NO_LAYOUT,
+                },
+                Insn::Ret { src: 6 },
+            ],
+            vec![Constant::I64(1), Constant::I64(2), Constant::I64(3)],
+            vec![0, 1, 3, 2],
+        );
+        let (value, ..) = run_with_machine(&module);
+        assert_eq!(value, Value::I64(2));
+    }
+
+    #[test]
+    fn flat_sums_stamp_their_tag_and_translate_payload_reads() {
+        // Opt: none | some(Int). Tag at slot 0, payload at slot 1.
+        let opt = LayoutDesc {
+            symbol: Some(flat_sym(3)),
+            width: 2,
+            body: LayoutBody::Sum(vec![vec![], vec![(1, FieldShape::Slot)]]),
+        };
+        let module = flat_module(
+            vec![opt],
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::AggNew {
+                    dest: 1,
+                    layout: 0,
+                    tag: 1,
+                    args_start: 0,
+                    args_len: 1,
+                },
+                Insn::GetTag { dest: 2, src: 1 },
+                Insn::Field {
+                    dest: 3,
+                    src: 1,
+                    offset: 1,
+                    layout: NO_LAYOUT,
+                },
+                Insn::Add { dest: 4, a: 2, b: 3 },
+                Insn::Ret { src: 4 },
+            ],
+            vec![Constant::I64(41)],
+            vec![0],
+        );
+        let (value, ..) = run_with_machine(&module);
+        assert_eq!(value, Value::I64(42));
+    }
+
+    #[test]
+    fn blank_receivers_stay_flat_and_set_field_fills_them() {
+        // An init receiver: every field Unit until assigned. The spliced
+        // Storage-like child starts as a blank span and a FieldIndex
+        // `SetField` fills it copy-on-write.
+        let storage = LayoutDesc {
+            symbol: Some(flat_sym(4)),
+            width: 1,
+            body: LayoutBody::Product(vec![(0, FieldShape::Slot)]),
+        };
+        let outer = LayoutDesc {
+            symbol: Some(flat_sym(5)),
+            width: 2,
+            body: LayoutBody::Product(vec![(0, FieldShape::Spliced(0)), (1, FieldShape::Slot)]),
+        };
+        let unit = crate::RK_CONST | 0;
+        let module = flat_module(
+            vec![storage, outer],
+            vec![
+                // The blank cell: unit constants in both fields.
+                Insn::AggNew {
+                    dest: 0,
+                    layout: 1,
+                    tag: 0,
+                    args_start: 0,
+                    args_len: 2,
+                },
+                Insn::Const { dest: 1, k: 1 },
+                Insn::AggNew {
+                    dest: 2,
+                    layout: 0,
+                    tag: 0,
+                    args_start: 2,
+                    args_len: 1,
+                },
+                Insn::SetField {
+                    dest: 0,
+                    rec: 0,
+                    src: 2,
+                    offset: 0,
+                    layout: 0,
+                },
+                Insn::SetField {
+                    dest: 0,
+                    rec: 0,
+                    src: 1,
+                    offset: 1,
+                    layout: NO_LAYOUT,
+                },
+                Insn::Field {
+                    dest: 3,
+                    src: 0,
+                    offset: 1,
+                    layout: NO_LAYOUT,
+                },
+                Insn::Field {
+                    dest: 4,
+                    src: 0,
+                    offset: 0,
+                    layout: 0,
+                },
+                Insn::Field {
+                    dest: 5,
+                    src: 4,
+                    offset: 0,
+                    layout: NO_LAYOUT,
+                },
+                Insn::Add { dest: 6, a: 3, b: 5 },
+                Insn::Ret { src: 6 },
+            ],
+            vec![Constant::Void, Constant::I64(5), Constant::I64(7)],
+            vec![unit, unit, crate::RK_CONST | 2],
+        );
+        let (value, ..) = run_with_machine(&module);
+        assert_eq!(value, Value::I64(12));
+    }
+
+    #[test]
+    fn flat_aggregates_render_through_their_layouts() {
+        let outer = LayoutDesc {
+            symbol: Some(flat_sym(2)),
+            width: 3,
+            body: LayoutBody::Product(vec![(0, FieldShape::Spliced(0)), (2, FieldShape::Slot)]),
+        };
+        let opt = LayoutDesc {
+            symbol: Some(flat_sym(3)),
+            width: 3,
+            body: LayoutBody::Sum(vec![vec![], vec![(1, FieldShape::Spliced(0))]]),
+        };
+        let module = flat_module(
+            vec![pair_layout(), outer, opt],
+            vec![
+                Insn::Const { dest: 0, k: 0 },
+                Insn::Const { dest: 1, k: 1 },
+                Insn::AggNew {
+                    dest: 2,
+                    layout: 0,
+                    tag: 0,
+                    args_start: 0,
+                    args_len: 2,
+                },
+                Insn::AggNew {
+                    dest: 3,
+                    layout: 2,
+                    tag: 1,
+                    args_start: 2,
+                    args_len: 1,
+                },
+                Insn::Ret { src: 3 },
+            ],
+            vec![Constant::I64(4), Constant::I64(9)],
+            vec![0, 1, 2],
+        );
+        let mut names = ValueNames::default();
+        names.types.insert(flat_sym(1), "Pair".into());
+        names
+            .fields
+            .insert(flat_sym(1), vec!["x".into(), "y".into()]);
+        names.types.insert(flat_sym(3), "Opt".into());
+        names
+            .cases
+            .insert(flat_sym(3), vec!["none".into(), "some".into()]);
+        let mut io = CaptureIO::default();
+        let (_, rendered) = run_displayed(&module, &mut io, &names).expect("vm run");
+        assert_eq!(rendered, "Opt.some(Pair(x: 4, y: 9))");
+    }
+
+    #[test]
+    fn host_string_arguments_arrive_flat_when_the_module_publishes_layouts() {
+        let strings = export_shape();
+        let storage = LayoutDesc {
+            symbol: Some(export_sym(2)),
+            width: 1,
+            body: LayoutBody::Product(vec![(0, FieldShape::Slot)]),
+        };
+        let string = LayoutDesc {
+            symbol: Some(strings),
+            width: 3,
+            body: LayoutBody::Product(vec![
+                (0, FieldShape::Spliced(0)),
+                (1, FieldShape::Slot),
+                (2, FieldShape::Slot),
+            ]),
+        };
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "echo".into(),
+                code: vec![Insn::Ret { src: 0 }],
+                arity: 1,
+                n_regs: 1,
+                unwind: vec![],
+            }],
+            layouts: vec![storage, string],
+            exports: vec![("echo".into(), 0)],
+            ..Module::default()
+        };
+        let mut io = CaptureIO::default();
+        let outcome = run_export(
+            &module,
+            "echo",
+            &[HostValue::String(b"hi".to_vec())],
+            strings,
+            Budgets::default(),
+            &mut io,
+        )
+        .expect("export run");
+        assert!(matches!(outcome.value, Value::Agg(1, _)), "{:?}", outcome.value);
+        assert_eq!(
+            outcome.string_bytes(&outcome.value).expect("string"),
+            b"hi"
+        );
     }
 }

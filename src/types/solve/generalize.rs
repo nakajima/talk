@@ -53,6 +53,25 @@ impl<'s> Generalizer<'s> {
         }
     }
 
+    /// A held equation whose root no binder quantified: it rides no
+    /// scheme's qualified context, and no later given can prove it, so
+    /// unless the sides already agree it is an unsatisfied obligation the
+    /// group must report. Dropping these silently was the hole that let a
+    /// self-recursive call at a larger instantiation (`f<T>` calling
+    /// `f(x: Wrap(value: x))`) typecheck against a type-wrong instance.
+    /// Returns the rendered sides when the equation is unproven.
+    pub fn unproven_equation(&mut self, root: u32, a: &Ty, b: &Ty) -> Option<(String, String)> {
+        if !self.var_predicates.contains_key(&root) {
+            return None;
+        }
+        let a = self.store.zonk_ty(a);
+        let b = self.store.zonk_ty(b);
+        if a == b {
+            return None;
+        }
+        Some((self.store.render(&a), self.store.render(&b)))
+    }
+
     /// Quantify the generalizable variables of `ty`, in order of appearance,
     /// seeding the scheme with the binder's declared generic parameters.
     /// Call once per binder; variables already generalized (bound to Params)

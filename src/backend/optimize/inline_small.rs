@@ -48,10 +48,8 @@ fn primitive(inst: &Inst) -> bool {
             | Inst::Store { .. }
             | Inst::MemCopy { .. }
             | Inst::PtrAdd { .. }
-            | Inst::TupleGet { .. }
+            | Inst::Field { .. }
             | Inst::GetTag { .. }
-            | Inst::GetPayload { .. }
-            | Inst::GetField { .. }
             | Inst::IsUnique { .. }
     )
 }
@@ -100,10 +98,8 @@ fn remap_inst(
             op(offset);
             dest(d);
         }
-        Inst::TupleGet { dest: d, src, .. }
+        Inst::Field { dest: d, src, .. }
         | Inst::GetTag { dest: d, src }
-        | Inst::GetPayload { dest: d, src, .. }
-        | Inst::GetField { dest: d, src, .. }
         | Inst::IsUnique { dest: d, src } => {
             op(src);
             dest(d);
@@ -157,7 +153,7 @@ fn candidate(function: &Function) -> Option<Candidate> {
     }
     Some(Candidate {
         arity,
-        n_locals: function.n_locals,
+        n_locals: function.n_locals(),
         blocks: function.blocks.clone(),
     })
 }
@@ -221,8 +217,10 @@ fn inline_round(program: &mut Program) -> u64 {
             };
             #[allow(clippy::expect_used)]
             let body = candidates.get(&func).expect("membership checked above");
-            let base = function.n_locals;
-            function.n_locals = function.n_locals.saturating_add(body.n_locals - body.arity);
+            let base = function.n_locals();
+            function.locals = crate::backend::mir::LocalInfo::uniform(
+                function.n_locals().saturating_add(body.n_locals - body.arity),
+            );
 
             // Straight-line bodies splice in place — no block split, no
             // jump chain — the overwhelmingly common case (scalar
@@ -351,9 +349,12 @@ mod tests {
     /// Core-style `add`: one scalar instruction over its parameters.
     fn scalar_add() -> Function {
         Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "add".into(),
             arity: 2,
-            n_locals: 3,
+            locals: crate::backend::mir::LocalInfo::uniform(3),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts: vec![Inst::Scalar {
@@ -369,9 +370,12 @@ mod tests {
 
     fn caller(insts: Vec<Inst>, ret: Operand) -> Function {
         Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "caller".into(),
             arity: 0,
-            n_locals: 2,
+            locals: crate::backend::mir::LocalInfo::uniform(2),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts,
@@ -398,6 +402,7 @@ mod tests {
             entry: 1,
             global_slots: 0,
             exports: Vec::new(),
+            layout_table: Vec::new(),
         };
         assert_eq!(run(&mut program).applied, 1);
         let insts = &program.functions[1].blocks[0].insts;
@@ -425,9 +430,12 @@ mod tests {
         // the `get` shape. The call disappears, the trap block arrives,
         // and the caller's tail runs after the join.
         let checked_get = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "get".into(),
             arity: 1,
-            n_locals: 3,
+            locals: crate::backend::mir::LocalInfo::uniform(3),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),
@@ -482,6 +490,7 @@ mod tests {
             entry: 1,
             global_slots: 0,
             exports: Vec::new(),
+            layout_table: Vec::new(),
         };
         assert_eq!(run(&mut program).applied, 1);
         let function = &program.functions[1];
@@ -516,9 +525,12 @@ mod tests {
         let mut program = Program {
             functions: vec![
                 Function {
+                    frame_sites: Default::default(),
+                    param_reprs: Vec::new(),
+                    return_repr: None,
                     name: "clobber".into(),
                     arity: 1,
-                    n_locals: 1,
+                    locals: crate::backend::mir::LocalInfo::uniform(1),
                     blocks: vec![BlockData {
                         params: Vec::new(),
                         insts: vec![Inst::Copy {
@@ -541,6 +553,7 @@ mod tests {
             entry: 1,
             global_slots: 0,
             exports: Vec::new(),
+            layout_table: Vec::new(),
         };
         assert_eq!(run(&mut program).applied, 0);
         assert!(
@@ -578,6 +591,7 @@ mod tests {
             entry: 1,
             global_slots: 0,
             exports: Vec::new(),
+            layout_table: Vec::new(),
         };
         assert_eq!(run(&mut program).applied, 1);
         let function = &program.functions[1];
@@ -589,6 +603,6 @@ mod tests {
             panic!("no scalar spliced: {insts:?}");
         };
         assert!(*dest >= 2, "callee temp reused a caller local");
-        assert!(function.n_locals > 2, "caller frame not widened");
+        assert!(function.n_locals() > 2, "caller frame not widened");
     }
 }

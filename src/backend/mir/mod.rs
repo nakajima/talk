@@ -13,11 +13,13 @@ use crate::compiling::typed_program::TypedProgram;
 use crate::name::Name;
 mod entries;
 mod glue;
+pub(crate) mod escape;
+pub(crate) mod layout;
 mod release;
 mod verify;
 mod visit;
 
-pub(crate) use visit::{Slot, visit_inst, visit_term};
+pub(crate) use visit::{Escape, Slot, visit_inst, visit_term};
 
 /// The rigid-generic witnesses a closure environment carries: for each
 /// inherited type parameter, its `(drop, retain)` witness locals.
@@ -30,7 +32,7 @@ use crate::typed_ast::{
     Block, Decl, DeclKind, Expr, ExprKind, Func, Literal, Node, Pattern, PatternKind,
     RecordFieldPattern, RecordFieldPatternKind, Stmt, StmtKind,
 };
-use crate::types::ty::{ParamKind, Perm, ProtocolRef, StaticValue, Ty};
+use crate::types::ty::{ParamKind, Perm, ProtocolRef, StaticValue, Ty, TyFold};
 
 use super::BackendError;
 
@@ -115,22 +117,14 @@ pub(crate) enum Inst {
         /// call (ADR 0027); the block ends with `Term::UnwindRet`.
         unwind: Option<BlockId>,
     },
-    /// Build a tuple from element operands.
-    Tuple {
+    /// Build an aggregate — struct, tuple, closed record, or enum
+    /// value — flat under its layout (ADR 0045): identity lives in the
+    /// layout table, and products are the `tag: 0` case of the one
+    /// construction shape.
+    Aggregate {
         dest: LocalId,
-        args: Vec<Operand>,
-    },
-    /// Read one positional element of a tuple.
-    TupleGet {
-        dest: LocalId,
-        src: Operand,
-        index: u16,
-    },
-    /// Build an enum value with its declaration-order tag.
-    Variant {
-        dest: LocalId,
-        enum_symbol: Symbol,
         tag: u16,
+        layout: layout::LayoutId,
         args: Vec<Operand>,
     },
     /// Read an enum value's tag as an Int.
@@ -138,41 +132,81 @@ pub(crate) enum Inst {
         dest: LocalId,
         src: Operand,
     },
-    /// Read one payload element of an enum value.
-    GetPayload {
+    /// A struct cell awaiting an explicit initializer's field
+    /// assignments: every field is Unit until the init body stores it.
+    /// Only the uniform tagged representation can say "nothing here
+    /// yet", so the destination never classes native — and because the
+    /// blankness is declared rather than smuggled through unit-valued
+    /// `Record` arguments, it does not break the layout's construction
+    /// contract for honest sites (ADR 0045).
+    Blank {
+        dest: LocalId,
+        layout: layout::LayoutId,
+    },
+    /// Read one element of an aggregate — record field, tuple item, or
+    /// variant payload (ADR 0045's collapsed read). A payload read
+    /// carries the variant it reads from: the arm established the tag,
+    /// and offset-addressed backends need it to place the element. The
+    /// container's layout makes every read a static offset: MIR knows
+    /// the container type at every emission site, so no backend infers
+    /// a source's shape from dataflow.
+    Field {
+        dest: LocalId,
+        src: Operand,
+        /// The container's layout: native backends map the offset back
+        /// to a struct member through it.
+        container: layout::LayoutId,
+        /// The member's slot offset in the container (ADR 0046); a sum
+        /// payload's offset already includes the tag slot.
+        offset: u16,
+        /// The spliced child's layout for an inline-aggregate member.
+        member: Option<layout::LayoutId>,
+    },
+    /// Read one member of a value whose container has no static shape —
+    /// the existential boundary's writeback tuple (its payload element
+    /// has no static width). Resolves through the value's own published
+    /// layout at runtime.
+    FieldIndex {
         dest: LocalId,
         src: Operand,
         index: u16,
     },
-    /// Build a struct value with fields in declaration order.
-    Record {
-        dest: LocalId,
-        struct_symbol: Symbol,
-        args: Vec<Operand>,
-    },
-    /// Read one stored field of a struct value.
-    GetField {
-        dest: LocalId,
-        src: Operand,
-        index: u16,
-    },
-    /// Read an InlineArray element at a runtime-validated index.
+    /// Read an InlineArray element at a runtime-validated index. Carries
+    /// the element's layout: the stride and per-element representation
+    /// come from the published table, never from the value.
     GetElement {
         dest: LocalId,
         src: Operand,
+        element: layout::LayoutId,
         index: Operand,
     },
     /// Replace one stored field of a struct value in place.
     SetField {
         rec: LocalId,
         src: Operand,
+        /// The container's layout; see `Field::container`.
+        container: layout::LayoutId,
+        /// The member's slot offset in the container (ADR 0046).
+        offset: u16,
+        /// The spliced child's layout for an inline-aggregate member.
+        member: Option<layout::LayoutId>,
+    },
+    /// The write twin of `FieldIndex`: replace one member of a value
+    /// whose container has no static shape.
+    SetFieldIndex {
+        rec: LocalId,
+        src: Operand,
         index: u16,
     },
     /// A UTF-8 string literal; lowering interns the bytes as immortal
-    /// static data and builds the core `String` value over them.
+    /// static data and builds the core `String` value over them. Carries
+    /// the published layouts of the String and its spliced Storage field
+    /// so a backend builds the flat value without inferring them.
     StringLit {
         dest: LocalId,
         bytes: Vec<u8>,
+        layout: layout::LayoutId,
+        storage_layout: layout::LayoutId,
     },
     /// A raw pointer to interned immortal static bytes (string-literal
     /// pattern comparisons).
@@ -201,12 +235,12 @@ pub(crate) enum Inst {
     Load {
         dest: LocalId,
         ptr: Operand,
-        kind: MemTy,
+        kind: layout::SlotKind,
     },
     Store {
         ptr: Operand,
         src: Operand,
-        kind: MemTy,
+        kind: layout::SlotKind,
     },
     MemCopy {
         from: Operand,
@@ -359,27 +393,6 @@ pub(crate) enum Inst {
     },
 }
 
-/// The sized memory element classes the target knows (byte loads are one
-/// byte; every other class is one 8-byte word).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MemTy {
-    Byte,
-    I64,
-    F64,
-    Bool,
-    Ptr,
-    Boxed,
-}
-
-impl MemTy {
-    pub(crate) fn size(self) -> u32 {
-        match self {
-            MemTy::Byte => 1,
-            _ => 8,
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) enum Term {
     /// Jump to a block, passing one argument per block parameter
@@ -414,12 +427,55 @@ pub(crate) struct BlockData {
     pub term: Option<Term>,
 }
 
+/// One frame local's published facts (ADR 0045): the locals table IS
+/// the frame — its length is the local count — and each entry says what
+/// the local holds and which substrate its reabstractions may use. The
+/// facts are stamped by `escape::shape_frames` after register
+/// allocation, on the numbering backends see; until then every entry is
+/// the uniform default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LocalInfo {
+    /// The inline layout every definition of this local agrees on;
+    /// `None` is a uniform tagged value.
+    pub layout: Option<layout::LayoutId>,
+    /// Whether the value provably never leaves this frame (ADR 0044
+    /// rule 3's substrate latch): reabstractions may then reuse frame
+    /// storage instead of the arena.
+    pub frame_local: bool,
+}
+
+impl LocalInfo {
+    /// A frame of `count` uniform locals: the builder's shape before
+    /// `shape_frames` stamps the facts.
+    pub fn uniform(count: u16) -> Vec<LocalInfo> {
+        vec![LocalInfo::default(); usize::from(count)]
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct Function {
     pub name: String,
     pub arity: u16,
-    pub n_locals: u16,
+    /// The frame: one entry per local (see [`LocalInfo`]).
+    pub locals: Vec<LocalInfo>,
     pub blocks: Vec<BlockData>,
+    /// Per-parameter value representation (ADR 0045): the layout each
+    /// parameter arrives with, so a backend can give direct calls native
+    /// signatures. Empty (synthesized bodies) means every parameter is a
+    /// uniform tagged value.
+    pub param_reprs: Vec<layout::ParamRepr>,
+    /// The return type's layout, when the body's types were in hand.
+    pub return_repr: Option<layout::LayoutId>,
+    /// Construction sites, as `(block, instruction)`, whose value stays
+    /// in this frame: the backend may give them reusable frame storage
+    /// instead of the arena. Stamped by `escape::shape_frames`.
+    pub frame_sites: rustc_hash::FxHashSet<(usize, usize)>,
+}
+
+impl Function {
+    pub fn n_locals(&self) -> u16 {
+        u16::try_from(self.locals.len()).unwrap_or(u16::MAX)
+    }
 }
 
 #[derive(Debug)]
@@ -430,6 +486,9 @@ pub(crate) struct Program {
     pub global_slots: u32,
     /// Host-callable entry points (ADR 0043): export name → wrapper.
     pub exports: Vec<(String, FuncId)>,
+    /// The interned layouts the aggregate instructions reference by
+    /// `LayoutId` (ADR 0045): the shapes a backend must produce.
+    pub layout_table: Vec<layout::Layout>,
 }
 
 impl Program {
@@ -444,19 +503,68 @@ impl Program {
             self.entry, self.global_slots
         );
         for (id, function) in self.functions.iter().enumerate() {
+            let signature = if function.param_reprs.is_empty() && function.return_repr.is_none() {
+                String::new()
+            } else {
+                format!(
+                    ", params [{}] -> {}",
+                    function
+                        .param_reprs
+                        .iter()
+                        .map(|repr| repr.render())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    function
+                        .return_repr
+                        .map(|layout| format!("L{layout}"))
+                        .unwrap_or_else(|| "uniform".into()),
+                )
+            };
             let _ = writeln!(
                 out,
-                "fn{id} {} (arity {}, locals {})",
-                function.name, function.arity, function.n_locals
+                "fn{id} {} (arity {}, locals {}{signature})",
+                function.name, function.arity, function.n_locals()
             );
             for (block, data) in function.blocks.iter().enumerate() {
                 let _ = writeln!(out, "  b{block}:");
                 for inst in &data.insts {
-                    let _ = writeln!(out, "    {inst:?}");
+                    // Aggregate constructions render their layout as a
+                    // table id so shapes are legible next to the code.
+                    match inst {
+                        Inst::Aggregate {
+                            dest,
+                            tag,
+                            layout,
+                            args,
+                        } => {
+                            let _ = writeln!(
+                                out,
+                                "    Aggregate {{ dest: {dest}, tag: {tag}, layout: L{layout}, args: {args:?} }}"
+                            );
+                        }
+                        Inst::Blank {
+                            dest,
+                            layout,
+                        } => {
+                            let _ = writeln!(
+                                out,
+                                "    Blank {{ dest: {dest}, layout: L{layout} }}"
+                            );
+                        }
+                        _ => {
+                            let _ = writeln!(out, "    {inst:?}");
+                        }
+                    }
                 }
                 if let Some(term) = &data.term {
                     let _ = writeln!(out, "    -> {term:?}");
                 }
+            }
+        }
+        if !self.layout_table.is_empty() {
+            let _ = writeln!(out, "layout table:");
+            for (id, layout) in self.layout_table.iter().enumerate() {
+                let _ = writeln!(out, "  L{id}: {}", layout.render());
             }
         }
         out
@@ -480,19 +588,9 @@ pub(crate) enum Entry<'a> {
     },
 }
 
-/// The scalar value classification wave 1 accepts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ScalarTy {
-    Unit,
-    Bool,
-    Int,
-    Float,
-    Byte,
-    Ptr,
-    Never,
-}
-
-fn scalar_ty(ty: &Ty, span: Span) -> Result<ScalarTy, BackendError> {
+/// Whether wave 1 accepts the type as a scalar value; the error names
+/// the type for the caller's diagnostic.
+fn scalar_ty(ty: &Ty, span: Span) -> Result<(), BackendError> {
     // Shared loans of Copy scalars erase at execution (ledger BOR-01): a
     // borrowed Int is an Int in the target.
     if let Ty::Borrow(_, inner) = ty {
@@ -500,21 +598,18 @@ fn scalar_ty(ty: &Ty, span: Span) -> Result<ScalarTy, BackendError> {
     }
     if let Ty::Nominal(symbol, args) = ty
         && args.is_empty()
+        && matches!(
+            *symbol,
+            Symbol::Void
+                | Symbol::Bool
+                | Symbol::Int
+                | Symbol::Float
+                | Symbol::Byte
+                | Symbol::RawPtr
+                | Symbol::Never
+        )
     {
-        let scalar = [
-            (Symbol::Void, ScalarTy::Unit),
-            (Symbol::Bool, ScalarTy::Bool),
-            (Symbol::Int, ScalarTy::Int),
-            (Symbol::Float, ScalarTy::Float),
-            (Symbol::Byte, ScalarTy::Byte),
-            (Symbol::RawPtr, ScalarTy::Ptr),
-            (Symbol::Never, ScalarTy::Never),
-        ]
-        .into_iter()
-        .find(|(known, _)| known == symbol);
-        if let Some((_, scalar)) = scalar {
-            return Ok(scalar);
-        }
+        return Ok(());
     }
     Err(BackendError::unsupported(
         format!(
@@ -835,32 +930,6 @@ fn contains_object(builder: &ProgramBuilder<'_>, ty: &Ty) -> bool {
     computed
 }
 
-fn mem_ty_of(ty: &Ty) -> MemTy {
-    let mut ty = ty;
-    while let Ty::Borrow(_, inner) = ty {
-        ty = inner;
-    }
-    if let Ty::Nominal(symbol, args) = ty
-        && args.is_empty()
-    {
-        if *symbol == Symbol::Byte {
-            return MemTy::Byte;
-        }
-        if *symbol == Symbol::Int {
-            return MemTy::I64;
-        }
-        if *symbol == Symbol::Float {
-            return MemTy::F64;
-        }
-        if *symbol == Symbol::Bool {
-            return MemTy::Bool;
-        }
-        if *symbol == Symbol::RawPtr {
-            return MemTy::Ptr;
-        }
-    }
-    MemTy::Boxed
-}
 
 /// Frame-level (depth-0) variable use counts: the liveness source for
 /// last-use borrow tracking and loop-carried move checks. This is
@@ -1127,7 +1196,7 @@ struct RecordCell {
 }
 
 /// Whether a type contains an associated-type projection anywhere.
-fn ty_has_projection(ty: &Ty) -> bool {
+pub(crate) fn ty_has_projection(ty: &Ty) -> bool {
     struct Search {
         found: bool,
     }
@@ -1173,9 +1242,10 @@ struct PlaceLink {
     index: u16,
     heap: bool,
     field_ty: Ty,
-    /// `Some(row width)` when the parent is a record row — runtime records
-    /// are tuples, so writes rebuild the tuple instead of `SetField`.
-    record_arity: Option<u16>,
+    /// The container type this link projects out of: reads and writes
+    /// carry its published layout, and a tuple or record parent rebuilds
+    /// (runtime records are tuples) where a nominal parent `SetField`s.
+    parent: Ty,
 }
 
 /// The distinct rigid effect-generic parameters a substitution's types
@@ -1235,6 +1305,46 @@ fn witness_params(subst: &[(Symbol, Ty)]) -> Vec<Symbol> {
 /// order glue chunks and their MakeClosure sites share.
 fn glue_witness_params(ty: &Ty) -> Vec<Symbol> {
     witness_params(std::slice::from_ref(&(Symbol::RawPtr, ty.clone())))
+}
+
+/// The deepest type-application nesting an instantiation may demand.
+/// Written types a few levels deep are ordinary; a demanded substitution
+/// approaching this depth only arises when a body demands itself at an
+/// ever-larger instantiation, which would otherwise diverge the worklist.
+const INSTANTIATION_DEPTH_LIMIT: usize = 64;
+
+/// Ground free inference variables to `()` (ADR 0045 rule 6). A variable
+/// still unsolved when a type reaches MIR was constrained by nothing —
+/// `Result.error(99)` never pins `Success` — so no value of it can ever
+/// be observed, and the unit type stands in. Executed instances and
+/// published layouts stay concrete, and two sites that leave different
+/// variables free share one demanded instance.
+fn ground_free_vars(ty: &Ty) -> Ty {
+    struct Grounder;
+    impl TyFold for Grounder {
+        fn fold_var(&mut self, _: crate::types::ty::TyVar) -> Ty {
+            Ty::unit()
+        }
+    }
+    Grounder.fold_ty(ty)
+}
+
+/// How deep a type's applications nest — `Wrap<Wrap<Int>>` is three.
+fn ty_depth(ty: &Ty) -> usize {
+    let children = match ty {
+        Ty::Nominal(_, items) | Ty::Tuple(items) => items.iter().map(ty_depth).max(),
+        Ty::Borrow(_, inner) | Ty::Unique(inner) => Some(ty_depth(inner)),
+        Ty::Func(params, ret, _) => params
+            .iter()
+            .chain([ret.as_ref()])
+            .map(ty_depth)
+            .max(),
+        Ty::Record(row) => row.fields.iter().map(|(_, item)| ty_depth(item)).max(),
+        Ty::Any { assoc, .. } => assoc.iter().map(|(_, item)| ty_depth(item)).max(),
+        Ty::Proj(base, _, _) => Some(ty_depth(base)),
+        Ty::Param(_) | Ty::Var(_) | Ty::Eff(_) | Ty::Static(_) | Ty::Error => None,
+    };
+    1 + children.unwrap_or(0)
 }
 
 /// Whether a type mentions a rigid parameter symbol (`Self` is
@@ -1328,11 +1438,14 @@ pub(crate) fn build(
         Err(error) if check_all && error.message.contains("nothing to run") => {
             let id = builder.reserve("empty_entry");
             let fx = FunctionBuilder::new(&mut builder, 0, 0);
-            let (n_locals, blocks) = fx.finish(Operand::Const(Constant::Unit))?;
+            let (n_locals, blocks, _return_repr) = fx.finish(Operand::Const(Constant::Unit))?;
             builder.functions[id] = Function {
+                frame_sites: Default::default(),
+                param_reprs: Vec::new(),
+                return_repr: None,
                 name: "empty_entry".into(),
                 arity: 0,
-                n_locals,
+                locals: crate::backend::mir::LocalInfo::uniform(n_locals),
                 blocks,
             };
             id
@@ -1399,6 +1512,33 @@ pub(crate) fn build(
         }
     }
     builder.drain_worklist()?;
+    // Rigid instances — any whose substitution still carries type
+    // parameters — exist only under check-all, where the identity seeds
+    // manufacture them. They verified above; what ships in their place
+    // is a trap, because their aggregate layouts are opaque (rule 6) and
+    // the executed path is fully monomorphic.
+    if check_all {
+        let rigid: Vec<FuncId> = builder
+            .instance_witnesses
+            .iter()
+            .filter(|(_, params)| !params.is_empty())
+            .map(|(id, _)| *id)
+            .collect();
+        for id in rigid {
+            let function = &mut builder.functions[id];
+            let arity = function.arity;
+            function.param_reprs = Vec::new();
+            function.return_repr = None;
+            function.frame_sites = Default::default();
+            function.locals = crate::backend::mir::LocalInfo::uniform(arity.max(1));
+            function.blocks = vec![BlockData {
+                params: Vec::new(),
+                insts: Vec::new(),
+                term: Some(Term::Trap("check-only instance is not executable")),
+            }];
+        }
+    }
+    let layout_table = builder.layouts.borrow().table();
 
     Ok(Program {
         functions: builder.functions,
@@ -1406,8 +1546,10 @@ pub(crate) fn build(
         global_slots: u32::try_from(builder.global_slots.len()).unwrap_or_default()
             + u32::from(builder.result_slot.is_some()),
         exports: builder.exports,
+        layout_table,
     })
 }
+
 
 /// A monomorphic function instance: a callable symbol plus the concrete
 /// types substituted for its scheme parameters (whole-program
@@ -1482,6 +1624,9 @@ struct ProgramBuilder<'a> {
     needs_drop_cache: std::cell::RefCell<FxHashMap<Ty, bool>>,
     contains_buffer_cache: std::cell::RefCell<FxHashMap<Ty, bool>>,
     contains_object_cache: std::cell::RefCell<FxHashMap<Ty, bool>>,
+    /// The layout oracle (ADR 0045): one classification per type,
+    /// memoized like the structural caches above.
+    layouts: std::cell::RefCell<layout::Layouts<'a>>,
 }
 
 impl<'a> ProgramBuilder<'a> {
@@ -1522,6 +1667,8 @@ impl<'a> ProgramBuilder<'a> {
                 }
             }
         }
+        let layouts =
+            layout::Layouts::new(struct_index.clone(), enum_index.clone(), catalog.clone());
         Self {
             programs,
             catalog,
@@ -1529,6 +1676,7 @@ impl<'a> ProgramBuilder<'a> {
             enum_index,
             variant_index,
             deinit_witnesses,
+            layouts: std::cell::RefCell::new(layouts),
             needs_drop_cache: std::cell::RefCell::new(FxHashMap::default()),
             contains_buffer_cache: std::cell::RefCell::new(FxHashMap::default()),
             contains_object_cache: std::cell::RefCell::new(FxHashMap::default()),
@@ -1770,9 +1918,12 @@ impl<'a> ProgramBuilder<'a> {
     fn reserve(&mut self, name: &str) -> FuncId {
         let id = self.functions.len();
         self.functions.push(Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: name.into(),
             arity: 0,
-            n_locals: 0,
+            locals: crate::backend::mir::LocalInfo::uniform(0),
             blocks: Vec::new(),
         });
         id
@@ -1838,6 +1989,28 @@ impl<'a> ProgramBuilder<'a> {
                 }
             })
             .collect();
+        for (_, ty) in &mut subst {
+            *ty = ground_free_vars(ty);
+        }
+        // Monomorphic recursion reuses its own instance; polymorphic
+        // recursion (`f<T>` demanding `f<Wrap<T>>`) manufactures an
+        // ever-deeper instantiation each generation and would run the
+        // worklist forever. No legitimate program spells types anywhere
+        // near this deep, so the bound rejects only the divergence.
+        if subst
+            .iter()
+            .any(|(_, ty)| ty_depth(ty) > INSTANTIATION_DEPTH_LIMIT)
+        {
+            return Err(BackendError::new(
+                format!(
+                    "instantiating `{}` nests type applications deeper than {}; \
+                     polymorphic recursion is not supported",
+                    callable.body.name(),
+                    INSTANTIATION_DEPTH_LIMIT,
+                ),
+                span,
+            ));
+        }
         subst.sort_by_key(|(param, _)| *param);
         let instance = (symbol, subst);
         if let Some(id) = self.func_ids.get(&instance).copied() {
@@ -1984,21 +2157,11 @@ impl<'a> ProgramBuilder<'a> {
             return Some(vec![element.clone(); count]);
         }
         let def = self.struct_def(symbol)?;
-        // Raw keys for the same reason as `variant_payloads`.
-        let substitution: FxHashMap<Symbol, Ty> = def
-            .params
-            .iter()
-            .map(|param| param.symbol)
-            .zip(args.iter().cloned())
-            .collect();
-        Some(
-            def.fields
-                .values()
-                .map(|(_, ty)| {
-                    ty.substitute(&substitution, &FxHashMap::default(), &FxHashMap::default())
-                })
-                .collect(),
-        )
+        Some(layout::instantiate(
+            &def.params,
+            args,
+            def.fields.values().map(|(_, ty)| ty),
+        ))
     }
 
     /// The declaration-order index of a stored field, by its source name.
@@ -2029,29 +2192,13 @@ impl<'a> ProgramBuilder<'a> {
     /// Each variant's payload types for an enum application, in tag order.
     fn variant_payloads(&self, symbol: Symbol, args: &[Ty]) -> Option<Vec<Vec<Ty>>> {
         let def = self.enum_def(symbol)?;
-        // Substitution keys stay raw: scheme parameters keep `Ty::Param`
-        // symbols as authored (core params are owner-stamped at creation),
-        // so a re-stamped key would never match its occurrences.
-        let substitution: FxHashMap<Symbol, Ty> = def
-            .params
-            .iter()
-            .map(|param| param.symbol)
-            .zip(args.iter().cloned())
-            .collect();
         Some(
             def.variants
                 .values()
                 .map(|variant| match &variant.constructor_scheme.ty {
-                    Ty::Func(params, _, _) => params
-                        .iter()
-                        .map(|param| {
-                            param.substitute(
-                                &substitution,
-                                &FxHashMap::default(),
-                                &FxHashMap::default(),
-                            )
-                        })
-                        .collect(),
+                    Ty::Func(params, _, _) => {
+                        layout::instantiate(&def.params, args, params.iter())
+                    }
                     _ => Vec::new(),
                 })
                 .collect(),
@@ -2201,11 +2348,15 @@ impl<'a> ProgramBuilder<'a> {
         self.show_glue.insert(ty.clone(), id);
         let mut fx = FunctionBuilder::new(self, 1, 0);
         let result = fx.emit_show(Operand::Local(0), ty, protocol, span)?;
-        let (n_locals, blocks) = fx.finish(result)?;
+        let (n_locals, blocks, _return_repr) = fx.finish(result)?;
+        let layout = self.layouts.borrow_mut().id_of(ty);
         self.functions[id] = Function {
+            frame_sites: Default::default(),
+            param_reprs: vec![layout::ParamRepr::Value(layout)],
+            return_repr: None,
             name: "derived_show".into(),
             arity: 1,
-            n_locals,
+            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(id)
@@ -2226,11 +2377,15 @@ impl<'a> ProgramBuilder<'a> {
         self.equality_glue.insert(ty.clone(), id);
         let mut fx = FunctionBuilder::new(self, 2, 0);
         let result = fx.emit_equality(Operand::Local(0), Operand::Local(1), ty, protocol, span)?;
-        let (n_locals, blocks) = fx.finish(result)?;
+        let (n_locals, blocks, _return_repr) = fx.finish(result)?;
+        let layout = self.layouts.borrow_mut().id_of(ty);
         self.functions[id] = Function {
+            frame_sites: Default::default(),
+            param_reprs: vec![layout::ParamRepr::Value(layout); 2],
+            return_repr: None,
             name: "derived_equals".into(),
             arity: 2,
-            n_locals,
+            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(id)
@@ -2325,7 +2480,7 @@ impl<'a> ProgramBuilder<'a> {
         fx.flow_label = name.clone();
         fx.frame_span = body.span;
         let arity = fx.bind_witness_params(&hidden, declared_arity);
-        fx.next_local = arity;
+        fx.frame.resize(usize::from(arity), BuildLocal::default());
         fx.subst = subst.iter().cloned().collect();
         fx.in_init = matches!(callable.body, CallableBody::Init { .. });
         if let CallableBody::Func(func) = callable.body
@@ -2366,6 +2521,8 @@ impl<'a> ProgramBuilder<'a> {
                 }
             }
         }
+        let mut param_reprs = vec![layout::ParamRepr::Uniform; usize::from(arity)];
+        let mut init_self_layout = None;
         for (ix, param) in params.iter().enumerate() {
             let local = u16::try_from(ix).unwrap_or_default();
             if let Some(ty) = &param.ty {
@@ -2373,12 +2530,32 @@ impl<'a> ProgramBuilder<'a> {
                     fx.unique_locals.insert(local);
                 }
                 let ty = fx.resolved(ty);
-                fx.local_tys.insert(local, ty.clone());
+                // Publish how the parameter arrives (ADR 0045). A borrow
+                // of an inline aggregate may pass its pointee by value:
+                // aggregates have value semantics (`SetField` copies,
+                // mutation returns through the writeback tuple), so the
+                // reference itself is never observable. An initializer's
+                // `self` is the exception: it arrives as the blank cell,
+                // which only the uniform representation can hold — but it
+                // leaves fully assigned, so the RETURN publishes the
+                // receiver's layout instead.
+                param_reprs[ix] = if fx.in_init && ix == 0 {
+                    init_self_layout = Some(fx.layout_id(&ty));
+                    layout::ParamRepr::Uniform
+                } else {
+                    match &ty {
+                        Ty::Borrow(_, inner) => layout::ParamRepr::Borrow(fx.layout_id(inner)),
+                        ty => layout::ParamRepr::Value(fx.layout_id(ty)),
+                    }
+                };
+                fx.frame_entry(local).declared = Some(ty.clone());
                 fx.check_copy(&ty, body.span)?;
                 // Owned (non-borrow) parameters are the callee's to drop —
-                // except a deinit body's own `self`, whose teardown the
-                // caller glue owns.
-                if !(suppress_self_drop && ix == 0) {
+                // except a deinit body's own `self` (the caller glue owns
+                // its teardown), and an init's blank receiver, whose
+                // assigned-so-far fields own individually through shadow
+                // entries so an abort tears down exactly what was built.
+                if !((suppress_self_drop || fx.in_init) && ix == 0) {
                     fx.own_local(local, &ty);
                 }
             }
@@ -2409,11 +2586,22 @@ impl<'a> ProgramBuilder<'a> {
             CallableBody::Init { .. } => Operand::Local(0),
             CallableBody::Func(_) => value,
         };
-        let (n_locals, blocks) = fx.finish(value)?;
+        let (n_locals, blocks, return_repr) = fx.finish(value)?;
+        // An initializer returns its receiver, fully assigned (definite
+        // assignment is the checker's guarantee), so the published
+        // return is the receiver's layout even though `self` arrived
+        // blank.
+        let return_repr = match callable.body {
+            CallableBody::Init { .. } => init_self_layout,
+            CallableBody::Func(_) => return_repr,
+        };
         Ok(Function {
+            frame_sites: Default::default(),
+            param_reprs,
+            return_repr,
             name,
             arity,
-            n_locals,
+            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
         })
     }
@@ -2456,6 +2644,21 @@ struct LoopFrame {
     breaks: Vec<ArmEnd>,
 }
 
+/// One local of the frame under construction — the builder-side face of
+/// the published locals table (ADR 0045). The declared type comes from
+/// parameters and bindings; the owned type is set only when this frame
+/// must release the value (`needs_release`), together with the loop
+/// depth it was registered at (consuming a value bound outside the
+/// current loop retains, because the loop may repeat). The two type
+/// slots stay separate because call sites consult them in different
+/// priority orders.
+#[derive(Clone, Default)]
+struct BuildLocal {
+    declared: Option<Ty>,
+    owned: Option<Ty>,
+    loop_depth: usize,
+}
+
 struct FunctionBuilder<'p, 'a> {
     program_builder: &'p mut ProgramBuilder<'a>,
     /// The `TypeOutput` side tables of the program this body came from.
@@ -2464,15 +2667,16 @@ struct FunctionBuilder<'p, 'a> {
     /// the body resolve through it before any scalar decision.
     subst: FxHashMap<Symbol, Ty>,
     locals: FxHashMap<Symbol, LocalId>,
-    next_local: u16,
+    /// The frame under construction: one entry per allocated local, the
+    /// builder-side face of the published locals table (ADR 0045). Its
+    /// length is the local count.
+    frame: Vec<BuildLocal>,
     blocks: Vec<BlockData>,
     current: BlockId,
     loop_stack: Vec<LoopFrame>,
     /// Lexical scopes of droppable owned locals, in declaration order
     /// (structural drops, ADR 0017/0030).
     scopes: Vec<Vec<LocalId>>,
-    /// The declared type of every tracked owned local or temp.
-    owned_tys: FxHashMap<LocalId, Ty>,
     /// Locals whose value moved out (no scope-exit drop).
     moved: rustc_hash::FxHashSet<LocalId>,
     /// Owned rvalue temporaries of the statement being compiled; they drop
@@ -2481,9 +2685,20 @@ struct FunctionBuilder<'p, 'a> {
     /// Suppress old-value drops for `self.field =` inside an initializer:
     /// the fresh record's placeholders are not values.
     in_init: bool,
+    /// The blank init receiver's assigned-so-far fields, as shadow
+    /// ownership entries: one shared local per field (allocated once, so
+    /// join states stay equal), re-defined at each assignment. An abort
+    /// mid-init releases exactly these, in reverse order — the
+    /// C++/Swift/Rust partial-initialization rule; the receiver itself is
+    /// never whole-owned during its own initializer.
+    init_field_shadows: FxHashMap<u16, (LocalId, Ty)>,
     /// A `mut func` receiver writes back through the private tuple-return
     /// convention: every return wraps `(result, final self)`.
     writeback_params: Vec<LocalId>,
+    /// What the frame's return sites carry (ADR 0045): unset until the
+    /// first return, `Some(None)` once sites disagree or types were
+    /// never in hand.
+    published_return: Option<Option<layout::LayoutId>>,
     /// This frame's `[drop, retain]` witness locals per rigid
     /// effect-generic: from the perform site in clause bodies, from hidden
     /// parameters in rigid-substituted instances.
@@ -2576,9 +2791,6 @@ struct FunctionBuilder<'p, 'a> {
     /// Locals holding values read from global slots (for mut-receiver
     /// writebacks and move guards).
     global_loads: FxHashMap<LocalId, u32>,
-    /// Declared types of typed locals (params and bindings), for capture
-    /// checking.
-    local_tys: FxHashMap<LocalId, Ty>,
     /// Errors raised on paths that cannot return `Result` (drop emission);
     /// surfaced when the function finishes.
     deferred_errors: Vec<BackendError>,
@@ -2591,10 +2803,6 @@ struct FunctionBuilder<'p, 'a> {
     /// The source span of this frame's body, for frame-level diagnostics
     /// (a returned-borrow escape has no single instruction to blame).
     frame_span: Span,
-    /// The loop depth at which each tracked local was registered:
-    /// consuming a value bound outside the current loop retains (the
-    /// loop may repeat), whatever the syntactic use count says.
-    owned_loop_depth: FxHashMap<LocalId, usize>,
     /// Locals declared unique (`*T`). The representation strips
     /// uniqueness, but sharing one would break the sole-reference
     /// contract, so they keep move semantics.
@@ -2616,16 +2824,17 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             program,
             subst: FxHashMap::default(),
             locals: FxHashMap::default(),
-            next_local: arity,
+            frame: vec![BuildLocal::default(); usize::from(arity)],
             blocks: vec![BlockData::default()],
             current: 0,
             loop_stack: Vec::new(),
             scopes: vec![Vec::new()],
-            owned_tys: FxHashMap::default(),
             moved: rustc_hash::FxHashSet::default(),
             stmt_temps: Vec::new(),
             in_init: false,
+            init_field_shadows: FxHashMap::default(),
             writeback_params: Vec::new(),
+            published_return: None,
             param_witnesses: rustc_hash::FxHashMap::default(),
             param_requirements: rustc_hash::FxHashMap::default(),
             captured_locals: rustc_hash::FxHashSet::default(),
@@ -2649,12 +2858,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             in_unwind_cleanup: false,
             clause_delimiter: None,
             global_loads: FxHashMap::default(),
-            local_tys: FxHashMap::default(),
             deferred_errors: Vec::new(),
             flow_events: Vec::new(),
             flow_label: "mir".into(),
             frame_span: Span::SYNTHESIZED,
-            owned_loop_depth: FxHashMap::default(),
             unique_locals: rustc_hash::FxHashSet::default(),
             in_return_consume: false,
             returns_borrow: false,
@@ -2782,7 +2989,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// One planned release: the local's tracked type, dropped where the
     /// planner decided, with the event the verifier replays.
     fn release_planned(&mut self, local: LocalId) {
-        let Some(ty) = self.owned_tys.get(&local).cloned() else {
+        let Some(ty) = self.owned_ty(local).cloned() else {
             return;
         };
         self.record_flow(verify::FlowEvent::Drop(local));
@@ -2797,13 +3004,30 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
     }
 
-    fn finish(mut self, value: Operand) -> Result<(u16, Vec<BlockData>), BackendError> {
+    /// Seal the body: the locals count, the blocks, and the return
+    /// layout every return site agreed on (`None` when they disagree or
+    /// the body's types were never in hand).
+    fn finish(
+        mut self,
+        value: Operand,
+    ) -> Result<(u16, Vec<BlockData>, Option<layout::LayoutId>), BackendError> {
         if !self.terminated() {
             self.emit_return(value);
         }
         self.elaborate_and_verify();
         self.deferred_error()?;
-        Ok((self.next_local, self.blocks))
+        Ok((self.n_locals(), self.blocks, self.published_return.flatten()))
+    }
+
+    /// Record what this frame's returns actually carry (ADR 0045): every
+    /// return site must agree, or the function publishes no return
+    /// layout and callers treat the result as uniform.
+    fn record_return_layout(&mut self, layout: Option<layout::LayoutId>) {
+        self.published_return = Some(match self.published_return {
+            None => layout,
+            Some(previous) if previous == layout => layout,
+            Some(_) => None,
+        });
     }
 
     /// Plan and emit the control-flow releases (docs/ownership-rethink-
@@ -2822,6 +3046,30 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     )]
     fn elaborate_and_verify(&mut self) {
         let plan = release::plan(&self.blocks, &self.flow_events);
+        // An equalization edge on an init-field shadow IS divergence:
+        // the field was assigned on one join predecessor and not the
+        // other, so no static cleanup exists (the release would free
+        // content the receiver still holds). The C++ discipline —
+        // path-uniform initialization — is a diagnostic, not a runtime
+        // drop flag, until a real program demands one.
+        if !self.init_field_shadows.is_empty() {
+            let shadows: rustc_hash::FxHashSet<LocalId> = self
+                .init_field_shadows
+                .values()
+                .map(|(slot, _)| *slot)
+                .collect();
+            let diverged = plan
+                .edges
+                .iter()
+                .any(|(_, _, locals)| locals.iter().any(|local| shadows.contains(local)));
+            if diverged {
+                self.deferred_errors.push(BackendError::new(
+                    "a `self` field must be assigned on every branch before they join:                      an initializer's abort cleanup is static, so assign the field in                      all branches or before branching"
+                        .into(),
+                    self.frame_span,
+                ));
+            }
+        }
         self.emit_plan(&plan);
         #[cfg(debug_assertions)]
         if self.deferred_errors.is_empty() {
@@ -2834,14 +3082,18 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .collect();
                 let rendered = Program {
                     functions: vec![Function {
+                        frame_sites: Default::default(),
+                        param_reprs: Vec::new(),
+                        return_repr: None,
                         name: self.flow_label.clone(),
                         arity: 0,
-                        n_locals: self.next_local,
+                        locals: crate::backend::mir::LocalInfo::uniform(self.n_locals()),
                         blocks: self.blocks.clone(),
                     }],
                     entry: 0,
                     global_slots: 0,
                     exports: Vec::new(),
+                    layout_table: Vec::new(),
                 }
                 .render();
                 panic!(
@@ -2884,7 +3136,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             let root = self.borrow_root(view);
             let named_owned = |local: LocalId| {
                 self.locals.values().any(|bound| *bound == local)
-                    && self.owned_tys.contains_key(&local)
+                    && self.owns(local)
                     && !self.moved.contains(&local)
             };
             if named_owned(root) || named_owned(view) {
@@ -2916,6 +3168,20 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // core accounts for by hand.
         let core_frame = self.program_builder.programs[self.program].module
             == crate::compiling::module::ModuleId::Core;
+        if self.in_init {
+            // The receiver leaves fully assigned (definite assignment is
+            // the checker's guarantee); its field shadows' claims leave
+            // with it.
+            let mut shadows: Vec<LocalId> = self
+                .init_field_shadows
+                .values()
+                .map(|(slot, _)| *slot)
+                .collect();
+            shadows.sort_unstable();
+            for slot in shadows {
+                self.spend_init_shadow(slot);
+            }
+        }
         self.in_return_consume = true;
         match self.return_ty.clone() {
             Some(ret)
@@ -2938,11 +3204,39 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .iter()
                     .map(|local| Operand::Local(*local)),
             );
+            // The pairing tuple's element types: the declared return plus
+            // each writeback param's evolved value — the borrow's pointee,
+            // since what rides back is the value, not the reference. A
+            // function without a declared return returns Unit (the caller
+            // reconstructs the same tuple from its side of the signature);
+            // a missing writeback entry degrades to `Ty::Error`, whose
+            // layout is opaque — never a guessed shape.
+            let mut element_tys = vec![self.return_ty.clone().unwrap_or_else(Ty::unit)];
+            element_tys.extend(self.writeback_params.iter().map(|local| {
+                let ty = self
+                    .declared_ty(*local)
+                    .or_else(|| self.owned_ty(*local))
+                    .cloned()
+                    .unwrap_or(Ty::Error);
+                match ty {
+                    Ty::Borrow(_, inner) => *inner,
+                    ty => ty,
+                }
+            }));
+            let layout = self.layout_id(&Ty::Tuple(element_tys));
+            self.record_return_layout(Some(layout));
             let paired = self.fresh_local();
-            self.push(Inst::Tuple { dest: paired, args });
+            self.push(Inst::Aggregate {
+                tag: 0,
+                dest: paired,
+                layout,
+                args,
+            });
             self.terminate(Term::Return(Operand::Local(paired)));
             return;
         }
+        let layout = self.return_ty.clone().map(|ret| self.layout_id(&ret));
+        self.record_return_layout(layout);
         self.terminate(Term::Return(value));
     }
 
@@ -3123,7 +3417,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             Ty::Nominal(symbol, args) => {
                 if let Some(payloads) = self.program_builder.variant_payloads(*symbol, args) {
-                    self.drop_enum_value(value, payloads);
+                    let container = self.container_layout(&ty);
+                    self.drop_enum_value(value, container, payloads);
                     return;
                 }
                 // A `Deinit` conformance is the user's destructor hook: the
@@ -3153,6 +3448,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let Some(fields) = self.program_builder.field_types(*symbol, args) else {
                     return;
                 };
+                let container = self.container_layout(&ty);
                 for (index, field_ty) in fields.iter().enumerate().rev() {
                     // Stored slots own: a borrow-typed field releases
                     // its referent (owning stored views).
@@ -3161,11 +3457,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         matches!(field_ty, Ty::Nominal(head, _) if *head == Symbol::RawPtr);
                     if field_is_ptr {
                         let field = self.fresh_local();
-                        self.push(Inst::GetField {
-                            dest: field,
-                            src: value,
-                            index: u16::try_from(index).unwrap_or_default(),
-                        });
+                        self.push_field(field, value, container, u16::try_from(index).unwrap_or_default(), None);
                         self.push(Inst::Free {
                             src: Operand::Local(field),
                         });
@@ -3175,41 +3467,31 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         continue;
                     }
                     let field = self.fresh_local();
-                    self.push(Inst::GetField {
-                        dest: field,
-                        src: value,
-                        index: u16::try_from(index).unwrap_or_default(),
-                    });
+                    self.push_field(field, value, container, u16::try_from(index).unwrap_or_default(), None);
                     self.drop_value(Operand::Local(field), field_ty);
                 }
             }
             Ty::Tuple(items) => {
+                let container = self.container_layout(&ty);
                 for (index, item_ty) in items.iter().enumerate().rev() {
                     let item_ty = &strip_borrows(item_ty.clone());
                     if !needs_drop(self.program_builder, item_ty) {
                         continue;
                     }
                     let item = self.fresh_local();
-                    self.push(Inst::TupleGet {
-                        dest: item,
-                        src: value,
-                        index: u16::try_from(index).unwrap_or_default(),
-                    });
+                    self.push_field(item, value, container, u16::try_from(index).unwrap_or_default(), None);
                     self.drop_value(Operand::Local(item), item_ty);
                 }
             }
             Ty::Record(row) => {
+                let container = self.container_layout(&ty);
                 for (index, (_, item_ty)) in row.fields.iter().enumerate().rev() {
                     let item_ty = &strip_borrows(item_ty.clone());
                     if !needs_drop(self.program_builder, item_ty) {
                         continue;
                     }
                     let item = self.fresh_local();
-                    self.push(Inst::TupleGet {
-                        dest: item,
-                        src: value,
-                        index: u16::try_from(index).unwrap_or_default(),
-                    });
+                    self.push_field(item, value, container, u16::try_from(index).unwrap_or_default(), None);
                     self.drop_value(Operand::Local(item), item_ty);
                 }
             }
@@ -3219,7 +3501,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
 
     /// Enum payload drops dispatch on the tag: one arm per variant with
     /// owned payloads, joining back after.
-    fn drop_enum_value(&mut self, value: Operand, payloads: Vec<Vec<Ty>>) {
+    fn drop_enum_value(
+        &mut self,
+        value: Operand,
+        container: layout::LayoutId,
+        payloads: Vec<Vec<Ty>>,
+    ) {
         // Stored views own: a borrow-typed payload releases its referent
         // like any other stored reference.
         let payloads: Vec<Vec<Ty>> = payloads
@@ -3263,11 +3550,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             self.switch_to(arm);
             for (index, payload_ty) in droppable.iter().rev() {
                 let payload = self.fresh_local();
-                self.push(Inst::GetPayload {
-                    dest: payload,
-                    src: value,
-                    index: u16::try_from(*index).unwrap_or_default(),
-                });
+                self.push_field(payload, value, container, u16::try_from(*index).unwrap_or_default(), Some(u16::try_from(variant_tag).unwrap_or_default()));
                 self.drop_value(Operand::Local(payload), payload_ty);
             }
             self.terminate(Term::Goto(join, Vec::new()));
@@ -3283,6 +3566,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     fn retain_enum_value(
         &mut self,
         value: Operand,
+        container: layout::LayoutId,
         payloads: Vec<Vec<Ty>>,
         span: Span,
     ) -> Result<(), BackendError> {
@@ -3327,11 +3611,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             self.switch_to(arm);
             for (index, payload_ty) in retained.iter() {
                 let payload = self.fresh_local();
-                self.push(Inst::GetPayload {
-                    dest: payload,
-                    src: value,
-                    index: u16::try_from(*index).unwrap_or_default(),
-                });
+                self.push_field(payload, value, container, u16::try_from(*index).unwrap_or_default(), Some(u16::try_from(variant_tag).unwrap_or_default()));
                 self.retain_value(Operand::Local(payload), payload_ty, span)?;
             }
             self.terminate(Term::Goto(join, Vec::new()));
@@ -3443,9 +3723,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             .copied()
             .unwrap_or(0);
         let bound_outside_loop = self
-            .owned_loop_depth
-            .get(&local)
-            .is_some_and(|depth| self.loop_stack.len() > *depth);
+            .frame
+            .get(usize::from(local))
+            .is_some_and(|entry| entry.owned.is_some() && self.loop_stack.len() > entry.loop_depth);
         remaining > 0 || bound_outside_loop || self.has_live_view(local)
     }
 
@@ -3458,7 +3738,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             // possibly more uses: a non-last-use consume donates here
             // exactly as below, or later consumes double-spend the one
             // owned reference (the sequential-if-let double release).
-            if let Some(ty) = self.owned_tys.get(&local).cloned()
+            if let Some(ty) = self.owned_ty(local).cloned()
                 && needs_drop(self.program_builder, &ty)
                 && self.consume_donates(local, &ty)
             {
@@ -3478,7 +3758,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             self.record_flow(verify::FlowEvent::Move(local));
             return true;
         }
-        if let Some(ty) = self.owned_tys.get(&local).cloned() {
+        if let Some(ty) = self.owned_ty(local).cloned() {
             if !needs_drop(self.program_builder, &ty) && contains_object(self.program_builder, &ty)
             {
                 self.push(Inst::RegionAcquire { src: operand });
@@ -3580,7 +3860,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 && let Some(position) = self.stmt_temps.iter().position(|temp| *temp == local)
             {
                 self.stmt_temps.remove(position);
-                if self.owned_tys.contains_key(&local) {
+                if self.owns(local) {
                     self.record_flow(verify::FlowEvent::Move(local));
                 }
             }
@@ -3638,8 +3918,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// Register an owned rvalue temporary for the current statement.
     fn produce_temp(&mut self, local: LocalId, ty: &Ty) {
         if self.needs_release(ty) {
-            self.owned_tys.insert(local, ty.clone());
-            self.owned_loop_depth.insert(local, self.loop_stack.len());
+            let depth = self.loop_stack.len();
+            let entry = self.frame_entry(local);
+            entry.owned = Some(ty.clone());
+            entry.loop_depth = depth;
             self.stmt_temps.push(local);
             self.record_flow(verify::FlowEvent::Def(local));
         }
@@ -3648,8 +3930,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// Register a binding as a scope-owned droppable local.
     fn own_local(&mut self, local: LocalId, ty: &Ty) {
         if self.needs_release(ty) {
-            self.owned_tys.insert(local, ty.clone());
-            self.owned_loop_depth.insert(local, self.loop_stack.len());
+            let depth = self.loop_stack.len();
+            let entry = self.frame_entry(local);
+            entry.owned = Some(ty.clone());
+            entry.loop_depth = depth;
             if let Some(scope) = self.scopes.last_mut() {
                 scope.push(local);
             }
@@ -3757,9 +4041,68 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     }
 
     fn fresh_local(&mut self) -> LocalId {
-        let local = self.next_local;
-        self.next_local += 1;
+        let local = u16::try_from(self.frame.len()).unwrap_or(u16::MAX);
+        self.frame.push(BuildLocal::default());
         local
+    }
+
+    fn n_locals(&self) -> u16 {
+        u16::try_from(self.frame.len()).unwrap_or(u16::MAX)
+    }
+
+    fn frame_entry(&mut self, local: LocalId) -> &mut BuildLocal {
+        let index = usize::from(local);
+        if self.frame.len() <= index {
+            self.frame.resize(index + 1, BuildLocal::default());
+        }
+        &mut self.frame[index]
+    }
+
+    /// The local's declared type, from its parameter or binding.
+    fn declared_ty(&self, local: LocalId) -> Option<&Ty> {
+        self.frame
+            .get(usize::from(local))
+            .and_then(|entry| entry.declared.as_ref())
+    }
+
+    /// The local's type when this frame owes its release.
+    fn owned_ty(&self, local: LocalId) -> Option<&Ty> {
+        self.frame
+            .get(usize::from(local))
+            .and_then(|entry| entry.owned.as_ref())
+    }
+
+    fn owns(&self, local: LocalId) -> bool {
+        self.owned_ty(local).is_some()
+    }
+
+    /// Intern the layout of a constructed aggregate's type (ADR 0045).
+    /// Free inference variables ground first: an executed instruction may
+    /// not carry an opaque layout (rule 6), and a variable nothing ever
+    /// constrained is unobservable, so `()` stands in for it.
+    fn layout_id(&mut self, ty: &Ty) -> layout::LayoutId {
+        self.program_builder
+            .layouts
+            .borrow_mut()
+            .id_of(&ground_free_vars(ty))
+    }
+
+    /// The shaped layout a construction publishes, under the site's
+    /// declared identity (ADR 0045: `'heap` enums construct their sum
+    /// shape; an `InlineArray` built by a `Record` keeps its symbol).
+    fn construction_layout(&mut self, ty: &Ty, identity: Option<Symbol>) -> layout::LayoutId {
+        self.program_builder
+            .layouts
+            .borrow_mut()
+            .shaped_id(&ground_free_vars(ty), identity)
+    }
+
+    /// The layout governing field access on a value of this type.
+    fn container_layout(&mut self, ty: &Ty) -> layout::LayoutId {
+        self.program_builder
+            .layouts
+            .borrow_mut()
+            .container_id(&ground_free_vars(ty))
     }
 
     fn new_block(&mut self) -> BlockId {
@@ -3773,6 +4116,121 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
 
     fn terminated(&self) -> bool {
         self.blocks[self.current].term.is_some()
+    }
+
+    /// Emit a member read (ADR 0046): offset-addressed when the
+    /// container is shaped; the logical form at the existential
+    /// boundary, where the writeback tuple's payload element has no
+    /// static width.
+    fn push_field(
+        &mut self,
+        dest: LocalId,
+        src: Operand,
+        container: layout::LayoutId,
+        index: u16,
+        of_variant: Option<u16>,
+    ) {
+        let site = {
+            let layouts = self.program_builder.layouts.borrow();
+            if layouts.is_shaped(container) {
+                Some(
+                    layouts
+                        .site(container, index, of_variant)
+                        .expect("a shaped container resolves every checked member"),
+                )
+            } else {
+                None
+            }
+        };
+        match site {
+            Some((offset, member)) => {
+                // Chain fold (ADR 0046 D5): reading a member out of a
+                // spliced child that the immediately-preceding
+                // instruction read out of its parent is one parent read
+                // at the summed offset. Only the new access rewrites —
+                // the intermediate stays for any other consumer, and
+                // dead code collects it otherwise.
+                let (src, container, offset) = self
+                    .fold_chain(src, container, offset)
+                    .unwrap_or((src, container, offset));
+                self.push(Inst::Field {
+                    dest,
+                    src,
+                    container,
+                    offset,
+                    member,
+                });
+            }
+            None => self.push(Inst::FieldIndex { dest, src, index }),
+        }
+    }
+
+    /// The parent-side rewrite of a spliced member chain, when the
+    /// source is the immediately-preceding instruction's spliced read:
+    /// with zero instructions in between, the parent operand still
+    /// holds the same value, so adjacency alone makes this sound.
+    fn fold_chain(
+        &self,
+        src: Operand,
+        container: layout::LayoutId,
+        offset: u16,
+    ) -> Option<(Operand, layout::LayoutId, u16)> {
+        let Operand::Local(temp) = src else {
+            return None;
+        };
+        if self.terminated() {
+            return None;
+        }
+        let Inst::Field {
+            dest,
+            src: parent_src,
+            container: parent_container,
+            offset: parent_offset,
+            member: Some(member),
+        } = self.blocks[self.current].insts.last()?
+        else {
+            return None;
+        };
+        if *dest != temp || *member != container {
+            return None;
+        }
+        Some((
+            *parent_src,
+            *parent_container,
+            parent_offset.checked_add(offset)?,
+        ))
+    }
+
+    /// The write twin of [`Self::push_field`].
+    fn push_set_field(
+        &mut self,
+        rec: LocalId,
+        src: Operand,
+        container: layout::LayoutId,
+        index: u16,
+    ) {
+        let site = {
+            let layouts = self.program_builder.layouts.borrow();
+            if layouts.is_shaped(container) {
+                Some(
+                    layouts
+                        .site(container, index, None)
+                        .expect("a shaped container resolves every checked member"),
+                )
+            } else {
+                None
+            }
+        };
+        match site {
+            Some((offset, member)) => self.push(Inst::SetField {
+                rec,
+                src,
+                container,
+                offset,
+                member,
+            }),
+            None => self.push(Inst::SetFieldIndex { rec, src, index }),
+        }
     }
 
     fn push(&mut self, inst: Inst) {
@@ -3798,9 +4256,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             Inst::MakeClosure { dest, env, .. } if env.iter().any(|op| hits(set, op)) => {
                 Some(*dest)
             }
-            Inst::Tuple { args, .. }
-            | Inst::Variant { args, .. }
-            | Inst::Record { args, .. }
+            Inst::Aggregate {
+                tag: 0, args, .. }
             | Inst::ObjectNew { args, .. }
                 if args.iter().any(|op| hits(set, op)) =>
             {
@@ -3926,7 +4383,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     index: u16::try_from(*index).unwrap_or_default(),
                     heap: false,
                     field_ty,
-                    record_arity: Some(u16::try_from(items.len()).unwrap_or_default()),
+                    parent: Ty::Tuple(items.clone()),
                 });
                 Ok(Some(chain))
             }
@@ -3954,7 +4411,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     index: u16::try_from(index).unwrap_or_default(),
                     heap: false,
                     field_ty,
-                    record_arity: Some(u16::try_from(row.fields.len()).unwrap_or_default()),
+                    parent: Ty::Record(row.clone()),
                 });
                 Ok(Some(chain))
             }
@@ -3984,11 +4441,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .field_types(struct_symbol, head_args(head))
                     .and_then(|fields| fields.get(usize::from(index)).cloned())
                     .unwrap_or(Ty::Error);
+                let parent = head.clone();
                 chain.links.push(PlaceLink {
                     index,
                     heap,
                     field_ty,
-                    record_arity: None,
+                    parent,
                 });
                 Ok(Some(chain))
             }
@@ -4030,7 +4488,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 });
             } else {
                 if assign {
-                    if let Some(ty) = self.owned_tys.get(&chain.base).cloned() {
+                    if let Some(ty) = self.owned_ty(chain.base).cloned() {
                         if !self.moved.contains(&chain.base) {
                             self.displace_or_drop(chain.base, &ty);
                         }
@@ -4042,8 +4500,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     dest: chain.base,
                     src: value,
                 });
-                if assign && self.owned_tys.contains_key(&chain.base) {
+                if assign && self.owns(chain.base) {
                     self.record_flow(verify::FlowEvent::Def(chain.base));
+                }
+                // A whole-receiver writeback (a `mut` method on `self`
+                // inside its own init) replaces every assigned field's
+                // content: every live shadow re-reads.
+                if self.in_init && chain.base == 0 {
+                    self.reshadow_all_init_fields();
                 }
             }
             return Ok(());
@@ -4061,11 +4525,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     index: link.index,
                 });
             } else {
-                self.push(Inst::GetField {
-                    dest: child,
-                    src: Operand::Local(current),
-                    index: link.index,
-                });
+                let layout = self.container_layout(&link.parent);
+                self.push_field(child, Operand::Local(current), layout, link.index, None);
             }
             parents.push((current, link.clone()));
             current = child;
@@ -4087,13 +4548,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.push(Inst::RegionRelease { src: value });
             }
         } else {
-            if assign && !self.in_init && needs_drop(self.program_builder, &leaf.field_ty) {
+            if assign
+                && needs_drop(self.program_builder, &leaf.field_ty)
+                && self.displaced_field_is_real(chain)
+            {
                 let old = self.fresh_local();
-                self.push(Inst::GetField {
-                    dest: old,
-                    src: Operand::Local(current),
-                    index: leaf.index,
-                });
+                let layout = self.container_layout(&leaf.parent);
+                self.push_field(old, Operand::Local(current), layout, leaf.index, None);
                 let field_ty = leaf.field_ty.clone();
                 self.drop_value(Operand::Local(old), &field_ty);
             }
@@ -4101,18 +4562,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // Stored slots own (owning stored views).
                 self.consume_binding(value, &strip_borrows(leaf.field_ty.clone()), span)?;
             }
-            if let Some(arity) = leaf.record_arity {
-                let rebuilt = self.rebuild_tuple(current, leaf.index, value, arity);
+            if matches!(leaf.parent, Ty::Tuple(_) | Ty::Record(_)) {
+                let parent = leaf.parent.clone();
+                let rebuilt = self.rebuild_tuple(current, leaf.index, value, &parent);
                 self.push(Inst::Copy {
                     dest: current,
                     src: Operand::Local(rebuilt),
                 });
             } else {
-                self.push(Inst::SetField {
-                    rec: current,
-                    src: value,
-                    index: leaf.index,
-                });
+                let layout = self.container_layout(&leaf.parent.clone());
+                self.push_set_field(current, value, layout, leaf.index);
             }
         }
         // Write updated records back up through the value links; a `'heap`
@@ -4127,19 +4586,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 });
                 return Ok(());
             }
-            if let Some(arity) = link.record_arity {
+            if matches!(link.parent, Ty::Tuple(_) | Ty::Record(_)) {
                 let rebuilt =
-                    self.rebuild_tuple(parent, link.index, Operand::Local(updated), arity);
+                    self.rebuild_tuple(parent, link.index, Operand::Local(updated), &link.parent);
                 self.push(Inst::Copy {
                     dest: parent,
                     src: Operand::Local(rebuilt),
                 });
             } else {
-                self.push(Inst::SetField {
-                    rec: parent,
-                    src: Operand::Local(updated),
-                    index: link.index,
-                });
+                let layout = self.container_layout(&link.parent);
+                self.push_set_field(parent, Operand::Local(updated), layout, link.index);
             }
             updated = parent;
         }
@@ -4152,25 +4608,123 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 src: Operand::Local(updated),
             });
         }
+        // A write into the blank init receiver: the top-level field's
+        // content is (re)owned for abort cleanup, whether this was its
+        // assignment or a writeback that evolved it.
+        if self.in_init
+            && chain.base == 0
+            && chain.global_slot.is_none()
+            && let Some(link) = chain.links.first()
+            && !link.heap
+        {
+            let (index, field_ty) = (link.index, link.field_ty.clone());
+            self.shadow_init_field(index, &field_ty);
+        }
         Ok(())
+    }
+
+    /// Whether the value a field write displaces is real. Outside an
+    /// initializer, always. Inside one, only the blank receiver holds
+    /// placeholders: its top-level field is real exactly when its shadow
+    /// is live on this path.
+    fn displaced_field_is_real(&self, chain: &PlaceChain) -> bool {
+        if !self.in_init || chain.base != 0 || chain.global_slot.is_some() {
+            return true;
+        }
+        let Some(link) = chain.links.first() else {
+            return true;
+        };
+        match self.init_field_shadows.get(&link.index) {
+            Some((slot, _)) => self.owns(*slot) && !self.moved.contains(slot),
+            None => false,
+        }
+    }
+
+    /// Spend a shadow's claim without emitting anything: the content's
+    /// ownership went elsewhere (displaced-value drop, writeback, or the
+    /// receiver leaving at return).
+    fn spend_init_shadow(&mut self, slot: LocalId) {
+        if self.owns(slot) && !self.moved.contains(&slot) {
+            self.moved.insert(slot);
+            self.record_flow(verify::FlowEvent::Move(slot));
+        }
+    }
+
+    /// (Re)own one assigned receiver field through its shared shadow
+    /// local: read the field's current content and register it owned on
+    /// this path. One local per field keeps ownership state equal at
+    /// joins; the release plan rejects any divergence.
+    fn shadow_init_field(&mut self, index: u16, field_ty: &Ty) {
+        let field_ty = strip_borrows(field_ty.clone());
+        if !self.needs_release(&field_ty) {
+            return;
+        }
+        let Some(receiver_ty) = self.declared_ty(0).cloned() else {
+            return;
+        };
+        let slot = match self.init_field_shadows.get(&index) {
+            Some((slot, _)) => {
+                let slot = *slot;
+                self.spend_init_shadow(slot);
+                slot
+            }
+            None => {
+                let slot = self.fresh_local();
+                self.init_field_shadows
+                    .insert(index, (slot, field_ty.clone()));
+                slot
+            }
+        };
+        let layout = self.container_layout(&receiver_ty);
+        self.push_field(slot, Operand::Local(0), layout, index, None);
+        self.moved.remove(&slot);
+        self.own_local(slot, &field_ty);
+    }
+
+    /// Every live shadow re-reads its field (a whole-receiver writeback
+    /// replaced the value behind all of them).
+    fn reshadow_all_init_fields(&mut self) {
+        let mut live: Vec<(u16, Ty)> = self
+            .init_field_shadows
+            .iter()
+            .filter(|(_, (slot, _))| self.owns(*slot) && !self.moved.contains(slot))
+            .map(|(index, (_, ty))| (*index, ty.clone()))
+            .collect();
+        live.sort_unstable_by_key(|(index, _)| *index);
+        for (index, field_ty) in live {
+            self.shadow_init_field(index, &field_ty);
+        }
     }
 
     /// A captureless function value whose body builds one enum variant —
     /// an uncalled constructor reference.
-    fn constructor_value(&mut self, enum_symbol: Symbol, tag: u16, arity: u16) -> Operand {
+    fn constructor_value(
+        &mut self,
+        enum_symbol: Symbol,
+        enum_ty: &Ty,
+        tag: u16,
+        arity: u16,
+    ) -> Operand {
         let id = self.program_builder.reserve("constructor");
+        // One chunk per use site, at the site's instantiation: this
+        // instance's substitution grounds the enum's application, so the
+        // construction publishes a concrete layout (rule 6).
+        let layout = self.construction_layout(enum_ty, Some(enum_symbol));
         let mut block = BlockData::default();
-        block.insts.push(Inst::Variant {
+        block.insts.push(Inst::Aggregate {
             dest: arity,
-            enum_symbol,
             tag,
+            layout,
             args: (0..arity).map(Operand::Local).collect(),
         });
         block.term = Some(Term::Return(Operand::Local(arity)));
         self.program_builder.functions[id] = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "constructor".into(),
             arity,
-            n_locals: arity + 1,
+            locals: crate::backend::mir::LocalInfo::uniform(arity + 1),
             blocks: vec![block],
         };
         let dest = self.fresh_local();
@@ -4186,11 +4740,33 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// String layout).
     fn emit_string_lit(&mut self, text: &str) -> Operand {
         let dest = self.fresh_local();
+        let (layout, storage_layout) = self.string_layouts();
         self.push(Inst::StringLit {
             dest,
             bytes: text.as_bytes().to_vec(),
+            layout,
+            storage_layout,
         });
         Operand::Local(dest)
+    }
+
+    /// The interned layouts of core String and its storage field, for
+    /// string-literal emission. The storage child's type comes from the
+    /// catalog — core owns String's shape, and the spliced child's
+    /// identity must be exactly the field's declared nominal
+    /// (`ByteStorage` today), never a guess.
+    fn string_layouts(&mut self) -> (layout::LayoutId, layout::LayoutId) {
+        let layout = self.construction_layout(
+            &Ty::Nominal(Symbol::String, Vec::new()),
+            Some(Symbol::String),
+        );
+        let storage_ty = self
+            .program_builder
+            .field_types(Symbol::String, &[])
+            .and_then(|fields| fields.first().cloned())
+            .unwrap_or(Ty::Error);
+        let storage_layout = self.container_layout(&storage_ty);
+        (layout, storage_layout)
     }
 
     /// `left + right` through the `String: Add` witness, dropping both
@@ -4335,7 +4911,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     return Ok(Operand::Local(dest));
                 }
                 if let Some(payloads) = self.program_builder.variant_payloads(*symbol, args) {
-                    return self.emit_enum_equality(a, b, payloads, protocol, span);
+                    return self.emit_enum_equality(a, b, &ty, payloads, protocol, span);
                 }
                 if let Some(fields) = self.program_builder.field_types(*symbol, args) {
                     let pairs: Vec<(u16, Ty)> = fields
@@ -4343,7 +4919,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         .enumerate()
                         .map(|(ix, field)| (u16::try_from(ix).unwrap_or_default(), field.clone()))
                         .collect();
-                    return self.emit_field_equality(a, b, &pairs, false, protocol, span);
+                    let container = self.container_layout(&ty);
+                    return self.emit_field_equality(a, b, &pairs, container, protocol, span);
                 }
                 Err(BackendError::unsupported(
                     "derived equality on this type is not supported yet".into(),
@@ -4356,7 +4933,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .enumerate()
                     .map(|(ix, item)| (u16::try_from(ix).unwrap_or_default(), item.clone()))
                     .collect();
-                self.emit_field_equality(a, b, &pairs, true, protocol, span)
+                let container = self.container_layout(&ty);
+                self.emit_field_equality(a, b, &pairs, container, protocol, span)
             }
             Ty::Record(row) => {
                 let pairs: Vec<(u16, Ty)> = row
@@ -4365,7 +4943,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .enumerate()
                     .map(|(ix, (_, item))| (u16::try_from(ix).unwrap_or_default(), item.clone()))
                     .collect();
-                self.emit_field_equality(a, b, &pairs, true, protocol, span)
+                let container = self.container_layout(&ty);
+                self.emit_field_equality(a, b, &pairs, container, protocol, span)
             }
             _ => Err(BackendError::unsupported(
                 "derived equality on this type is not supported yet".into(),
@@ -4374,14 +4953,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
     }
 
-    /// All-fields-equal with early exit; `tuple_layout` selects TupleGet
-    /// over GetField.
+    /// All-fields-equal with early exit.
     fn emit_field_equality(
         &mut self,
         a: Operand,
         b: Operand,
         fields: &[(u16, Ty)],
-        tuple_layout: bool,
+        container: layout::LayoutId,
         protocol: &crate::types::ty::ProtocolRef,
         span: Span,
     ) -> Result<Operand, BackendError> {
@@ -4391,28 +4969,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         for (index, field_ty) in fields {
             let fa = self.fresh_local();
             let fb = self.fresh_local();
-            if tuple_layout {
-                self.push(Inst::TupleGet {
-                    dest: fa,
-                    src: a,
-                    index: *index,
-                });
-                self.push(Inst::TupleGet {
-                    dest: fb,
-                    src: b,
-                    index: *index,
-                });
-            } else {
-                self.push(Inst::GetField {
-                    dest: fa,
-                    src: a,
-                    index: *index,
-                });
-                self.push(Inst::GetField {
-                    dest: fb,
-                    src: b,
-                    index: *index,
-                });
+            {
+                self.push_field(fa, a, container, *index, None);
+                self.push_field(fb, b, container, *index, None);
             }
             let equal = self.emit_equality(
                 Operand::Local(fa),
@@ -4487,19 +5046,27 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// Collect one writeback target per exclusive-borrow parameter, the
     /// receiver's slot first when the callee is a `mut func` method —
     /// mirroring the callee's `writeback_params` order.
+    /// Besides the landing targets, reports each writeback element's
+    /// value type (the mut parameter's pointee): the caller derives the
+    /// callee's published `(result, finals…)` tuple layout from them, so
+    /// both sides address the same offsets from the same facts.
     fn writeback_targets(
         &mut self,
         callee_ty: &Ty,
         operand_count: usize,
-        receiver: Option<Option<WritebackTarget>>,
+        receiver: Option<(Option<WritebackTarget>, Ty)>,
         mut_arg_places: &[(usize, PlaceChain)],
         args: &[crate::typed_ast::CallArg],
         args_operand_offset: usize,
-    ) -> Result<Vec<Option<WritebackTarget>>, BackendError> {
+    ) -> Result<(Vec<Option<WritebackTarget>>, Vec<Ty>), BackendError> {
         let mut targets: Vec<Option<WritebackTarget>> = Vec::new();
+        let mut element_tys: Vec<Ty> = Vec::new();
         let has_receiver = receiver.is_some();
-        if let Some(receiver) = receiver {
+        if let Some((receiver, receiver_ty)) = receiver {
+            // Member callee types exclude the receiver, so its evolved
+            // element type arrives from the call site.
             targets.push(receiver);
+            element_tys.push(strip_borrows(receiver_ty));
         }
         if let Ty::Func(params, _, _) = callee_ty {
             let offset = operand_count.saturating_sub(params.len());
@@ -4532,10 +5099,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         }
                     }
                     targets.push(place.map(WritebackTarget::Place));
+                    element_tys.push(strip_borrows((*param).clone()));
                 }
             }
         }
-        Ok(targets)
+        Ok((targets, element_tys))
     }
 
     /// The landing half of the `(result, final mut values…)` convention:
@@ -4545,6 +5113,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         &mut self,
         dest: LocalId,
         targets: Vec<Option<WritebackTarget>>,
+        element_tys: Vec<Ty>,
         result_ty: &Ty,
         span: Span,
     ) -> Result<Operand, BackendError> {
@@ -4552,22 +5121,22 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             self.produce_temp(dest, result_ty);
             return Ok(Operand::Local(dest));
         }
+        // The callee's `(result, finals…)` tuple, reconstructed from the
+        // same signature facts the callee published it from.
+        let tuple_ty = Ty::Tuple(
+            std::iter::once(result_ty.clone())
+                .chain(element_tys)
+                .collect(),
+        );
+        let container = self.container_layout(&tuple_ty);
         let result = self.fresh_local();
-        self.push(Inst::TupleGet {
-            dest: result,
-            src: Operand::Local(dest),
-            index: 0,
-        });
+        self.push_field(result, Operand::Local(dest), container, 0, None);
         for (position, target) in targets.into_iter().enumerate() {
             let Some(target) = target else {
                 continue;
             };
             let updated = self.fresh_local();
-            self.push(Inst::TupleGet {
-                dest: updated,
-                src: Operand::Local(dest),
-                index: u16::try_from(position + 1).unwrap_or_default(),
-            });
+            self.push_field(updated, Operand::Local(dest), container, u16::try_from(position + 1).unwrap_or_default(), None);
             match target {
                 WritebackTarget::Place(chain) => {
                     self.write_place(&chain, Operand::Local(updated), &Ty::Error, span, false)?;
@@ -4614,8 +5183,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         source: LocalId,
         replaced: u16,
         value: Operand,
-        arity: u16,
+        container: &Ty,
     ) -> LocalId {
+        let arity = match container {
+            Ty::Tuple(items) => u16::try_from(items.len()).unwrap_or_default(),
+            Ty::Record(row) => u16::try_from(row.fields.len()).unwrap_or_default(),
+            _ => 0,
+        };
+        let layout = self.layout_id(container);
         let mut args = Vec::new();
         for index in 0..arity {
             if index == replaced {
@@ -4623,15 +5198,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 continue;
             }
             let item = self.fresh_local();
-            self.push(Inst::TupleGet {
-                dest: item,
-                src: Operand::Local(source),
-                index,
-            });
+            self.push_field(item, Operand::Local(source), layout, index, None);
             args.push(Operand::Local(item));
         }
         let dest = self.fresh_local();
-        self.push(Inst::Tuple { dest, args });
+        self.push(Inst::Aggregate { dest, tag: 0, layout, args });
         dest
     }
 
@@ -4801,7 +5372,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     span,
                 ))
             }
-            _ => scalar_ty(ty, span).map(|_| ()),
+            _ => scalar_ty(ty, span),
         }
     }
 
@@ -4925,50 +5496,42 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     // Enum retains dispatch on the tag, one arm per variant
                     // with buffer-carrying payloads; scalars retain nothing.
                     if let Some(payloads) = self.program_builder.variant_payloads(*symbol, args) {
-                        self.retain_enum_value(value, payloads, span)?;
+                        let container = self.container_layout(&ty);
+                        self.retain_enum_value(value, container, payloads, span)?;
                     }
                     return Ok(());
                 };
+                let container = self.container_layout(&ty);
                 for (index, field_ty) in fields.iter().enumerate() {
                     if !donates(self.program_builder, field_ty) {
                         continue;
                     }
                     let field = self.fresh_local();
-                    self.push(Inst::GetField {
-                        dest: field,
-                        src: value,
-                        index: u16::try_from(index).unwrap_or_default(),
-                    });
+                    self.push_field(field, value, container, u16::try_from(index).unwrap_or_default(), None);
                     self.retain_value(Operand::Local(field), field_ty, span)?;
                 }
                 Ok(())
             }
             Ty::Tuple(items) => {
+                let container = self.container_layout(&ty);
                 for (index, item_ty) in items.iter().enumerate() {
                     if !donates(self.program_builder, item_ty) {
                         continue;
                     }
                     let item = self.fresh_local();
-                    self.push(Inst::TupleGet {
-                        dest: item,
-                        src: value,
-                        index: u16::try_from(index).unwrap_or_default(),
-                    });
+                    self.push_field(item, value, container, u16::try_from(index).unwrap_or_default(), None);
                     self.retain_value(Operand::Local(item), item_ty, span)?;
                 }
                 Ok(())
             }
             Ty::Record(row) => {
+                let container = self.container_layout(&ty);
                 for (index, (_, item_ty)) in row.fields.iter().enumerate() {
                     if !donates(self.program_builder, item_ty) {
                         continue;
                     }
                     let item = self.fresh_local();
-                    self.push(Inst::TupleGet {
-                        dest: item,
-                        src: value,
-                        index: u16::try_from(index).unwrap_or_default(),
-                    });
+                    self.push_field(item, value, container, u16::try_from(index).unwrap_or_default(), None);
                     self.retain_value(Operand::Local(item), item_ty, span)?;
                 }
                 Ok(())
@@ -5023,9 +5586,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 continue;
             };
             let Some(ty) = self
-                .owned_tys
-                .get(&local)
-                .or_else(|| self.local_tys.get(&local))
+                .owned_ty(local)
+                .or_else(|| self.declared_ty(local))
                 .cloned()
             else {
                 continue;
@@ -5124,9 +5686,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 continue;
             };
             let ty = self
-                .owned_tys
-                .get(&local)
-                .or_else(|| self.local_tys.get(&local))
+                .owned_ty(local)
+                .or_else(|| self.declared_ty(local))
                 .cloned()
                 .unwrap_or(Ty::Error);
             let droppable = self.needs_release(&ty);
@@ -5264,11 +5825,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     let ty = self.resolved(&lhs.ty.clone().unwrap_or(Ty::Error));
                     let local = self.fresh_local();
                     self.locals.insert(*symbol, local);
-                    self.local_tys.insert(local, ty.clone());
+                    self.frame_entry(local).declared = Some(ty.clone());
                     self.own_local(local, &ty);
                     self.moved.insert(local);
                     self.uninitialized.insert(local);
-                    if self.owned_tys.contains_key(&local) {
+                    if self.owns(local) {
                         self.record_flow(verify::FlowEvent::Move(local));
                     }
                     return Ok(Operand::Const(Constant::Unit));
@@ -5308,10 +5869,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         });
                     }
                     self.locals.insert(*symbol, local);
-                    self.local_tys.insert(
-                        local,
-                        Ty::Borrow(Perm::Shared, Box::new(self.resolved(&rhs.ty))),
-                    );
+                    self.frame_entry(local).declared =
+                        Some(Ty::Borrow(Perm::Shared, Box::new(self.resolved(&rhs.ty))));
                     return Ok(Operand::Const(Constant::Unit));
                 }
                 // letrec: a func-valued binding that captures frame
@@ -5385,7 +5944,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     });
                     self.consume_binding(value, ty, pattern.span)?;
                     self.locals.insert(*symbol, handle);
-                    self.local_tys.insert(handle, ty.clone());
+                    self.frame_entry(handle).declared = Some(ty.clone());
                     self.cell_handles.insert(handle);
                     if self.needs_release(ty) {
                         self.own_local(handle, ty);
@@ -5417,7 +5976,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // for-loop's iterator), which the release classifier
                 // cannot see through.
                 let value_ty = match value {
-                    Operand::Local(source) => self.owned_tys.get(&source).cloned(),
+                    Operand::Local(source) => self.owned_ty(source).cloned(),
                     _ => None,
                 };
                 // Consume before the symbol points at the aliased local:
@@ -5426,7 +5985,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // (which would donate a reference nothing releases).
                 self.consume_binding(value, ty, pattern.span)?;
                 self.locals.insert(*symbol, local);
-                self.local_tys.insert(local, ty.clone());
+                self.frame_entry(local).declared = Some(ty.clone());
                 self.propagate_view(Operand::Local(local), value);
                 if contains_borrow_classified(self.program_builder, ty) {
                     self.view_locals.insert(local);
@@ -5459,7 +6018,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .iter()
                     .map(|element| self.resolved(&element.ty.clone().unwrap_or(Ty::Error)))
                     .collect();
-                let extracted = self.extract_tuple(value, elements.len());
+                let container = self.container_layout(ty);
+                let extracted = self.extract_tuple(value, container, elements.len());
                 // Deconstruction: when the source is owned, its elements
                 // inherit that ownership (binds must not also donate);
                 // a borrowed source keeps ownership and binds donate.
@@ -5479,7 +6039,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             PatternKind::Record { fields, slots } => {
                 let cells = self.record_cells(pattern, fields, slots)?;
-                let extracted = self.extract_tuple(value, cells.len());
+                let container = self.container_layout(ty);
+                let extracted = self.extract_tuple(value, container, cells.len());
                 if self.consume_operand(value) {
                     for (operand, cell) in extracted.iter().zip(&cells) {
                         if let Operand::Local(local) = operand {
@@ -5559,7 +6120,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     }
                     return Ok(());
                 }
-                let extracted = self.extract_struct_fields(value, false, cells.len());
+                let container = self.container_layout(ty);
+                let extracted = self.extract_struct_fields(value, container, false, cells.len());
                 if self.consume_operand(value) {
                     for (operand, cell) in extracted.iter().zip(&cells) {
                         if let Operand::Local(local) = operand {
@@ -5651,7 +6213,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // hand it to the release planner, not strand it in the
                 // join parameter.
                 let result_ty = arm_ends.iter().find_map(|arm| match arm.value {
-                    Operand::Local(local) => self.owned_tys.get(&local).cloned(),
+                    Operand::Local(local) => self.owned_ty(local).cloned(),
                     _ => None,
                 });
                 self.merge_arms(arm_ends, result, join, temps_before, moved_before);
@@ -5893,7 +6455,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         // Replacement: the old value is destroyed exactly
                         // once before the new one lands (OWN-04) — or
                         // displaced to scope exit while a view is live.
-                        if let Some(ty) = self.owned_tys.get(&local).cloned() {
+                        if let Some(ty) = self.owned_ty(local).cloned() {
                             if !self.moved.contains(&local) {
                                 self.displace_or_drop(local, &ty);
                             }
@@ -5906,7 +6468,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             dest: local,
                             src: value,
                         });
-                        if self.owned_tys.contains_key(&local) {
+                        if self.owns(local) {
                             self.record_flow(verify::FlowEvent::Def(local));
                         }
                         Ok(Operand::Const(Constant::Unit))
@@ -6009,7 +6571,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 for arg in &args {
                     self.propagate_view(Operand::Local(dest), *arg);
                 }
-                self.push(Inst::Tuple { dest, args });
+                let layout = self.layout_id(&ty);
+                self.push(Inst::Aggregate { dest, tag: 0, layout, args });
                 self.produce_temp(dest, &ty);
                 Ok(Operand::Local(dest))
             }
@@ -6044,10 +6607,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 for operand in &compiled {
                     self.propagate_view(Operand::Local(dest), *operand);
                 }
-                self.push(Inst::Variant {
+                let layout = self.construction_layout(&ty, Some(enum_symbol));
+                self.push(Inst::Aggregate {
                     dest,
-                    enum_symbol,
                     tag: *tag,
+                    layout,
                     args: compiled,
                 });
                 self.produce_temp(dest, &ty);
@@ -6082,7 +6646,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 if heap {
                     self.push(Inst::ObjectGet { dest, src, index });
                 } else {
-                    self.push(Inst::GetField { dest, src, index });
+                    let layout = self.container_layout(&base_ty);
+                    self.push_field(dest, src, layout, index, None);
                 }
                 // Field reads carry their owner's provenance so views
                 // derived from fields track the whole value.
@@ -6090,11 +6655,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 Ok(Operand::Local(dest))
             }
             ExprKind::Member(Some(receiver), crate::label::Label::Positional(index)) => {
+                let layout = self.container_layout(&self.resolved(&receiver.ty));
                 let src = self.compile_expr(receiver)?;
                 let index = u16::try_from(*index)
                     .map_err(|_| BackendError::new("tuple index out of range".into(), expr.span))?;
                 let dest = self.fresh_local();
-                self.push(Inst::TupleGet { dest, src, index });
+                self.push_field(dest, src, layout, index, None);
                 Ok(Operand::Local(dest))
             }
             // A record field read: the label's position in the row is its
@@ -6117,13 +6683,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             expr.span,
                         )
                     })?;
+                let layout = self.container_layout(&self.resolved(&receiver.ty));
                 let src = self.compile_expr(receiver)?;
                 let dest = self.fresh_local();
-                self.push(Inst::TupleGet {
-                    dest,
-                    src,
-                    index: u16::try_from(index).unwrap_or_default(),
-                });
+                self.push_field(dest, src, layout, u16::try_from(index).unwrap_or_default(), None);
                 Ok(Operand::Local(dest))
             }
             ExprKind::Variable(Name::Resolved(symbol, name)) => {
@@ -6169,7 +6732,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         });
                         return Ok(Operand::Local(dest));
                     }
-                    if self.owned_tys.contains_key(&local) {
+                    if self.owns(local) {
                         self.record_flow(verify::FlowEvent::Use(local));
                     }
                     Ok(Operand::Local(local))
@@ -6216,10 +6779,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 ));
                             };
                             let dest = self.fresh_local();
-                            self.push(Inst::Variant {
+                            let layout = self.construction_layout(
+                                &Ty::Nominal(enum_symbol, Vec::new()),
+                                Some(enum_symbol),
+                            );
+                            self.push(Inst::Aggregate {
                                 dest,
-                                enum_symbol,
                                 tag,
+                                layout,
                                 args: Vec::new(),
                             });
                             Ok(Operand::Local(dest))
@@ -6242,10 +6809,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 }
                                 Some(Ty::Nominal(enum_symbol, _)) => {
                                     let dest = self.fresh_local();
-                                    self.push(Inst::Variant {
+                                    let layout = self.construction_layout(
+                                        &Ty::Nominal(enum_symbol, Vec::new()),
+                                        Some(enum_symbol),
+                                    );
+                                    self.push(Inst::Aggregate {
                                         dest,
-                                        enum_symbol,
                                         tag: 0,
+                                        layout,
                                         args: Vec::new(),
                                     });
                                     Ok(Operand::Local(dest))
@@ -6391,9 +6962,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         values.push(value);
                     }
                     let dest = self.fresh_local();
-                    self.push(Inst::Record {
+                    let layout = self.construction_layout(&ty, Some(Symbol::InlineArray));
+                    self.push(Inst::Aggregate {
+                        tag: 0,
                         dest,
-                        struct_symbol: Symbol::InlineArray,
+                        layout,
                         args: values,
                     });
                     self.produce_temp(dest, &ty);
@@ -6417,15 +6990,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         expr.span,
                     ));
                 }
-                let array_symbol = *array_symbol;
                 let element_ty = type_args.first().cloned().unwrap_or(Ty::Error);
-                let element = mem_ty_of(&element_ty);
+                let element = layout::scalar_kind(&element_ty);
                 let count = i64::try_from(items.len()).unwrap_or_default();
 
                 let base = self.fresh_local();
                 self.push(Inst::Alloc {
                     dest: base,
-                    bytes: Operand::Const(Constant::Int(count * i64::from(element.size()))),
+                    bytes: Operand::Const(Constant::Int(
+                        count * i64::from(layout::element_stride(element)),
+                    )),
                 });
                 for (index, item) in items.iter().enumerate() {
                     let value = self.compile_expr(item)?;
@@ -6437,7 +7011,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         offset: Operand::Const(Constant::Int(
                             i64::try_from(index).unwrap_or_default(),
                         )),
-                        size: element.size(),
+                        size: layout::element_stride(element),
                     });
                     self.push(Inst::Store {
                         ptr: Operand::Local(slot),
@@ -6445,16 +7019,25 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         kind: element,
                     });
                 }
+                let element = match &ty {
+                    Ty::Nominal(_, args) => args.first().cloned().unwrap_or(Ty::Error),
+                    _ => Ty::Error,
+                };
+                let storage_layout =
+                    self.layout_id(&Ty::Nominal(Symbol::Storage, vec![element]));
                 let storage = self.fresh_local();
-                self.push(Inst::Record {
+                self.push(Inst::Aggregate {
+                    tag: 0,
                     dest: storage,
-                    struct_symbol: Symbol::Storage,
+                    layout: storage_layout,
                     args: vec![Operand::Local(base)],
                 });
                 let dest = self.fresh_local();
-                self.push(Inst::Record {
+                let layout = self.layout_id(&ty);
+                self.push(Inst::Aggregate {
+                    tag: 0,
                     dest,
-                    struct_symbol: array_symbol,
+                    layout,
                     args: vec![
                         Operand::Local(storage),
                         Operand::Const(Constant::Int(count)),
@@ -6549,7 +7132,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         tail: None,
                     },
                 );
-                let targets = self.writeback_targets(
+                let (targets, writeback_tys) = self.writeback_targets(
                     &declared_fn,
                     operands.len(),
                     None,
@@ -6661,7 +7244,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.push(Inst::SetFloor {
                     src: Operand::Local(saved_floor),
                 });
-                self.apply_writebacks(dest, targets, &ty, expr.span)
+                self.apply_writebacks(dest, targets, writeback_tys, &ty, expr.span)
             }
             ExprKind::RecordLiteral { fields, spread } => {
                 // In-row-order spreadless literals became tuples at
@@ -6701,7 +7284,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     args.push(*operand);
                 }
                 let dest = self.fresh_local();
-                self.push(Inst::Tuple { dest, args });
+                let layout = self.layout_id(&record_ty);
+                self.push(Inst::Aggregate { dest, tag: 0, layout, args });
                 self.produce_temp(dest, &record_ty);
                 Ok(Operand::Local(dest))
             }
@@ -6710,7 +7294,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             {
                 // An uncalled leading-dot constructor reference.
                 let func_ty = self.resolved(&expr.ty);
-                let Ty::Func(params, _, _) = &func_ty else {
+                let Ty::Func(params, result, _) = &func_ty else {
                     return Err(BackendError::unsupported(
                         "this constructor cannot be used as a value yet".into(),
                         expr.span,
@@ -6722,7 +7306,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .expect("guarded above");
                 let arity = u16::try_from(params.len())
                     .map_err(|_| BackendError::new("too many parameters".into(), expr.span))?;
-                Ok(self.constructor_value(enum_symbol, tag, arity))
+                let enum_ty = (**result).clone();
+                Ok(self.constructor_value(enum_symbol, &enum_ty, tag, arity))
             }
             ExprKind::Member(Some(receiver), crate::label::Label::Named(member_name))
                 if matches!(
@@ -6737,7 +7322,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     unreachable!("guarded above");
                 };
                 let func_ty = self.resolved(&expr.ty);
-                let (Ty::Func(params, _, _), Some(names)) =
+                let (Ty::Func(params, result, _), Some(names)) =
                     (&func_ty, self.program_builder.variant_names(*enum_symbol))
                 else {
                     return Err(BackendError::unsupported(
@@ -6754,7 +7339,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let arity = u16::try_from(params.len())
                     .map_err(|_| BackendError::new("too many parameters".into(), expr.span))?;
                 let tag = u16::try_from(tag).unwrap_or_default();
-                Ok(self.constructor_value(*enum_symbol, tag, arity))
+                let enum_symbol = *enum_symbol;
+                let enum_ty = (**result).clone();
+                Ok(self.constructor_value(enum_symbol, &enum_ty, tag, arity))
             }
             _ => Err(BackendError::unsupported(
                 "this expression is not supported yet".into(),
@@ -6776,9 +7363,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             Literal::Bool(value) => Ok(Operand::Const(Constant::Bool(*value))),
             Literal::String(text) => {
                 let dest = self.fresh_local();
+                let (layout, storage_layout) = self.string_layouts();
                 self.push(Inst::StringLit {
                     dest,
                     bytes: text.clone().into_bytes(),
+                    layout,
+                    storage_layout,
                 });
                 Ok(Operand::Local(dest))
             }
@@ -6790,16 +7380,30 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let len = i64::try_from(bytes.len()).unwrap_or_default();
                 let ptr = self.fresh_local();
                 self.push(Inst::BytesLit { dest: ptr, bytes });
+                // The storage child is Character's declared field type
+                // (core owns the shape; `ByteStorage` today).
+                let storage_ty = self
+                    .program_builder
+                    .field_types(Symbol::Character, &[])
+                    .and_then(|fields| fields.first().cloned())
+                    .unwrap_or(Ty::Error);
+                let storage_layout = self.container_layout(&storage_ty);
                 let storage = self.fresh_local();
-                self.push(Inst::Record {
+                self.push(Inst::Aggregate {
+                    tag: 0,
                     dest: storage,
-                    struct_symbol: Symbol::Storage,
+                    layout: storage_layout,
                     args: vec![Operand::Local(ptr)],
                 });
                 let dest = self.fresh_local();
-                self.push(Inst::Record {
+                let layout = self.construction_layout(
+                    &Ty::Nominal(Symbol::Character, Vec::new()),
+                    Some(Symbol::Character),
+                );
+                self.push(Inst::Aggregate {
+                    tag: 0,
                     dest,
-                    struct_symbol: Symbol::Character,
+                    layout,
                     args: vec![
                         Operand::Local(storage),
                         Operand::Const(Constant::Int(0)),
@@ -6921,17 +7525,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .iter()
                     .map(|element| self.resolved(&element.ty.clone().unwrap_or(Ty::Error)))
                     .collect();
+                let container = self.container_layout(&ty);
                 for (index, (element, element_ty)) in elements.iter().zip(&element_tys).enumerate()
                 {
                     if pattern_bind_symbols(element).is_empty() && !self.needs_release(element_ty) {
                         continue;
                     }
                     let extracted = self.fresh_local();
-                    self.push(Inst::TupleGet {
-                        dest: extracted,
-                        src: scrutinee,
-                        index: u16::try_from(index).unwrap_or_default(),
-                    });
+                    self.push_field(extracted, scrutinee, container, u16::try_from(index).unwrap_or_default(), None);
                     self.settle_owned_match(
                         element,
                         Operand::Local(extracted),
@@ -6947,21 +7548,18 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 fields,
                 ..
             } => {
-                let Some((_, _, payload_tys)) =
+                let Some((_, variant_tag, payload_tys)) =
                     self.variant_case(*resolved, variant_name, &ty, fields)
                 else {
                     return Ok(());
                 };
+                let container = self.container_layout(&ty);
                 for (index, (field, payload_ty)) in fields.iter().zip(&payload_tys).enumerate() {
                     if pattern_bind_symbols(field).is_empty() && !self.needs_release(payload_ty) {
                         continue;
                     }
                     let extracted = self.fresh_local();
-                    self.push(Inst::GetPayload {
-                        dest: extracted,
-                        src: scrutinee,
-                        index: u16::try_from(index).unwrap_or_default(),
-                    });
+                    self.push_field(extracted, scrutinee, container, u16::try_from(index).unwrap_or_default(), Some(variant_tag));
                     self.settle_owned_match(
                         field,
                         Operand::Local(extracted),
@@ -7054,6 +7652,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             PatternKind::Record { fields, slots } => {
                 let cells = self.record_cells(pattern, fields, slots)?;
+                let container = self.container_layout(&ty);
                 for (index, cell) in cells.iter().enumerate() {
                     if let Some(name) = &cell.bind {
                         // The label binder owns the slot; interior binds
@@ -7077,11 +7676,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             }
                             if !pattern_bind_symbols(&cell.pattern).is_empty() {
                                 let extracted = self.fresh_local();
-                                self.push(Inst::TupleGet {
-                                    dest: extracted,
-                                    src: scrutinee,
-                                    index: u16::try_from(index).unwrap_or_default(),
-                                });
+                                self.push_field(extracted, scrutinee, container, u16::try_from(index).unwrap_or_default(), None);
                                 self.settle_owned_match(
                                     &cell.pattern,
                                     Operand::Local(extracted),
@@ -7098,11 +7693,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         continue;
                     }
                     let extracted = self.fresh_local();
-                    self.push(Inst::TupleGet {
-                        dest: extracted,
-                        src: scrutinee,
-                        index: u16::try_from(index).unwrap_or_default(),
-                    });
+                    self.push_field(extracted, scrutinee, container, u16::try_from(index).unwrap_or_default(), None);
                     self.settle_owned_match(
                         &cell.pattern,
                         Operand::Local(extracted),
@@ -7114,6 +7705,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             PatternKind::Struct { fields, slots, .. } => {
                 let (heap, cells) = self.struct_cells(pattern, fields, slots, &ty)?;
+                let container = self.container_layout(&ty);
                 for (index, cell) in cells.iter().enumerate() {
                     if pattern_bind_symbols(&cell.pattern).is_empty()
                         && !self.needs_release(&cell.field_ty)
@@ -7135,11 +7727,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             index: u16::try_from(index).unwrap_or_default(),
                         });
                     } else {
-                        self.push(Inst::GetField {
-                            dest: extracted,
-                            src: scrutinee,
-                            index: u16::try_from(index).unwrap_or_default(),
-                        });
+                        self.push_field(extracted, scrutinee, container, u16::try_from(index).unwrap_or_default(), None);
                     }
                     self.settle_owned_match(
                         &cell.pattern,
@@ -7342,6 +7930,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     fn extract_struct_fields(
         &mut self,
         scrutinee: Operand,
+        container: layout::LayoutId,
         heap: bool,
         len: usize,
     ) -> Vec<Operand> {
@@ -7356,11 +7945,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         index,
                     });
                 } else {
-                    self.push(Inst::GetField {
-                        dest,
-                        src: scrutinee,
-                        index,
-                    });
+                    self.push_field(dest, scrutinee, container, index, None);
                 }
                 Operand::Local(dest)
             })
@@ -7497,7 +8082,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .iter()
                     .map(|element| self.resolved(&element.ty.clone().unwrap_or(Ty::Error)))
                     .collect();
-                let extracted = self.extract_tuple(scrutinee, elements.len());
+                let container = self.container_layout(scrutinee_ty);
+                let extracted = self.extract_tuple(scrutinee, container, elements.len());
                 self.test_all(elements, &extracted, &element_tys, matched, failed)
             }
             PatternKind::Variant {
@@ -7546,14 +8132,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     failed,
                 );
                 self.switch_to(payloads);
+                let container = self.container_layout(scrutinee_ty);
                 let extracted: Vec<Operand> = (0..fields.len())
                     .map(|index| {
                         let dest = self.fresh_local();
-                        self.push(Inst::GetPayload {
-                            dest,
-                            src: scrutinee,
-                            index: u16::try_from(index).unwrap_or_default(),
-                        });
+                        self.push_field(dest, scrutinee, container, u16::try_from(index).unwrap_or_default(), Some(tag));
                         Operand::Local(dest)
                     })
                     .collect();
@@ -7603,7 +8186,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             ),
             PatternKind::Record { fields, slots } => {
                 let cells = self.record_cells(pattern, fields, slots)?;
-                let extracted = self.extract_tuple(scrutinee, cells.len());
+                let container = self.container_layout(scrutinee_ty);
+                let extracted = self.extract_tuple(scrutinee, container, cells.len());
                 // `label: pattern` also binds the label to the slot;
                 // register those binders exactly like Bind cells.
                 for (cell, slot) in cells.iter().zip(&extracted) {
@@ -7631,7 +8215,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             PatternKind::Struct { fields, slots, .. } => {
                 let (heap, cells) = self.struct_cells(pattern, fields, slots, scrutinee_ty)?;
-                let extracted = self.extract_struct_fields(scrutinee, heap, cells.len());
+                let container = self.container_layout(scrutinee_ty);
+                let extracted = self.extract_struct_fields(scrutinee, container, heap, cells.len());
                 let patterns: Vec<Pattern> =
                     cells.iter().map(|cell| cell.pattern.clone()).collect();
                 let tys: Vec<Ty> = cells.iter().map(|cell| cell.field_ty.clone()).collect();
@@ -7687,13 +8272,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             })?;
         let start_index = self.program_builder.field_index_by_name(head, "start");
 
+        let container = self.container_layout(&head_ty);
         let len = i64::try_from(bytes.len()).unwrap_or_default();
         let count = self.fresh_local();
-        self.push(Inst::GetField {
-            dest: count,
-            src: scrutinee,
-            index: count_index,
-        });
+        self.push_field(count, scrutinee, container, count_index, None);
         let count_ok = self.new_block();
         self.branch_if_equal(
             ScalarOp::IntCmp(CmpKind::Eq),
@@ -7709,25 +8291,17 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
 
         let storage = self.fresh_local();
-        self.push(Inst::GetField {
-            dest: storage,
-            src: scrutinee,
-            index: storage_index,
-        });
+        self.push_field(storage, scrutinee, container, storage_index, None);
         let base = self.fresh_local();
-        self.push(Inst::GetField {
-            dest: base,
-            src: Operand::Local(storage),
-            index: 0,
-        });
+        let storage_container = self.container_layout(&Ty::Nominal(
+            Symbol::Storage,
+            vec![Ty::Nominal(Symbol::Byte, Vec::new())],
+        ));
+        self.push_field(base, Operand::Local(storage), storage_container, 0, None);
         let base = if let Some(start_index) = start_index {
             // A view (Substring) offsets into its shared storage.
             let start = self.fresh_local();
-            self.push(Inst::GetField {
-                dest: start,
-                src: scrutinee,
-                index: start_index,
-            });
+            self.push_field(start, scrutinee, container, start_index, None);
             let offset = self.fresh_local();
             self.push(Inst::PtrAdd {
                 dest: offset,
@@ -7787,13 +8361,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         self.push(Inst::Load {
             dest: lhs,
             ptr: Operand::Local(lhs_ptr),
-            kind: MemTy::Byte,
+            kind: layout::SlotKind::Byte,
         });
         let rhs = self.fresh_local();
         self.push(Inst::Load {
             dest: rhs,
             ptr: Operand::Local(rhs_ptr),
-            kind: MemTy::Byte,
+            kind: layout::SlotKind::Byte,
         });
         let advance = self.new_block();
         self.branch_if_equal(
@@ -7820,15 +8394,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     }
 
     /// Extract every element of a tuple scrutinee into fresh locals.
-    fn extract_tuple(&mut self, scrutinee: Operand, len: usize) -> Vec<Operand> {
+    fn extract_tuple(
+        &mut self,
+        scrutinee: Operand,
+        container: layout::LayoutId,
+        len: usize,
+    ) -> Vec<Operand> {
         (0..len)
             .map(|index| {
                 let dest = self.fresh_local();
-                self.push(Inst::TupleGet {
-                    dest,
-                    src: scrutinee,
-                    index: u16::try_from(index).unwrap_or_default(),
-                });
+                self.push_field(dest, scrutinee, container, u16::try_from(index).unwrap_or_default(), None);
                 Operand::Local(dest)
             })
             .collect()
@@ -7913,7 +8488,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
             }
         }
-        let targets =
+        let (targets, writeback_tys) =
             self.writeback_targets(&callee_ty, operands.len(), None, &mut_arg_places, args, 0)?;
         let dest = self.fresh_local();
         let unwind = None;
@@ -7923,7 +8498,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             args: operands,
             unwind,
         });
-        self.apply_writebacks(dest, targets, &self.resolved(&expr.ty), expr.span)
+        self.apply_writebacks(dest, targets, writeback_tys, &self.resolved(&expr.ty), expr.span)
     }
 
     fn compile_call(
@@ -8111,11 +8686,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                     });
                                     witnesses.push(Operand::Local(entry));
                                 }
-                                Some(Some(WritebackTarget::Repack {
-                                    chain,
-                                    protocol,
-                                    witnesses,
-                                }))
+                                Some((
+                                    Some(WritebackTarget::Repack {
+                                        chain,
+                                        protocol,
+                                        witnesses,
+                                    }),
+                                    Ty::Error,
+                                ))
                             }
                             None => None,
                         };
@@ -8134,7 +8712,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 }
                             }
                         }
-                        let targets = self.writeback_targets(
+                        let (targets, writeback_tys) = self.writeback_targets(
                             &callee_ty,
                             operands.len(),
                             receiver_target,
@@ -8153,6 +8731,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         return self.apply_writebacks(
                             dest,
                             targets,
+                            writeback_tys,
                             &self.resolved(&expr.ty),
                             expr.span,
                         );
@@ -8289,7 +8868,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 None
                             };
                             let (receiver_target, precompiled) = match receiver_target {
-                                Some((target, precompiled)) => (Some(target), precompiled),
+                                Some((target, precompiled)) => {
+                                    let receiver_ty = value_receiver
+                                        .map(|receiver| self.resolved(&receiver.ty))
+                                        .unwrap_or(Ty::Error);
+                                    (Some((target, receiver_ty)), precompiled)
+                                }
                                 None => (None, None),
                             };
                             let implementation = dictionary[index];
@@ -8315,7 +8899,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 }
                             }
                             let args_operand_offset = usize::from(value_receiver.is_some());
-                            let targets = self.writeback_targets(
+                            let (targets, writeback_tys) = self.writeback_targets(
                                 &callee_ty,
                                 operands.len(),
                                 receiver_target,
@@ -8334,6 +8918,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             return self.apply_writebacks(
                                 dest,
                                 targets,
+                                writeback_tys,
                                 &self.resolved(&expr.ty),
                                 expr.span,
                             );
@@ -8482,8 +9067,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         if mut_receiver
             && let Some(chain) = &receiver_place
             && self
-                .local_tys
-                .get(&chain.base)
+                .declared_ty(chain.base)
                 .is_some_and(|base_ty| matches!(base_ty, Ty::Borrow(Perm::Shared, _)))
         {
             return Err(BackendError::new(
@@ -8494,11 +9078,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // Protocol-static calls spell the receiver as their first argument,
         // so its exclusive-borrow parameter must drive writeback below. Only
         // reserve the separate receiver slot for an actual value-member call.
-        let receiver = (mut_receiver && value_receiver_ty.is_some())
-            .then(|| receiver_place.clone().map(WritebackTarget::Place));
+        let receiver = (mut_receiver && value_receiver_ty.is_some()).then(|| {
+            (
+                receiver_place.clone().map(WritebackTarget::Place),
+                value_receiver_ty.clone().unwrap_or(Ty::Error),
+            )
+        });
         let callee_ty = self.resolved(&callee.ty);
         let args_operand_offset = usize::from(value_receiver_ty.is_some());
-        let targets = self.writeback_targets(
+        let (targets, writeback_tys) = self.writeback_targets(
             &callee_ty,
             operands.len(),
             receiver,
@@ -8524,7 +9112,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             // displaced one dies at scope exit). Without a live view
             // the old invalidation is simply unnecessary bookkeeping —
             // there is nobody left to invalidate.
-            if let Some(ty) = self.owned_tys.get(&base).cloned()
+            if let Some(ty) = self.owned_ty(base).cloned()
                 && self.has_live_view(base)
             {
                 if let Err(error) = self.retain_value(Operand::Local(base), &ty, expr.span) {
@@ -8556,7 +9144,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let dest = self.fresh_local();
         let first_operand = operands.first().copied();
         self.push_call(dest, func, operands);
-        let result = self.apply_writebacks(dest, targets, &self.resolved(&expr.ty), expr.span)?;
+        let result =
+            self.apply_writebacks(dest, targets, writeback_tys, &self.resolved(&expr.ty), expr.span)?;
         // A call returning a borrowed view derives from its receiver or
         // first argument: the view's owner for invalidation and escape
         // checks (per-argument provenance, RFC 2094's model).
@@ -8722,7 +9311,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // retain], then constraint dictionaries) after the declared
         // arguments.
         let arity = fx.bind_witness_params(&sig_generics, declared_arity);
-        fx.next_local = arity;
+        fx.frame.resize(usize::from(arity), BuildLocal::default());
         for (ix, param) in body.args.iter().enumerate() {
             let local = u16::try_from(ix).unwrap_or_default();
             // Typing published every clause binder's type on its node
@@ -8739,6 +9328,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             if matches!(ty, Ty::Borrow(Perm::Exclusive, _)) {
                 fx.writeback_params.push(local);
             }
+            // The declared type feeds the resume tuple's published layout
+            // (borrow params own nothing, so `owned` alone cannot type
+            // them).
+            fx.frame_entry(local).declared = Some(ty.clone());
             fx.check_copy(&ty, body.span)?;
             fx.own_local(local, &ty);
             if let Name::Resolved(symbol, _) = &param.name {
@@ -8806,11 +9399,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
         fx.elaborate_and_verify();
         fx.deferred_error()?;
-        let (n_locals, blocks) = (fx.next_local, fx.blocks);
+        let (n_locals, blocks) = (fx.n_locals(), fx.blocks);
         self.program_builder.functions[id] = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "handler_clause".into(),
             arity,
-            n_locals,
+            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
         };
 
@@ -8971,8 +9567,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             self.locals.get(symbol).is_some_and(|local| {
                 self.cell_handles.contains(local)
                     && self
-                        .local_tys
-                        .get(local)
+                        .declared_ty(*local)
                         .is_some_and(|ty| self.needs_release(&ty.clone()))
             })
         });
@@ -8994,7 +9589,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         fx.use_counts = frame_uses(&body_nodes);
         let arity = u16::try_from(func.params.len())
             .map_err(|_| BackendError::new("too many parameters".into(), func.body.span))?;
-        fx.next_local = arity;
+        fx.frame.resize(usize::from(arity), BuildLocal::default());
         for (ix, param) in func.params.iter().enumerate() {
             let local = u16::try_from(ix).unwrap_or_default();
             if let Some(ty) = &param.ty {
@@ -9004,6 +9599,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 if matches!(ty, Ty::Borrow(Perm::Exclusive, _)) {
                     fx.writeback_params.push(local);
                 }
+                // The declared type feeds the writeback tuple's published
+                // layout (borrow params own nothing, so `owned` alone
+                // cannot type them).
+                fx.frame_entry(local).declared = Some(ty.clone());
                 fx.check_copy(&ty, func.body.span)?;
                 fx.own_local(local, &ty);
             }
@@ -9021,11 +9620,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             &effects,
         );
         let value = fx.compile_block(&func.body)?;
-        let (n_locals, blocks) = fx.finish(value)?;
+        let (n_locals, blocks, _return_repr) = fx.finish(value)?;
         self.program_builder.functions[id] = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: func.name.name_str(),
             arity,
-            n_locals,
+            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
         };
 
@@ -9291,10 +9893,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
             }
             let fresh = self.fresh_local();
-            self.push(Inst::Record {
+            let layout = self.construction_layout(&ty, Some(struct_symbol));
+            self.push(Inst::Blank {
                 dest: fresh,
-                struct_symbol,
-                args: vec![Operand::Const(Constant::Unit); field_count],
+                layout,
             });
             let mut call_args = vec![Operand::Local(fresh)];
             call_args.extend(operands.iter().copied());
@@ -9342,9 +9944,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             for operand in &operands {
                 self.propagate_view(Operand::Local(dest), *operand);
             }
-            self.push(Inst::Record {
+            let layout = self.construction_layout(&ty, Some(struct_symbol));
+            self.push(Inst::Aggregate {
+                tag: 0,
                 dest,
-                struct_symbol,
+                layout,
                 args: operands,
             });
             self.produce_temp(dest, &ty);
@@ -9368,9 +9972,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let dest = self.fresh_local();
         match &instruction.kind {
             K::Alloc { elem, count } => {
-                let element = mem_ty_of(&self.resolved(elem));
+                let element = layout::scalar_kind(&self.resolved(elem));
                 let count = self.ir_value(instruction, count)?;
-                let bytes = if element.size() == 1 {
+                let bytes = if layout::element_stride(element) == 1 {
                     count
                 } else {
                     let scaled = self.fresh_local();
@@ -9378,7 +9982,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         dest: scaled,
                         op: ScalarOp::IntMul,
                         a: count,
-                        b: Some(Operand::Const(Constant::Int(i64::from(element.size())))),
+                        b: Some(Operand::Const(Constant::Int(i64::from(
+                            layout::element_stride(element),
+                        )))),
                     });
                     Operand::Local(scaled)
                 };
@@ -9404,13 +10010,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 return Ok(Operand::Local(dest));
             }
             K::Load { ty, addr } => {
-                let kind = mem_ty_of(&self.resolved(ty));
+                let kind = layout::scalar_kind(&self.resolved(ty));
                 let ptr = self.ir_value(instruction, addr)?;
                 self.push(Inst::Load { dest, ptr, kind });
                 return Ok(Operand::Local(dest));
             }
             K::Store { ty, value, addr } => {
-                let kind = mem_ty_of(&self.resolved(ty));
+                let kind = layout::scalar_kind(&self.resolved(ty));
                 let src = self.ir_value(instruction, value)?;
                 let ptr = self.ir_value(instruction, addr)?;
                 // The write donates the value to memory: its previous
@@ -9424,7 +10030,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // Exchange two memory slots: two loads, two crossed
                 // stores. Ownership is unchanged — each slot still owns
                 // exactly one value.
-                let kind = mem_ty_of(&self.resolved(ty));
+                let kind = layout::scalar_kind(&self.resolved(ty));
                 let first = self.ir_value(instruction, a)?;
                 let second = self.ir_value(instruction, b)?;
                 let from_first = self.fresh_local();
@@ -9468,25 +10074,31 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.push(Inst::MemCopy { from, to, len });
                 return Ok(Operand::Const(Constant::Unit));
             }
-            K::InlineGet { array, index } => {
+            K::InlineGet {
+                element,
+                array,
+                index,
+            } => {
+                let element = self.layout_id(&self.resolved(element));
                 let array = self.ir_value(instruction, array)?;
                 let index = self.ir_value(instruction, index)?;
                 self.push(Inst::GetElement {
                     dest,
                     src: array,
+                    element,
                     index,
                 });
                 return Ok(Operand::Local(dest));
             }
             K::Gep { elem, addr, offset } => {
-                let element = mem_ty_of(&self.resolved(elem));
+                let element = layout::scalar_kind(&self.resolved(elem));
                 let ptr = self.ir_value(instruction, addr)?;
                 let offset = self.ir_value(instruction, offset)?;
                 self.push(Inst::PtrAdd {
                     dest,
                     ptr,
                     offset,
-                    size: element.size(),
+                    size: layout::element_stride(element),
                 });
                 return Ok(Operand::Local(dest));
             }

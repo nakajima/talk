@@ -590,6 +590,10 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         // unified predicate language.
         let mut var_predicates: FxHashMap<u32, Vec<Predicate>> = FxHashMap::default();
         let mut held_members: Vec<(Ty, crate::label::Label, Ty, CtOrigin)> = vec![];
+        // Held equations keep their origins on the side: a scheme predicate
+        // carries none, but one whose root never quantifies is reported
+        // after generalization, and the diagnostic needs the site.
+        let mut held_equations: Vec<(u32, Ty, Ty, CtOrigin)> = vec![];
         for residual in residuals {
             match &residual {
                 Constraint::Conforms { ty, protocol, .. } => {
@@ -653,15 +657,17 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         self.deferred.push(residual)
                     }
                 }
-                Constraint::Eq(a, b, _) => {
+                Constraint::Eq(a, b, origin) => {
                     let mut roots = vec![];
                     self.group_owned_roots(a, &mut roots);
                     self.group_owned_roots(b, &mut roots);
                     roots.sort_unstable();
                     roots.dedup();
                     if generalizable && let Some(root) = roots.first().copied() {
-                        let predicate =
-                            Predicate::TypeEq(self.store.zonk_ty(a), self.store.zonk_ty(b));
+                        let a = self.store.zonk_ty(a);
+                        let b = self.store.zonk_ty(b);
+                        let predicate = Predicate::TypeEq(a.clone(), b.clone());
+                        held_equations.push((root, a, b, *origin));
                         let predicates = var_predicates.entry(root).or_default();
                         if !predicates.contains(&predicate) {
                             predicates.push(predicate);
@@ -725,6 +731,23 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     .errors
                     .extend(Self::ambiguous_declared_predicate_errors(&scheme, declared));
                 self.schemes.insert(*symbol, scheme);
+            }
+            // A held equation whose root no binder quantified rides no
+            // scheme and meets no further given: unless its sides already
+            // agree it is unprovable, and dropping it silently was the
+            // hole that let a self-recursive call at a larger
+            // instantiation typecheck against a type-wrong instance.
+            for (root, a, b, origin) in held_equations {
+                if let Some((expected, found)) = generalizer.unproven_equation(root, &a, &b) {
+                    self.diagnostics.errors.push((
+                        TypeError::Mismatch {
+                            expected,
+                            found,
+                            reason: origin.reason,
+                        },
+                        origin.node,
+                    ));
+                }
             }
             // Held member uses: quantification turned their receivers'
             // variables into scheme parameters — attach each constraint

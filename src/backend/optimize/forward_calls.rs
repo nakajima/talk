@@ -99,9 +99,12 @@ mod tests {
 
     fn function(arity: u16, insts: Vec<Inst>, term: Term) -> Function {
         Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: String::new(),
             arity,
-            n_locals: arity + 1,
+            locals: crate::backend::mir::LocalInfo::uniform(arity + 1),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts,
@@ -125,15 +128,19 @@ mod tests {
             entry: 0,
             global_slots: 0,
             exports: Vec::new(),
+            layout_table: Vec::new(),
         }
     }
 
     #[test]
     fn threads_identity_forwarder_and_preserves_caller_unwind() {
         let caller = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: String::new(),
             arity: 2,
-            n_locals: 3,
+            locals: crate::backend::mir::LocalInfo::uniform(3),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),

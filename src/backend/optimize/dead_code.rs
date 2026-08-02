@@ -2,7 +2,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::backend::mir::{Function, Inst, LocalId, ScalarOp, Slot, visit_inst, visit_term};
+use crate::backend::mir::{Function, Inst, LocalId, ScalarOp, visit_inst, visit_term};
 
 use super::PassResult;
 
@@ -19,14 +19,14 @@ impl UseCounts {
             block_params.extend(block.params.iter().copied());
             for inst in &mut block.insts {
                 visit_inst(inst, &mut |slot, local| {
-                    if slot == Slot::Use {
+                    if slot.is_use() {
                         *counts.entry(*local).or_insert(0) += 1;
                     }
                 });
             }
             if let Some(term) = &mut block.term {
                 visit_term(term, &mut |slot, local| {
-                    if slot == Slot::Use {
+                    if slot.is_use() {
                         *counts.entry(*local).or_insert(0) += 1;
                     }
                 });
@@ -48,6 +48,11 @@ impl UseCounts {
 fn removable(inst: &Inst) -> Option<LocalId> {
     match inst {
         Inst::Copy { dest, .. } => Some(*dest),
+        // A member read is total and effect-free: offsets are resolved
+        // against the published layout, and retains are separate
+        // instructions. Chain folding (ADR 0046) bypasses intermediate
+        // reads and relies on this pass to collect them.
+        Inst::Field { dest, .. } => Some(*dest),
         Inst::Scalar { dest, op, .. } if !matches!(op, ScalarOp::IntDiv | ScalarOp::IntToByte) => {
             Some(*dest)
         }
@@ -84,9 +89,12 @@ mod tests {
     #[test]
     fn removes_dead_pure_chains() {
         let mut function = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "dead".into(),
             arity: 0,
-            n_locals: 2,
+            locals: crate::backend::mir::LocalInfo::uniform(2),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts: vec![
@@ -110,11 +118,40 @@ mod tests {
     }
 
     #[test]
+    fn removes_dead_member_reads() {
+        let mut function = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
+            name: "dead_read".into(),
+            arity: 1,
+            locals: crate::backend::mir::LocalInfo::uniform(2),
+            blocks: vec![BlockData {
+                params: Vec::new(),
+                insts: vec![Inst::Field {
+                    dest: 1,
+                    src: Operand::Local(0),
+                    container: 0,
+                    offset: 0,
+                    member: None,
+                }],
+                term: Some(Term::Return(Operand::Const(Constant::Unit))),
+            }],
+        };
+
+        assert_eq!(run(&mut function).applied, 1);
+        assert!(function.blocks[0].insts.is_empty());
+    }
+
+    #[test]
     fn keeps_unused_operations_that_can_trap() {
         let mut function = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "trap".into(),
             arity: 0,
-            n_locals: 1,
+            locals: crate::backend::mir::LocalInfo::uniform(1),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts: vec![Inst::Scalar {

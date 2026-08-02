@@ -5,43 +5,44 @@
 //! with jump patching. Semantic decisions all happened in MIR.
 
 use rustc_hash::FxHashMap;
-use talk_runtime::{Chunk, CmpOp, Constant as RuntimeConstant, Insn, IoOp, MemKind, Module};
+use talk_runtime::{
+    Chunk, CmpOp, Constant as RuntimeConstant, FieldShape, Insn, IoOp, LayoutBody, LayoutDesc,
+    MemKind, Module, NO_LAYOUT,
+};
 
 use super::BackendError;
+use super::mir::layout::{FieldRepr, Layout, Shape};
 use super::mir::{
-    BlockData, CmpKind, Constant, Function, Inst, MemTy, Operand, Program, ScalarOp, Term,
+    BlockData, CmpKind, Constant, Function, Inst, Operand, Program, ScalarOp, Term,
 };
 use crate::name_resolution::symbol::Symbol as CompilerSymbol;
 
-fn mem_kind(kind: MemTy) -> MemKind {
+fn mem_kind(kind: super::mir::layout::SlotKind) -> MemKind {
+    use super::mir::layout::SlotKind;
     match kind {
-        MemTy::Byte => MemKind::Byte,
-        MemTy::I64 => MemKind::I64,
-        MemTy::F64 => MemKind::F64,
-        MemTy::Bool => MemKind::Bool,
-        MemTy::Ptr => MemKind::Ptr,
-        MemTy::Boxed => MemKind::Boxed,
+        SlotKind::Byte => MemKind::Byte,
+        SlotKind::Int => MemKind::I64,
+        SlotKind::F64 => MemKind::F64,
+        SlotKind::Bool => MemKind::Bool,
+        SlotKind::Ptr => MemKind::Ptr,
+        SlotKind::Value => MemKind::Boxed,
     }
 }
 use crate::parsing::span::Span;
 
-/// Compiler symbols carried into runtime values (variant/record identity
-/// and display) use the runtime's own symbol type; identities map
-/// one-to-one.
+/// Compiler symbols carried into runtime values (aggregate identity
+/// and display) use the runtime's own symbol type; the layout table
+/// only ever names declared aggregates, so everything else folds to
+/// the library fallback.
 pub(crate) fn runtime_symbol(
     symbol: crate::name_resolution::symbol::Symbol,
 ) -> talk_runtime::symbol::Symbol {
     use crate::name_resolution::symbol::Symbol as C;
-    use talk_runtime::symbol::{LocalSymbolId, ModuleId, ModuleSymbolId, Symbol as R};
+    use talk_runtime::symbol::{ModuleId, ModuleSymbolId, Symbol as R};
     let module = |id: crate::compiling::module::ModuleId| ModuleId(id.0);
     match symbol {
         C::Struct(id) => R::Struct(ModuleSymbolId::new(module(id.module_id), id.local_id)),
         C::Enum(id) => R::Enum(ModuleSymbolId::new(module(id.module_id), id.local_id)),
-        C::Builtin(id) => R::Builtin(ModuleSymbolId::new(module(id.module_id), id.local_id)),
-        C::Variant(id) => R::Variant(ModuleSymbolId::new(module(id.module_id), id.local_id)),
-        C::Global(id) => R::Global(ModuleSymbolId::new(module(id.module_id), id.local_id)),
-        C::Protocol(id) => R::Protocol(ModuleSymbolId::new(module(id.module_id), id.local_id)),
-        C::DeclaredLocal(id) => R::DeclaredLocal(LocalSymbolId(id.0)),
         _ => R::Library,
     }
 }
@@ -49,6 +50,7 @@ pub(crate) fn runtime_symbol(
 pub(crate) fn lower(program: &Program) -> Result<Module, BackendError> {
     let mut module = Module {
         entry: u32::try_from(program.entry).unwrap_or_default(),
+        layouts: published_layouts(&program.layout_table),
         ..Module::default()
     };
     let mut consts = ConstPool::default();
@@ -66,12 +68,16 @@ pub(crate) fn lower(program: &Program) -> Result<Module, BackendError> {
     for function in &program.functions {
         let chunk = lower_function(
             function,
+            &program.layout_table,
             &mut module,
             &mut consts,
             &mut traps,
             &mut statics,
             &mut effects,
-        )?;
+        )
+        .map_err(|error| {
+            BackendError::new(format!("{} (in {})", error.message, function.name), error.span)
+        })?;
         module.chunks.push(chunk);
     }
     module.consts = consts.values;
@@ -82,6 +88,86 @@ pub(crate) fn lower(program: &Program) -> Result<Module, BackendError> {
         .map(|(name, id)| (name.clone(), u32::try_from(*id).unwrap_or_default()))
         .collect();
     Ok(module)
+}
+
+/// The MIR layout table in the runtime's wire shape. A width or offset
+/// past `u16` demotes its entry to unshaped rather than truncating —
+/// such a layout is never constructed flat. (Inline layouts always fit:
+/// the width limit is four slots; only enormous boxed shapes could
+/// overflow, and nothing classes those.)
+fn published_layouts(table: &[Layout]) -> Vec<LayoutDesc> {
+    table
+        .iter()
+        .map(|layout| match layout {
+            Layout::Slot => LayoutDesc {
+                symbol: None,
+                width: 1,
+                body: LayoutBody::Unshaped,
+            },
+            Layout::Opaque => LayoutDesc {
+                symbol: None,
+                width: 0,
+                body: LayoutBody::Unshaped,
+            },
+            Layout::Inline(symbol, shape) | Layout::Boxed(symbol, shape) => {
+                shape_desc(*symbol, shape)
+            }
+        })
+        .collect()
+}
+
+fn shape_desc(symbol: Option<CompilerSymbol>, shape: &Shape) -> LayoutDesc {
+    let unshaped = LayoutDesc {
+        symbol: None,
+        width: 0,
+        body: LayoutBody::Unshaped,
+    };
+    let Ok(width) = u16::try_from(shape.width()) else {
+        return unshaped;
+    };
+    let field = |offset: &u32, repr: &FieldRepr| -> Option<(u16, FieldShape)> {
+        let offset = u16::try_from(*offset).ok()?;
+        let shape = match repr {
+            FieldRepr::Slot(_) => FieldShape::Slot,
+            FieldRepr::Spliced(child) => FieldShape::Spliced(*child),
+        };
+        Some((offset, shape))
+    };
+    let body = match shape {
+        Shape::Product { offsets, reprs, .. } => {
+            let fields: Option<Vec<_>> = offsets
+                .iter()
+                .zip(reprs)
+                .map(|(offset, repr)| field(offset, repr))
+                .collect();
+            match fields {
+                Some(fields) => LayoutBody::Product(fields),
+                None => return unshaped,
+            }
+        }
+        Shape::Sum { payloads, reprs, .. } => {
+            let variants: Option<Vec<Vec<_>>> = payloads
+                .iter()
+                .zip(reprs)
+                .map(|(offsets, reprs)| {
+                    offsets
+                        .iter()
+                        .zip(reprs)
+                        .map(|(offset, repr)| field(offset, repr))
+                        .collect()
+                })
+                .collect();
+            match variants {
+                Some(variants) => LayoutBody::Sum(variants),
+                None => return unshaped,
+            }
+        }
+    };
+    LayoutDesc {
+        symbol: symbol.map(runtime_symbol),
+        width,
+        body,
+    }
 }
 
 #[derive(Default)]
@@ -174,6 +260,7 @@ impl TrapPool {
 
 fn lower_function(
     function: &Function,
+    table: &[Layout],
     module: &mut Module,
     consts: &mut ConstPool,
     traps: &mut TrapPool,
@@ -183,16 +270,17 @@ fn lower_function(
     let switch_pool_start = module.switch_pool.len();
     let mut lowering = Lowering {
         code: Vec::new(),
-        next_reg: function.n_locals,
-        scratch_floor: function.n_locals,
-        function_floor: function.n_locals,
+        next_reg: function.n_locals(),
+        scratch_floor: function.n_locals(),
+        function_floor: function.n_locals(),
         block_consts: FxHashMap::default(),
-        max_reg: function.n_locals,
+        max_reg: function.n_locals(),
         consts,
         traps,
         statics,
         effects,
         module,
+        table,
         block_params: function
             .blocks
             .iter()
@@ -388,6 +476,10 @@ struct Lowering<'a> {
     statics: &'a mut StaticsPool,
     effects: &'a mut EffectPool,
     module: &'a mut Module,
+    /// The MIR layout table: lowering resolves logical field indexes to
+    /// slot offsets against it and distinguishes inline (spliced)
+    /// elements from boxed (one-slot) ones.
+    table: &'a [Layout],
     /// Each block's parameter registers (post-renumbering): `Goto`
     /// lowering emits the edge's parallel copy into these.
     block_params: Vec<Vec<u16>>,
@@ -734,89 +826,128 @@ impl Lowering<'_> {
                     self.unwind_sites.push((self.pc(), *block));
                 }
             }
-            Inst::Tuple { dest, args } => {
-                let (args_start, args_len) = self.arg_range(args);
-                self.code.push(Insn::TupleNew {
-                    dest: *dest,
-                    args_start,
-                    args_len,
-                });
-            }
-            Inst::TupleGet { dest, src, index } => {
-                let src = self.reg(*src);
-                self.code.push(Insn::Extract {
-                    dest: *dest,
-                    src,
-                    index: *index,
-                });
-            }
-            Inst::Variant {
+            Inst::Aggregate {
                 dest,
-                enum_symbol,
                 tag,
+                layout,
                 args,
             } => {
+                let layout = self.require_shaped(*layout)?;
                 let (args_start, args_len) = self.arg_range(args);
-                self.code.push(Insn::VariantNew {
+                self.code.push(Insn::AggNew {
                     dest: *dest,
-                    symbol: runtime_symbol(*enum_symbol),
+                    layout,
                     tag: *tag,
                     args_start,
                     args_len,
+                });
+            }
+            // A blank record is a record whose every field is Unit until
+            // the initializer assigns it; a flat aggregate's tagged slots
+            // can say "nothing here yet", so blankness lowers as
+            // unit-valued fields under the receiver's published layout.
+            Inst::Blank { dest, layout, .. } => {
+                let layout = self.require_shaped(*layout)?;
+                let LayoutBody::Product(fields) = &self.module.layouts[layout as usize].body
+                else {
+                    return Err(BackendError::new(
+                        "backend bug: a blank receiver under a non-product layout".into(),
+                        Span::SYNTHESIZED,
+                    ));
+                };
+                let args = vec![Operand::Const(Constant::Unit); fields.len()];
+                let (args_start, args_len) = self.arg_range(&args);
+                self.code.push(Insn::AggNew {
+                    dest: *dest,
+                    layout,
+                    tag: 0,
+                    args_start,
+                    args_len,
+                });
+            }
+            Inst::Field {
+                dest,
+                src,
+                offset,
+                member,
+                ..
+            } => {
+                // MIR is offset-addressed (ADR 0046): the builder
+                // resolved the member's placement; this is a transcription.
+                let src = self.reg(*src);
+                self.code.push(Insn::Field {
+                    dest: *dest,
+                    src,
+                    offset: *offset,
+                    layout: member.unwrap_or(NO_LAYOUT),
+                });
+            }
+            Inst::FieldIndex { dest, src, index } => {
+                // The existential boundary reads logically through the
+                // value's own published layout.
+                let src = self.reg(*src);
+                self.code.push(Insn::FieldIndex {
+                    dest: *dest,
+                    src,
+                    index: *index,
                 });
             }
             Inst::GetTag { dest, src } => {
                 let src = self.reg(*src);
                 self.code.push(Insn::GetTag { dest: *dest, src });
             }
-            Inst::GetPayload { dest, src, index } => {
-                let src = self.reg(*src);
-                self.code.push(Insn::GetPayload {
-                    dest: *dest,
-                    src,
-                    index: *index,
-                });
-            }
-            Inst::Record {
+            Inst::GetElement {
                 dest,
-                struct_symbol,
-                args,
+                src,
+                element,
+                index,
             } => {
-                let (args_start, args_len) = self.arg_range(args);
-                self.code.push(Insn::RecordNew {
-                    dest: *dest,
-                    symbol: runtime_symbol(*struct_symbol),
-                    args_start,
-                    args_len,
-                });
-            }
-            Inst::GetField { dest, src, index } => {
-                let rec = self.reg(*src);
-                self.code.push(Insn::GetField {
-                    dest: *dest,
-                    rec,
-                    index: *index,
-                });
-            }
-            Inst::GetElement { dest, src, index } => {
+                // An inline element splices across its stride; a scalar
+                // or boxed element occupies one slot.
+                let element = match self.table.get(*element as usize) {
+                    Some(Layout::Inline(_, _)) => *element,
+                    _ => NO_LAYOUT,
+                };
                 let rec = self.reg(*src);
                 let index = self.reg(*index);
                 self.code.push(Insn::GetElement {
                     dest: *dest,
                     rec,
                     index,
+                    element,
                 });
             }
-            Inst::SetField { rec, src, index } => {
+            Inst::SetField {
+                rec,
+                src,
+                offset,
+                member,
+                ..
+            } => {
                 let src = self.reg(*src);
                 self.code.push(Insn::SetField {
+                    dest: *rec,
+                    rec: *rec,
+                    src,
+                    offset: *offset,
+                    layout: member.unwrap_or(NO_LAYOUT),
+                });
+            }
+            Inst::SetFieldIndex { rec, src, index } => {
+                let src = self.reg(*src);
+                self.code.push(Insn::SetFieldIndex {
                     dest: *rec,
                     rec: *rec,
                     src,
                     index: *index,
                 });
             }
-            Inst::StringLit { dest, bytes } => {
+            Inst::StringLit {
+                dest,
+                bytes,
+                layout,
+                storage_layout,
+            } => {
                 // Literal text is immortal static data; the value is the
                 // core String struct over it: String { storage:
                 // Storage { base }, byte_count, capacity } (layout owned
@@ -826,20 +957,24 @@ impl Lowering<'_> {
                 let k = self.consts.intern_ptr(offset);
                 self.code.push(Insn::Const { dest: base, k });
                 let storage = self.fresh_reg();
+                let storage_layout = self.require_shaped(*storage_layout)?;
                 let (args_start, args_len) = self.reg_range(&[base]);
-                self.code.push(Insn::RecordNew {
+                self.code.push(Insn::AggNew {
                     dest: storage,
-                    symbol: runtime_symbol(CompilerSymbol::Storage),
+                    layout: storage_layout,
+                    tag: 0,
                     args_start,
                     args_len,
                 });
                 let len = self.reg(Operand::Const(Constant::Int(
                     i64::try_from(bytes.len()).unwrap_or_default(),
                 )));
+                let layout = self.require_shaped(*layout)?;
                 let (args_start, args_len) = self.reg_range(&[storage, len, len]);
-                self.code.push(Insn::RecordNew {
+                self.code.push(Insn::AggNew {
                     dest: *dest,
-                    symbol: runtime_symbol(CompilerSymbol::String),
+                    layout,
+                    tag: 0,
                     args_start,
                     args_len,
                 });
@@ -1033,16 +1168,15 @@ impl Lowering<'_> {
             }
             Inst::ExistentialPack {
                 dest,
-                protocol,
                 payload,
                 witnesses,
+                ..
             } => {
                 let mut regs = vec![self.reg(*payload)];
                 regs.extend(witnesses.iter().map(|witness| self.reg(*witness)));
                 let (args_start, args_len) = self.reg_range(&regs);
                 self.code.push(Insn::ExistentialPack {
                     dest: *dest,
-                    protocol: runtime_symbol(*protocol),
                     args_start,
                     args_len,
                 });
@@ -1143,6 +1277,21 @@ impl Lowering<'_> {
             }
         }
         Ok(())
+    }
+
+    /// Every executed construction publishes a shaped layout (ADR 0045
+    /// rule 6): an unshaped id reaching lowering is a compiler bug.
+    fn require_shaped(&self, layout: super::mir::layout::LayoutId) -> Result<u32, BackendError> {
+        match self.module.layouts.get(layout as usize) {
+            Some(desc) if !matches!(desc.body, LayoutBody::Unshaped) => Ok(layout),
+            _ => Err(BackendError::new(
+                format!(
+                    "backend bug: construction without a published layout (L{layout} = {:?})",
+                    self.module.layouts.get(layout as usize)
+                ),
+                Span::SYNTHESIZED,
+            )),
+        }
     }
 
     fn fresh_reg(&mut self) -> u16 {

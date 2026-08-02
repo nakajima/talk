@@ -94,10 +94,16 @@ enum {
     TALK_OBJECT = 9,
     /* A shared mutable box for a captured local. Tagged apart from
      * `TALK_AGG` so the region handle scan skips it. */
-    TALK_CELL = 10
+    TALK_CELL = 10,
+    /* A boxed aggregate stored in its NATIVE layout (ADR 0045): the box
+     * header names the published layout, and the payload is the layout's
+     * untagged C struct. Boxing and unboxing are copies, not per-field
+     * re-tagging. */
+    TALK_NATIVE = 11
 };
 
 typedef struct TalkAgg TalkAgg;
+typedef struct TalkNative TalkNative;
 
 typedef struct {
     uint8_t tag;
@@ -105,23 +111,41 @@ typedef struct {
         int64_t i;
         double f;
         TalkAgg *agg;
+        TalkNative *native;
         unsigned char *ptr;
         struct TalkObject *obj;
     } v;
 } TalkValue;
 
-/* One layout for records, tuples, and enum payloads. `tag` is the variant
- * index (zero for records and tuples); the payload is inline. */
-/* `symbol` is a display identity the emitter assigns: zero for tuples and
- * anonymous products, otherwise an index into `talk_types`. It exists so a
- * result can be rendered the way the runtime renders it, which needs the
- * struct's and its fields' names. */
+/* The native box header: the published layout id (indexing the generated
+ * accessors below) and the display identity rendering uses. The payload
+ * (the layout's TalkL struct) follows immediately. */
+struct TalkNative {
+    uint32_t layout;
+    uint32_t display;
+};
+
+#define TALK_NATIVE_PAYLOAD(value) ((void *)((value).v.native + 1))
+
+/* The VM's flat aggregate, verbatim (ADR 0046): `len` slots under the
+ * published layout `layout`, a sum's tag in slot 0, spliced children
+ * inline. `symbol` is a display identity the emitter assigns: zero for
+ * tuples and anonymous products, otherwise an index into `talk_types`.
+ * `meta` is runtime-representation metadata for the layout-less
+ * containers (a closure's function index); layout-governed values
+ * leave it zero. */
 struct TalkAgg {
+    uint32_t layout;
     uint32_t symbol;
-    uint32_t tag;
+    uint32_t meta;
     uint32_t len;
     TalkValue fields[];
 };
+
+/* The sentinel layout of the runtime's own containers — closures,
+ * cells, existentials — whose slots are all single values, so element
+ * index and slot offset coincide. */
+#define TALK_DYN UINT32_MAX
 
 enum {
     TALK_TYPE_TUPLE = 0,
@@ -145,6 +169,33 @@ typedef struct {
 /* Set by the generated `main` from a table the emitter writes out. */
 static const TalkTypeInfo *talk_types;
 static uint32_t talk_type_count;
+
+/* The published layout table as data (ADR 0046): one row per layout id,
+ * mirroring the wire descriptors, so the logical operations — the
+ * existential boundary's member access, rendering — walk structure the
+ * same way the VM does. `child` is UINT32_MAX for a one-slot member. */
+typedef struct {
+    uint16_t offset;
+    uint16_t width;
+    uint32_t child;
+    uint32_t child_symbol;
+} TalkField;
+
+typedef struct {
+    uint16_t width;
+    uint8_t is_sum;
+    const TalkField *fields;
+    uint32_t field_count;
+    /* Sums: variant v's fields are fields[variant_starts[v] ..
+     * variant_starts[v + 1]); variant_starts has variant_count + 1
+     * entries. NULL for products. */
+    const uint32_t *variant_starts;
+    uint32_t variant_count;
+} TalkLayoutInfo;
+
+/* Set by the generated `main` from a table the emitter writes out. */
+static const TalkLayoutInfo *talk_layouts;
+static uint32_t talk_layout_count;
 
 /* Noreturn so the C compiler knows a trapping block ends control flow and
  * does not report the function as falling off its end. */
@@ -228,10 +279,11 @@ static inline TalkValue talk_int(int64_t number) {
     return value;
 }
 
-static inline TalkValue talk_agg(uint32_t symbol, uint32_t tag, uint32_t len) {
+static inline TalkValue talk_agg(uint32_t layout, uint32_t symbol, uint32_t meta, uint32_t len) {
     TalkAgg *agg = (TalkAgg *)talk_arena_alloc(sizeof(TalkAgg) + (size_t)len * sizeof(TalkValue));
+    agg->layout = layout;
     agg->symbol = symbol;
-    agg->tag = tag;
+    agg->meta = meta;
     agg->len = len;
     TalkValue value;
     value.tag = TALK_AGG;
@@ -242,10 +294,11 @@ static inline TalkValue talk_agg(uint32_t symbol, uint32_t tag, uint32_t len) {
 /* An aggregate in caller-provided storage: the frame's, for a
  * construction the escape analysis proved cannot outlive it. One slot per
  * site, reused on each execution, so a loop allocates nothing. */
-static inline TalkValue talk_agg_in(void *storage, uint32_t symbol, uint32_t tag, uint32_t len) {
+static inline TalkValue talk_agg_in(void *storage, uint32_t layout, uint32_t symbol, uint32_t meta, uint32_t len) {
     TalkAgg *agg = (TalkAgg *)storage;
+    agg->layout = layout;
     agg->symbol = symbol;
-    agg->tag = tag;
+    agg->meta = meta;
     agg->len = len;
     TalkValue value;
     value.tag = TALK_AGG;
@@ -253,15 +306,107 @@ static inline TalkValue talk_agg_in(void *storage, uint32_t symbol, uint32_t tag
     return value;
 }
 
-/* Replace one field. The VM's `SetField` is copy-on-write over an `Rc`;
- * with no counts to consult, copying unconditionally is the same
- * observable behaviour at a worse constant. */
-static inline TalkValue talk_set_field(TalkValue record, uint32_t index, TalkValue field) {
+static inline TalkValue talk_native_box(uint32_t layout, uint32_t display, size_t size) {
+    TalkValue value;
+    value.tag = TALK_NATIVE;
+    value.v.native = (TalkNative *)talk_arena_alloc(sizeof(TalkNative) + size);
+    value.v.native->layout = layout;
+    value.v.native->display = display;
+    return value;
+}
+
+/* A native box in caller-provided storage (a frame buffer). */
+static inline TalkValue talk_native_box_in(void *storage, uint32_t layout, uint32_t display) {
+    TalkValue value;
+    value.tag = TALK_NATIVE;
+    value.v.native = (TalkNative *)storage;
+    value.v.native->layout = layout;
+    value.v.native->display = display;
+    return value;
+}
+
+/* Generated per program, after the layout declarations: the flat form
+ * of a native box (rendering, the logical boundary) and the region
+ * scan's walk over native boxes. */
+static TalkValue talk_native_retag(TalkValue value);
+static TalkValue talk_rebox(uint32_t layout, TalkValue flat);
+struct TalkObject;
+static void talk_native_scan(TalkValue value, struct TalkObject ***out, size_t *count,
+                             size_t *capacity);
+
+/* A spliced child copied out of its parent's slots, as the VM's
+ * `read_slots` does for an inline member. */
+static inline TalkValue talk_slice(TalkValue value, uint32_t offset, uint32_t width,
+                                   uint32_t layout, uint32_t symbol) {
+    TalkValue child = talk_agg(layout, symbol, 0, width);
+    memcpy(child.v.agg->fields, value.v.agg->fields + offset,
+           (size_t)width * sizeof(TalkValue));
+    return child;
+}
+
+/* Replace `span` slots. The VM's `SetField` is copy-on-write over an
+ * `Rc`; with no counts to consult, copying unconditionally is the same
+ * observable behaviour at a worse constant. A spliced write flattens
+ * the source's slots into the span. */
+static inline TalkValue talk_set_slots(TalkValue record, uint32_t offset, uint32_t span,
+                                       TalkValue field) {
     TalkAgg *from = record.v.agg;
-    TalkValue copy = talk_agg(from->symbol, from->tag, from->len);
+    TalkValue copy = talk_agg(from->layout, from->symbol, from->meta, from->len);
     memcpy(copy.v.agg->fields, from->fields, (size_t)from->len * sizeof(TalkValue));
-    copy.v.agg->fields[index] = field;
+    if (span == 1) {
+        copy.v.agg->fields[offset] = field;
+    } else {
+        if (field.tag == TALK_NATIVE) {
+            field = talk_native_retag(field);
+        }
+        memcpy(copy.v.agg->fields + offset, field.v.agg->fields,
+               (size_t)span * sizeof(TalkValue));
+    }
     return copy;
+}
+
+/* One member of a flat value, by its table row: a slot, a reconstructed
+ * spliced child, or Unit for a zero-width member. */
+static TalkValue talk_field_at(TalkValue value, const TalkField *field) {
+    if (field->child == UINT32_MAX) {
+        return value.v.agg->fields[field->offset];
+    }
+    if (field->width == 0) {
+        return talk_unit();
+    }
+    return talk_rebox(
+        field->child,
+        talk_slice(value, field->offset, field->width, field->child, field->child_symbol));
+}
+
+/* The logical member operations the existential boundary needs: the
+ * container's layout is dynamic, so structure comes from the value's
+ * own layout row — exactly the VM's `FieldIndex`/`SetFieldIndex`. */
+static TalkValue talk_native_field(TalkValue value, uint32_t index) {
+    if (value.tag == TALK_NATIVE) {
+        value = talk_native_retag(value);
+    }
+    uint32_t layout = value.v.agg->layout;
+    if (layout == TALK_DYN || layout >= talk_layout_count) {
+        return value.v.agg->fields[index];
+    }
+    return talk_field_at(value, &talk_layouts[layout].fields[index]);
+}
+
+static TalkValue talk_native_set_field(TalkValue record, uint32_t index, TalkValue field) {
+    if (record.tag == TALK_NATIVE) {
+        record = talk_native_retag(record);
+    }
+    uint32_t layout = record.v.agg->layout;
+    if (layout == TALK_DYN || layout >= talk_layout_count) {
+        return talk_set_slots(record, index, 1, field);
+    }
+    const TalkField *site = &talk_layouts[layout].fields[index];
+    if (site->child != UINT32_MAX && site->width == 0) {
+        return record;
+    }
+    return talk_set_slots(record, site->offset,
+                          site->child == UINT32_MAX ? 1 : site->width, field);
 }
 
 /* ---- managed memory -------------------------------------------------
@@ -314,6 +459,15 @@ static inline TalkValue talk_pointer(unsigned char *pointer) {
  * can be freed -- the VM rejects an interior free too, and the magic word
  * turns an emitter bug into a trap instead of heap corruption. */
 static inline TalkHeader *talk_header(unsigned char *pointer) {
+#if defined(__GNUC__)
+    /* Launder provenance: native string literals hand callers a pointer
+     * the compiler can trace to `talk_statics`, and constant propagation
+     * into inlined retain/free then "proves" a negative offset on the
+     * branch `talk_is_static` already made unreachable —
+     * -Werror=array-bounds rejects the unit. A register-constraint
+     * no-op severs the trace at zero runtime cost. */
+    __asm__("" : "+r"(pointer));
+#endif
     TalkHeader *header = (TalkHeader *)(void *)(pointer - sizeof(TalkHeader));
     if (header->magic != TALK_ALLOC_MAGIC) {
         talk_trap("free or retain of a pointer that is not an allocation base");
@@ -690,7 +844,7 @@ static void talk_effects_release(void) {
 /* ---- closures ------------------------------------------------------- */
 
 static inline TalkValue talk_closure(uint32_t function, uint32_t captured) {
-    TalkValue value = talk_agg(0, function, captured);
+    TalkValue value = talk_agg(TALK_DYN, 0, function, captured);
     value.tag = TALK_CLOSURE;
     return value;
 }
@@ -758,7 +912,7 @@ static inline TalkValue talk_shr(TalkValue a, TalkValue b) {
  */
 
 static inline TalkValue talk_cell_new(TalkValue initial) {
-    TalkValue cell = talk_agg(0, 0, 1);
+    TalkValue cell = talk_agg(TALK_DYN, 0, 0, 1);
     cell.v.agg->fields[0] = initial;
     cell.tag = TALK_CELL;
     return cell;
@@ -787,12 +941,25 @@ static inline TalkValue talk_existential_witness(TalkValue existential, uint32_t
 }
 
 /* An `InlineArray` read at a runtime index, bounds-checked as the VM's
- * `inline_get` is. */
+ * `inline_get` is. One-slot elements read their slot directly. */
 static inline TalkValue talk_get_element(TalkValue aggregate, TalkValue index) {
     if (index.v.i < 0 || (uint64_t)index.v.i >= aggregate.v.agg->len) {
         talk_trap("inline_get index out of range");
     }
     return aggregate.v.agg->fields[index.v.i];
+}
+
+/* The inline-element form: elements stride by their width and read as
+ * spliced children, as the VM's `GetElement` does. */
+static inline TalkValue talk_get_element_slice(TalkValue aggregate, TalkValue index,
+                                               uint32_t stride, uint32_t layout,
+                                               uint32_t symbol) {
+    if (index.v.i < 0
+        || (uint64_t)index.v.i * stride + stride > aggregate.v.agg->len) {
+        talk_trap("inline_get index out of range");
+    }
+    return talk_rebox(
+        layout, talk_slice(aggregate, (uint32_t)index.v.i * stride, stride, layout, symbol));
 }
 
 /* ---- float operations ----------------------------------------------- */
@@ -1079,6 +1246,9 @@ static void talk_scan_handles(TalkValue value, TalkObject ***out, size_t *count,
             talk_scan_handles(value.v.agg->fields[index], out, count, capacity);
         }
         return;
+    case TALK_NATIVE:
+        talk_native_scan(value, out, count, capacity);
+        return;
     default:
         return;
     }
@@ -1120,7 +1290,7 @@ static void talk_drain_finalizers(void) {
             handle.tag = TALK_OBJECT;
             handle.v.obj = next;
             TalkValue thunk = next->finalizer;
-            talk_dispatch(thunk.v.agg->tag, thunk.v.agg->fields, &handle);
+            talk_dispatch(thunk.v.agg->meta, thunk.v.agg->fields, &handle);
             continue;
         }
         talk_pending_count--;
@@ -1737,9 +1907,8 @@ static size_t talk_utf8_step(const unsigned char *bytes, size_t available, size_
  * output raw. */
 static void talk_render_string(TalkOut *out, TalkAgg *string) {
     talk_out_text(out, "\"");
-    if (string->len >= 2 && string->fields[0].tag == TALK_AGG
-        && string->fields[0].v.agg->len >= 1) {
-        const unsigned char *base = string->fields[0].v.agg->fields[0].v.ptr;
+    if (string->len >= 2) {
+        const unsigned char *base = string->fields[0].v.ptr;
         int64_t signed_count = string->fields[1].v.i;
         size_t count = signed_count > 0 ? (size_t)signed_count : 0;
         size_t index = 0;
@@ -1806,6 +1975,11 @@ static void talk_render(TalkOut *out, TalkValue value) {
         snprintf(scratch, sizeof scratch, "<object #%" PRIu64 ">", value.v.obj->ordinal);
         talk_out_text(out, scratch);
         return;
+    case TALK_NATIVE:
+        /* Rendering is cold: convert to the tagged form the renderer
+         * walks (identity from the box header, shape from the layout). */
+        talk_render(out, talk_native_retag(value));
+        return;
     case TALK_AGG:
         break;
     default:
@@ -1826,8 +2000,9 @@ static void talk_render(TalkOut *out, TalkValue value) {
         }
         return;
     }
-    if (info == NULL) {
-        /* A tuple or anonymous product. */
+    /* A layout-less container (or a table miss): render the slots as a
+     * bare tuple — nothing user-visible reaches here. */
+    if (agg->layout == TALK_DYN || agg->layout >= talk_layout_count) {
         talk_out_text(out, "(");
         for (uint32_t index = 0; index < agg->len; index++) {
             if (index > 0) {
@@ -1838,39 +2013,66 @@ static void talk_render(TalkOut *out, TalkValue value) {
         talk_out_text(out, ")");
         return;
     }
-    if (info->kind == TALK_TYPE_ENUM) {
-        talk_out_text(out, info->name);
-        talk_out_text(out, ".");
-        if (agg->tag < info->member_count) {
-            talk_out_text(out, info->members[agg->tag]);
+    /* Structure comes from the layout table, names from the type table
+     * (ADR 0046): members walk by field, not by slot, so spliced
+     * children render whole. */
+    const TalkLayoutInfo *shape = &talk_layouts[agg->layout];
+    if (shape->is_sum) {
+        uint32_t tag = (uint32_t)agg->fields[0].v.i;
+        if (info != NULL) {
+            talk_out_text(out, info->name);
+            talk_out_text(out, ".");
+            if (info->kind == TALK_TYPE_ENUM && tag < info->member_count) {
+                talk_out_text(out, info->members[tag]);
+            } else {
+                snprintf(scratch, sizeof scratch, "case%" PRIu32, tag);
+                talk_out_text(out, scratch);
+            }
         } else {
-            snprintf(scratch, sizeof scratch, "case%" PRIu32, agg->tag);
+            snprintf(scratch, sizeof scratch, "case%" PRIu32, tag);
             talk_out_text(out, scratch);
         }
-        if (agg->len == 0) {
+        if (tag >= shape->variant_count) {
+            return;
+        }
+        uint32_t first = shape->variant_starts[tag];
+        uint32_t last = shape->variant_starts[tag + 1];
+        if (first == last) {
             return;
         }
         talk_out_text(out, "(");
-        for (uint32_t index = 0; index < agg->len; index++) {
-            if (index > 0) {
+        for (uint32_t field = first; field < last; field++) {
+            if (field > first) {
                 talk_out_text(out, ", ");
             }
-            talk_render(out, agg->fields[index]);
+            talk_render(out, talk_field_at(value, &shape->fields[field]));
+        }
+        talk_out_text(out, ")");
+        return;
+    }
+    if (info == NULL) {
+        /* A tuple or anonymous product. */
+        talk_out_text(out, "(");
+        for (uint32_t field = 0; field < shape->field_count; field++) {
+            if (field > 0) {
+                talk_out_text(out, ", ");
+            }
+            talk_render(out, talk_field_at(value, &shape->fields[field]));
         }
         talk_out_text(out, ")");
         return;
     }
     talk_out_text(out, info->name);
     talk_out_text(out, "(");
-    for (uint32_t index = 0; index < agg->len; index++) {
-        if (index > 0) {
+    for (uint32_t field = 0; field < shape->field_count; field++) {
+        if (field > 0) {
             talk_out_text(out, ", ");
         }
-        if (index < info->member_count) {
-            talk_out_text(out, info->members[index]);
+        if (field < info->member_count) {
+            talk_out_text(out, info->members[field]);
             talk_out_text(out, ": ");
         }
-        talk_render(out, agg->fields[index]);
+        talk_render(out, talk_field_at(value, &shape->fields[field]));
     }
     talk_out_text(out, ")");
 }

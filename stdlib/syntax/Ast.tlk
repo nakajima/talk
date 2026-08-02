@@ -496,8 +496,8 @@ pub enum DeclKind {
 	case func_signature(FuncSignature)
 	// name + its token span, generics, where, body, 'linear, 'heap.
 	case struct_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, Bool, Bool)
-	// name + its token span, generics, where, body, 'linear.
-	case enum_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, Bool)
+	// name + its token span, generics, where, body, 'linear, 'heap.
+	case enum_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, Bool, Bool)
 	// name + its token span, generics, where, body, conformances.
 	case protocol_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, [TypeAnnotation])
 	// name + its token span, generics, payloads, per-payload labels,

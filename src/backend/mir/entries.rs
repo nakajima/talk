@@ -194,7 +194,7 @@ impl<'a> ProgramBuilder<'a> {
                         && fx.borrow_roots.contains_key(&view)
                     {
                         let root = fx.borrow_root(view);
-                        if !fx.global_loads.contains_key(&root) && fx.owned_tys.contains_key(&root)
+                        if !fx.global_loads.contains_key(&root) && fx.owns(root)
                         {
                             return Err(BackendError::new(
                                 "a borrowed value cannot be stored in a global binding".into(),
@@ -233,11 +233,14 @@ impl<'a> ProgramBuilder<'a> {
             }
         }
 
-        let (n_locals, blocks) = fx.finish(value)?;
+        let (n_locals, blocks, _return_repr) = fx.finish(value)?;
         self.functions[id] = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "script".into(),
             arity: 0,
-            n_locals,
+            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
         };
 
@@ -278,11 +281,14 @@ impl<'a> ProgramBuilder<'a> {
                 global: slot,
                 src: Operand::Local(result),
             });
-            let (n_locals, blocks) = fx.finish(Operand::Const(Constant::Unit))?;
+            let (n_locals, blocks, _return_repr) = fx.finish(Operand::Const(Constant::Unit))?;
             self.functions[body_id] = Function {
+                frame_sites: Default::default(),
+                param_reprs: Vec::new(),
+                return_repr: None,
                 name: "entry_body".into(),
                 arity: 0,
-                n_locals,
+                locals: crate::backend::mir::LocalInfo::uniform(n_locals),
                 blocks,
             };
             Some((host, body_id, slot))
@@ -342,11 +348,14 @@ impl<'a> ProgramBuilder<'a> {
                 wrapper.drop_value(Operand::Local(loaded), &ty);
             }
         }
-        let (n_locals, blocks) = wrapper.finish(Operand::Local(result))?;
+        let (n_locals, blocks, _return_repr) = wrapper.finish(Operand::Local(result))?;
         self.functions[outer] = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "script_main".into(),
             arity: 0,
-            n_locals,
+            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(outer)
@@ -377,11 +386,14 @@ impl<'a> ProgramBuilder<'a> {
             args: Vec::new(),
             unwind: None,
         });
-        let (n_locals, blocks) = fx.finish(Operand::Local(result))?;
+        let (n_locals, blocks, _return_repr) = fx.finish(Operand::Local(result))?;
         self.functions[id] = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "entry_init".into(),
             arity: 0,
-            n_locals,
+            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
         };
         self.wrap_with_teardown(id, None)
@@ -474,11 +486,14 @@ impl<'a> ProgramBuilder<'a> {
             });
             fx.flush_stmt_temps(None);
         }
-        let (n_locals, blocks) = fx.finish(Operand::Const(Constant::Unit))?;
+        let (n_locals, blocks, _return_repr) = fx.finish(Operand::Const(Constant::Unit))?;
         self.functions[id] = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "globals_init".into(),
             arity: 0,
-            n_locals,
+            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(Some(id))
@@ -635,11 +650,14 @@ impl<'a> ProgramBuilder<'a> {
         }
         let id = self.reserve("empty_entry");
         let fx = FunctionBuilder::new(self, 0, 0);
-        let (n_locals, blocks) = fx.finish(Operand::Const(Constant::Unit))?;
+        let (n_locals, blocks, _return_repr) = fx.finish(Operand::Const(Constant::Unit))?;
         self.functions[id] = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "empty_entry".into(),
             arity: 0,
-            n_locals,
+            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(id)
@@ -672,11 +690,14 @@ impl<'a> ProgramBuilder<'a> {
                 args,
                 unwind: None,
             });
-            let (n_locals, blocks) = fx.finish(Operand::Local(result))?;
+            let (n_locals, blocks, _return_repr) = fx.finish(Operand::Local(result))?;
             self.functions[outer] = Function {
+                frame_sites: Default::default(),
+                param_reprs: Vec::new(),
+                return_repr: None,
                 name: format!("export:{name}"),
                 arity,
-                n_locals,
+                locals: crate::backend::mir::LocalInfo::uniform(n_locals),
                 blocks,
             };
             return Ok(outer);
@@ -714,11 +735,14 @@ impl<'a> ProgramBuilder<'a> {
             global: slot,
             src: Operand::Local(result),
         });
-        let (n_locals, blocks) = fx.finish(Operand::Const(Constant::Unit))?;
+        let (n_locals, blocks, _return_repr) = fx.finish(Operand::Const(Constant::Unit))?;
         self.functions[body_id] = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "export_body".into(),
             arity: 0,
-            n_locals,
+            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
         };
 
@@ -759,11 +783,14 @@ impl<'a> ProgramBuilder<'a> {
                 wrapper.drop_value(Operand::Local(loaded), &ty);
             }
         }
-        let (n_locals, blocks) = wrapper.finish(Operand::Local(result))?;
+        let (n_locals, blocks, _return_repr) = wrapper.finish(Operand::Local(result))?;
         self.functions[outer] = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: format!("export:{name}"),
             arity,
-            n_locals,
+            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(outer)

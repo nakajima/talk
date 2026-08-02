@@ -571,11 +571,16 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 }
             }
             DeclKind::Enum {
-                name, linear, body, ..
+                name,
+                linear,
+                heap,
+                body,
+                ..
             } => {
                 let Ok(symbol) = name.symbol() else { return };
                 let mut info = Enum {
                     linear: *linear,
+                    heap: *heap,
                     ..Default::default()
                 };
                 for member in &body.decls {
@@ -899,6 +904,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             where_clause,
             body,
             linear,
+            heap,
             ..
         } = &decl.kind
         else {
@@ -935,6 +941,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     .collect();
                 let mut info = Enum {
                     linear: *linear,
+                    heap: *heap,
                     params: params.clone(),
                     predicates: predicates.clone(),
                     ..Default::default()

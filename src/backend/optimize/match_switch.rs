@@ -205,9 +205,12 @@ mod tests {
             },
         );
         let mut function = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "match".into(),
             arity: 1,
-            n_locals: 6,
+            locals: crate::backend::mir::LocalInfo::uniform(6),
             blocks: vec![
                 entry,
                 comparison(0, 2, 2, 4, 2),
@@ -229,9 +232,12 @@ mod tests {
     #[test]
     fn requires_tags_and_does_not_bypass_instructionful_continuations() {
         let mut function = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "not_a_match".into(),
             arity: 1,
-            n_locals: 4,
+            locals: crate::backend::mir::LocalInfo::uniform(4),
             blocks: vec![
                 comparison(0, 1, 0, 2, 1),
                 comparison(0, 2, 1, 2, 2),

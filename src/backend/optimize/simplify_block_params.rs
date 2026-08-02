@@ -2,7 +2,7 @@
 
 use rustc_hash::FxHashSet;
 
-use crate::backend::mir::{Function, LocalId, Slot, Term, visit_inst, visit_term};
+use crate::backend::mir::{Function, LocalId, Term, visit_inst, visit_term};
 
 use super::PassResult;
 
@@ -16,14 +16,14 @@ impl UsedLocals {
         for block in &mut function.blocks {
             for inst in &mut block.insts {
                 visit_inst(inst, &mut |slot, local| {
-                    if slot == Slot::Use {
+                    if slot.is_use() {
                         locals.insert(*local);
                     }
                 });
             }
             if let Some(term) = &mut block.term {
                 visit_term(term, &mut |slot, local| {
-                    if slot == Slot::Use {
+                    if slot.is_use() {
                         locals.insert(*local);
                     }
                 });
@@ -82,9 +82,12 @@ mod tests {
     #[test]
     fn removes_unused_parameter_and_matching_edge_argument() {
         let mut function = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "params".into(),
             arity: 0,
-            n_locals: 3,
+            locals: crate::backend::mir::LocalInfo::uniform(3),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),

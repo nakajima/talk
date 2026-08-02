@@ -39,6 +39,55 @@ pub enum MemKind {
     Boxed,
 }
 
+/// Sentinel layout id on `Field`/`SetField`/`GetElement`: the accessed
+/// member is a single slot, not a spliced inline child. Any other value
+/// is the spliced child's layout id.
+pub const NO_LAYOUT: u32 = u32::MAX;
+
+/// The member shape a `Field`/`SetField`/`GetElement` layout operand
+/// encodes: `NO_LAYOUT` is one slot, anything else the spliced child.
+pub fn member_shape(layout: u32) -> FieldShape {
+    if layout == NO_LAYOUT {
+        FieldShape::Slot
+    } else {
+        FieldShape::Spliced(layout)
+    }
+}
+
+/// How one product field or sum payload element occupies its slots
+/// (ADR 0045): one slot holding one value, or a nested inline aggregate
+/// spliced flat across the child layout's width.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FieldShape {
+    Slot,
+    Spliced(u32),
+}
+
+/// The flat body of one published layout. Offsets index the aggregate's
+/// slot vector; a sum's tag lives at slot 0 and payloads start at 1.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LayoutBody {
+    /// One (offset, shape) per field in declaration order.
+    Product(Vec<(u16, FieldShape)>),
+    /// Per variant in tag order, one (offset, shape) per payload element.
+    Sum(Vec<Vec<(u16, FieldShape)>>),
+    /// An id the table carries only to keep indices aligned (scalars,
+    /// references, check-only entries): never constructed flat.
+    Unshaped,
+}
+
+/// One published aggregate layout (ADR 0045): the shape of a flat
+/// `Value::Agg` with this id. MIR computes these; the VM only reads them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LayoutDesc {
+    /// Display identity for rendering (`None` for tuples, closed records,
+    /// and inline arrays).
+    pub symbol: Option<symbol::Symbol>,
+    /// Total width in slots.
+    pub width: u16,
+    pub body: LayoutBody,
+}
+
 /// Register-or-constant operand encoding (Lua 5's RK design —
 /// Ierusalimschy, de Figueiredo & Celes, *The Implementation of
 /// Lua 5.0*, J.UCS 2005): when the high bit of an operand field is
@@ -154,41 +203,53 @@ pub enum Insn {
         cell: u16,
         src: u16,
     },
-    RecordNew {
+    /// Build one flat aggregate ([`interp::Value::Agg`]) — struct, tuple,
+    /// record, or enum variant — under a published layout. `tag` stamps
+    /// slot 0 for sums and must be 0 for products; identity and shape
+    /// both live in the layout table, never on the value.
+    AggNew {
         dest: u16,
-        symbol: symbol::Symbol,
+        layout: u32,
+        tag: u16,
         args_start: u32,
         args_len: u16,
     },
-    GetField {
+    /// Offset-addressed field read on a flat aggregate (ADR 0045): the
+    /// lowering resolved the logical index against the container's
+    /// published layout. `layout` is [`NO_LAYOUT`] for a one-slot field,
+    /// or the spliced child's layout id (the read reconstitutes that
+    /// aggregate from its span).
+    Field {
         dest: u16,
-        rec: u16,
+        src: u16,
+        offset: u16,
+        layout: u32,
+    },
+    /// Logical-index read through the value's own published layout —
+    /// the existential boundary's read, where an element's width is
+    /// dynamic at the site (a `mut` requirement's writeback tuple).
+    /// Every statically-shaped container uses `Field` instead.
+    FieldIndex {
+        dest: u16,
+        src: u16,
         index: u16,
     },
+    /// Read one element of a flat aggregate at a runtime-validated
+    /// dynamic index: the slot offset is `index` times the element's
+    /// stride ([`NO_LAYOUT`] element = one slot; a spliced element's
+    /// stride is its layout's width).
     GetElement {
         dest: u16,
         rec: u16,
         index: u16,
-    },
-    VariantNew {
-        dest: u16,
-        symbol: symbol::Symbol,
-        tag: u16,
-        args_start: u32,
-        args_len: u16,
+        element: u32,
     },
     GetTag {
         dest: u16,
         src: u16,
     },
-    GetPayload {
-        dest: u16,
-        src: u16,
-        index: u16,
-    },
     ExistentialPack {
         dest: u16,
-        protocol: symbol::Symbol,
         args_start: u32,
         args_len: u16,
     },
@@ -201,17 +262,19 @@ pub enum Insn {
         dest: u16,
         src: u16,
     },
-    TupleNew {
-        dest: u16,
-        args_start: u32,
-        args_len: u16,
-    },
-    Extract {
-        dest: u16,
-        src: u16,
-        index: u16,
-    },
+    /// Offset-addressed field write (copy-on-write, value semantics):
+    /// the flat counterpart of `Field`.
     SetField {
+        dest: u16,
+        rec: u16,
+        src: u16,
+        offset: u16,
+        layout: u32,
+    },
+    /// Logical-index write through the value's own published layout —
+    /// `FieldIndex`'s copy-on-write counterpart at the existential
+    /// boundary.
+    SetFieldIndex {
         dest: u16,
         rec: u16,
         src: u16,
@@ -455,6 +518,9 @@ pub struct Module {
     pub switch_pool: Vec<u32>,
     pub traps: Vec<String>,
     pub statics: Vec<u8>,
+    /// The published aggregate layouts (ADR 0045), indexed by the layout
+    /// ids instructions carry.
+    pub layouts: Vec<LayoutDesc>,
     pub entry: u32,
     /// Host-callable entry points: export name → wrapper chunk index.
     /// Unlike chunk names (diagnostic strings), these are an ABI: the
@@ -464,29 +530,14 @@ pub struct Module {
 
 impl Module {
     pub fn render(&self) -> String {
-        self.render_styled(&Styles::plain())
-    }
-
-    pub fn render_ansi(&self) -> String {
-        self.render_styled(&Styles::ansi())
-    }
-
-    pub fn render_styled(&self, s: &Styles) -> String {
         let mut out = String::new();
         for (i, chunk) in self.chunks.iter().enumerate() {
             out.push_str(&format!(
-                "chunk {i}: {}{}{} (arity {}, regs {})\n",
-                s.func, chunk.name, s.reset, chunk.arity, chunk.n_regs
+                "chunk {i}: {} (arity {}, regs {})\n",
+                chunk.name, chunk.arity, chunk.n_regs
             ));
             for (pc, insn) in chunk.code.iter().enumerate() {
-                let text = self.render_insn(insn);
-                let styled = match text.split_once(' ') {
-                    Some((mnemonic, rest)) => {
-                        format!("{}{mnemonic}{} {rest}", s.keyword, s.reset)
-                    }
-                    None => format!("{}{text}{}", s.keyword, s.reset),
-                };
-                out.push_str(&format!("  {pc}: {styled}\n"));
+                out.push_str(&format!("  {pc}: {}\n", self.render_insn(insn)));
             }
         }
         out
@@ -547,40 +598,44 @@ impl Module {
             Insn::CellNew { dest, init } => format!("cell_new r{dest} <- r{init}"),
             Insn::CellGet { dest, cell } => format!("cell_get r{dest} <- r{cell}"),
             Insn::CellSet { cell, src } => format!("cell_set r{cell} <- r{src}"),
-            Insn::RecordNew {
+            Insn::AggNew {
                 dest,
-                symbol,
-                args_start,
-                args_len,
-            } => format!(
-                "record_new r{dest} <- {symbol}({})",
-                self.render_args(*args_start, *args_len)
-            ),
-            Insn::GetField { dest, rec, index } => format!("get_field r{dest} <- r{rec}.{index}"),
-            Insn::GetElement { dest, rec, index } => {
-                format!("get_element r{dest} <- r{rec}[r{index}]")
-            }
-            Insn::VariantNew {
-                dest,
-                symbol,
+                layout,
                 tag,
                 args_start,
                 args_len,
             } => format!(
-                "variant_new r{dest} <- {symbol}#{tag}({})",
+                "agg_new r{dest} <- L{layout}#{tag}({})",
                 self.render_args(*args_start, *args_len)
             ),
-            Insn::GetTag { dest, src } => format!("get_tag r{dest} <- r{src}"),
-            Insn::GetPayload { dest, src, index } => {
-                format!("get_payload r{dest} <- r{src}.{index}")
+            Insn::Field {
+                dest,
+                src,
+                offset,
+                layout,
+            } => format!(
+                "field r{dest} <- r{src}[{offset}]{}",
+                layout_display(*layout)
+            ),
+            Insn::FieldIndex { dest, src, index } => {
+                format!("field_index r{dest} <- r{src}.{index}")
             }
+            Insn::GetElement {
+                dest,
+                rec,
+                index,
+                element,
+            } => format!(
+                "get_element r{dest} <- r{rec}[r{index}]{}",
+                layout_display(*element)
+            ),
+            Insn::GetTag { dest, src } => format!("get_tag r{dest} <- r{src}"),
             Insn::ExistentialPack {
                 dest,
-                protocol,
                 args_start,
                 args_len,
             } => format!(
-                "existential_pack r{dest} <- any {protocol}({})",
+                "existential_pack r{dest} <- any({})",
                 self.render_args(*args_start, *args_len)
             ),
             Insn::ExistentialWitness { dest, src, index } => {
@@ -589,21 +644,22 @@ impl Module {
             Insn::ExistentialPayload { dest, src } => {
                 format!("existential_payload r{dest} <- r{src}")
             }
-            Insn::TupleNew {
-                dest,
-                args_start,
-                args_len,
-            } => format!(
-                "tuple r{dest} <- ({})",
-                self.render_args(*args_start, *args_len)
-            ),
-            Insn::Extract { dest, src, index } => format!("extract r{dest} <- r{src}.{index}"),
             Insn::SetField {
                 dest,
                 rec,
                 src,
+                offset,
+                layout,
+            } => format!(
+                "set_field r{dest} <- r{rec} with [{offset}]{} = r{src}",
+                layout_display(*layout)
+            ),
+            Insn::SetFieldIndex {
+                dest,
+                rec,
+                src,
                 index,
-            } => format!("set_field r{dest} <- r{rec} with .{index} = r{src}"),
+            } => format!("set_field_index r{dest} <- r{rec} with .{index} = r{src}"),
             Insn::Alloc { dest, count } => format!("alloc r{dest} <- r{count} bytes"),
             Insn::Free { dest, ptr } => format!("free r{dest} <- r{ptr}"),
             Insn::Retain { dest, ptr } => format!("retain r{dest} <- r{ptr}"),
@@ -723,26 +779,11 @@ impl Module {
     }
 }
 
-pub struct Styles {
-    pub func: &'static str,
-    pub keyword: &'static str,
-    pub reset: &'static str,
-}
-
-impl Styles {
-    pub fn plain() -> Self {
-        Self {
-            func: "",
-            keyword: "",
-            reset: "",
-        }
-    }
-
-    pub fn ansi() -> Self {
-        Self {
-            func: "\x1b[1;33m",
-            keyword: "\x1b[1;35m",
-            reset: "\x1b[0m",
-        }
+/// Layout suffix for disassembly: nothing for [`NO_LAYOUT`].
+fn layout_display(layout: u32) -> String {
+    if layout == NO_LAYOUT {
+        String::new()
+    } else {
+        format!("@L{layout}")
     }
 }

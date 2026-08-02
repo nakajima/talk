@@ -2254,6 +2254,21 @@ mod tests {
         );
     }
 
+    // ADR 0042: a rename never manufactures a collision — the LSP path
+    // must refuse exactly like the analysis path does.
+    #[test]
+    fn rename_refuses_to_create_a_collision() {
+        let code = "let first = 1\nlet second = 2\nfirst + second\n";
+        let uri = Url::from_file_path(std::env::temp_dir().join("rename_lsp_collision.tlk"))
+            .expect("file uri");
+        let module = workspace_for_docs(vec![(uri.clone(), code)]);
+        let offset = code.rfind("first").expect("target") as u32;
+        assert!(
+            super::rename_at(&module, &uri, offset, "second").is_none(),
+            "rename onto an existing binding must refuse"
+        );
+    }
+
     #[test]
     fn rename_renames_local_binding() {
         let code = r#"func main() {

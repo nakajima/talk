@@ -18,8 +18,10 @@ struct CheckedLoadMatch {
     collection: u16,
     index: u16,
     length_field: u16,
-    storage_field: u16,
-    base_field: u16,
+    /// `base`'s offset in the collection itself: the compiler folds the
+    /// `storage.base` chain to one read (ADR 0046), so the emitted
+    /// sequence carries the container offset directly.
+    base_offset: u16,
     dest: u16,
     kind: MemKind,
 }
@@ -56,10 +58,11 @@ fn bounds_helper(module: &Module, chunk: &Chunk) -> Option<BoundsHelper> {
             k: true_k,
         },
         Insn::Jump { target: merge },
-        Insn::GetField {
+        Insn::Field {
             dest: length,
-            rec: 0,
-            index: length_field,
+            src: 0,
+            offset: length_field,
+            ..
         },
         Insn::Cmp {
             dest: upper_cond,
@@ -152,7 +155,7 @@ fn checked_load_match(
     start: usize,
     targets: &FxHashSet<usize>,
 ) -> Option<CheckedLoadMatch> {
-    let end = start.checked_add(7)?;
+    let end = start.checked_add(6)?;
     if end >= chunk.code.len() {
         return None;
     }
@@ -163,15 +166,11 @@ fn checked_load_match(
             args_len: 2,
             ..
         },
-        Insn::GetField {
-            dest: storage,
-            rec: storage_owner,
-            index: storage_field,
-        },
-        Insn::GetField {
+        Insn::Field {
             dest: base,
-            rec: storage_value,
-            index: base_field,
+            src: base_owner,
+            offset: base_offset,
+            layout: base_layout,
         },
         Insn::Const { dest: scale, k },
         Insn::Mul {
@@ -203,14 +202,16 @@ fn checked_load_match(
         (*mul_a == *index && *mul_b == *scale) || (*mul_b == *index && *mul_a == *scale);
     if collection & talk_runtime::RK_CONST != 0
         || index & talk_runtime::RK_CONST != 0
-        || storage_owner != collection
-        || storage_value != storage
+        // `base` is one slot at a container offset; a spliced member
+        // would need materialization.
+        || *base_layout != talk_runtime::NO_LAYOUT
+        || base_owner != collection
         || !scale_matches
         || !multiply_matches
         || add_base != base
         || add_offset != scaled
         || ptr != address
-        || (start + 1..start + 7).any(|pc| targets.contains(&pc))
+        || (start + 1..start + 6).any(|pc| targets.contains(&pc))
     {
         return None;
     }
@@ -219,8 +220,7 @@ fn checked_load_match(
         collection: *collection,
         index: *index,
         length_field: helper.length_field,
-        storage_field: *storage_field,
-        base_field: *base_field,
+        base_offset: *base_offset,
         dest: *dest,
         kind: *kind,
     })
@@ -240,7 +240,7 @@ pub(super) fn run(module: &mut Module) -> u64 {
     for chunk_index in 0..module.chunks.len() {
         let targets = chunk_targets(module, &module.chunks[chunk_index]);
         let original_len = module.chunks[chunk_index].code.len();
-        let matches: Vec<CheckedLoadMatch> = (0..original_len.saturating_sub(6))
+        let matches: Vec<CheckedLoadMatch> = (0..original_len.saturating_sub(5))
             .filter_map(|start| {
                 checked_load_match(
                     module,
@@ -251,38 +251,34 @@ pub(super) fn run(module: &mut Module) -> u64 {
                 )
             })
             .collect();
-        if matches.is_empty() || module.chunks[chunk_index].n_regs > u16::MAX - 3 {
+        if matches.is_empty() || module.chunks[chunk_index].n_regs > u16::MAX - 2 {
             continue;
         }
         let length_reg = module.chunks[chunk_index].n_regs;
-        let storage_reg = length_reg + 1;
-        let base_reg = length_reg + 2;
-        module.chunks[chunk_index].n_regs += 3;
+        let base_reg = length_reg + 1;
+        module.chunks[chunk_index].n_regs += 2;
         for matched in matches {
             let fallback = u32::try_from(module.chunks[chunk_index].code.len()).unwrap_or_default();
-            let continuation = u32::try_from(matched.start + 7).unwrap_or_default();
+            let continuation = u32::try_from(matched.start + 6).unwrap_or_default();
             let original =
-                module.chunks[chunk_index].code[matched.start..matched.start + 7].to_vec();
+                module.chunks[chunk_index].code[matched.start..matched.start + 6].to_vec();
             module.chunks[chunk_index].code.extend(original);
             module.chunks[chunk_index].code.push(Insn::Jump {
                 target: continuation,
             });
-            module.chunks[chunk_index].code[matched.start] = Insn::GetField {
+            module.chunks[chunk_index].code[matched.start] = Insn::Field {
                 dest: length_reg,
-                rec: matched.collection,
-                index: matched.length_field,
+                src: matched.collection,
+                offset: matched.length_field,
+                layout: talk_runtime::NO_LAYOUT,
             };
-            module.chunks[chunk_index].code[matched.start + 1] = Insn::GetField {
-                dest: storage_reg,
-                rec: matched.collection,
-                index: matched.storage_field,
-            };
-            module.chunks[chunk_index].code[matched.start + 2] = Insn::GetField {
+            module.chunks[chunk_index].code[matched.start + 1] = Insn::Field {
                 dest: base_reg,
-                rec: storage_reg,
-                index: matched.base_field,
+                src: matched.collection,
+                offset: matched.base_offset,
+                layout: talk_runtime::NO_LAYOUT,
             };
-            module.chunks[chunk_index].code[matched.start + 3] = Insn::CheckedIndexedLoad {
+            module.chunks[chunk_index].code[matched.start + 2] = Insn::CheckedIndexedLoad {
                 dest: matched.dest,
                 base: base_reg,
                 index: matched.index,
@@ -290,7 +286,7 @@ pub(super) fn run(module: &mut Module) -> u64 {
                 kind: matched.kind,
                 failure_target: fallback,
             };
-            module.chunks[chunk_index].code[matched.start + 4] = Insn::Jump {
+            module.chunks[chunk_index].code[matched.start + 3] = Insn::Jump {
                 target: continuation,
             };
             applied += 1;
@@ -313,15 +309,11 @@ mod tests {
                     args_start: 0,
                     args_len: 2,
                 },
-                Insn::GetField {
-                    dest: 2,
-                    rec: 0,
-                    index: 0,
-                },
-                Insn::GetField {
+                Insn::Field {
                     dest: 0,
-                    rec: 2,
-                    index: 0,
+                    src: 0,
+                    offset: 0,
+                    layout: talk_runtime::NO_LAYOUT,
                 },
                 Insn::Const { dest: 3, k: 3 },
                 Insn::Mul {
@@ -361,10 +353,11 @@ mod tests {
                 },
                 Insn::Const { dest: 3, k: 1 },
                 Insn::Jump { target: 6 },
-                Insn::GetField {
+                Insn::Field {
                     dest: 4,
-                    rec: 0,
-                    index: 1,
+                    src: 0,
+                    offset: 1,
+                    layout: talk_runtime::NO_LAYOUT,
                 },
                 Insn::Cmp {
                     dest: 3,
@@ -403,25 +396,36 @@ mod tests {
     fn fuses_checked_indexed_load_and_keeps_original_failure_call() {
         let mut module = checked_load_module();
         assert_eq!(run(&mut module), 1);
-        assert_eq!(module.chunks[0].n_regs, 8);
+        assert_eq!(module.chunks[0].n_regs, 7);
+        // The compiler already folded `storage.base` to one container
+        // offset (ADR 0046); the fused hot path re-reads it fresh.
         assert!(matches!(
-            module.chunks[0].code[3],
-            Insn::CheckedIndexedLoad {
-                dest: 1,
-                base: 7,
-                index: 1,
-                length: 5,
-                kind: MemKind::I64,
-                failure_target: 8,
+            module.chunks[0].code[1],
+            Insn::Field {
+                dest: 6,
+                src: 0,
+                offset: 0,
+                layout: talk_runtime::NO_LAYOUT,
             }
         ));
         assert!(matches!(
-            module.chunks[0].code[8],
+            module.chunks[0].code[2],
+            Insn::CheckedIndexedLoad {
+                dest: 1,
+                base: 6,
+                index: 1,
+                length: 5,
+                kind: MemKind::I64,
+                failure_target: 7,
+            }
+        ));
+        assert!(matches!(
+            module.chunks[0].code[7],
             Insn::Call { chunk: 1, .. }
         ));
         assert!(matches!(
-            module.chunks[0].code[15],
-            Insn::Jump { target: 7 }
+            module.chunks[0].code[13],
+            Insn::Jump { target: 6 }
         ));
     }
 

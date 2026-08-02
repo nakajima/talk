@@ -1664,6 +1664,7 @@ pub mod tests {
             *resolved.0.roots[0].as_decl(),
             any_decl!(DeclKind::Enum {
                 linear: false,
+                heap: false,
                 name: Name::Resolved(Symbol::Enum(EnumId::from(1)), "Fizz".into()),
                 name_span: Span::ANY,
                 generics: vec![],

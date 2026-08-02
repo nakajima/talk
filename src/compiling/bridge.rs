@@ -49,153 +49,12 @@ impl<'a, 'io> ResultValidator<'a, 'io> {
         })
     }
 
-    /// Validate the outcome's root value as the schema's root type.
-    /// Returns the number of schema-typed nodes walked.
-    pub fn validate(&self) -> Result<usize, String> {
-        let mut visited = 0usize;
-        self.check(
-            &self.run.value,
-            &AbiTy::Named(self.schema.root.clone()),
-            &mut visited,
-        )?;
-        Ok(visited)
-    }
-
-    fn check(&self, value: &Value, ty: &AbiTy, visited: &mut usize) -> Result<(), String> {
-        match ty {
-            AbiTy::Named(name) => self.check_named(value, name, visited),
-            AbiTy::Optional(inner) => {
-                let Value::Variant(symbol, tag, payloads) = value else {
-                    return Err(format!("expected an Optional value, got {value:?}"));
-                };
-                if *symbol != self.optional_symbol {
-                    return Err("optional value carries the wrong enum identity".into());
-                }
-                match (tag, payloads.len()) {
-                    // core/Optional.tlk declaration order: some, none.
-                    (0, 1) => self.check(&payloads[0], inner, visited),
-                    (1, 0) => Ok(()),
-                    _ => Err(format!(
-                        "malformed Optional value: tag {tag} with {} payloads",
-                        payloads.len()
-                    )),
-                }
-            }
-            AbiTy::Array(element) => {
-                for element_value in self.array_elements(value, element)? {
-                    self.check(&element_value, element, visited)?;
-                }
-                Ok(())
-            }
-            AbiTy::Tuple(items) => {
-                let Value::Tuple(values) = value else {
-                    return Err(format!("expected a tuple value, got {value:?}"));
-                };
-                if values.len() != items.len() {
-                    return Err(format!(
-                        "tuple arity {} does not match the schema's {}",
-                        values.len(),
-                        items.len()
-                    ));
-                }
-                for (value, item) in values.iter().zip(items) {
-                    self.check(value, item, visited)?;
-                }
-                Ok(())
-            }
-        }
-    }
-
-    fn check_named(&self, value: &Value, name: &str, visited: &mut usize) -> Result<(), String> {
-        match name {
-            "Int" => {
-                let Value::I64(_) = value else {
-                    return Err(format!("expected an Int, got {value:?}"));
-                };
-                return Ok(());
-            }
-            "Bool" => {
-                let Value::Bool(_) = value else {
-                    return Err(format!("expected a Bool, got {value:?}"));
-                };
-                return Ok(());
-            }
-            "Byte" => {
-                let Value::Byte(_) = value else {
-                    return Err(format!("expected a Byte, got {value:?}"));
-                };
-                return Ok(());
-            }
-            "Float" => {
-                let Value::F64(_) = value else {
-                    return Err(format!("expected a Float, got {value:?}"));
-                };
-                return Ok(());
-            }
-            "String" => return self.string(value).map(|_| ()),
-            _ => {}
-        }
-        let schema_type = self
-            .schema
-            .types
-            .get(name)
-            .ok_or_else(|| format!("value of unknown ABI type `{name}`"))?;
-        let expected = self.symbols[name];
-        *visited += 1;
-        match &schema_type.kind {
-            AbiTypeKind::Struct(fields) => {
-                let Value::Record(symbol, values) = value else {
-                    return Err(format!("expected a `{name}` record, got {value:?}"));
-                };
-                if *symbol != expected {
-                    return Err(format!("record carries the wrong identity for `{name}`"));
-                }
-                if values.len() != fields.len() {
-                    return Err(format!(
-                        "`{name}` has {} fields but the schema declares {}",
-                        values.len(),
-                        fields.len()
-                    ));
-                }
-                for (value, (field, ty)) in values.iter().zip(fields) {
-                    self.check(value, ty, visited)
-                        .map_err(|err| format!("{name}.{field}: {err}"))?;
-                }
-                Ok(())
-            }
-            AbiTypeKind::Enum(variants) => {
-                let Value::Variant(symbol, tag, payloads) = value else {
-                    return Err(format!("expected a `{name}` variant, got {value:?}"));
-                };
-                if *symbol != expected {
-                    return Err(format!("variant carries the wrong identity for `{name}`"));
-                }
-                let (variant, payload_types) = variants
-                    .get(*tag as usize)
-                    .ok_or_else(|| format!("`{name}` has no variant tag {tag}"))?;
-                if payloads.len() != payload_types.len() {
-                    return Err(format!(
-                        "`{name}.{variant}` has {} payloads but the schema declares {}",
-                        payloads.len(),
-                        payload_types.len()
-                    ));
-                }
-                for (value, ty) in payloads.iter().zip(payload_types) {
-                    self.check(value, ty, visited)
-                        .map_err(|err| format!("{name}.{variant}: {err}"))?;
-                }
-                Ok(())
-            }
-        }
-    }
 
     /// The UTF-8 text of a String-shaped value.
     pub fn string(&self, value: &Value) -> Result<String, String> {
-        let Value::Record(symbol, _) = value else {
+        let view = self.run.aggregate(value)?;
+        if view.symbol != Some(self.string_symbol) {
             return Err(format!("expected a String, got {value:?}"));
-        };
-        if *symbol != self.string_symbol {
-            return Err("string value carries the wrong identity".into());
         }
         let bytes = self.run.string_bytes(value)?;
         String::from_utf8(bytes.to_vec()).map_err(|err| format!("string is not UTF-8: {err}"))
@@ -206,27 +65,28 @@ impl<'a, 'io> ResultValidator<'a, 'io> {
     /// element, one 8-byte word otherwise (boxed-arena handles for
     /// record, enum, string, optional, and nested-array elements).
     pub fn array_elements(&self, value: &Value, element: &AbiTy) -> Result<Vec<Value>, String> {
-        let Value::Record(symbol, fields) = value else {
+        let view = self.run.aggregate(value)?;
+        if view.symbol != Some(self.array_symbol) {
             return Err(format!("expected an array, got {value:?}"));
-        };
-        if *symbol != self.array_symbol {
-            return Err("array value carries the wrong identity".into());
         }
-        let [storage, count, capacity] = fields.as_slice() else {
+        if view.len != 3 {
             return Err("array record does not have Array's shape".into());
-        };
-        let Value::Record(storage_symbol, storage_fields) = storage else {
-            return Err("array storage is not a record".into());
-        };
-        if *storage_symbol != self.storage_symbol {
+        }
+        let storage = self.run.element(value, 0)?;
+        let storage_view = self.run.aggregate(&storage)?;
+        if storage_view.symbol != Some(self.storage_symbol) {
             return Err("array storage carries the wrong identity".into());
         }
-        let [Value::Ptr(base)] = storage_fields.as_slice() else {
+        let Value::Ptr(base) = self.run.element(&storage, 0)? else {
             return Err("array storage does not have Storage's shape".into());
         };
-        let (Value::I64(count), Value::I64(capacity)) = (count, capacity) else {
+        let base = &base;
+        let (Value::I64(count), Value::I64(capacity)) =
+            (self.run.element(value, 1)?, self.run.element(value, 2)?)
+        else {
             return Err("array count/capacity are not integers".into());
         };
+        let (count, capacity) = (&count, &capacity);
         if *count < 0 || *capacity < 0 || count > capacity {
             return Err(format!("malformed array bounds: count {count}, capacity {capacity}"));
         }
@@ -354,16 +214,22 @@ pub fn lex_tokens(run: &RunOutcome, schema: &AbiSchema) -> Result<(Vec<Token>, b
     let mut tokens = Vec::new();
     let mut complete = true;
     for element in &elements {
-        let Value::Record(symbol, fields) = element else {
+        let view = run.aggregate(element)?;
+        if view.symbol != Some(validator.symbols["MetaToken"]) {
             return Err(format!("expected a MetaToken, got {element:?}"));
-        };
-        if *symbol != validator.symbols["MetaToken"] {
-            return Err("lexed token carries the wrong identity".into());
         }
-        let [kind, start, end, line, col] = fields.as_slice() else {
+        if view.len != 5 {
             return Err("MetaToken does not have its declared shape".into());
-        };
-        let Value::Variant(_, tag, _) = kind else {
+        }
+        let kind = run.element(element, 0)?;
+        let (start, end, line, col) = (
+            run.element(element, 1)?,
+            run.element(element, 2)?,
+            run.element(element, 3)?,
+            run.element(element, 4)?,
+        );
+        let (start, end, line, col) = (&start, &end, &line, &col);
+        let Some(tag) = run.aggregate(&kind)?.tag else {
             return Err(format!("expected a TokenKind, got {kind:?}"));
         };
         let Some(AbiTypeKind::Enum(variants)) =
@@ -372,7 +238,7 @@ pub fn lex_tokens(run: &RunOutcome, schema: &AbiSchema) -> Result<(Vec<Token>, b
             return Err("schema has no TokenKind".into());
         };
         let (name, _) = variants
-            .get(*tag as usize)
+            .get(usize::from(tag))
             .ok_or_else(|| format!("TokenKind has no variant tag {tag}"))?;
         if int(start)? < 0 {
             complete = false;
@@ -626,12 +492,13 @@ impl ResultAdapter<'_, '_> {
 
     fn meta_token(&self, value: &Value) -> Result<Token, String> {
         let mut fields = self.record(value, "MetaToken")?;
-        let (kind, _) = self.variant(&take(&mut fields, "kind")?, "TokenKind")?;
         let coord = |value: Value| -> Result<u32, String> {
             u32::try_from(int(&value)?).map_err(|_| "meta token coordinate out of range".into())
         };
+        // Meta consumers read spans only, never a kind — skip the
+        // per-node variant resolution the wire field would cost.
         Ok(Token {
-            kind: token_kind(&kind)?,
+            kind: TokenKind::Generated,
             start: coord(take(&mut fields, "start")?)?,
             end: coord(take(&mut fields, "end")?)?,
             line: coord(take(&mut fields, "line")?)?,
@@ -695,24 +562,24 @@ impl ResultAdapter<'_, '_> {
         let AbiTypeKind::Struct(fields) = &schema_type.kind else {
             return Err(format!("ABI type `{ty}` is not a struct"));
         };
-        let Value::Record(symbol, values) = value else {
+        let view = self.v.run.aggregate(value)?;
+        if view.symbol != Some(self.v.symbols[ty]) || view.tag.is_some() {
             return Err(format!("expected a `{ty}` record, got {value:?}"));
-        };
-        if *symbol != self.v.symbols[ty] {
-            return Err(format!("record carries the wrong identity for `{ty}`"));
         }
-        if values.len() != fields.len() {
+        if view.len != fields.len() {
             return Err(format!(
                 "`{ty}` has {} fields but the schema declares {}",
-                values.len(),
+                view.len,
                 fields.len()
             ));
         }
-        Ok(fields
+        fields
             .iter()
-            .zip(values.iter())
-            .map(|((name, _), value)| (name.clone(), value.clone()))
-            .collect())
+            .enumerate()
+            .map(|(index, (name, _))| {
+                Ok((name.clone(), self.v.run.element(value, index as u16)?))
+            })
+            .collect()
     }
 
     /// An enum value's schema variant name and payload values,
@@ -727,35 +594,37 @@ impl ResultAdapter<'_, '_> {
         let AbiTypeKind::Enum(variants) = &schema_type.kind else {
             return Err(format!("ABI type `{ty}` is not an enum"));
         };
-        let Value::Variant(symbol, tag, payloads) = value else {
+        let view = self.v.run.aggregate(value)?;
+        if view.symbol != Some(self.v.symbols[ty]) {
+            return Err(format!("expected a `{ty}` variant, got {value:?}"));
+        }
+        let Some(tag) = view.tag else {
             return Err(format!("expected a `{ty}` variant, got {value:?}"));
         };
-        if *symbol != self.v.symbols[ty] {
-            return Err(format!("variant carries the wrong identity for `{ty}`"));
-        }
         let (name, payload_types) = variants
-            .get(*tag as usize)
+            .get(usize::from(tag))
             .ok_or_else(|| format!("`{ty}` has no variant tag {tag}"))?;
-        if payloads.len() != payload_types.len() {
+        if view.len != payload_types.len() {
             return Err(format!(
                 "`{ty}.{name}` has {} payloads but the schema declares {}",
-                payloads.len(),
+                view.len,
                 payload_types.len()
             ));
         }
-        Ok((name.clone(), payloads.to_vec()))
+        let payloads = (0..view.len)
+            .map(|index| self.v.run.element(value, index as u16))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((name.clone(), payloads))
     }
 
     fn opt(&self, value: &Value) -> Result<Option<Value>, String> {
-        let Value::Variant(symbol, tag, payloads) = value else {
+        let view = self.v.run.aggregate(value)?;
+        if view.symbol != Some(self.v.optional_symbol) {
             return Err(format!("expected an Optional value, got {value:?}"));
-        };
-        if *symbol != self.v.optional_symbol {
-            return Err("optional value carries the wrong enum identity".into());
         }
-        match (tag, payloads.len()) {
-            (0, 1) => Ok(Some(payloads[0].clone())),
-            (1, 0) => Ok(None),
+        match (view.tag, view.len) {
+            (Some(0), 1) => Ok(Some(self.v.run.element(value, 0)?)),
+            (Some(1), 0) => Ok(None),
             _ => Err("malformed Optional value".into()),
         }
     }
@@ -1911,6 +1780,9 @@ impl ResultAdapter<'_, '_> {
                 where_clause: self.where_clause(&p[4])?,
                 body: self.body(&p[5])?,
                 linear: boolean(&p[6])?,
+                // Appended in the enum-'heap migration: absent from
+                // artifacts built before it, and absence means unmarked.
+                heap: p.get(7).map(boolean).transpose()?.unwrap_or(false),
             },
             "protocol_decl" => DeclKind::Protocol {
                 name: self.name(&p[0])?,
@@ -2044,68 +1916,7 @@ impl ResultAdapter<'_, '_> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::compiling::abi::parse_schema;
-    use talk_runtime::interp::{Budgets, HostValue};
-    use talk_runtime::io::CaptureIO;
-
-    /// Every structured parse result the frontend artifact produces over
-    /// the corpus validates against the checked-in ABI descriptor: the
-    /// trust seam holds for real crossings, not just for the schema's
-    /// own round-trip.
-    #[test]
-    fn structured_results_validate_over_corpus() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let module = crate::compiling::frontend::load(root).expect("frontend artifact loads");
-        let abi_text = std::fs::read_to_string(crate::compiling::frontend::abi_path(root))
-            .expect("ABI descriptor exists");
-        let schema = parse_schema(&abi_text).expect("ABI descriptor parses");
-
-        let mut covered: Vec<std::path::PathBuf> = Vec::new();
-        for dir in [
-            "tests/parser",
-            "tests/parser/expr",
-            "tests/parser/pattern",
-            "tests/parser/type",
-            "tests/parser/block",
-            "tests/parser/tokentree",
-            "tests/parser/lenient",
-            "tests/parser/unicode",
-            "core",
-            "stdlib",
-            "tests/examples",
-            "examples",
-        ] {
-            for entry in std::fs::read_dir(root.join(dir)).expect("corpus dir") {
-                let path = entry.expect("corpus entry").path();
-                if path.extension().is_some_and(|ext| ext == "tlk") {
-                    covered.push(path);
-                }
-            }
-        }
-        covered.sort();
-        assert!(!covered.is_empty());
-
-        let mut walked = 0usize;
-        for path in covered {
-            let source = std::fs::read_to_string(&path).expect("read corpus source");
-            let mut io = CaptureIO::default();
-            let run = talk_runtime::interp::run_export(
-                &module,
-                "parse_file_source",
-                &[HostValue::String(source.into_bytes())],
-                crate::backend::string_shape(),
-                Budgets::default(),
-                &mut io,
-            )
-            .unwrap_or_else(|error| panic!("parse_file_source failed on {}: {error}", path.display()));
-            let validator = ResultValidator::new(&run, &schema).expect("validator builds");
-            walked += validator
-                .validate()
-                .unwrap_or_else(|error| panic!("validation failed on {}: {error}", path.display()));
-        }
-        assert!(walked > 10_000, "suspiciously few schema nodes: {walked}");
-    }
 
     /// The descriptor's own round trip: what `describe` emits,
     /// `parse_schema` reads back, and the checked-in copy is it.

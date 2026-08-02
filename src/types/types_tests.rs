@@ -5062,7 +5062,7 @@ pub mod tests {
         let typed = check(
             "
             protocol P {}
-            enum Expr<T> {
+            enum Expr<T> 'heap {
                 case int(Int) -> Expr<Int>
                 case pair<A, B>(Expr<A>, Expr<B>) -> Expr<(A, B)>
                 case boxed<A: P>(A) -> Expr<A>
@@ -5371,7 +5371,7 @@ pub mod tests {
     fn gadt_exhaustiveness_uses_result_substitutions_for_payloads() {
         let typed = check(
             "// no-core
-            enum Expr<T> {
+            enum Expr<T> 'heap {
                 case int(Int) -> Expr<Int>
                 case bool(Bool) -> Expr<Bool>
                 case pair<A, B>(Expr<A>, Expr<B>) -> Expr<(A, B)>
@@ -6809,7 +6809,7 @@ func f(consume r: GADTResult<Int, true>) -> GADTResult<Int, true> { r }",
     fn recursive_payload_may_apply_static_argument_to_own_head() {
         let t = super::tests::check(
             "// no-core
-enum Chain<T, static Flag: Bool> {
+enum Chain<T, static Flag: Bool> 'heap {
 case leaf(T)
 case nest(Chain<T, true>)
 }",
@@ -6868,7 +6868,7 @@ case rgb(Int)
         // so `nest`'s payload unifies with an explicit `Tree<Int, 0>`.
         let t = super::tests::check(
             "// no-core
-enum Tree<T, static Depth: Int = 0> {
+enum Tree<T, static Depth: Int = 0> 'heap {
 case leaf(T)
 case nest(Tree<T>)
 }

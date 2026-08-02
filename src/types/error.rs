@@ -80,6 +80,11 @@ pub enum TypeError {
         receiver: String,
         label: String,
     },
+    /// ADR 0045 rule 2: a type whose layout contains itself must live
+    /// behind a reference — recursion makes indirection non-optional.
+    RecursiveTypeNeedsHeap {
+        name: String,
+    },
     /// The member exists but is not visible from the access site's file
     /// (ADR 0042).
     InaccessibleMember {
@@ -340,6 +345,7 @@ impl TypeError {
             Self::IntegerLiteralOutOfRange { .. } => "type.integer-literal-out-of-range",
             Self::InfiniteType { .. } => "type.infinite-type",
             Self::UnknownMember { .. } => "type.unknown-member",
+            Self::RecursiveTypeNeedsHeap { .. } => "type.recursive-type-needs-heap",
             Self::InaccessibleMember { .. } => "type.inaccessible-member",
             Self::PublicApiExposesPrivate { .. } => "type.public-api-exposes-private",
             Self::UnknownMemberOnInferred { .. } => "type.unknown-member-on-inferred",
@@ -503,6 +509,12 @@ impl Display for TypeError {
             }
             TypeError::UnknownMember { receiver, label } => {
                 write!(f, "Unknown member '{label}' on {receiver}")
+            }
+            TypeError::RecursiveTypeNeedsHeap { name } => {
+                write!(
+                    f,
+                    "recursive type `{name}` must be declared 'heap: its layout contains itself, so its values live behind a reference"
+                )
             }
             TypeError::InaccessibleMember { receiver, label } => {
                 write!(

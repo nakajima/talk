@@ -12,7 +12,6 @@
 //! Verification: Algorithms and Formalizations").
 
 mod c;
-mod c_escape;
 mod checked_indexed_load;
 mod lower;
 mod optimize;
@@ -27,7 +26,7 @@ mod regalloc;
 pub(crate) use mir::{Entry, ProgramInput};
 
 use crate::parsing::span::Span;
-use talk_runtime::interp::{StringShape, ValueNames, run_displayed_counted};
+use talk_runtime::interp::{ValueNames, run_displayed_counted};
 
 pub use talk_runtime::VmStats;
 pub use talk_runtime::interp::{Budgets, HostValue, RunOutcome};
@@ -145,13 +144,10 @@ impl Executable {
     }
 }
 
-/// The core String layout's record symbols, for fabricating host string
+/// The core String record symbol, for fabricating host string
 /// arguments (layout owned by core/String.tlk; parity tests pin it).
-pub(crate) fn string_shape() -> StringShape {
-    StringShape {
-        string: lower::runtime_symbol(crate::name_resolution::symbol::Symbol::String),
-        storage: lower::runtime_symbol(crate::name_resolution::symbol::Symbol::Storage),
-    }
+pub(crate) fn string_shape() -> talk_runtime::symbol::Symbol {
+    lower::runtime_symbol(crate::name_resolution::symbol::Symbol::String)
 }
 
 /// A backend rejection: either a source construct no wave supports yet, or
@@ -193,9 +189,7 @@ pub(crate) fn compile(
     };
     {
         profiling::scope!("backend.regalloc");
-        for function in &mut program.functions {
-            regalloc::reuse_locals(function);
-        }
+        allocate_registers(&mut program);
     }
     let mut module = {
         profiling::scope!("backend.lower");
@@ -232,13 +226,29 @@ pub(crate) fn render_c(
 ) -> Result<String, BackendError> {
     let mut program = mir::build(programs, entry, false)?;
     optimize::run(&mut program);
-    // Read before register allocation, where a parameter's slot is still
-    // only ever the parameter (see `c_escape::parameter_summaries`).
-    let escaping_parameters = c_escape::parameter_summaries(&program);
+    // The escape-derived frame facts only the C emitter reads (ADR
+    // 0045). Parameter escape summaries must read the pre-allocation
+    // program, where a parameter's slot is still only ever the
+    // parameter; the shaping itself runs on the final numbering.
+    let summaries = mir::escape::parameter_summaries(&program);
+    allocate_registers(&mut program);
+    mir::escape::shape_frames(&mut program, &summaries);
+    c::emit(&program, &c::display_names(programs))
+}
+
+/// Register allocation over the whole program. Layout classes are
+/// program-wide facts (they read every function's return repr), so they
+/// derive here once and publish on each function's locals table under
+/// the final numbering.
+fn allocate_registers(program: &mut mir::Program) {
+    let returns: Vec<Option<mir::layout::LayoutId>> = program
+        .functions
+        .iter()
+        .map(|function| function.return_repr)
+        .collect();
     for function in &mut program.functions {
-        regalloc::reuse_locals(function);
+        regalloc::reuse_locals(function, &program.layout_table, &returns);
     }
-    c::emit(&program, &escaping_parameters, &c::display_names(programs))
 }
 
 /// Render the middle representation for inspection (TOOL-10).
@@ -250,9 +260,7 @@ pub(crate) fn render_mir(
     let mut program = mir::build(programs, entry, false)?;
     if optimized {
         optimize::run(&mut program);
-        for function in &mut program.functions {
-            regalloc::reuse_locals(function);
-        }
+        allocate_registers(&mut program);
     }
     Ok(program.render())
 }

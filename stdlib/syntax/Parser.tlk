@@ -3208,11 +3208,8 @@ struct Parser {
 			let attribute = self.lexeme(token: attr_tok)
 			if attribute == "linear" {
 				is_linear = true
-			} else if attribute == "heap" && context == .struct_body {
-				is_heap = true
 			} else if attribute == "heap" {
-				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected 'heap applies to struct declarations only, got " + describe_kind(kind: .effect_name))
-				return dummy_decl()
+				is_heap = true
 			} else {
 				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected a declaration attribute ('heap or 'linear), got " + describe_kind(kind: .effect_name))
 				return dummy_decl()
@@ -3239,7 +3236,7 @@ struct Parser {
 		if self.is_failed() { return dummy_decl() }
 		let d_end = self.span_end()
 		if context == .enum_body {
-			return Decl(kind: .enum_decl(name, name_tok.lexeme.lower, name_tok.lexeme.upper, generics, wc, body, is_linear), is_public: false, start: start_tok.span.lower, end: d_end)
+			return Decl(kind: .enum_decl(name, name_tok.lexeme.lower, name_tok.lexeme.upper, generics, wc, body, is_linear, is_heap), is_public: false, start: start_tok.span.lower, end: d_end)
 		}
 		if context == .struct_body {
 			return Decl(kind: .struct_decl(name, name_tok.lexeme.lower, name_tok.lexeme.upper, generics, wc, body, is_linear, is_heap), is_public: false, start: start_tok.span.lower, end: d_end)
@@ -3948,7 +3945,7 @@ struct Parser {
 				}
 				match kind {
 					.struct_decl(_, _, _, _, _, _, _, _) -> self.check_pub_context_nominal(context: context),
-					.enum_decl(_, _, _, _, _, _, _) -> self.check_pub_context_nominal(context: context),
+					.enum_decl(_, _, _, _, _, _, _, _) -> self.check_pub_context_nominal(context: context),
 					.protocol_decl(_, _, _, _, _, _, _) -> self.check_pub_context_nominal(context: context),
 					.typealias_decl(_, _, _, _) -> self.check_pub_context_nominal(context: context),
 					.effect_decl(_, _, _, _, _, _, _) -> self.check_pub_context_nominal(context: context),
@@ -4453,7 +4450,7 @@ func meta_decl(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: 
 			meta_optional_where(ctx: ctx, metas: metas, claimed: claimed, live: live, wc: wc)
 			meta_body(ctx: ctx, metas: metas, claimed: claimed, live: live, body: body)
 		},
-		.enum_decl(_, _, _, generics, wc, body, _) -> {
+		.enum_decl(_, _, _, generics, wc, body, _, _) -> {
 			for generic in generics {
 				meta_generic_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, generic: generic)
 			}

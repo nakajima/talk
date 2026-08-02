@@ -68,7 +68,7 @@ enum DeclKind @ enum:65535.44
 	func_decl(Func)
 	func_signature(FuncSignature)
 	struct_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, Bool, Bool)
-	enum_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, Bool)
+	enum_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, Bool, Bool)
 	protocol_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, [TypeAnnotation])
 	enum_variant(String, Int, Int, [GenericDecl], [TypeAnnotation], [String?], TypeAnnotation?)
 	extend_decl([GenericDecl], TypeApplication, [TypeAnnotation], WhereClause?, Body)

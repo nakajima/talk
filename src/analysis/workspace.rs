@@ -514,6 +514,16 @@ impl Workspace {
         self.resolved_names.exports().get(name)?.first().copied()
     }
 
+    /// The text of an embedded stdlib document a definition lookup can
+    /// land in — those live outside the workspace's own documents.
+    pub fn stdlib_document_text(&self, document_id: &DocumentId) -> Option<String> {
+        self.stdlib_module_ids.iter().find_map(|(module_id, name)| {
+            let stdlib = Self::stdlib_module(name, *module_id)?;
+            let file_id = *stdlib.document_to_file_id.get(document_id)?;
+            stdlib.texts.get(file_id.0 as usize).cloned()
+        })
+    }
+
     fn stdlib_module(name: &str, module_id: ModuleId) -> Option<Self> {
         let documents = crate::compiling::stdlib::source_documents(name)?;
         let source_root =
@@ -682,30 +692,12 @@ impl Workspace {
     }
 }
 
-fn parser_error_range(text: &str, err: &ParserError) -> TextRange {
-    let eof = text.len() as u32;
-
+fn parser_error_range(err: &ParserError) -> TextRange {
     match err {
         // Frontend-bridged diagnostics carry their position directly.
         ParserError::Frontend {
             span: Some(span), ..
         } => TextRange::new(span.start, span.end),
-        ParserError::UnexpectedToken {
-            token: Some(token), ..
-        } => TextRange::new(token.start, token.end),
-        ParserError::InfiniteLoop(Some(token))
-        | ParserError::ExpectedIdentifier(Some(token))
-        | ParserError::ConformanceListNotAllowed {
-            token: Some(token), ..
-        } => TextRange::new(token.start, token.end),
-        ParserError::ExplicitSelfParameterNotAllowed { parameter } => {
-            TextRange::new(parameter.start, parameter.end)
-        }
-        ParserError::LegacyPublicModifier { span }
-        | ParserError::VisibilityNotAllowed { span, .. }
-        | ParserError::RepeatedVisibilityModifier { span }
-        | ParserError::MacroExportUnsupported { span } => TextRange::new(span.start, span.end),
-        ParserError::UnexpectedEndOfInput(..) => TextRange::new(eof, eof),
         _ => TextRange::new(0, 0),
     }
 }
@@ -759,10 +751,7 @@ pub(crate) fn diagnostic_for_any(
     let doc_id = file_id_to_document.get(file_idx)?.clone();
 
     let range = if let Some(err) = parse_error {
-        texts
-            .get(file_idx)
-            .map(|text| parser_error_range(text, err))
-            .unwrap_or_else(|| TextRange::new(0, 0))
+        parser_error_range(err)
     } else {
         match (
             texts.get(file_idx),

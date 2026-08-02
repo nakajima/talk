@@ -3,12 +3,9 @@
 //! images byte-identical (the fixed-point check), and produce the
 //! artifact together with its manifest so neither can go stale alone.
 //!
-//! Today both stages compile with the same (Rust) frontend, so the
-//! fixed point is a determinism guarantee. Once the self-hosted
-//! frontend drives parsing, the same sequence becomes the true
-//! bootstrap: stage 1 parses with the checked-in artifact, stage 2
-//! with the candidate — the check's meaning strengthens without the
-//! command changing shape.
+//! This is a true bootstrap (ADR 0043 Stage 5): stage 1 parses with
+//! the checked-in artifact, stage 2 with the candidate, so the fixed
+//! point proves the candidate parses its own sources identically.
 
 use crate::compiling::driver::{Driver, DriverConfig, OptimizationStats, Source};
 use crate::compiling::manifest::ArtifactManifest;
@@ -181,27 +178,6 @@ mod tests {
             stale.err().expect("edited source must fail").contains("sources"),
             "source edits must invalidate the manifest"
         );
-    }
-
-    /// Run a `String -> String` validation export from the frontend
-    /// image and return its output.
-    fn run_string_export(module: &talk_runtime::Module, name: &str, source: &str) -> String {
-        let mut io = CaptureIO::default();
-        let run = talk_runtime::interp::run_export(
-            module,
-            name,
-            &[HostValue::String(source.as_bytes().to_vec())],
-            crate::backend::string_shape(),
-            Budgets::default(),
-            &mut io,
-        )
-        .unwrap_or_else(|error| panic!("{name} failed: {error}"));
-        String::from_utf8(
-            run.string_bytes(&run.value)
-                .unwrap_or_else(|_| panic!("{name} returns a string"))
-                .to_vec(),
-        )
-        .unwrap_or_else(|error| panic!("{name} output is UTF-8: {error}"))
     }
 
     /// Explicit codegen-staleness gate. Normal tests validate that the

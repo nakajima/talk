@@ -116,6 +116,7 @@ pub enum CheckedIrKind {
         length: IrOperand,
     },
     InlineGet {
+        element: Ty,
         array: IrOperand,
         index: IrOperand,
     },

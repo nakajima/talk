@@ -86,6 +86,10 @@ pub struct Enum {
     /// Declared with the `linear` modifier: must be consumed exactly once.
     #[serde(default)]
     pub linear: bool,
+    /// Declared `'heap`: values live behind a reference. Required when
+    /// the layout contains itself (ADR 0045 rule 2).
+    #[serde(default)]
+    pub heap: bool,
     /// Declared generic parameters (see `StructInfo::params`).
     pub params: Vec<SchemeParam>,
     pub variants: IndexMap<String, Variant>,
@@ -655,6 +659,20 @@ impl TypeCatalog {
             Symbol::Int | Symbol::Float | Symbol::Bool | Symbol::Void
         ) || symbol == Symbol::RawPtr
             || symbol == Symbol::Byte
+    }
+
+    /// Whether a nominal's declared layout contains itself (ADR 0045
+    /// rule 2), so its values must live behind a reference (`'heap`).
+    /// Precision matters: `[Node]` does not make `Node` recursive —
+    /// array elements live behind `Storage`'s raw pointer — so the walk
+    /// consults per-declaration parameter expandability.
+    pub fn layout_recursive(&self, symbol: Symbol) -> bool {
+        let structs: rustc_hash::FxHashMap<Symbol, &StructInfo> =
+            self.structs.iter().map(|(k, v)| (*k, v)).collect();
+        let enums: rustc_hash::FxHashMap<Symbol, &Enum> =
+            self.enums.iter().map(|(k, v)| (*k, v)).collect();
+        let expands = expandable_params(&structs, &enums);
+        is_layout_recursive(symbol, &structs, &enums, &expands)
     }
 
     fn is_linear_decl(&self, symbol: Symbol) -> bool {
@@ -2182,4 +2200,202 @@ mod tests {
         assert!(catalog.cheap_clone_rows(head, &[Ty::Nominal(Symbol::Int, vec![])]));
         assert!(!catalog.cheap_clone_rows(head, &[Ty::Nominal(Symbol::String, vec![])]));
     }
+}
+
+/// Which of a declaration's type parameters expand inline in its layout
+/// (ADR 0045): `Wrap<T> { value: T }` expands its parameter; `Array<T>`
+/// does not — elements live behind `Storage`'s raw pointer. A fixpoint
+/// over all declarations, so expansion threads through applications.
+/// Shared by the checker's recursion rule and the backend's layout
+/// classifier: the two must agree exactly, or a declaration would be
+/// required to say `'heap` for a layout the classifier keeps inline.
+pub fn expandable_params(
+    structs: &rustc_hash::FxHashMap<Symbol, &StructInfo>,
+    enums: &rustc_hash::FxHashMap<Symbol, &Enum>,
+) -> rustc_hash::FxHashMap<Symbol, Vec<bool>> {
+    fn param_expands(
+        ty: &Ty,
+        param: Symbol,
+        table: &rustc_hash::FxHashMap<Symbol, Vec<bool>>,
+        structs: &rustc_hash::FxHashMap<Symbol, &StructInfo>,
+        enums: &rustc_hash::FxHashMap<Symbol, &Enum>,
+    ) -> bool {
+        match ty {
+            Ty::Param(symbol) => *symbol == param,
+            Ty::Unique(inner) => param_expands(inner, param, table, structs, enums),
+            Ty::Tuple(items) => items
+                .iter()
+                .any(|item| param_expands(item, param, table, structs, enums)),
+            Ty::Record(row) => row
+                .fields
+                .iter()
+                .any(|(_, item)| param_expands(item, param, table, structs, enums)),
+            Ty::Nominal(symbol, args) => {
+                if structs.get(symbol).is_some_and(|def| def.heap)
+                    || enums.get(symbol).is_some_and(|def| def.heap)
+                {
+                    return false;
+                }
+                if *symbol == Symbol::InlineArray {
+                    return args
+                        .first()
+                        .is_some_and(|arg| param_expands(arg, param, table, structs, enums));
+                }
+                let Some(expands) = table.get(symbol) else {
+                    return false;
+                };
+                args.iter().zip(expands).any(|(arg, expands)| {
+                    *expands && param_expands(arg, param, table, structs, enums)
+                })
+            }
+            _ => false,
+        }
+    }
+
+    let mut table: rustc_hash::FxHashMap<Symbol, Vec<bool>> = rustc_hash::FxHashMap::default();
+    for (symbol, def) in structs {
+        table.insert(*symbol, vec![false; def.params.len()]);
+    }
+    for (symbol, def) in enums {
+        table.insert(*symbol, vec![false; def.params.len()]);
+    }
+    loop {
+        let mut changed = false;
+        let snapshot = table.clone();
+        for (symbol, def) in structs {
+            if def.heap {
+                continue;
+            }
+            for (index, param) in def.params.iter().enumerate() {
+                if table[symbol][index] {
+                    continue;
+                }
+                let expands = def.fields.values().any(|(_, ty)| {
+                    param_expands(ty, param.symbol, &snapshot, structs, enums)
+                });
+                if expands {
+                    table.get_mut(symbol).into_iter().for_each(|e| e[index] = true);
+                    changed = true;
+                }
+            }
+        }
+        for (symbol, def) in enums {
+            if def.heap {
+                continue;
+            }
+            for (index, param) in def.params.iter().enumerate() {
+                if table[symbol][index] {
+                    continue;
+                }
+                let expands = def.variants.values().any(|variant| {
+                    match &variant.constructor_scheme.ty {
+                        Ty::Func(params, _, _) => params.iter().any(|ty| {
+                            param_expands(ty, param.symbol, &snapshot, structs, enums)
+                        }),
+                        _ => false,
+                    }
+                });
+                if expands {
+                    table.get_mut(symbol).into_iter().for_each(|e| e[index] = true);
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            return table;
+        }
+    }
+}
+
+/// Whether `symbol`'s declared layout reaches itself through inline
+/// positions only — the declaration-level cycle the layout classifier
+/// boxes and the checker requires `'heap` for.
+pub fn is_layout_recursive(
+    symbol: Symbol,
+    structs: &rustc_hash::FxHashMap<Symbol, &StructInfo>,
+    enums: &rustc_hash::FxHashMap<Symbol, &Enum>,
+    expands: &rustc_hash::FxHashMap<Symbol, Vec<bool>>,
+) -> bool {
+    fn mentions(
+        ty: &Ty,
+        out: &mut rustc_hash::FxHashSet<Symbol>,
+        structs: &rustc_hash::FxHashMap<Symbol, &StructInfo>,
+        enums: &rustc_hash::FxHashMap<Symbol, &Enum>,
+        expands: &rustc_hash::FxHashMap<Symbol, Vec<bool>>,
+    ) {
+        match ty {
+            Ty::Nominal(symbol, args) => {
+                if structs.get(symbol).is_some_and(|def| def.heap)
+                    || enums.get(symbol).is_some_and(|def| def.heap)
+                {
+                    return;
+                }
+                out.insert(*symbol);
+                if *symbol == Symbol::InlineArray {
+                    if let Some(element) = args.first() {
+                        mentions(element, out, structs, enums, expands);
+                    }
+                    return;
+                }
+                let empty = Vec::new();
+                let expandable = expands.get(symbol).unwrap_or(&empty);
+                for (arg, expandable) in args.iter().zip(expandable) {
+                    if *expandable {
+                        mentions(arg, out, structs, enums, expands);
+                    }
+                }
+            }
+            Ty::Unique(inner) => mentions(inner, out, structs, enums, expands),
+            Ty::Tuple(items) => {
+                for item in items {
+                    mentions(item, out, structs, enums, expands);
+                }
+            }
+            Ty::Record(row) => {
+                for (_, item) in &row.fields {
+                    mentions(item, out, structs, enums, expands);
+                }
+            }
+            _ => {}
+        }
+    }
+    fn edges(
+        symbol: Symbol,
+        structs: &rustc_hash::FxHashMap<Symbol, &StructInfo>,
+        enums: &rustc_hash::FxHashMap<Symbol, &Enum>,
+        expands: &rustc_hash::FxHashMap<Symbol, Vec<bool>>,
+    ) -> rustc_hash::FxHashSet<Symbol> {
+        let mut out = rustc_hash::FxHashSet::default();
+        if let Some(def) = structs.get(&symbol) {
+            if def.heap {
+                return out;
+            }
+            for (_, ty) in def.fields.values() {
+                mentions(ty, &mut out, structs, enums, expands);
+            }
+        } else if let Some(def) = enums.get(&symbol) {
+            if def.heap {
+                return out;
+            }
+            for variant in def.variants.values() {
+                if let Ty::Func(params, _, _) = &variant.constructor_scheme.ty {
+                    for param in params {
+                        mentions(param, &mut out, structs, enums, expands);
+                    }
+                }
+            }
+        }
+        out
+    }
+    let mut visited = rustc_hash::FxHashSet::default();
+    let mut stack: Vec<Symbol> = edges(symbol, structs, enums, expands).into_iter().collect();
+    while let Some(next) = stack.pop() {
+        if next == symbol {
+            return true;
+        }
+        if visited.insert(next) {
+            stack.extend(edges(next, structs, enums, expands));
+        }
+    }
+    false
 }

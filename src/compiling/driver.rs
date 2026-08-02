@@ -1032,6 +1032,24 @@ pub mod tests {
         assert!(rendered.contains("VM instruction statistics"), "{rendered}");
     }
 
+    // The checked-load fusion matches a compiler-emitted instruction
+    // shape; any change to lowering or to the pass's own rewrite that
+    // stops the pattern matching would silently disable it. This pins
+    // that a real indexed read keeps fusing.
+    #[test]
+    fn array_indexing_keeps_the_checked_load_fusion() {
+        let source = "pub func pick() -> Int {\n\tlet values = [10, 20, 30]\n\tvalues.get(1)\n}\n";
+        let exe = service_executable(source, &["pick"]).expect("service compiles");
+        assert!(
+            exe.optimization_stats()
+                .passes
+                .iter()
+                .any(|pass| pass.name == "checked_indexed_load" && pass.applied > 0),
+            "expected checked indexed loads to fuse: {:?}",
+            exe.optimization_stats()
+        );
+    }
+
     #[test]
     fn enum_matches_lower_to_runtime_switch_dispatch() {
         let source = "enum Choice {\n\tcase zero, one, two\n}\npub func choose() -> Int {\n\tlet choice = Choice.two\n\tmatch choice {\n\t\t.zero -> 0,\n\t\t.one -> 1,\n\t\t.two -> 2\n\t}\n}\n";

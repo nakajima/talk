@@ -139,9 +139,12 @@ mod tests {
     #[test]
     fn removes_dead_blocks_and_remaps_targets() {
         let mut function = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "reachable".into(),
             arity: 0,
-            n_locals: 1,
+            locals: crate::backend::mir::LocalInfo::uniform(1),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),

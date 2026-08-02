@@ -552,13 +552,6 @@ impl<'s> Solver<'s> {
                 origin,
             }),
             Ty::Borrow(_, found_inner) => {
-                if std::env::var_os("TALK_SYNTH_DEBUG").is_some() {
-                    eprintln!(
-                        "COERCE borrow-found reason={:?} expected={:?}",
-                        origin.reason,
-                        self.store.shallow(&expected)
-                    );
-                }
                 // Return-position donation (implicit sharing): a borrow
                 // returned where the frame's type owns always donates a
                 // retained reference. MIR's return path retains any

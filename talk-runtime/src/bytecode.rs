@@ -1,12 +1,17 @@
 use crate::CmpOp;
-use crate::symbol::{LocalSymbolId, ModuleId, ModuleSymbolId, Symbol};
-use crate::{Chunk, Constant, Insn, IoOp, MemKind, Module};
+use crate::symbol::{ModuleId, ModuleSymbolId, Symbol};
+use crate::{Chunk, Constant, FieldShape, Insn, IoOp, LayoutBody, LayoutDesc, MemKind, Module};
 
 const MAGIC: &[u8; 7] = b"TALKBC\0";
 /// The wire-format version, embedded in every image header and recorded
 /// in artifact manifests (ADR 0043): a loader refuses any other version.
-pub const FORMAT_VERSION: u32 = 4;
-const MIN_SUPPORTED_FORMAT_VERSION: u32 = 3;
+// Version 6 is the flat-aggregate format (ADR 0045): the module ships
+// its layout table, one `AggNew` opcode builds every aggregate under a
+// published layout, and field access is offset-addressed. The floor
+// matches: earlier versions carried the symbol-headed representation
+// this runtime no longer has, so they fail at the gate.
+pub const FORMAT_VERSION: u32 = 7;
+const MIN_SUPPORTED_FORMAT_VERSION: u32 = 7;
 
 pub fn supports_format(version: u32) -> bool {
     (MIN_SUPPORTED_FORMAT_VERSION..=FORMAT_VERSION).contains(&version)
@@ -98,6 +103,51 @@ impl Encoder {
         self.u32_vec("switch_pool", &module.switch_pool)?;
         self.strings("traps", &module.traps)?;
         self.bytes("statics", &module.statics)?;
+        self.layouts(&module.layouts)?;
+        Ok(())
+    }
+
+    fn layouts(&mut self, layouts: &[LayoutDesc]) -> Result<(), EncodeError> {
+        self.len("layouts", layouts.len())?;
+        for desc in layouts {
+            match desc.symbol {
+                None => self.u8(0),
+                Some(symbol) => {
+                    self.u8(1);
+                    self.symbol(symbol);
+                }
+            }
+            self.u16(desc.width);
+            match &desc.body {
+                LayoutBody::Unshaped => self.u8(0),
+                LayoutBody::Product(fields) => {
+                    self.u8(1);
+                    self.layout_fields(fields)?;
+                }
+                LayoutBody::Sum(variants) => {
+                    self.u8(2);
+                    self.len("layout variants", variants.len())?;
+                    for variant in variants {
+                        self.layout_fields(variant)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn layout_fields(&mut self, fields: &[(u16, FieldShape)]) -> Result<(), EncodeError> {
+        self.len("layout fields", fields.len())?;
+        for &(offset, shape) in fields {
+            self.u16(offset);
+            match shape {
+                FieldShape::Slot => self.u8(0),
+                FieldShape::Spliced(child) => {
+                    self.u8(1);
+                    self.u32(child);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -118,7 +168,7 @@ impl Encoder {
             self.u16(chunk.n_regs);
             self.len("code", chunk.code.len())?;
             for insn in &chunk.code {
-                self.insn(*insn);
+                self.insn(*insn)?;
             }
             // The unwind table (ADR 0027): (suspension pc, entry pc).
             self.len("unwind", chunk.unwind.len())?;
@@ -164,7 +214,7 @@ impl Encoder {
         }
     }
 
-    fn insn(&mut self, insn: Insn) {
+    fn insn(&mut self, insn: Insn) -> Result<(), EncodeError> {
         match insn {
             Insn::Const { dest, k } => {
                 self.u8(0);
@@ -194,60 +244,70 @@ impl Encoder {
             Insn::CellNew { dest, init } => self.reg2(9, dest, init),
             Insn::CellGet { dest, cell } => self.reg2(10, dest, cell),
             Insn::CellSet { cell, src } => self.reg2(11, cell, src),
-            Insn::RecordNew {
+            Insn::AggNew {
                 dest,
-                symbol,
+                layout,
+                tag,
                 args_start,
                 args_len,
             } => {
                 self.u8(12);
                 self.u16(dest);
-                self.symbol(symbol);
-                self.u32(args_start);
-                self.u16(args_len);
-            }
-            Insn::GetField { dest, rec, index } => {
-                self.u8(13);
-                self.u16(dest);
-                self.u16(rec);
-                self.u16(index);
-            }
-            Insn::GetElement { dest, rec, index } => {
-                self.u8(61);
-                self.u16(dest);
-                self.u16(rec);
-                self.u16(index);
-            }
-            Insn::VariantNew {
-                dest,
-                symbol,
-                tag,
-                args_start,
-                args_len,
-            } => {
-                self.u8(14);
-                self.u16(dest);
-                self.symbol(symbol);
+                self.u32(layout);
                 self.u16(tag);
                 self.u32(args_start);
                 self.u16(args_len);
             }
+            Insn::Field {
+                dest,
+                src,
+                offset,
+                layout,
+            } => {
+                self.u8(13);
+                self.u16(dest);
+                self.u16(src);
+                self.u16(offset);
+                self.u32(layout);
+            }
+            Insn::FieldIndex { dest, src, index } => {
+                self.u8(14);
+                self.u16(dest);
+                self.u16(src);
+                self.u16(index);
+            }
+            Insn::GetElement {
+                dest,
+                rec,
+                index,
+                element,
+            } => {
+                self.u8(61);
+                self.u16(dest);
+                self.u16(rec);
+                self.u16(index);
+                self.u32(element);
+            }
             Insn::GetTag { dest, src } => self.reg2(15, dest, src),
-            Insn::GetPayload { dest, src, index } => {
+            Insn::SetFieldIndex {
+                dest,
+                rec,
+                src,
+                index,
+            } => {
                 self.u8(16);
                 self.u16(dest);
+                self.u16(rec);
                 self.u16(src);
                 self.u16(index);
             }
             Insn::ExistentialPack {
                 dest,
-                protocol,
                 args_start,
                 args_len,
             } => {
                 self.u8(17);
                 self.u16(dest);
-                self.symbol(protocol);
                 self.u32(args_start);
                 self.u16(args_len);
             }
@@ -258,33 +318,19 @@ impl Encoder {
                 self.u16(index);
             }
             Insn::ExistentialPayload { dest, src } => self.reg2(19, dest, src),
-            Insn::TupleNew {
-                dest,
-                args_start,
-                args_len,
-            } => {
-                self.u8(20);
-                self.u16(dest);
-                self.u32(args_start);
-                self.u16(args_len);
-            }
-            Insn::Extract { dest, src, index } => {
-                self.u8(21);
-                self.u16(dest);
-                self.u16(src);
-                self.u16(index);
-            }
             Insn::SetField {
                 dest,
                 rec,
                 src,
-                index,
+                offset,
+                layout,
             } => {
                 self.u8(22);
                 self.u16(dest);
                 self.u16(rec);
                 self.u16(src);
-                self.u16(index);
+                self.u16(offset);
+                self.u32(layout);
             }
             Insn::Alloc { dest, count } => self.reg2(23, dest, count),
             Insn::Free { dest, ptr } => self.reg2(24, dest, ptr),
@@ -448,6 +494,7 @@ impl Encoder {
                 self.u32(message);
             }
         }
+        Ok(())
     }
 
     fn call_like(&mut self, tag: u8, dest: u16, chunk: u32, args_start: u32, args_len: u16) {
@@ -526,25 +573,7 @@ impl Encoder {
         match symbol {
             Symbol::Struct(id) => self.module_symbol(0, id.module_id.0, id.local_id),
             Symbol::Enum(id) => self.module_symbol(1, id.module_id.0, id.local_id),
-            Symbol::TypeAlias(id) => self.module_symbol(2, id.module_id.0, id.local_id),
-            Symbol::TypeParameter(id) => self.module_symbol(3, id.module_id.0, id.local_id),
-            Symbol::Global(id) => self.module_symbol(4, id.module_id.0, id.local_id),
-            Symbol::DeclaredLocal(id) => self.local_symbol(5, id.0),
-            Symbol::PatternBindLocal(id) => self.local_symbol(6, id.0),
-            Symbol::ParamLocal(id) => self.local_symbol(7, id.0),
-            Symbol::Builtin(id) => self.module_symbol(8, id.module_id.0, id.local_id),
-            Symbol::Property(id) => self.module_symbol(9, id.module_id.0, id.local_id),
-            Symbol::Synthesized(id) => self.module_symbol(10, id.module_id.0, id.local_id),
-            Symbol::InstanceMethod(id) => self.module_symbol(11, id.module_id.0, id.local_id),
-            Symbol::Initializer(id) => self.module_symbol(12, id.module_id.0, id.local_id),
-            Symbol::StaticMethod(id) => self.module_symbol(13, id.module_id.0, id.local_id),
-            Symbol::Variant(id) => self.module_symbol(14, id.module_id.0, id.local_id),
-            Symbol::Protocol(id) => self.module_symbol(15, id.module_id.0, id.local_id),
-            Symbol::AssociatedType(id) => self.module_symbol(16, id.module_id.0, id.local_id),
-            Symbol::MethodRequirement(id) => self.module_symbol(17, id.module_id.0, id.local_id),
-            Symbol::Effect(id) => self.module_symbol(18, id.module_id.0, id.local_id),
-            Symbol::Main => self.local_symbol(19, 0),
-            Symbol::Library => self.local_symbol(20, 0),
+            Symbol::Library => self.local_symbol(2, 0),
         }
     }
 
@@ -646,6 +675,7 @@ impl<'a> Decoder<'a> {
         let switch_pool = self.u32_vec()?;
         let traps = self.strings()?;
         let statics = self.byte_vec()?;
+        let layouts = self.layouts()?;
         Ok(Module {
             chunks,
             consts,
@@ -653,10 +683,59 @@ impl<'a> Decoder<'a> {
             switch_pool,
             traps,
             statics,
+            layouts,
             entry,
             exports,
         })
     }
+
+    fn layouts(&mut self) -> Result<Vec<LayoutDesc>, DecodeError> {
+        let len = self.len_of(4)?;
+        let mut layouts = Vec::with_capacity(len);
+        for _ in 0..len {
+            let symbol = match self.u8()? {
+                0 => None,
+                1 => Some(self.symbol()?),
+                tag => return Err(DecodeError::InvalidTag("layout symbol", tag)),
+            };
+            let width = self.u16()?;
+            let body = match self.u8()? {
+                0 => LayoutBody::Unshaped,
+                1 => LayoutBody::Product(self.layout_fields()?),
+                2 => {
+                    let variants = self.len_of(4)?;
+                    let mut bodies = Vec::with_capacity(variants);
+                    for _ in 0..variants {
+                        bodies.push(self.layout_fields()?);
+                    }
+                    LayoutBody::Sum(bodies)
+                }
+                tag => return Err(DecodeError::InvalidTag("layout body", tag)),
+            };
+            layouts.push(LayoutDesc {
+                symbol,
+                width,
+                body,
+            });
+        }
+        Ok(layouts)
+    }
+
+    fn layout_fields(&mut self) -> Result<Vec<(u16, FieldShape)>, DecodeError> {
+        let len = self.len_of(3)?;
+        let mut fields = Vec::with_capacity(len);
+        for _ in 0..len {
+            let offset = self.u16()?;
+            let shape = match self.u8()? {
+                0 => FieldShape::Slot,
+                1 => FieldShape::Spliced(self.u32()?),
+                tag => return Err(DecodeError::InvalidTag("layout field", tag)),
+            };
+            fields.push((offset, shape));
+        }
+        Ok(fields)
+    }
+
 
     fn exports(&mut self) -> Result<Vec<(String, u32)>, DecodeError> {
         let len = self.len_of(8)?;
@@ -762,36 +841,37 @@ impl<'a> Decoder<'a> {
                 cell: self.u16()?,
                 src: self.u16()?,
             }),
-            12 => Ok(Insn::RecordNew {
+            12 => Ok(Insn::AggNew {
                 dest: self.u16()?,
-                symbol: self.symbol()?,
-                args_start: self.u32()?,
-                args_len: self.u16()?,
-            }),
-            13 => Ok(Insn::GetField {
-                dest: self.u16()?,
-                rec: self.u16()?,
-                index: self.u16()?,
-            }),
-            14 => Ok(Insn::VariantNew {
-                dest: self.u16()?,
-                symbol: self.symbol()?,
+                layout: self.u32()?,
                 tag: self.u16()?,
                 args_start: self.u32()?,
                 args_len: self.u16()?,
             }),
-            15 => Ok(Insn::GetTag {
+            13 => Ok(Insn::Field {
                 dest: self.u16()?,
                 src: self.u16()?,
+                offset: self.u16()?,
+                layout: self.u32()?,
             }),
-            16 => Ok(Insn::GetPayload {
+            14 => Ok(Insn::FieldIndex {
                 dest: self.u16()?,
                 src: self.u16()?,
                 index: self.u16()?,
             }),
+            16 => Ok(Insn::SetFieldIndex {
+                dest: self.u16()?,
+                rec: self.u16()?,
+                src: self.u16()?,
+                index: self.u16()?,
+            }),
+
+            15 => Ok(Insn::GetTag {
+                dest: self.u16()?,
+                src: self.u16()?,
+            }),
             17 => Ok(Insn::ExistentialPack {
                 dest: self.u16()?,
-                protocol: self.symbol()?,
                 args_start: self.u32()?,
                 args_len: self.u16()?,
             }),
@@ -804,21 +884,12 @@ impl<'a> Decoder<'a> {
                 dest: self.u16()?,
                 src: self.u16()?,
             }),
-            20 => Ok(Insn::TupleNew {
-                dest: self.u16()?,
-                args_start: self.u32()?,
-                args_len: self.u16()?,
-            }),
-            21 => Ok(Insn::Extract {
-                dest: self.u16()?,
-                src: self.u16()?,
-                index: self.u16()?,
-            }),
             22 => Ok(Insn::SetField {
                 dest: self.u16()?,
                 rec: self.u16()?,
                 src: self.u16()?,
-                index: self.u16()?,
+                offset: self.u16()?,
+                layout: self.u32()?,
             }),
             23 => Ok(Insn::Alloc {
                 dest: self.u16()?,
@@ -965,6 +1036,7 @@ impl<'a> Decoder<'a> {
                 dest: self.u16()?,
                 rec: self.u16()?,
                 index: self.u16()?,
+                element: self.u32()?,
             }),
             62 => Ok(Insn::IToB {
                 dest: self.u16()?,
@@ -1043,34 +1115,14 @@ impl<'a> Decoder<'a> {
         match tag {
             0 => Ok(Symbol::Struct(self.module_symbol()?)),
             1 => Ok(Symbol::Enum(self.module_symbol()?)),
-            2 => Ok(Symbol::TypeAlias(self.module_symbol()?)),
-            3 => Ok(Symbol::TypeParameter(self.module_symbol()?)),
-            4 => Ok(Symbol::Global(self.module_symbol()?)),
-            5 => Ok(Symbol::DeclaredLocal(LocalSymbolId(self.u32()?))),
-            6 => Ok(Symbol::PatternBindLocal(LocalSymbolId(self.u32()?))),
-            7 => Ok(Symbol::ParamLocal(LocalSymbolId(self.u32()?))),
-            8 => Ok(Symbol::Builtin(self.module_symbol()?)),
-            9 => Ok(Symbol::Property(self.module_symbol()?)),
-            10 => Ok(Symbol::Synthesized(self.module_symbol()?)),
-            11 => Ok(Symbol::InstanceMethod(self.module_symbol()?)),
-            12 => Ok(Symbol::Initializer(self.module_symbol()?)),
-            13 => Ok(Symbol::StaticMethod(self.module_symbol()?)),
-            14 => Ok(Symbol::Variant(self.module_symbol()?)),
-            15 => Ok(Symbol::Protocol(self.module_symbol()?)),
-            16 => Ok(Symbol::AssociatedType(self.module_symbol()?)),
-            17 => Ok(Symbol::MethodRequirement(self.module_symbol()?)),
-            18 => Ok(Symbol::Effect(self.module_symbol()?)),
-            19 => {
-                let _ = self.u32()?;
-                Ok(Symbol::Main)
-            }
-            20 => {
+            2 => {
                 let _ = self.u32()?;
                 Ok(Symbol::Library)
             }
             _ => Err(DecodeError::InvalidTag("symbol", tag)),
         }
     }
+
 
     fn module_symbol(&mut self) -> Result<ModuleSymbolId, DecodeError> {
         Ok(ModuleSymbolId::new(ModuleId(self.u16()?), self.u32()?))
@@ -1188,6 +1240,7 @@ impl<'a> Decoder<'a> {
 
 impl Module {
     fn validate(&self) -> Result<(), DecodeError> {
+        self.validate_layouts()?;
         if self.entry as usize >= self.chunks.len() {
             return Err(DecodeError::InvalidIndex("entry chunk"));
         }
@@ -1200,6 +1253,79 @@ impl Module {
             chunk.validate(self)?;
         }
         Ok(())
+    }
+}
+
+impl Module {
+    /// Layout table sanity (images are untrusted): every spliced child
+    /// must exist, be shaped, and land its span inside the parent's
+    /// width; every slot field must land in bounds. Zero-width children
+    /// may sit exactly at the width (they occupy nothing).
+    fn validate_layouts(&self) -> Result<(), DecodeError> {
+        // Returns the slots the fields occupy, so the caller can require
+        // the declared width to be exactly what the body reaches — a
+        // wider width would make every construction allocate padding.
+        let check_fields = |width: u16, fields: &[(u16, FieldShape)]| {
+            let mut reach: u32 = 0;
+            for &(offset, shape) in fields {
+                let span = match shape {
+                    FieldShape::Slot => 1,
+                    FieldShape::Spliced(child) => {
+                        let child = self
+                            .layouts
+                            .get(child as usize)
+                            .ok_or(DecodeError::InvalidIndex("layout child"))?;
+                        if matches!(child.body, LayoutBody::Unshaped) {
+                            return Err(DecodeError::InvalidIndex("layout child"));
+                        }
+                        u32::from(child.width)
+                    }
+                };
+                if u32::from(offset) + span > u32::from(width) {
+                    return Err(DecodeError::InvalidIndex("layout field offset"));
+                }
+                reach = reach.max(u32::from(offset) + span);
+            }
+            Ok(reach)
+        };
+        for desc in &self.layouts {
+            match &desc.body {
+                LayoutBody::Unshaped => {}
+                LayoutBody::Product(fields) => {
+                    if check_fields(desc.width, fields)? != u32::from(desc.width) {
+                        return Err(DecodeError::InvalidIndex("layout width"));
+                    }
+                }
+                LayoutBody::Sum(variants) => {
+                    if desc.width == 0 {
+                        return Err(DecodeError::InvalidIndex("layout tag slot"));
+                    }
+                    // The tag occupies slot 0; the widest variant's
+                    // payload must reach the declared width exactly.
+                    let mut reach: u32 = 1;
+                    for variant in variants {
+                        reach = reach.max(check_fields(desc.width, variant)?);
+                    }
+                    if reach != u32::from(desc.width) {
+                        return Err(DecodeError::InvalidIndex("layout width"));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// A construction or offset read's layout operand: must index the
+    /// table and name a shaped entry.
+    fn shaped_layout(&self, layout: u32) -> Result<&LayoutDesc, DecodeError> {
+        let desc = self
+            .layouts
+            .get(layout as usize)
+            .ok_or(DecodeError::InvalidIndex("layout"))?;
+        if matches!(desc.body, LayoutBody::Unshaped) {
+            return Err(DecodeError::InvalidIndex("layout"));
+        }
+        Ok(desc)
     }
 }
 
@@ -1252,8 +1378,6 @@ impl Insn {
             | Insn::BToI { dest, src }
             | Insn::IToB { dest, src }
             | Insn::Not { dest, src }
-            | Insn::Extract { dest, src, .. }
-            | Insn::GetPayload { dest, src, .. }
             | Insn::ExistentialWitness { dest, src, .. }
             | Insn::ExistentialPayload { dest, src }
             | Insn::CellGet { dest, cell: src }
@@ -1300,18 +1424,35 @@ impl Insn {
                 Register::new(n_regs).check_rk(b, module)?;
             }
             Insn::CellSet { cell, src } => Register::new(n_regs).check_many(&[cell, src])?,
-            Insn::RecordNew {
+            Insn::AggNew {
                 dest,
+                layout,
+                tag,
                 args_start,
                 args_len,
-                ..
+            } => {
+                Register::new(n_regs).check(dest)?;
+                module.check_arg_registers(args_start, args_len, n_regs)?;
+                let desc = module.shaped_layout(layout)?;
+                let fields = match &desc.body {
+                    LayoutBody::Product(fields) => {
+                        if tag != 0 {
+                            return Err(DecodeError::InvalidIndex("construction tag"));
+                        }
+                        fields
+                    }
+                    LayoutBody::Sum(variants) => variants
+                        .get(usize::from(tag))
+                        .ok_or(DecodeError::InvalidIndex("construction tag"))?,
+                    LayoutBody::Unshaped => {
+                        return Err(DecodeError::InvalidIndex("construction layout"));
+                    }
+                };
+                if fields.len() != usize::from(args_len) {
+                    return Err(DecodeError::InvalidIndex("construction arity"));
+                }
             }
-            | Insn::TupleNew {
-                dest,
-                args_start,
-                args_len,
-            }
-            | Insn::ExistentialPack {
+            Insn::ExistentialPack {
                 dest,
                 args_start,
                 args_len,
@@ -1325,6 +1466,32 @@ impl Insn {
                 Register::new(n_regs).check(dest)?;
                 module.check_arg_registers(args_start, args_len, n_regs)?;
             }
+            Insn::Field {
+                dest, src, layout, ..
+            } => {
+                Register::new(n_regs).check_many(&[dest, src])?;
+                if layout != crate::NO_LAYOUT {
+                    module.shaped_layout(layout)?;
+                }
+            }
+            Insn::SetField {
+                dest,
+                rec,
+                src,
+                layout,
+                ..
+            } => {
+                Register::new(n_regs).check_many(&[dest, rec, src])?;
+                if layout != crate::NO_LAYOUT {
+                    module.shaped_layout(layout)?;
+                }
+            }
+            Insn::FieldIndex { dest, src, .. } => {
+                Register::new(n_regs).check_many(&[dest, src])?;
+            }
+            Insn::SetFieldIndex { dest, rec, src, .. } => {
+                Register::new(n_regs).check_many(&[dest, rec, src])?;
+            }
             Insn::SetFinalizer { obj, closure } => {
                 Register::new(n_regs).check_many(&[obj, closure])?
             }
@@ -1336,27 +1503,18 @@ impl Insn {
             Insn::ObjectSet { obj, src, index: _ } => {
                 Register::new(n_regs).check_many(&[obj, src])?
             }
-            Insn::VariantNew {
-                dest,
-                args_start,
-                args_len,
-                ..
-            } => {
-                Register::new(n_regs).check(dest)?;
-                module.check_arg_registers(args_start, args_len, n_regs)?;
-            }
-            Insn::GetField {
+            Insn::GetElement {
                 dest,
                 rec,
-                index: _,
-            } => Register::new(n_regs).check_many(&[dest, rec])?,
-            Insn::GetElement { dest, rec, index } => {
-                Register::new(n_regs).check_many(&[dest, rec, index])?
+                index,
+                element,
+            } => {
+                Register::new(n_regs).check_many(&[dest, rec, index])?;
+                if element != crate::NO_LAYOUT {
+                    module.shaped_layout(element)?;
+                }
             }
             Insn::GetTag { dest, src } => Register::new(n_regs).check_many(&[dest, src])?,
-            Insn::SetField { dest, rec, src, .. } => {
-                Register::new(n_regs).check_many(&[dest, rec, src])?
-            }
             Insn::Load { dest, ptr, .. } => Register::new(n_regs).check_many(&[dest, ptr])?,
             Insn::CheckedIndexedLoad {
                 dest,
@@ -1588,7 +1746,10 @@ mod tests {
     }
 
     #[test]
-    fn decodes_the_previous_bytecode_format() {
+    fn rejects_formats_below_the_floor() {
+        // Version 4 carried opcodes this decoder no longer knows, so
+        // accepting it would load a stale artifact that fails at
+        // execution instead of at the gate.
         let module = Module {
             chunks: vec![Chunk {
                 name: "main".into(),
@@ -1600,8 +1761,184 @@ mod tests {
             ..Module::default()
         };
         let mut encoded = module.encode_bytecode().unwrap();
-        encoded[MAGIC.len()..MAGIC.len() + 4].copy_from_slice(&(FORMAT_VERSION - 1).to_le_bytes());
-        assert!(Module::decode_bytecode(&encoded).is_ok());
+        encoded[MAGIC.len()..MAGIC.len() + 4]
+            .copy_from_slice(&(MIN_SUPPORTED_FORMAT_VERSION - 1).to_le_bytes());
+        assert!(Module::decode_bytecode(&encoded).is_err());
+    }
+
+    #[test]
+    fn round_trips_layouts_and_flat_opcodes() {
+        let storage_sym = Symbol::Struct(ModuleSymbolId::new(ModuleId(1), 8));
+        let pair_sym = Symbol::Struct(ModuleSymbolId::new(ModuleId(1), 9));
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::AggNew {
+                        dest: 1,
+                        layout: 1,
+                        tag: 0,
+                        args_start: 0,
+                        args_len: 2,
+                    },
+                    Insn::Field {
+                        dest: 2,
+                        src: 1,
+                        offset: 0,
+                        layout: 0,
+                    },
+                    Insn::SetField {
+                        dest: 1,
+                        rec: 1,
+                        src: 0,
+                        offset: 1,
+                        layout: crate::NO_LAYOUT,
+                    },
+                    Insn::Ret { src: 2 },
+                ],
+                arity: 0,
+                n_regs: 3,
+                unwind: vec![],
+            }],
+            consts: vec![Constant::I64(3)],
+            arg_pool: vec![0, 0],
+            layouts: vec![
+                LayoutDesc {
+                    symbol: Some(storage_sym),
+                    width: 1,
+                    body: LayoutBody::Product(vec![(0, FieldShape::Slot)]),
+                },
+                LayoutDesc {
+                    symbol: Some(pair_sym),
+                    width: 2,
+                    body: LayoutBody::Product(vec![
+                        (0, FieldShape::Spliced(0)),
+                        (1, FieldShape::Slot),
+                    ]),
+                },
+                LayoutDesc {
+                    symbol: None,
+                    width: 1,
+                    body: LayoutBody::Unshaped,
+                },
+                LayoutDesc {
+                    symbol: Some(pair_sym),
+                    width: 2,
+                    body: LayoutBody::Sum(vec![vec![], vec![(1, FieldShape::Slot)]]),
+                },
+            ],
+            ..Module::default()
+        };
+        let decoded = Module::decode_bytecode(&module.encode_bytecode().unwrap()).unwrap();
+        assert_eq!(decoded.layouts, module.layouts);
+        assert_eq!(decoded.chunks[0].code, module.chunks[0].code);
+    }
+
+    #[test]
+    fn rejects_constructions_that_disagree_with_their_layout() {
+        let pair_sym = Symbol::Struct(ModuleSymbolId::new(ModuleId(1), 9));
+        // Two args into a one-field product: the image lies about the
+        // shape and must fail at the gate, not at execution.
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::Const { dest: 0, k: 0 },
+                    Insn::AggNew {
+                        dest: 1,
+                        layout: 0,
+                        tag: 0,
+                        args_start: 0,
+                        args_len: 2,
+                    },
+                    Insn::Ret { src: 1 },
+                ],
+                arity: 0,
+                n_regs: 2,
+                unwind: vec![],
+            }],
+            consts: vec![Constant::I64(3)],
+            arg_pool: vec![0, 0],
+            layouts: vec![LayoutDesc {
+                symbol: Some(pair_sym),
+                width: 1,
+                body: LayoutBody::Product(vec![(0, FieldShape::Slot)]),
+            }],
+            ..Module::default()
+        };
+        assert!(Module::decode_bytecode(&module.encode_bytecode().unwrap()).is_err());
+    }
+
+    #[test]
+    fn rejects_spliced_children_that_escape_their_parent() {
+        let pair_sym = Symbol::Struct(ModuleSymbolId::new(ModuleId(1), 9));
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![Insn::Ret { src: 0 }],
+                arity: 0,
+                n_regs: 1,
+                unwind: vec![],
+            }],
+            layouts: vec![
+                LayoutDesc {
+                    symbol: Some(pair_sym),
+                    width: 2,
+                    body: LayoutBody::Product(vec![(0, FieldShape::Slot), (1, FieldShape::Slot)]),
+                },
+                // A two-slot child spliced at offset 1 of a two-slot
+                // parent overruns it.
+                LayoutDesc {
+                    symbol: Some(pair_sym),
+                    width: 2,
+                    body: LayoutBody::Product(vec![(1, FieldShape::Spliced(0))]),
+                },
+            ],
+            ..Module::default()
+        };
+        assert!(Module::decode_bytecode(&module.encode_bytecode().unwrap()).is_err());
+    }
+
+    #[test]
+    fn rejects_widths_wider_than_their_body() {
+        // A declared width the body never reaches would make every
+        // construction allocate the padding — the width must be exactly
+        // what the fields (plus a sum's tag slot) occupy.
+        let pair_sym = Symbol::Struct(ModuleSymbolId::new(ModuleId(1), 9));
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![Insn::Ret { src: 0 }],
+                arity: 0,
+                n_regs: 1,
+                unwind: vec![],
+            }],
+            layouts: vec![LayoutDesc {
+                symbol: Some(pair_sym),
+                width: 400,
+                body: LayoutBody::Product(vec![(0, FieldShape::Slot), (1, FieldShape::Slot)]),
+            }],
+            ..Module::default()
+        };
+        assert!(Module::decode_bytecode(&module.encode_bytecode().unwrap()).is_err());
+    }
+
+    #[test]
+    fn rejects_symbol_tags_outside_the_narrowed_codec() {
+        // The wire codec names only what the layout table publishes:
+        // struct and enum identities (plus the library fallback). The
+        // old 21-tag vocabulary is gone with the representation that
+        // needed it — a stray tag is a corrupt image.
+        let bytes = [15u8, 0, 0, 0, 0, 0, 0];
+        let mut decoder = Decoder {
+            bytes: &bytes,
+            cursor: 0,
+        };
+        assert!(matches!(
+            decoder.symbol(),
+            Err(DecodeError::InvalidTag("symbol", 15))
+        ));
     }
 
     #[test]
@@ -1642,6 +1979,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -1667,6 +2005,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -1700,6 +2039,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -1727,6 +2067,7 @@ mod tests {
             switch_pool: vec![77],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -1749,6 +2090,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -1784,6 +2126,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -1825,6 +2168,7 @@ mod tests {
                 switch_pool: vec![],
                 traps: vec![],
                 statics: vec![],
+                layouts: vec![],
                 entry: 0,
                 exports: vec![],
             }
@@ -1877,6 +2221,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -1945,6 +2290,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -1976,6 +2322,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -2021,6 +2368,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -2033,7 +2381,6 @@ mod tests {
     fn round_trips_module_with_pools_and_compound_opcodes() {
         let struct_symbol = Symbol::Struct(ModuleSymbolId::new(ModuleId(0), 1));
         let enum_symbol = Symbol::Enum(ModuleSymbolId::new(ModuleId(0), 2));
-        let protocol_symbol = Symbol::Protocol(ModuleSymbolId::new(ModuleId(0), 3));
         let module = Module {
             chunks: vec![
                 Chunk {
@@ -2068,27 +2415,29 @@ mod tests {
                             b: 1,
                         },
                         Insn::Not { dest: 2, src: 0 },
-                        Insn::RecordNew {
+                        Insn::AggNew {
                             dest: 3,
-                            symbol: struct_symbol,
+                            layout: 0,
+                            tag: 0,
                             args_start: 0,
                             args_len: 2,
                         },
-                        Insn::VariantNew {
+                        Insn::AggNew {
                             dest: 4,
-                            symbol: enum_symbol,
+                            layout: 1,
                             tag: 7,
                             args_start: 1,
                             args_len: 2,
                         },
                         Insn::ExistentialPack {
                             dest: 5,
-                            protocol: protocol_symbol,
                             args_start: 2,
                             args_len: 2,
                         },
-                        Insn::TupleNew {
+                        Insn::AggNew {
                             dest: 6,
+                            layout: 2,
+                            tag: 0,
                             args_start: 0,
                             args_len: 3,
                         },
@@ -2148,6 +2497,36 @@ mod tests {
             switch_pool: vec![11, 12, 13],
             traps: vec!["round-trip trap".into()],
             statics: vec![1, 2, 3, 4],
+            layouts: vec![
+                LayoutDesc {
+                    symbol: Some(struct_symbol),
+                    width: 2,
+                    body: LayoutBody::Product(vec![(0, FieldShape::Slot), (1, FieldShape::Slot)]),
+                },
+                LayoutDesc {
+                    symbol: Some(enum_symbol),
+                    width: 3,
+                    body: LayoutBody::Sum(vec![
+                        vec![],
+                        vec![],
+                        vec![],
+                        vec![],
+                        vec![],
+                        vec![],
+                        vec![],
+                        vec![(1, FieldShape::Slot), (2, FieldShape::Slot)],
+                    ]),
+                },
+                LayoutDesc {
+                    symbol: None,
+                    width: 3,
+                    body: LayoutBody::Product(vec![
+                        (0, FieldShape::Slot),
+                        (1, FieldShape::Slot),
+                        (2, FieldShape::Slot),
+                    ]),
+                },
+            ],
             entry: 0,
             exports: vec![],
         };
@@ -2179,6 +2558,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -2194,8 +2574,10 @@ mod tests {
             chunks: vec![Chunk {
                 name: "main".into(),
                 code: vec![
-                    Insn::TupleNew {
+                    Insn::AggNew {
                         dest: 0,
+                        layout: 0,
+                        tag: 0,
                         args_start: 0,
                         args_len: 1,
                     },
@@ -2210,6 +2592,11 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![LayoutDesc {
+                symbol: None,
+                width: 1,
+                body: LayoutBody::Product(vec![(0, FieldShape::Slot)]),
+            }],
             entry: 0,
             exports: vec![],
         };
@@ -2251,6 +2638,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -2275,6 +2663,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };
@@ -2323,6 +2712,7 @@ mod tests {
             switch_pool: vec![],
             traps: vec![],
             statics: vec![],
+            layouts: vec![],
             entry: 0,
             exports: vec![],
         };

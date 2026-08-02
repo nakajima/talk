@@ -60,8 +60,6 @@ pub enum Doc {
     Concat(Box<Doc>, Box<Doc>),
     /// Chooses between the flattened and broken forms of a document.
     Group(Box<Doc>),
-    /// Produces text that does not contribute to line-fitting calculations.
-    Annotation(String),
 }
 
 impl Add for Doc {
@@ -170,14 +168,6 @@ fn identifier_text(name: &str) -> String {
     }
 }
 
-/// Creates output text that occupies no width for line-fitting purposes.
-///
-/// The renderer emits the text verbatim, but [`group`] ignores it when deciding
-/// whether the flattened document fits. Use [`text`] for ordinary source text.
-pub fn annotate(s: impl Into<String>) -> Doc {
-    Doc::Annotation(s.into())
-}
-
 /// Creates a break that is a space in a flat [`group`] and a newline otherwise.
 pub fn line() -> Doc {
     Doc::Line
@@ -235,25 +225,6 @@ pub fn join(docs: Vec<Doc>, separator: Doc) -> Doc {
     })
 }
 
-pub trait FormatterDecorator {
-    fn wrap_expr(&self, expr: &Expr, doc: Doc) -> Doc;
-    fn wrap_decl(&self, decl: &Decl, doc: Doc) -> Doc;
-    fn wrap_stmt(&self, stmt: &Stmt, doc: Doc) -> Doc;
-}
-
-pub struct DefaultDecorator {}
-impl FormatterDecorator for DefaultDecorator {
-    fn wrap_expr(&self, _: &Expr, doc: Doc) -> Doc {
-        doc
-    }
-    fn wrap_decl(&self, _: &Decl, doc: Doc) -> Doc {
-        doc
-    }
-    fn wrap_stmt(&self, _: &Stmt, doc: Doc) -> Doc {
-        doc
-    }
-}
-
 enum IfConditionRef<'a> {
     Boolean(&'a Expr),
     Let(&'a Pattern, &'a Expr),
@@ -262,7 +233,6 @@ enum IfConditionRef<'a> {
 pub struct Formatter<'a> {
     // Track expression metadata for source location info
     meta_storage: &'a NodeMetaStorage,
-    decorators: Vec<Box<dyn FormatterDecorator>>,
     comments: Option<RefCell<CommentStore>>,
     source: Option<&'a str>,
 }
@@ -271,7 +241,6 @@ impl<'a> Formatter<'a> {
     pub fn new(meta_storage: &'a NodeMetaStorage) -> Formatter<'a> {
         Self {
             meta_storage,
-            decorators: vec![],
             comments: None,
             source: None,
         }
@@ -279,18 +248,6 @@ impl<'a> Formatter<'a> {
 }
 
 impl<'a> Formatter<'a> {
-    pub fn new_with_decorators(
-        meta_storage: &'a NodeMetaStorage,
-        decorators: Vec<Box<dyn FormatterDecorator>>,
-    ) -> Formatter<'a> {
-        Formatter {
-            meta_storage,
-            decorators,
-            comments: None,
-            source: None,
-        }
-    }
-
     fn new_with_comments(
         meta_storage: &'a NodeMetaStorage,
         comments: Vec<Comment>,
@@ -298,7 +255,6 @@ impl<'a> Formatter<'a> {
     ) -> Formatter<'a> {
         Formatter {
             meta_storage,
-            decorators: vec![],
             comments: Some(RefCell::new(CommentStore::new(comments))),
             source,
         }
@@ -591,9 +547,7 @@ impl<'a> Formatter<'a> {
             }
         };
 
-        self.decorators
-            .iter()
-            .fold(doc, |acc, decorator| decorator.wrap_expr(expr, acc))
+        doc
     }
 
     fn format_decl(&self, decl: &Decl) -> Doc {
@@ -755,9 +709,7 @@ impl<'a> Formatter<'a> {
             doc
         };
 
-        self.decorators
-            .iter()
-            .fold(doc, |acc, decorator| decorator.wrap_decl(decl, acc))
+        doc
     }
 
     fn format_type_alias(&self, lhs: &Name, rhs: &TypeAnnotation) -> Doc {
@@ -854,9 +806,7 @@ impl<'a> Formatter<'a> {
             }
         };
 
-        self.decorators
-            .iter()
-            .fold(doc, |acc, decorator| decorator.wrap_stmt(stmt, acc))
+        doc
     }
 
     fn format_string_literal(&self, string: &str) -> Doc {
@@ -2795,9 +2745,6 @@ impl<'a> Formatter<'a> {
         while let Some((indent, current_doc)) = queue.pop() {
             match current_doc {
                 Doc::Empty => continue,
-                Doc::Annotation(s) => {
-                    output.push_str(&s);
-                }
                 Doc::Text(s) => {
                     if was_newline {
                         output.push_str(&"\t".repeat(indent as usize));
@@ -2909,7 +2856,6 @@ impl<'a> Formatter<'a> {
             Doc::Empty | Doc::Text(_) | Doc::Comment(_) => doc,
             Doc::Hardline => Doc::Hardline,
             Doc::Softline => Doc::Empty,
-            Doc::Annotation(_) => doc,
             Doc::Line => Doc::Text(" ".to_string()),
             Doc::Concat(left, right) => Doc::Concat(
                 Box::new(Self::flatten(*left)),
@@ -2929,7 +2875,6 @@ impl<'a> Formatter<'a> {
         while let Some(current_doc) = queue.pop() {
             match current_doc {
                 Doc::Empty => continue,
-                Doc::Annotation(_) => continue,
                 Doc::Text(s) | Doc::Comment(s) => width += s.len(),
                 Doc::Line => width += 1,
                 Doc::Softline => continue,
@@ -2956,7 +2901,6 @@ impl<'a> Formatter<'a> {
             };
             match doc {
                 Doc::Empty => continue,
-                Doc::Annotation(_) => continue,
                 Doc::Text(s) | Doc::Comment(s) => width -= s.len() as isize,
                 Doc::Line | Doc::Softline | Doc::Hardline => return true,
                 Doc::Concat(left, right) => {

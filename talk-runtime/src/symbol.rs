@@ -19,28 +19,13 @@ impl ModuleSymbolId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LocalSymbolId(pub u32);
 
+/// The identities the runtime can name: the aggregate identities the
+/// layout table publishes (structs, enums), plus a fallback for
+/// everything the compiler keeps to itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Symbol {
     Struct(ModuleSymbolId),
     Enum(ModuleSymbolId),
-    TypeAlias(ModuleSymbolId),
-    TypeParameter(ModuleSymbolId),
-    Global(ModuleSymbolId),
-    DeclaredLocal(LocalSymbolId),
-    PatternBindLocal(LocalSymbolId),
-    ParamLocal(LocalSymbolId),
-    Builtin(ModuleSymbolId),
-    Property(ModuleSymbolId),
-    Synthesized(ModuleSymbolId),
-    InstanceMethod(ModuleSymbolId),
-    Initializer(ModuleSymbolId),
-    StaticMethod(ModuleSymbolId),
-    Variant(ModuleSymbolId),
-    Protocol(ModuleSymbolId),
-    AssociatedType(ModuleSymbolId),
-    MethodRequirement(ModuleSymbolId),
-    Effect(ModuleSymbolId),
-    Main,
     Library,
 }
 

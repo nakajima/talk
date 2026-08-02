@@ -182,6 +182,11 @@ pub enum DeclKind {
         /// Declared `linear`: values must be consumed exactly once.
         #[drive(skip)]
         linear: bool,
+        /// Declared `'heap`: values live behind a reference. Required
+        /// when the layout contains itself (ADR 0045 rule 2) — recursion
+        /// is the case where indirection is not optional.
+        #[drive(skip)]
+        heap: bool,
     },
 
     // Individual enum variant in declaration

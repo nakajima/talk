@@ -250,6 +250,44 @@ fn run_executes_core_operators() {
 }
 
 #[test]
+fn spliced_member_chains_fold_to_one_read() {
+    // `o.inner.x` is statically slot 0 of `o` (ADR 0046): the chain
+    // folds at emission and dead code collects the intermediate, so the
+    // optimized MIR carries exactly one member read.
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("talk-fold-{}-{unique}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("create fixture dir");
+    let path = dir.join("chain.tlk");
+    std::fs::write(
+        &path,
+        b"struct Inner {\n\tlet x: Int\n\tlet y: Int\n}\nstruct Outer {\n\tlet inner: Inner\n\tlet z: Int\n}\nfunc pick(o: Outer) -> Int {\n\to.inner.x\n}\nprint(pick(o: Outer(inner: Inner(x: 7, y: 8), z: 9)))\n",
+    )
+    .expect("write chain program");
+    let mir = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["mir", path.to_str().expect("utf8 path")])
+        .output()
+        .expect("render mir");
+    assert!(
+        mir.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mir.stderr)
+    );
+    let rendered = String::from_utf8_lossy(&mir.stdout);
+    let pick = rendered
+        .split("\nfn")
+        .find(|section| section.contains(" pick "))
+        .expect("pick in render");
+    assert_eq!(
+        pick.matches("Field {").count(),
+        1,
+        "the chain should fold to one read:\n{pick}"
+    );
+}
+
+#[test]
 fn inline_array_literal_and_checked_get_reach_runtime() {
     assert_runs(
         b"let values: [Int; 3] = [10, 20, 30]\n\
@@ -1758,7 +1796,7 @@ fn memberwise_constructions_build_directly() {
         "construction still builds a blank record:\n{make}"
     );
     assert!(
-        make.contains("Record {"),
+        make.contains("Aggregate {"),
         "construction should build the record directly:\n{make}"
     );
 
@@ -2598,7 +2636,7 @@ func chorus<T: Greet>(voices: [T]) -> String {
 	out
 }
 
-enum Tree {
+enum Tree 'heap {
 	case leaf(Int)
 	case node(Tree, Tree)
 }
@@ -2784,6 +2822,104 @@ fn parity_generic_two_instantiations() {
 #[test]
 fn parity_effectful_closures() {
     assert_parity_program("effectful_closures");
+}
+
+#[test]
+fn abort_through_an_init_unwinds_the_assigned_fields_only() {
+    // ADR 0045: an effect abort through an initializer drops exactly
+    // the assigned-so-far fields (reverse order), never the blank
+    // placeholders — the C++/Swift/Rust partial-initialization rule.
+    // Before any assignment: nothing to release.
+    assert_runs(
+        b"effect 'bail(error) -> Never\n\
+          struct Holder {\n\
+          \tlet data: [Int]\n\
+          \tinit(n: Int) {\n\
+          \t\t'bail(error: \"stop\")\n\
+          \t\tself.data = [n]\n\
+          \t}\n\
+          }\n\
+          func build() 'bail -> Int {\n\
+          \tlet h = Holder(n: 1)\n\
+          \th.data.count\n\
+          }\n\
+          @handle 'bail { err in\n\
+          \tprint(\"bailed\")\n\
+          }\n\
+          print(build())\n",
+        &[],
+        b"bailed\n",
+    );
+    // After a partial assignment: the assigned buffer-owning field
+    // releases on the unwind (the leak fence at exit pins it), the
+    // still-blank field does not.
+    assert_runs(
+        b"effect 'bail(error) -> Never\n\
+          struct Pair2 {\n\
+          \tlet left: [Int]\n\
+          \tlet right: [Int]\n\
+          \tinit(n: Int) {\n\
+          \t\tself.left = [n, n]\n\
+          \t\t'bail(error: \"stop\")\n\
+          \t\tself.right = [n]\n\
+          \t}\n\
+          }\n\
+          func build() 'bail -> Int {\n\
+          \tlet p = Pair2(n: 2)\n\
+          \tp.left.count + p.right.count\n\
+          }\n\
+          @handle 'bail { err in\n\
+          \tprint(\"bailed\")\n\
+          }\n\
+          print(build())\n",
+        &[],
+        b"bailed\n",
+    );
+    // Reassignment inside the init: the displaced first value is real
+    // and drops at the write; the second leaves with the receiver.
+    assert_runs(
+        b"struct Holder {\n\
+          \tlet data: [Int]\n\
+          \tinit(n: Int) {\n\
+          \t\tself.data = [n]\n\
+          \t\tself.data = [n, n]\n\
+          \t}\n\
+          }\n\
+          print(Holder(n: 3).data.count)\n",
+        &[],
+        b"2\n",
+    );
+}
+
+#[test]
+fn divergent_init_assignment_rejects() {
+    // A field assigned on one branch but not the other has no static
+    // abort cleanup at the join; the initializer must assign it in all
+    // branches or before branching (path-uniform initialization, the
+    // C++ discipline — a diagnostic, not a runtime drop flag).
+    let source = b"struct Holder {\n\
+        \tlet data: [Int]\n\
+        \tinit(n: Int) {\n\
+        \t\tif n > 0 {\n\
+        \t\t\tself.data = [n]\n\
+        \t\t}\n\
+        \t\tif n <= 0 {\n\
+        \t\t\tself.data = []\n\
+        \t\t}\n\
+        \t}\n\
+        }\n\
+        print(Holder(n: 1).data.count)\n";
+    let output = run_source(source, &[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "divergent assignment must reject, got: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        stderr.contains("assigned on every branch") || stderr.contains("initialized"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -4339,4 +4475,154 @@ fn parity_programs_still_pass_frontend_checking() {
             String::from_utf8_lossy(&output.stderr),
         );
     });
+}
+
+/// ADR 0045: a body demanding itself at an ever-larger instantiation must
+/// reject rather than diverge. The mutual form rejects in the checker
+/// today (the in-group reference checks against the definition's rigid
+/// parameters). The DIRECT self-call form does not yet: its `T ~ Wrap<T>`
+/// obligation defers through unify's bare-param arm and is lost, so the
+/// call silently reuses the enclosing instance — an open checker bug
+/// tracked in the ADR 0045 notes. `INSTANTIATION_DEPTH_LIMIT` in
+/// `mir::demand` backstops any route that does demand growing instances.
+/// ADR 0045 rule 2: a type whose layout contains itself must live
+/// behind a reference, and `'heap` is how the declaration says so.
+/// Recursion through an array does NOT count — elements already live
+/// behind `Storage`'s pointer — which is what keeps the frontend's own
+/// AST enums unannotated.
+#[test]
+fn recursive_types_require_heap() {
+    let output = check_source(
+        b"enum Tree {\n\
+          \tcase leaf(Int)\n\
+          \tcase node(Tree, Tree)\n\
+          }\n\
+          func main() {}\n",
+    );
+    assert!(!output.status.success());
+    let printed = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        printed.contains("must be declared 'heap"),
+        "diagnostics:\n{printed}"
+    );
+
+    // Array-mediated recursion needs no marker...
+    assert_checks(
+        b"enum Node {\n\
+          \tcase leaf(Int)\n\
+          \tcase branch([Node])\n\
+          }\n\
+          func main() {}\n",
+    );
+    // ...and a marked recursive enum builds and runs.
+    assert_runs(
+        b"enum Tree 'heap {\n\
+          \tcase leaf(Int)\n\
+          \tcase node(Tree, Tree)\n\
+          }\n\
+          func weigh(t: Tree) -> Int {\n\
+          \tmatch t {\n\
+          \t\t.leaf(v) -> v,\n\
+          \t\t.node(a, b) -> weigh(t: a) + weigh(t: b)\n\
+          \t}\n\
+          }\n\
+          func main() {\n\
+          \tprint(weigh(t: Tree.node(Tree.leaf(1), Tree.leaf(2))))\n\
+          }\n",
+        &[],
+        b"3\n",
+    );
+}
+
+/// The direct form: the self-call's `T ~ Wrap<T>` obligation defers
+/// through unify's bare-param arm (a given could in principle prove it),
+/// and an undischarged deferred equation must be reported, not dropped —
+/// otherwise the call compiles against a type-wrong shared instance.
+#[test]
+fn direct_polymorphic_recursion_rejects_in_the_checker() {
+    let output = run_source(
+        b"struct Wrap<T> {\n\
+          \tlet value: T\n\
+          }\n\
+          func f<T>(x: T) -> Int {\n\
+          \tf(x: Wrap(value: x))\n\
+          }\n\
+          func main() {\n\
+          \tprint(f(x: 1))\n\
+          }\n",
+        &[],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("mismatch") || stderr.contains("Mismatch"),
+        "expected a type mismatch rejection, got:\n{stderr}"
+    );
+}
+
+#[test]
+fn mutual_polymorphic_recursion_rejects_in_the_checker() {
+    let output = run_source(
+        b"struct Wrap<T> {\n\
+          \tlet value: T\n\
+          }\n\
+          func f<T>(x: T) -> Int {\n\
+          \tg(x: x)\n\
+          }\n\
+          func g<T>(x: T) -> Int {\n\
+          \tf(x: Wrap(value: x))\n\
+          }\n\
+          func main() {\n\
+          \tprint(f(x: 1))\n\
+          }\n",
+        &[],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("recursive definition"),
+        "expected the recursive-definition rejection, got:\n{stderr}"
+    );
+}
+
+/// ADR 0045: an enum constructed with a payload parameter left unbound
+/// (`Result.error(99)` never pins `Success`) still runs, with the free
+/// parameter grounded so the executed instance is concrete — no executed
+/// aggregate may carry an opaque layout.
+#[test]
+fn unbound_enum_payload_params_ground_to_a_concrete_layout() {
+    let source = b"func main() {\n\
+                   \tlet r = Result.error(99)\n\
+                   \tprint(r.is_ok())\n\
+                   }\n";
+    assert_runs(source, &[], b"false\n");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .arg("mir")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("run `talk mir`");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(source)
+        .expect("write Talk source");
+    let output = child.wait_with_output().expect("read mir output");
+    assert!(
+        output.status.success(),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let dump = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !dump.contains(": opaque"),
+        "an executed instruction carries an opaque layout:\n{dump}"
+    );
 }

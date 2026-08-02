@@ -531,12 +531,14 @@ impl<'a> TypecheckSession<'a> {
                 | C::Store { ty, .. }
                 | C::Swap { ty, .. }
                 | C::Take { ty, .. }
-                | C::Gep { elem: ty, .. } => *ty = final_ty(&mut self.store, &self.catalog, ty),
+                | C::Gep { elem: ty, .. }
+                | C::InlineGet { element: ty, .. } => {
+                    *ty = final_ty(&mut self.store, &self.catalog, ty)
+                }
                 C::Scalar { .. }
                 | C::Free { .. }
                 | C::IsUnique { .. }
                 | C::MemCopy { .. }
-                | C::InlineGet { .. }
                 | C::Io { .. } => {}
             }
         }

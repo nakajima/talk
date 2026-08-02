@@ -142,10 +142,3 @@ impl From<&Node> for Node {
     }
 }
 
-// impl std::fmt::Debug for Node {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         let meta = Default::default();
-//         let formatter = formatter::Formatter::new(&meta);
-//         write!(f, "{}", formatter.format(std::slice::from_ref(self), 80))
-//     }
-// }

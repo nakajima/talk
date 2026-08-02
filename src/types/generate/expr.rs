@@ -1716,7 +1716,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 to: self.ir_operand(node, instruction, to)?,
                 length: self.ir_operand(node, instruction, length)?,
             },
-            K::InlineGet { array, index, .. } => C::InlineGet {
+            K::InlineGet {
+                ty, array, index, ..
+            } => C::InlineGet {
+                element: self.ir_annotation_ty(node, ty)?,
                 array: self.ir_operand(node, instruction, array)?,
                 index: self.ir_operand(node, instruction, index)?,
             },

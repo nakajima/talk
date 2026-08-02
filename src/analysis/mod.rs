@@ -47,7 +47,7 @@ pub enum DiagnosticKind {
 }
 
 impl DiagnosticKind {
-    pub fn code(&self) -> &'static str {
+    pub fn code(&self) -> &str {
         match self {
             Self::Parsing(error) => error.code(),
             Self::Macro(error) => error.code(),

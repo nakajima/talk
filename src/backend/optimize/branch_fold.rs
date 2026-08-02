@@ -142,9 +142,12 @@ mod tests {
     #[test]
     fn constant_branch_becomes_goto() {
         let mut function = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "branch".into(),
             arity: 0,
-            n_locals: 1,
+            locals: crate::backend::mir::LocalInfo::uniform(1),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),
@@ -188,9 +191,12 @@ mod tests {
                 (Operand::Local(0), Operand::Const(Constant::Bool(expected)))
             };
             let mut function = Function {
+                frame_sites: Default::default(),
+                param_reprs: Vec::new(),
+                return_repr: None,
                 name: "bool_branch".into(),
                 arity: 1,
-                n_locals: 2,
+                locals: crate::backend::mir::LocalInfo::uniform(2),
                 blocks: vec![
                     BlockData {
                         params: Vec::new(),
@@ -248,9 +254,12 @@ mod tests {
             }),
         };
         let mut function = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "thread_branches".into(),
             arity: 1,
-            n_locals: 1,
+            locals: crate::backend::mir::LocalInfo::uniform(1),
             blocks: vec![
                 repeated(1, 2),
                 repeated(3, 4),
@@ -276,9 +285,12 @@ mod tests {
     #[test]
     fn threading_one_incoming_edge_preserves_other_predecessors() {
         let mut function = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "shared_branch".into(),
             arity: 1,
-            n_locals: 1,
+            locals: crate::backend::mir::LocalInfo::uniform(1),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),
@@ -328,9 +340,12 @@ mod tests {
     #[test]
     fn does_not_thread_instructionful_parameterized_or_cyclic_blocks() {
         let mut function = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "unsafe_threads".into(),
             arity: 1,
-            n_locals: 2,
+            locals: crate::backend::mir::LocalInfo::uniform(2),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),
@@ -407,9 +422,12 @@ mod tests {
     #[test]
     fn threads_after_boolean_comparison_target_inversion() {
         let mut function = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "inverted_thread".into(),
             arity: 1,
-            n_locals: 2,
+            locals: crate::backend::mir::LocalInfo::uniform(2),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),
@@ -466,9 +484,12 @@ mod tests {
     #[test]
     fn comparison_that_overwrites_its_source_is_not_rewritten() {
         let mut function = Function {
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
             name: "overwriting_bool_branch".into(),
             arity: 1,
-            n_locals: 1,
+            locals: crate::backend::mir::LocalInfo::uniform(1),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),
