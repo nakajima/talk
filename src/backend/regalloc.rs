@@ -513,6 +513,11 @@ pub(crate) fn reuse_locals(
                         register == wanted
                             && start[usize::from(holder)] < s
                             && find_group(&mut affinity, holder) == group
+                            // A mate of a different layout class must not
+                            // hand its register over: the published class
+                            // of a register is the class of everything
+                            // allocated into it.
+                            && register_class.get(&register).copied().flatten() == class[local]
                     });
                 if let Some(entry) = touch {
                     active.remove(&entry);
@@ -620,6 +625,51 @@ mod tests {
             arity,
             locals: crate::backend::mir::LocalInfo::uniform(n_locals),
             blocks,
+        }
+    }
+
+    // The published class of a register is the class of everything
+    // allocated into it (ADR 0045/0046: the C emitter shapes storage
+    // from it). An affinity hand-off across a copy must refuse a mate
+    // of a different class, or a native struct register would receive
+    // tagged writes.
+    #[test]
+    fn affinity_touch_never_mixes_layout_classes() {
+        use crate::backend::mir::layout::{FieldRepr, Layout, Shape, SlotKind, local_layouts};
+        let table = vec![Layout::Inline(
+            None,
+            Shape::Product {
+                width: 2,
+                offsets: vec![0, 1],
+                reprs: vec![FieldRepr::Slot(SlotKind::Int); 2],
+                kinds: vec![SlotKind::Int; 2],
+            },
+        )];
+        let blocks = vec![BlockData {
+            params: Vec::new(),
+            insts: vec![
+                Inst::Aggregate {
+                    dest: 1,
+                    tag: 0,
+                    layout: 0,
+                    args: vec![int(1), int(2)],
+                },
+                add(3, local(1), int(0)),
+                copy(2, local(1)),
+                copy(2, int(5)),
+                add(4, local(2), int(1)),
+            ],
+            term: Some(Term::Return(local(4))),
+        }];
+        let mut function = function(0, 5, blocks);
+        reuse_locals(&mut function, &table, &[]);
+        let recomputed = local_layouts(&function, &table, &[]);
+        for (register, info) in function.locals.iter().enumerate() {
+            assert_eq!(
+                info.layout,
+                recomputed.get(register).copied().flatten(),
+                "register r{register}'s stamped class diverges from its defs"
+            );
         }
     }
 

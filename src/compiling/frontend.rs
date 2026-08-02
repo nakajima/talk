@@ -169,6 +169,41 @@ impl FrontendSession {
     }
 }
 
+/// An explicit parser session over a candidate artifact. Bootstrap
+/// stage 2 parses with the stage-1 image (ADR 0043 §3): the fixed
+/// point must prove the candidate parses its own sources, not that the
+/// embedded artifact parses them twice.
+pub struct ParserSession(FrontendSession);
+
+impl ParserSession {
+    /// Fail-closed: the image must decode and the descriptor parse.
+    pub fn from_artifact(image: &[u8], abi: &str) -> Result<Self, String> {
+        Ok(Self(FrontendSession {
+            module: talk_runtime::Module::decode_bytecode(image)
+                .map_err(|err| format!("candidate artifact failed to decode: {err:?}"))?,
+            schema: crate::compiling::abi::parse_schema(abi)?,
+        }))
+    }
+
+    /// Whether the artifact exposes the parser surface at all — a
+    /// non-parser service bootstrap has no self-hosting fixed point to
+    /// prove.
+    pub fn exports_parser(&self) -> bool {
+        self.0
+            .module
+            .exports
+            .iter()
+            .any(|(name, _)| name == "parse_file_source")
+    }
+}
+
+fn resolve(session: Option<&ParserSession>) -> Result<&FrontendSession, String> {
+    match session {
+        Some(candidate) => Ok(&candidate.0),
+        None => FrontendSession::shared(),
+    }
+}
+
 /// Parse one source through the frontend artifact into the compiler's
 /// own parse AST (ADR 0043 Stage 4): the strict whole-file entry.
 /// Fails closed — there is no fallback parser.
@@ -176,9 +211,18 @@ pub fn parse_source(
     source: &str,
     file_id: crate::node_id::FileID,
 ) -> Result<crate::compiling::bridge::BridgedParse, String> {
+    parse_source_in(None, source, file_id)
+}
+
+/// [`parse_source`] through an explicit session.
+fn parse_source_in(
+    parser: Option<&ParserSession>,
+    source: &str,
+    file_id: crate::node_id::FileID,
+) -> Result<crate::compiling::bridge::BridgedParse, String> {
     crate::profile::init();
     profiling::scope!("frontend.parse_source");
-    let session = FrontendSession::shared()?;
+    let session = resolve(parser)?;
     let mut io = talk_runtime::io::CaptureIO::default();
     let run = {
         profiling::scope!("frontend.execute");
@@ -262,7 +306,24 @@ pub fn parse_ast(
     ),
     crate::parsing::parser_error::ParserError,
 > {
-    parse_ast_with_comments(input, file_id, path).map(|(ast, diagnostics, _)| (ast, diagnostics))
+    parse_ast_in(None, input, file_id, path)
+}
+
+/// [`parse_ast`] through an explicit session (bootstrap stage 2).
+pub fn parse_ast_in(
+    parser: Option<&ParserSession>,
+    input: &str,
+    file_id: crate::node_id::FileID,
+    path: &str,
+) -> Result<
+    (
+        crate::ast::AST<crate::ast::Parsed>,
+        Vec<crate::common::diagnostic::AnyDiagnostic>,
+    ),
+    crate::parsing::parser_error::ParserError,
+> {
+    parse_ast_with_comments_in(parser, input, file_id, path)
+        .map(|(ast, diagnostics, _)| (ast, diagnostics))
 }
 
 /// `parse_ast` plus the comment byte ranges the formatter reads.
@@ -278,8 +339,24 @@ pub fn parse_ast_with_comments(
     ),
     crate::parsing::parser_error::ParserError,
 > {
+    parse_ast_with_comments_in(None, input, file_id, path)
+}
+
+fn parse_ast_with_comments_in(
+    parser: Option<&ParserSession>,
+    input: &str,
+    file_id: crate::node_id::FileID,
+    path: &str,
+) -> Result<
+    (
+        crate::ast::AST<crate::ast::Parsed>,
+        Vec<crate::common::diagnostic::AnyDiagnostic>,
+        Vec<(u32, u32)>,
+    ),
+    crate::parsing::parser_error::ParserError,
+> {
     use crate::parsing::parser_error::ParserError;
-    let bridged = parse_source(input, file_id).map_err(|error| ParserError::Frontend {
+    let bridged = parse_source_in(parser, input, file_id).map_err(|error| ParserError::Frontend {
         code: "parser.frontend-bridge".into(),
         message: error,
         span: None,

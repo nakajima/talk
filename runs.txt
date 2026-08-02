@@ -9,4 +9,5 @@ dd07635: cargo test --lib --quiet  193.43s user 0.50s system 970% cpu 19.979 tot
 06a3d4f: cargo test --lib --quiet  102.50s user 0.46s system 764% cpu 13.475 total
 d2bd469: cargo test --lib --quiet  92.32s user 0.48s system 856% cpu 10.838 total
 20b1f53: cargo test --lib --quiet  85.91s user 0.48s system 891% cpu 9.693 total
-
+9c170f8: cargo test --lib --quiet  88.28s user 0.56s system 794% cpu 11.184 total
+e48e534: cargo test --lib --quiet  86.64s user 0.48s system 729% cpu 11.945 total

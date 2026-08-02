@@ -4,8 +4,11 @@
 //! artifact together with its manifest so neither can go stale alone.
 //!
 //! This is a true bootstrap (ADR 0043 Stage 5): stage 1 parses with
-//! the checked-in artifact, stage 2 with the candidate, so the fixed
-//! point proves the candidate parses its own sources identically.
+//! the embedded artifact and stage 2 parses with the stage-1 candidate
+//! whenever the artifact exposes the parser surface, so the fixed
+//! point proves the candidate parses its own sources identically. A
+//! non-parser service set has no such fixed point; its stage 2 checks
+//! deterministic recompilation.
 
 use crate::compiling::driver::{Driver, DriverConfig, OptimizationStats, Source};
 use crate::compiling::manifest::ArtifactManifest;
@@ -33,6 +36,7 @@ fn compile_stage(
     exports: &[String],
     allowed_effects: &[String],
     schema_root: Option<&str>,
+    parser: Option<&std::sync::Arc<crate::compiling::frontend::ParserSession>>,
 ) -> Result<CompiledStage, String> {
     crate::profile::init();
     profiling::scope!("bootstrap.compile_stage");
@@ -40,7 +44,9 @@ fn compile_stage(
         .iter()
         .map(|(name, text)| Source::in_memory(name.into(), text.clone()))
         .collect();
-    let parsed = Driver::new(inputs, DriverConfig::new("Bootstrap"))
+    let mut config = DriverConfig::new("Bootstrap");
+    config.parser = parser.cloned();
+    let parsed = Driver::new(inputs, config)
         .parse()
         .map_err(|error| format!("bootstrap parse failed: {error:?}"))?;
     let resolved = parsed
@@ -96,11 +102,36 @@ pub fn bootstrap(
     profiling::scope!("bootstrap");
     let stage1 = {
         profiling::scope!("bootstrap.stage_1");
-        compile_stage(sources, exports, allowed_effects, schema_root)?
+        compile_stage(sources, exports, allowed_effects, schema_root, None)?
+    };
+    // The self-hosting fixed point (ADR 0043 §3): when the artifact IS
+    // a parser — it exposes the parse surface and carries a descriptor
+    // — stage 2 parses the source set with the stage-1 candidate, so a
+    // candidate that cannot rebuild itself fails here rather than on
+    // the next regeneration. Core and stdlib still arrive through the
+    // process-wide cached artifacts in both stages; the fixed point is
+    // over the sources being bootstrapped. A non-parser service has no
+    // such fixed point to prove, and stage 2 checks deterministic
+    // recompilation instead.
+    let candidate = match &stage1.abi {
+        Some(abi) => {
+            let session =
+                crate::compiling::frontend::ParserSession::from_artifact(&stage1.image, abi)?;
+            session
+                .exports_parser()
+                .then(|| std::sync::Arc::new(session))
+        }
+        None => None,
     };
     let stage2 = {
         profiling::scope!("bootstrap.stage_2");
-        compile_stage(sources, exports, allowed_effects, schema_root)?
+        compile_stage(
+            sources,
+            exports,
+            allowed_effects,
+            schema_root,
+            candidate.as_ref(),
+        )?
     };
     if stage1.image != stage2.image || stage1.abi != stage2.abi {
         return Err(
@@ -128,6 +159,45 @@ mod tests {
             "pub func double(n: Int) -> Int { n * 2 }\n\npub func shout(text: String) -> String { text + \"!\" }\n"
                 .into(),
         )]
+    }
+
+    // Stage 2's parsing must actually route through the supplied
+    // candidate session: a session whose descriptor names the wrong
+    // root fails the parse bridge, where the shared embedded session
+    // would have succeeded.
+    #[test]
+    fn stage_two_routes_parsing_through_the_supplied_session() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let image = std::fs::read(root.join("bootstrap/frontend.tbc"))
+            .expect("checked-in artifact");
+        let abi = std::fs::read_to_string(root.join("bootstrap/frontend.abi"))
+            .expect("checked-in descriptor");
+        // The optional identity is checked on every Optional crossing;
+        // pointing it at the wrong symbol fails the very first adapt.
+        let poisoned = abi.replace("optional: enum:1.1", "optional: enum:1.2");
+        assert_ne!(poisoned, abi, "the descriptor names the optional enum");
+        let session = crate::compiling::frontend::ParserSession::from_artifact(
+            &image, &poisoned,
+        )
+        .expect("candidate session builds");
+        assert!(session.exports_parser());
+        let sources = frontendish_sources();
+        let error = match compile_stage(
+            &sources,
+            &["double".into()],
+            &["alloc".into()],
+            None,
+            Some(&std::sync::Arc::new(session)),
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("a poisoned candidate schema must fail the parse"),
+        };
+        assert!(
+            error.contains("parse"),
+            "the failure should come from parsing: {error}"
+        );
+        compile_stage(&sources, &["double".into()], &["alloc".into()], None, None)
+            .expect("the shared session parses the same sources");
     }
 
     #[test]

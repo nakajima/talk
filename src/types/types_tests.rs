@@ -5636,6 +5636,7 @@ mod with_core {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            parser: None,
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -5707,6 +5708,7 @@ mod with_core {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            parser: None,
         };
         let typed = Driver::new(
             vec![Source::from(
@@ -5754,6 +5756,7 @@ mod with_core {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            parser: None,
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -5811,6 +5814,7 @@ mod with_core {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            parser: None,
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -7083,6 +7087,7 @@ func width<static N: Int>() -> Int { N }",
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            parser: None,
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -8557,6 +8562,7 @@ mod nested_types {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            parser: None,
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -8600,6 +8606,7 @@ mod nested_types {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            parser: None,
         };
         let driver_b = Driver::new(
             vec![Source::from("use A::{ fizz }\nlet f = fizz")],
@@ -8661,6 +8668,7 @@ mod nested_types {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            parser: None,
         };
         let driver_b = Driver::new(
             vec![Source::from(

@@ -111,6 +111,10 @@ pub struct DriverConfig {
         ModuleId,
         std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
     )>,
+    /// An explicit parser session for the strict path: bootstrap stage 2
+    /// parses with the stage-1 candidate (ADR 0043 §3). `None` is the
+    /// shared embedded artifact.
+    pub parser: Option<std::sync::Arc<crate::compiling::frontend::ParserSession>>,
 }
 
 impl std::fmt::Debug for DriverConfig {
@@ -143,6 +147,7 @@ impl DriverConfig {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            parser: None,
         }
     }
 
@@ -495,7 +500,12 @@ impl Driver {
                 // products come from the disk cache, so the interpreted
                 // parse cost is paid once per compiler build.
                 ParseMode::Strict => {
-                    crate::compiling::frontend::parse_ast(&input, file_id, file.path().as_ref())
+                    crate::compiling::frontend::parse_ast_in(
+                        self.config.parser.as_deref(),
+                        &input,
+                        file_id,
+                        file.path().as_ref(),
+                    )
                 }
                 // The lenient contract (ADR 0043): a hard failure
                 // degrades to an empty AST plus the failure as a
@@ -1466,6 +1476,7 @@ pub mod tests {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            parser: None,
         };
 
         let driver_b = Driver::new(
@@ -1518,6 +1529,7 @@ pub mod tests {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            parser: None,
         };
 
         let driver_b = Driver::new(
