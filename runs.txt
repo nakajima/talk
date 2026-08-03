@@ -11,3 +11,5 @@ d2bd469: cargo test --lib --quiet  92.32s user 0.48s system 856% cpu 10.838 tota
 20b1f53: cargo test --lib --quiet  85.91s user 0.48s system 891% cpu 9.693 total
 9c170f8: cargo test --lib --quiet  88.28s user 0.56s system 794% cpu 11.184 total
 e48e534: cargo test --lib --quiet  86.64s user 0.48s system 729% cpu 11.945 total
+fa67a93: cargo test --lib --quiet  84.20s user 0.55s system 717% cpu 11.807 total
+
