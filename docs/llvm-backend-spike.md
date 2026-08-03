@@ -10,19 +10,19 @@ TypedProgram
   -> MIR construction and ownership checking
   -> MIR optimization
   -> MIR register reuse
-  -> public codegen model
+  -> public finalized MIR (talk-mir, ADR 0047)
   -> talk-llvm
   -> textual LLVM IR
   -> clang + native runtime translation unit
   -> executable
 ```
 
-The target-neutral adapter in `src/backend/codegen.rs` exhaustively projects
-every private MIR instruction and terminator into `talk::codegen`. The
-`talk-llvm` workspace crate consumes that public model and owns textual IR
-emission, its command-line interface, and the native pointer-ABI bridge. Adding
-a MIR variant therefore makes the adapter fail to compile until the new
-operation has a deliberate external form.
+The compiler publishes the finalized MIR module through
+`Driver<Typed>::compile_mir` (ADR 0047); there is no separate codegen
+model or projection. The `talk-llvm` workspace crate consumes that module
+and owns textual IR emission, its command-line interface, and the native
+pointer-ABI bridge. Adding a MIR variant therefore makes the emitter fail
+to compile until the new operation has a deliberate external form.
 
 Language functions, basic blocks, calls, branches, block-argument copies, and
 scalar operations are LLVM IR. Integer and floating-point arithmetic lower to

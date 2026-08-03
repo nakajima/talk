@@ -20,7 +20,6 @@ use tar::Archive;
 use crate::{
     label::Label,
     lexing::unescape,
-    name_resolution::symbol::Symbol,
     node::Node,
     node_id::FileID,
     node_kinds::{
@@ -2102,17 +2101,6 @@ impl PackageProject {
     ) -> Result<crate::compiling::driver::Executable, PackageError> {
         self.typecheck_binary(requested)?
             .compile_executable(entry)
-            .map_err(PackageError::Compile)
-    }
-
-    /// Produce optimized target-neutral codegen input for a package binary.
-    pub fn codegen_binary(
-        &self,
-        requested: Option<&str>,
-        entry: Option<&str>,
-    ) -> Result<crate::codegen::Compilation<Symbol>, PackageError> {
-        self.typecheck_binary(requested)?
-            .codegen(entry)
             .map_err(PackageError::Compile)
     }
 

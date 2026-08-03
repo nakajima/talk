@@ -2001,6 +2001,7 @@ dependencies = [
  "serde",
  "sha2",
  "talk-mir",
+ "talk-native-runtime",
  "talk-vm",
  "tar",
  "tokio",
@@ -2024,6 +2025,8 @@ name = "talk-llvm"
 version = "0.1.0"
 dependencies = [
  "talk",
+ "talk-mir",
+ "talk-native-runtime",
  "talk-vm",
 ]
 
@@ -2039,6 +2042,10 @@ dependencies = [
 
 [[package]]
 name = "talk-mir"
+version = "0.1.0"
+
+[[package]]
+name = "talk-native-runtime"
 version = "0.1.0"
 
 [[package]]

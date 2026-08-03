@@ -724,14 +724,6 @@ mod tests {
         Symbol::Struct(StructId::new(ModuleId(9), id))
     }
 
-    fn msym(id: u32) -> crate::backend::mir::MirSymbol {
-        crate::backend::mir::MirSymbol {
-            kind: crate::backend::mir::MirSymbolKind::Struct,
-            module: 9,
-            local: id,
-        }
-    }
-
     fn int() -> Ty {
         Ty::Nominal(Symbol::Int, Vec::new())
     }

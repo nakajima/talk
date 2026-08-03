@@ -35,8 +35,9 @@ use super::mir::{
 use crate::parsing::span::Span;
 
 /// The generated file's runtime half, emitted verbatim ahead of the
-/// translated functions.
-const PRELUDE: &str = include_str!("c_prelude.c");
+/// translated functions. Owned by `talk-native-runtime` and shared with
+/// the LLVM backend (ADR 0047).
+const PRELUDE: &str = talk_native_runtime::source();
 
 pub(crate) fn emit(program: &Program) -> Result<String, BackendError> {
     let display = &program.display;

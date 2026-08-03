@@ -13,7 +13,6 @@
 
 mod c;
 mod checked_indexed_load;
-mod codegen;
 mod lower;
 mod optimize;
 
@@ -270,15 +269,6 @@ fn allocate_registers(program: &mut mir::Program) {
     for function in &mut program.functions {
         regalloc::reuse_locals(function, &program.layout_table, &returns);
     }
-}
-
-/// Project optimized MIR into the public model consumed by external backends.
-pub(crate) fn codegen(
-    programs: &[ProgramInput<'_>],
-    entry: Entry,
-) -> Result<crate::codegen::Compilation<crate::name_resolution::symbol::Symbol>, BackendError> {
-    let (program, _) = compile_mir(programs, entry)?;
-    Ok(codegen::project(&program, programs))
 }
 
 /// Render the middle representation for inspection (TOOL-10).
