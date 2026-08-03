@@ -60,31 +60,6 @@ pub(crate) fn from_source(symbol: Symbol) -> Option<MirSymbol> {
     })
 }
 
-/// Rebuild the source symbol. Transitional: the codegen projection and
-/// the C display table still key on source symbols until stage 3B moves
-/// layout and metadata identities onto `MirSymbol`.
-pub(crate) fn to_source(symbol: MirSymbol) -> Symbol {
-    let module_id = crate::compiling::module::ModuleId(symbol.module);
-    match symbol.kind {
-        MirSymbolKind::Struct => Symbol::Struct(crate::name_resolution::symbol::StructId {
-            module_id,
-            local_id: symbol.local,
-        }),
-        MirSymbolKind::Enum => Symbol::Enum(crate::name_resolution::symbol::EnumId {
-            module_id,
-            local_id: symbol.local,
-        }),
-        MirSymbolKind::Effect => Symbol::Effect(crate::name_resolution::symbol::EffectId {
-            module_id,
-            local_id: symbol.local,
-        }),
-        MirSymbolKind::Protocol => Symbol::Protocol(crate::name_resolution::symbol::ProtocolId {
-            module_id,
-            local_id: symbol.local,
-        }),
-    }
-}
-
 /// The executable identity a source symbol carries into finalized MIR.
 /// Emission sites only ever name declared effects and protocols, so a
 /// miss is a compiler bug, not a source error.
