@@ -21,7 +21,7 @@
 
 use rustc_hash::FxHashMap;
 
-use crate::backend::mir::{FuncId, Function, Inst, LocalId, Operand, Program, Term};
+use crate::compiling::mir::build::{FuncId, Function, Inst, LocalId, Operand, Program, Term};
 
 use super::PassResult;
 
@@ -33,7 +33,7 @@ const MAX_INLINE_BLOCKS: usize = 4;
 struct Candidate {
     arity: u16,
     n_locals: u16,
-    blocks: Vec<crate::backend::mir::BlockData>,
+    blocks: Vec<crate::compiling::mir::build::BlockData>,
 }
 
 /// Whether an instruction may appear in an inlined body: primitive,
@@ -218,7 +218,7 @@ fn inline_round(program: &mut Program) -> u64 {
             #[allow(clippy::expect_used)]
             let body = candidates.get(&func).expect("membership checked above");
             let base = function.n_locals();
-            function.locals = crate::backend::mir::LocalInfo::uniform(
+            function.locals = crate::compiling::mir::build::LocalInfo::uniform(
                 function.n_locals().saturating_add(body.n_locals - body.arity),
             );
 
@@ -313,13 +313,13 @@ fn inline_round(program: &mut Program) -> u64 {
                     Some(Term::Trap(message)) => Some(Term::Trap(message)),
                     other => other.clone(),
                 };
-                function.blocks.push(crate::backend::mir::BlockData {
+                function.blocks.push(crate::compiling::mir::build::BlockData {
                     params,
                     insts,
                     term,
                 });
             }
-            function.blocks.push(crate::backend::mir::BlockData {
+            function.blocks.push(crate::compiling::mir::build::BlockData {
                 params: Vec::new(),
                 insts: tail,
                 term,
@@ -336,7 +336,7 @@ fn inline_round(program: &mut Program) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::mir::{BlockData, Constant, ScalarOp};
+    use crate::compiling::mir::build::{BlockData, Constant, ScalarOp};
 
     fn local(id: LocalId) -> Operand {
         Operand::Local(id)
@@ -354,7 +354,7 @@ mod tests {
             return_repr: None,
             name: "add".into(),
             arity: 2,
-            locals: crate::backend::mir::LocalInfo::uniform(3),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(3),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts: vec![Inst::Scalar {
@@ -375,7 +375,7 @@ mod tests {
             return_repr: None,
             name: "caller".into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(2),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(2),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts,
@@ -404,8 +404,8 @@ mod tests {
             exports: Vec::new(),
             layout_table: Vec::new(),
             display: Default::default(),
-            string_symbol: crate::backend::mir::mir_string(),
-            storage_symbol: crate::backend::mir::mir_storage(),
+            string_symbol: crate::compiling::mir::build::mir_string(),
+            storage_symbol: crate::compiling::mir::build::mir_storage(),
         };
         assert_eq!(run(&mut program).applied, 1);
         let insts = &program.functions[1].blocks[0].insts;
@@ -438,13 +438,13 @@ mod tests {
             return_repr: None,
             name: "get".into(),
             arity: 1,
-            locals: crate::backend::mir::LocalInfo::uniform(3),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(3),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),
                     insts: vec![Inst::Scalar {
                         dest: 1,
-                        op: ScalarOp::IntCmp(crate::backend::mir::CmpKind::Lt),
+                        op: ScalarOp::IntCmp(crate::compiling::mir::build::CmpKind::Lt),
                         a: local(0),
                         b: Some(int(0)),
                     }],
@@ -495,8 +495,8 @@ mod tests {
             exports: Vec::new(),
             layout_table: Vec::new(),
             display: Default::default(),
-            string_symbol: crate::backend::mir::mir_string(),
-            storage_symbol: crate::backend::mir::mir_storage(),
+            string_symbol: crate::compiling::mir::build::mir_string(),
+            storage_symbol: crate::compiling::mir::build::mir_storage(),
         };
         assert_eq!(run(&mut program).applied, 1);
         let function = &program.functions[1];
@@ -536,7 +536,7 @@ mod tests {
                     return_repr: None,
                     name: "clobber".into(),
                     arity: 1,
-                    locals: crate::backend::mir::LocalInfo::uniform(1),
+                    locals: crate::compiling::mir::build::LocalInfo::uniform(1),
                     blocks: vec![BlockData {
                         params: Vec::new(),
                         insts: vec![Inst::Copy {
@@ -561,8 +561,8 @@ mod tests {
             exports: Vec::new(),
             layout_table: Vec::new(),
             display: Default::default(),
-            string_symbol: crate::backend::mir::mir_string(),
-            storage_symbol: crate::backend::mir::mir_storage(),
+            string_symbol: crate::compiling::mir::build::mir_string(),
+            storage_symbol: crate::compiling::mir::build::mir_storage(),
         };
         assert_eq!(run(&mut program).applied, 0);
         assert!(
@@ -602,8 +602,8 @@ mod tests {
             exports: Vec::new(),
             layout_table: Vec::new(),
             display: Default::default(),
-            string_symbol: crate::backend::mir::mir_string(),
-            storage_symbol: crate::backend::mir::mir_storage(),
+            string_symbol: crate::compiling::mir::build::mir_string(),
+            storage_symbol: crate::compiling::mir::build::mir_storage(),
         };
         assert_eq!(run(&mut program).applied, 1);
         let function = &program.functions[1];

@@ -5,7 +5,7 @@
 //! retaining their own destination and unwind edge. Closure construction is
 //! deliberately untouched: this pass only simplifies statically named calls.
 
-use crate::backend::mir::{FuncId, Function, Inst, Operand, Program, Term};
+use crate::compiling::mir::build::{FuncId, Function, Inst, Operand, Program, Term};
 
 use super::PassResult;
 
@@ -95,7 +95,7 @@ pub(super) fn run(program: &mut Program) -> PassResult {
 
 #[cfg(test)]
 mod tests {
-    use crate::backend::mir::{BlockData, Function, Inst, Operand, Program, Term};
+    use crate::compiling::mir::build::{BlockData, Function, Inst, Operand, Program, Term};
 
     fn function(arity: u16, insts: Vec<Inst>, term: Term) -> Function {
         Function {
@@ -104,7 +104,7 @@ mod tests {
             return_repr: None,
             name: String::new(),
             arity,
-            locals: crate::backend::mir::LocalInfo::uniform(arity + 1),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(arity + 1),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts,
@@ -130,8 +130,8 @@ mod tests {
             exports: Vec::new(),
             layout_table: Vec::new(),
             display: Default::default(),
-            string_symbol: crate::backend::mir::mir_string(),
-            storage_symbol: crate::backend::mir::mir_storage(),
+            string_symbol: crate::compiling::mir::build::mir_string(),
+            storage_symbol: crate::compiling::mir::build::mir_storage(),
         }
     }
 
@@ -143,7 +143,7 @@ mod tests {
             return_repr: None,
             name: String::new(),
             arity: 2,
-            locals: crate::backend::mir::LocalInfo::uniform(3),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(3),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),

@@ -2,7 +2,7 @@
 
 use rustc_hash::FxHashSet;
 
-use crate::backend::mir::{Function, LocalId, Term, visit_inst, visit_term};
+use crate::compiling::mir::build::{Function, LocalId, Term, visit_inst, visit_term};
 
 use super::PassResult;
 
@@ -77,7 +77,7 @@ pub(super) fn run(function: &mut Function) -> PassResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::mir::{BlockData, Constant, Operand};
+    use crate::compiling::mir::build::{BlockData, Constant, Operand};
 
     #[test]
     fn removes_unused_parameter_and_matching_edge_argument() {
@@ -87,7 +87,7 @@ mod tests {
             return_repr: None,
             name: "params".into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(3),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(3),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),

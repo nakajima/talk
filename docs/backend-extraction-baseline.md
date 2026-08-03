@@ -12,6 +12,24 @@ resolve stdlib paths through those variables and fail when they name a
 different checkout (for example when direnv exports the main checkout's paths
 inside a worktree).
 
+## Post-extraction accounting (final state)
+
+Recorded after stage 8 (`bash scripts/size_report.sh`; code = nonblank,
+non-comment `.rs` lines, in-file test tails split out):
+
+| Module | Production | In-file tests | Comments |
+| --- | --- | --- | --- |
+| Compiler MIR work (`src/compiling/mir`) | 12,224 | 2,934 | 2,348 |
+| Public MIR data (`talk-mir/src`) | 603 | 0 | 199 |
+| Bytecode adapter (`talk-bytecode/src`) | 1,611 | 136 | 160 |
+| C adapter (`talk-c/src`) | 2,126 | 0 | 282 |
+| VM (`talk-vm/src`) | 8,449 (code) | — | 702 |
+| Native runtime (`talk-native-runtime/src`) | 3 (code) | — | 5 |
+
+The native runtime's C source (`runtime.c`, ~1,900 nonblank lines) is
+outside the script's `.rs` accounting, as `c_prelude.c` was before the
+extraction.
+
 ## Package dependency graph (cargo tree, normal dependencies, depth 1)
 
 ```text

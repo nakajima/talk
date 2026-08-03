@@ -240,7 +240,7 @@ impl<'a> ProgramBuilder<'a> {
             return_repr: None,
             name: "script".into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         };
 
@@ -288,7 +288,7 @@ impl<'a> ProgramBuilder<'a> {
                 return_repr: None,
                 name: "entry_body".into(),
                 arity: 0,
-                locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+                locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
                 blocks,
             };
             Some((host, body_id, slot))
@@ -355,7 +355,7 @@ impl<'a> ProgramBuilder<'a> {
             return_repr: None,
             name: "script_main".into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(outer)
@@ -393,7 +393,7 @@ impl<'a> ProgramBuilder<'a> {
             return_repr: None,
             name: "entry_init".into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         };
         self.wrap_with_teardown(id, None)
@@ -493,7 +493,7 @@ impl<'a> ProgramBuilder<'a> {
             return_repr: None,
             name: "globals_init".into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(Some(id))
@@ -657,7 +657,7 @@ impl<'a> ProgramBuilder<'a> {
             return_repr: None,
             name: "empty_entry".into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(id)
@@ -697,7 +697,7 @@ impl<'a> ProgramBuilder<'a> {
                 return_repr: None,
                 name: format!("export:{name}"),
                 arity,
-                locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+                locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
                 blocks,
             };
             return Ok(outer);
@@ -742,7 +742,7 @@ impl<'a> ProgramBuilder<'a> {
             return_repr: None,
             name: "export_body".into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         };
 
@@ -790,7 +790,7 @@ impl<'a> ProgramBuilder<'a> {
             return_repr: None,
             name: format!("export:{name}"),
             arity,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(outer)

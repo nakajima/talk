@@ -21,7 +21,6 @@ mod profile;
 pub mod parsing;
 pub use parsing::*;
 pub mod analysis;
-pub(crate) mod backend;
 pub mod common;
 pub mod compiling;
 pub use common::*;

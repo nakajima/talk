@@ -1,6 +1,6 @@
 //! Remove MIR blocks that cannot be entered from the function entry.
 
-use crate::backend::mir::{BlockData, Function, Inst, Term};
+use crate::compiling::mir::build::{BlockData, Function, Inst, Term};
 
 use super::PassResult;
 
@@ -134,7 +134,7 @@ pub(super) fn run(function: &mut Function) -> PassResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::mir::{Constant, Operand};
+    use crate::compiling::mir::build::{Constant, Operand};
 
     #[test]
     fn removes_dead_blocks_and_remaps_targets() {
@@ -144,7 +144,7 @@ mod tests {
             return_repr: None,
             name: "reachable".into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(1),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(1),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),

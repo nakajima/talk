@@ -19,15 +19,15 @@ mod optimize;
 pub(crate) fn runtime_symbol(
     symbol: crate::name_resolution::symbol::Symbol,
 ) -> talk_vm::symbol::Symbol {
-    match mir::from_source(symbol) {
+    match build::from_source(symbol) {
         Some(mir) => talk_bytecode::vm_symbol(mir),
         None => talk_vm::symbol::Symbol::Library,
     }
 }
-mod mir;
+mod build;
 mod regalloc;
 
-pub(crate) use mir::{Entry, ProgramInput};
+pub(crate) use build::{Entry, ProgramInput};
 
 use crate::parsing::span::Span;
 
@@ -78,7 +78,7 @@ impl BackendError {
 pub(crate) fn check(programs: &[ProgramInput<'_>], entry: Entry) -> Result<(), BackendError> {
     // Checking means checking everything: every body compiles, called
     // or not, entry or no entry.
-    mir::build(programs, entry, true).map(|_| ())
+    build::build(programs, entry, true).map(|_| ())
 }
 
 /// The one finalized producer every target shares (ADR 0047): build and
@@ -89,20 +89,20 @@ pub(crate) fn check(programs: &[ProgramInput<'_>], entry: Entry) -> Result<(), B
 pub(crate) fn compile_mir(
     programs: &[ProgramInput<'_>],
     entry: Entry,
-) -> Result<(mir::Program, OptimizationStats), BackendError> {
-    let mut program = mir::build(programs, entry, false)?;
+) -> Result<(build::Program, OptimizationStats), BackendError> {
+    let mut program = build::build(programs, entry, false)?;
     let optimizations = finalize(&mut program);
     Ok((program, optimizations))
 }
 
-fn finalize(program: &mut mir::Program) -> OptimizationStats {
+fn finalize(program: &mut build::Program) -> OptimizationStats {
     let optimizations = optimize::run(program);
     // Parameter escape summaries must read the pre-allocation program,
     // where a parameter's slot is still only ever the parameter; the
     // shaping itself runs on the final numbering (ADR 0045).
-    let summaries = mir::escape::parameter_summaries(program);
+    let summaries = build::escape::parameter_summaries(program);
     allocate_registers(program);
-    mir::escape::shape_frames(program, &summaries);
+    build::escape::shape_frames(program, &summaries);
     optimizations
 }
 
@@ -110,8 +110,8 @@ fn finalize(program: &mut mir::Program) -> OptimizationStats {
 /// program-wide facts (they read every function's return repr), so they
 /// derive here once and publish on each function's locals table under
 /// the final numbering.
-fn allocate_registers(program: &mut mir::Program) {
-    let returns: Vec<Option<mir::layout::LayoutId>> = program
+fn allocate_registers(program: &mut build::Program) {
+    let returns: Vec<Option<build::layout::LayoutId>> = program
         .functions
         .iter()
         .map(|function| function.return_repr)
@@ -127,7 +127,7 @@ pub(crate) fn render_mir(
     entry: Entry,
     optimized: bool,
 ) -> Result<String, BackendError> {
-    let mut program = mir::build(programs, entry, false)?;
+    let mut program = build::build(programs, entry, false)?;
     if optimized {
         finalize(&mut program);
     }

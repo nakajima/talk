@@ -236,7 +236,7 @@ mod tests {
             &module,
             "double",
             &[HostValue::Int(21)],
-            crate::backend::string_shape(),
+            crate::compiling::mir::string_shape(),
             Budgets::default(),
             &mut io,
         )

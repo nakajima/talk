@@ -6,6 +6,7 @@ pub mod driver;
 pub mod frontend;
 pub mod manifest;
 pub(crate) mod interface;
+pub(crate) mod mir;
 pub mod module;
 pub mod module_path;
 pub mod package;

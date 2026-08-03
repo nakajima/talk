@@ -982,7 +982,7 @@ pub(crate) fn build(
                 return_repr: None,
                 name: "empty_entry".into(),
                 arity: 0,
-                locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+                locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
                 blocks,
             };
             id
@@ -1067,7 +1067,7 @@ pub(crate) fn build(
             function.param_reprs = Vec::new();
             function.return_repr = None;
             function.frame_sites = Default::default();
-            function.locals = crate::backend::mir::LocalInfo::uniform(arity.max(1));
+            function.locals = crate::compiling::mir::build::LocalInfo::uniform(arity.max(1));
             function.blocks = vec![BlockData {
                 params: Vec::new(),
                 insts: Vec::new(),
@@ -1506,7 +1506,7 @@ impl<'a> ProgramBuilder<'a> {
             return_repr: None,
             name: name.into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(0),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(0),
             blocks: Vec::new(),
         });
         id
@@ -1939,7 +1939,7 @@ impl<'a> ProgramBuilder<'a> {
             return_repr: None,
             name: "derived_show".into(),
             arity: 1,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(id)
@@ -1968,7 +1968,7 @@ impl<'a> ProgramBuilder<'a> {
             return_repr: None,
             name: "derived_equals".into(),
             arity: 2,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(id)
@@ -2184,7 +2184,7 @@ impl<'a> ProgramBuilder<'a> {
             return_repr,
             name,
             arity,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         })
     }
@@ -2670,7 +2670,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         return_repr: None,
                         name: self.flow_label.clone(),
                         arity: 0,
-                        locals: crate::backend::mir::LocalInfo::uniform(self.n_locals()),
+                        locals: crate::compiling::mir::build::LocalInfo::uniform(self.n_locals()),
                         blocks: self.blocks.clone(),
                     }],
                     entry: 0,
@@ -4310,7 +4310,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             return_repr: None,
             name: "constructor".into(),
             arity,
-            locals: crate::backend::mir::LocalInfo::uniform(arity + 1),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(arity + 1),
             blocks: vec![block],
         };
         let dest = self.fresh_local();
@@ -8992,7 +8992,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             return_repr: None,
             name: "handler_clause".into(),
             arity,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         };
 
@@ -9213,7 +9213,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             return_repr: None,
             name: func.name.name_str(),
             arity,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         };
 

@@ -12,7 +12,7 @@ mod match_switch;
 mod simplify_block_params;
 mod unreachable_blocks;
 
-use super::mir::{Function, Program};
+use super::build::{Function, Program};
 use super::{OptimizationPassStats, OptimizationStats};
 
 const MAX_SIMPLIFY_ROUNDS: usize = 8;

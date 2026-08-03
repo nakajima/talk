@@ -806,7 +806,7 @@ mod tests {
         let kinds = vec![SlotKind::Int; usize::try_from(width).unwrap_or_default()];
         let reprs = vec![FieldRepr::Slot(SlotKind::Int); offsets.len()];
         Layout::Inline(
-            symbol.map(crate::backend::mir::executable),
+            symbol.map(crate::compiling::mir::build::executable),
             Shape::Product {
                 width,
                 offsets,
@@ -863,7 +863,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&nominal(rect)),
             Layout::Inline(
-                Some(crate::backend::mir::executable(rect)),
+                Some(crate::compiling::mir::build::executable(rect)),
                 Shape::Product {
                     width: 4,
                     offsets: vec![0, 2],
@@ -957,7 +957,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&nominal(five)),
             Layout::Boxed(
-                Some(crate::backend::mir::executable(five)),
+                Some(crate::compiling::mir::build::executable(five)),
                 Shape::Product {
                     width: 5,
                     offsets: vec![0, 1, 2, 3, 4],
@@ -984,7 +984,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&nominal(list)),
             Layout::Boxed(
-                Some(crate::backend::mir::executable(list)),
+                Some(crate::compiling::mir::build::executable(list)),
                 Shape::Sum {
                     width: 3,
                     payloads: vec![vec![1, 2], Vec::new()],
@@ -1010,7 +1010,7 @@ mod tests {
         fixture.structs.insert(b, strukt(&[("a", nominal(a))]));
         let boxed_one = |symbol| {
             Layout::Boxed(
-                Some(crate::backend::mir::executable(symbol)),
+                Some(crate::compiling::mir::build::executable(symbol)),
                 Shape::Product {
                     width: 1,
                     offsets: vec![0],
@@ -1037,7 +1037,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&opt_int),
             Layout::Inline(
-                Some(crate::backend::mir::executable(opt)),
+                Some(crate::compiling::mir::build::executable(opt)),
                 Shape::Sum {
                     width: 2,
                     payloads: vec![vec![1], Vec::new()],
@@ -1053,7 +1053,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&opt_opt_int),
             Layout::Inline(
-                Some(crate::backend::mir::executable(opt)),
+                Some(crate::compiling::mir::build::executable(opt)),
                 Shape::Sum {
                     width: 3,
                     payloads: vec![vec![1], Vec::new()],
@@ -1115,7 +1115,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&three_points),
             Layout::Boxed(
-                Some(crate::backend::mir::mir_inline_array()),
+                Some(crate::compiling::mir::build::mir_inline_array()),
                 Shape::Product {
                     width: 6,
                     offsets: vec![0, 2, 4],
@@ -1180,7 +1180,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&nominal(text)),
             Layout::Inline(
-                Some(crate::backend::mir::executable(text)),
+                Some(crate::compiling::mir::build::executable(text)),
                 Shape::Product {
                     width: 2,
                     offsets: vec![0, 1],
@@ -1219,7 +1219,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&nominal(flags)),
             Layout::Inline(
-                Some(crate::backend::mir::executable(flags)),
+                Some(crate::compiling::mir::build::executable(flags)),
                 Shape::Product {
                     width: 2,
                     offsets: vec![0, 1],
@@ -1234,7 +1234,7 @@ mod tests {
         assert_eq!(
             fixture.layout(&nominal(mixed)),
             Layout::Inline(
-                Some(crate::backend::mir::executable(mixed)),
+                Some(crate::compiling::mir::build::executable(mixed)),
                 Shape::Sum {
                     width: 2,
                     payloads: vec![vec![1], vec![1]],
@@ -1271,21 +1271,21 @@ mod tests {
         ]
     }
 
-    fn function(n_locals: u16, blocks: Vec<crate::backend::mir::BlockData>) -> Function {
+    fn function(n_locals: u16, blocks: Vec<crate::compiling::mir::build::BlockData>) -> Function {
         Function {
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
             name: "t".into(),
             arity: 1,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         }
     }
 
     #[test]
     fn derivation_follows_constructions_copies_and_edges() {
-        use crate::backend::mir::{BlockData, Term};
+        use crate::compiling::mir::build::{BlockData, Term};
         let blocks = vec![
             BlockData {
                 params: Vec::new(),
@@ -1315,7 +1315,7 @@ mod tests {
 
     #[test]
     fn conflicting_definitions_degrade_to_uniform() {
-        use crate::backend::mir::{BlockData, Term};
+        use crate::compiling::mir::build::{BlockData, Term};
         let blocks = vec![BlockData {
             params: Vec::new(),
             insts: vec![
@@ -1340,7 +1340,7 @@ mod tests {
 
     #[test]
     fn boxed_constructions_stay_uniform() {
-        use crate::backend::mir::{BlockData, Term};
+        use crate::compiling::mir::build::{BlockData, Term};
         let blocks = vec![BlockData {
             params: Vec::new(),
             insts: vec![Inst::Aggregate {
@@ -1371,7 +1371,7 @@ mod tests {
 
     #[test]
     fn params_and_call_results_seed_their_published_layouts() {
-        use crate::backend::mir::{BlockData, Term};
+        use crate::compiling::mir::build::{BlockData, Term};
         // Param 0 arrives as an inline pair (by-value borrow), the call
         // returns another; both class their locals.
         let blocks = vec![BlockData {

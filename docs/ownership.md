@@ -213,7 +213,7 @@ below.
   immediately). Exit: gate compiles with must-reject unskippable; the
   soundness cases are visible failing tests; unsafe-gate pins green.
   **Landed 2026-07-18**: 51 pins retired, 22 survive (table below);
-  the unsafe gate lives in `src/backend/mir/unsafe_gate.rs` and both
+  the unsafe gate lives in the MIR builder (`src/compiling/mir/build/mod.rs`) and both
   gate pins are enforced; parked divergences are typed and
   self-cleaning (`KNOWN_STRICTER` 52 entries, `PENDING_REJECTION` 1).
 - **B. Places + initialization fixpoint.** Move-path tree, bitset
@@ -223,7 +223,7 @@ below.
   hand-threaded state everywhere the old system is trusted; divergences
   are triaged as old-system bugs or new-system bugs, each with a test.
   **Landed 2026-07-18** as the balance verifier
-  (`src/backend/mir/verify.rs`): the builder logs every Def/Use/Move/
+  (`src/compiling/mir/build/verify.rs`): the builder logs every Def/Use/Move/
   Drop decision and a forward fixpoint replays the log over the built
   CFG — the exactly-once checker ADR 0017 stage 2 promised. Places are
   locals + globals; field granularity was retired by the semantics

@@ -1,7 +1,7 @@
 //! Fold known branches, canonicalize Boolean comparisons feeding branches,
 //! and thread edges whose branch outcome is already known.
 
-use crate::backend::mir::{BlockId, CmpKind, Constant, Function, Inst, Operand, ScalarOp, Term};
+use crate::compiling::mir::build::{BlockId, CmpKind, Constant, Function, Inst, Operand, ScalarOp, Term};
 
 use super::PassResult;
 
@@ -137,7 +137,7 @@ pub(super) fn run(function: &mut Function) -> PassResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::mir::BlockData;
+    use crate::compiling::mir::build::BlockData;
 
     #[test]
     fn constant_branch_becomes_goto() {
@@ -147,7 +147,7 @@ mod tests {
             return_repr: None,
             name: "branch".into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(1),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(1),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),
@@ -196,7 +196,7 @@ mod tests {
                 return_repr: None,
                 name: "bool_branch".into(),
                 arity: 1,
-                locals: crate::backend::mir::LocalInfo::uniform(2),
+                locals: crate::compiling::mir::build::LocalInfo::uniform(2),
                 blocks: vec![
                     BlockData {
                         params: Vec::new(),
@@ -259,7 +259,7 @@ mod tests {
             return_repr: None,
             name: "thread_branches".into(),
             arity: 1,
-            locals: crate::backend::mir::LocalInfo::uniform(1),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(1),
             blocks: vec![
                 repeated(1, 2),
                 repeated(3, 4),
@@ -290,7 +290,7 @@ mod tests {
             return_repr: None,
             name: "shared_branch".into(),
             arity: 1,
-            locals: crate::backend::mir::LocalInfo::uniform(1),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(1),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),
@@ -345,7 +345,7 @@ mod tests {
             return_repr: None,
             name: "unsafe_threads".into(),
             arity: 1,
-            locals: crate::backend::mir::LocalInfo::uniform(2),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(2),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),
@@ -427,7 +427,7 @@ mod tests {
             return_repr: None,
             name: "inverted_thread".into(),
             arity: 1,
-            locals: crate::backend::mir::LocalInfo::uniform(2),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(2),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),
@@ -489,7 +489,7 @@ mod tests {
             return_repr: None,
             name: "overwriting_bool_branch".into(),
             arity: 1,
-            locals: crate::backend::mir::LocalInfo::uniform(1),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(1),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),

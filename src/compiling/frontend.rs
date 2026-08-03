@@ -232,7 +232,7 @@ fn parse_source_in(
             &[talk_vm::interp::HostValue::String(
                 source.as_bytes().to_vec(),
             )],
-            crate::backend::string_shape(),
+            crate::compiling::mir::string_shape(),
             talk_vm::interp::Budgets::default(),
             &mut io,
         )?
@@ -255,7 +255,7 @@ pub fn dump_export(name: &str, source: &str) -> Result<String, String> {
             &[talk_vm::interp::HostValue::String(
                 source.as_bytes().to_vec(),
             )],
-            crate::backend::string_shape(),
+            crate::compiling::mir::string_shape(),
             talk_vm::interp::Budgets::default(),
             &mut io,
         )?
@@ -283,7 +283,7 @@ pub fn lex(source: &str) -> Result<(Vec<crate::parsing::lexing::token::Token>, b
             &[talk_vm::interp::HostValue::String(
                 source.as_bytes().to_vec(),
             )],
-            crate::backend::string_shape(),
+            crate::compiling::mir::string_shape(),
             talk_vm::interp::Budgets::default(),
             &mut io,
         )?
@@ -492,7 +492,7 @@ mod tests {
                 &[talk_vm::interp::HostValue::String(
                     source.as_bytes().to_vec(),
                 )],
-                crate::backend::string_shape(),
+                crate::compiling::mir::string_shape(),
                 talk_vm::interp::Budgets::default(),
                 &mut io,
                 &mut stats,
@@ -568,7 +568,7 @@ mod tests {
             &[talk_vm::interp::HostValue::String(
                 b"let x = 1\n".to_vec(),
             )],
-            crate::backend::string_shape(),
+            crate::compiling::mir::string_shape(),
             talk_vm::interp::Budgets::default(),
             &mut io,
         )

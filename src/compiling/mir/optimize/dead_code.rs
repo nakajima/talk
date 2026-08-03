@@ -2,7 +2,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::backend::mir::{Function, Inst, LocalId, ScalarOp, visit_inst, visit_term};
+use crate::compiling::mir::build::{Function, Inst, LocalId, ScalarOp, visit_inst, visit_term};
 
 use super::PassResult;
 
@@ -84,7 +84,7 @@ pub(super) fn run(function: &mut Function) -> PassResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::mir::{BlockData, Constant, Operand, ScalarOp, Term};
+    use crate::compiling::mir::build::{BlockData, Constant, Operand, ScalarOp, Term};
 
     #[test]
     fn removes_dead_pure_chains() {
@@ -94,7 +94,7 @@ mod tests {
             return_repr: None,
             name: "dead".into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(2),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(2),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts: vec![
@@ -125,7 +125,7 @@ mod tests {
             return_repr: None,
             name: "dead_read".into(),
             arity: 1,
-            locals: crate::backend::mir::LocalInfo::uniform(2),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(2),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts: vec![Inst::Field {
@@ -151,7 +151,7 @@ mod tests {
             return_repr: None,
             name: "trap".into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(1),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(1),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts: vec![Inst::Scalar {

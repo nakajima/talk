@@ -627,7 +627,7 @@ impl Driver<Parsed> {
 /// execution, re-exported from the bytecode adapter (ADR 0047).
 pub use talk_bytecode::Executable;
 
-pub use crate::backend::{OptimizationPassStats, OptimizationStats};
+pub use crate::compiling::mir::{OptimizationPassStats, OptimizationStats};
 
 /// How the published MIR module is entered (ADR 0047): a script's
 /// top-level statements, a named zero-parameter public function, or a
@@ -751,18 +751,18 @@ impl Driver<Typed> {
     /// adapters consume exactly this output.
     pub fn compile_mir(&self, entry: MirEntry<'_>) -> Result<MirOutput, String> {
         let entry = match entry {
-            MirEntry::Script => crate::backend::Entry::Script,
-            MirEntry::Named(name) => crate::backend::Entry::Named(name),
+            MirEntry::Script => crate::compiling::mir::Entry::Script,
+            MirEntry::Named(name) => crate::compiling::mir::Entry::Named(name),
             MirEntry::Exports {
                 names,
                 allowed_effects,
-            } => crate::backend::Entry::Exports {
+            } => crate::compiling::mir::Entry::Exports {
                 names,
                 allowed_effects,
             },
         };
         self.with_backend_inputs(entry, |programs, entry| {
-            crate::backend::compile_mir(programs, entry)
+            crate::compiling::mir::compile_mir(programs, entry)
         })
         .map(|(module, optimizations)| MirOutput {
             module,
@@ -817,8 +817,8 @@ impl Driver<Typed> {
     /// rejection comes back with its message and, when the span maps to
     /// a source document, that document's path and byte range.
     pub fn check_ownership(&self) -> Result<(), OwnershipRejection> {
-        self.with_backend_inputs(crate::backend::Entry::Script, |programs, entry| {
-            crate::backend::check(programs, entry)
+        self.with_backend_inputs(crate::compiling::mir::Entry::Script, |programs, entry| {
+            crate::compiling::mir::check(programs, entry)
         })
         .map_err(|error| {
             let span = error.span;
@@ -833,11 +833,11 @@ impl Driver<Typed> {
     /// (TOOL-10). Same inputs as `compile_executable`.
     pub fn render_mir(&self, entry: Option<&str>, optimized: bool) -> Result<String, String> {
         let entry = match entry {
-            Some(name) => crate::backend::Entry::Named(name),
-            None => crate::backend::Entry::Script,
+            Some(name) => crate::compiling::mir::Entry::Named(name),
+            None => crate::compiling::mir::Entry::Script,
         };
         self.with_backend_inputs(entry, |programs, entry| {
-            crate::backend::render_mir(programs, entry, optimized)
+            crate::compiling::mir::render_mir(programs, entry, optimized)
         })
         .map_err(|error| self.locate_backend_error(&error))
     }
@@ -847,8 +847,8 @@ impl Driver<Typed> {
     /// hand them to the backend.
     fn with_backend_inputs<R>(
         &self,
-        entry: crate::backend::Entry<'_>,
-        run: impl FnOnce(&[crate::backend::ProgramInput<'_>], crate::backend::Entry<'_>) -> R,
+        entry: crate::compiling::mir::Entry<'_>,
+        run: impl FnOnce(&[crate::compiling::mir::ProgramInput<'_>], crate::compiling::mir::Entry<'_>) -> R,
     ) -> R {
         let core = crate::compiling::core::typed_program();
         // Bare services, including the service used to compile stdlib-owned
@@ -868,22 +868,22 @@ impl Driver<Typed> {
         // already carry their real module stamp.
         let user_module = self.config.module_id;
         let mut programs = vec![
-            crate::backend::ProgramInput {
+            crate::compiling::mir::ProgramInput {
                 program: &self.phase.program,
                 module: user_module,
             },
-            crate::backend::ProgramInput {
+            crate::compiling::mir::ProgramInput {
                 program: &core,
                 module: crate::compiling::module::ModuleId::Core,
             },
         ];
         for (name, program) in &stdlib {
             if let Some(module) = self.config.modules.get_module_id_by_name(name) {
-                programs.push(crate::backend::ProgramInput { program, module });
+                programs.push(crate::compiling::mir::ProgramInput { program, module });
             }
         }
         for (module, program) in &self.config.libraries {
-            programs.push(crate::backend::ProgramInput {
+            programs.push(crate::compiling::mir::ProgramInput {
                 program,
                 module: *module,
             });
@@ -893,7 +893,7 @@ impl Driver<Typed> {
 
     /// Render a backend rejection with its source location when the span
     /// points into one of this driver's files.
-    fn locate_backend_error(&self, error: &crate::backend::BackendError) -> String {
+    fn locate_backend_error(&self, error: &crate::compiling::mir::BackendError) -> String {
         let span = error.span;
         if span == crate::parsing::span::Span::SYNTHESIZED {
             return error.message.clone();
@@ -1333,7 +1333,7 @@ pub mod tests {
             &decoded,
             "double",
             &[HostValue::Int(21)],
-            crate::backend::string_shape(),
+            crate::compiling::mir::string_shape(),
             Budgets::default(),
             &mut io,
         )

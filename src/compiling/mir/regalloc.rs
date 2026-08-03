@@ -20,8 +20,8 @@
 
 use rustc_hash::FxHashMap;
 
-use super::mir::layout::{Layout, LayoutId, local_layouts};
-use super::mir::{BlockData, Function, Inst, LocalId, Operand, Slot, Term, visit_inst, visit_term};
+use super::build::layout::{Layout, LayoutId, local_layouts};
+use super::build::{BlockData, Function, Inst, LocalId, Operand, Slot, Term, visit_inst, visit_term};
 
 /// A block's successors in the flow graph, unwind cleanup entries
 /// included.
@@ -583,7 +583,7 @@ pub(crate) fn reuse_locals(
     // local allocated into it.
     let n_regs = next.max(function.arity).max(1);
     function.locals = (0..n_regs)
-        .map(|register| crate::backend::mir::LocalInfo {
+        .map(|register| crate::compiling::mir::build::LocalInfo {
             layout: register_class.get(&register).copied().flatten(),
             frame_local: false,
         })
@@ -593,7 +593,7 @@ pub(crate) fn reuse_locals(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::mir::{BlockData, CmpKind, Constant, ScalarOp};
+    use crate::compiling::mir::build::{BlockData, CmpKind, Constant, ScalarOp};
 
     fn copy(dest: LocalId, src: Operand) -> Inst {
         Inst::Copy { dest, src }
@@ -623,7 +623,7 @@ mod tests {
             return_repr: None,
             name: "test".into(),
             arity,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         }
     }
@@ -635,7 +635,7 @@ mod tests {
     // tagged writes.
     #[test]
     fn affinity_touch_never_mixes_layout_classes() {
-        use crate::backend::mir::layout::{FieldRepr, Layout, Shape, SlotKind, local_layouts};
+        use crate::compiling::mir::build::layout::{FieldRepr, Layout, Shape, SlotKind, local_layouts};
         let table = vec![Layout::Inline(
             None,
             Shape::Product {
@@ -812,7 +812,7 @@ mod tests {
             return_repr: None,
             name: "edge".into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(2),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(2),
             blocks: vec![
                 BlockData {
                     params: Vec::new(),
@@ -951,16 +951,16 @@ mod tests {
     fn registers_never_cross_layout_classes() {
         let table = vec![Layout::Inline(
             None,
-            crate::backend::mir::layout::Shape::Product {
+            crate::compiling::mir::build::layout::Shape::Product {
                 width: 2,
                 offsets: vec![0, 1],
                 reprs: vec![
-                    crate::backend::mir::layout::FieldRepr::Slot(
-                        crate::backend::mir::layout::SlotKind::Int
+                    crate::compiling::mir::build::layout::FieldRepr::Slot(
+                        crate::compiling::mir::build::layout::SlotKind::Int
                     );
                     2
                 ],
-                kinds: vec![crate::backend::mir::layout::SlotKind::Int; 2],
+                kinds: vec![crate::compiling::mir::build::layout::SlotKind::Int; 2],
             },
         )];
         let build = || Function {
@@ -969,7 +969,7 @@ mod tests {
             return_repr: None,
             name: String::new(),
             arity: 1,
-            locals: crate::backend::mir::LocalInfo::uniform(4),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(4),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts: vec![

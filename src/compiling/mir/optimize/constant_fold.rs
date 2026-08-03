@@ -2,7 +2,7 @@
 
 use rustc_hash::FxHashMap;
 
-use crate::backend::mir::{
+use crate::compiling::mir::build::{
     CmpKind, Constant, Function, Inst, LocalId, Operand, ScalarOp, Slot, Term, visit_inst,
 };
 
@@ -154,7 +154,7 @@ pub(super) fn run(function: &mut Function) -> PassResult {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::mir::{BlockData, ScalarOp};
+    use crate::compiling::mir::build::{BlockData, ScalarOp};
 
     #[test]
     fn folds_constant_scalar_chains_and_return_operands() {
@@ -164,7 +164,7 @@ mod tests {
             return_repr: None,
             name: "fold".into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(2),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(2),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts: vec![
@@ -207,7 +207,7 @@ mod tests {
             return_repr: None,
             name: "divide".into(),
             arity: 0,
-            locals: crate::backend::mir::LocalInfo::uniform(1),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(1),
             blocks: vec![BlockData {
                 params: Vec::new(),
                 insts: vec![Inst::Scalar {

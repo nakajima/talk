@@ -36,13 +36,13 @@ impl<'a, 'io> ResultValidator<'a, 'io> {
             run,
             schema,
             symbols,
-            string_symbol: crate::backend::runtime_symbol(
+            string_symbol: crate::compiling::mir::runtime_symbol(
                 crate::name_resolution::symbol::Symbol::String,
             ),
-            array_symbol: crate::backend::runtime_symbol(
+            array_symbol: crate::compiling::mir::runtime_symbol(
                 crate::name_resolution::symbol::Symbol::Array,
             ),
-            storage_symbol: crate::backend::runtime_symbol(
+            storage_symbol: crate::compiling::mir::runtime_symbol(
                 crate::name_resolution::symbol::Symbol::Storage,
             ),
             optional_symbol: schema.optional.runtime()?,

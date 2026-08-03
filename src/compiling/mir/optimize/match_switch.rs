@@ -2,7 +2,7 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::backend::mir::{
+use crate::compiling::mir::build::{
     BlockData, BlockId, CmpKind, Constant, Function, Inst, LocalId, Operand, ScalarOp, Slot, Term,
     visit_inst,
 };
@@ -210,7 +210,7 @@ mod tests {
             return_repr: None,
             name: "match".into(),
             arity: 1,
-            locals: crate::backend::mir::LocalInfo::uniform(6),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(6),
             blocks: vec![
                 entry,
                 comparison(0, 2, 2, 4, 2),
@@ -237,7 +237,7 @@ mod tests {
             return_repr: None,
             name: "not_a_match".into(),
             arity: 1,
-            locals: crate::backend::mir::LocalInfo::uniform(4),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(4),
             blocks: vec![
                 comparison(0, 1, 0, 2, 1),
                 comparison(0, 2, 1, 2, 2),

@@ -62,7 +62,7 @@ mod c_emit_tests {
         // summaries and the published per-site facts the emitter reads.
         let returns: Vec<_> = program.functions.iter().map(|f| f.return_repr).collect();
         for function in &mut program.functions {
-            let classes = crate::backend::mir::layout::local_layouts(
+            let classes = crate::compiling::mir::build::layout::local_layouts(
                 function,
                 &program.layout_table,
                 &returns,
@@ -71,8 +71,8 @@ mod c_emit_tests {
                 info.layout = classes.get(local).copied().flatten();
             }
         }
-        let summaries = crate::backend::mir::escape::parameter_summaries(&program);
-        crate::backend::mir::escape::shape_frames(&mut program, &summaries);
+        let summaries = crate::compiling::mir::build::escape::parameter_summaries(&program);
+        crate::compiling::mir::build::escape::shape_frames(&mut program, &summaries);
         emit(&program).expect("emission").source
     }
 
@@ -285,7 +285,7 @@ mod c_emit_tests {
                 Inst::GetElement {
                     dest: 3,
                     src: Operand::Local(1),
-                    element: crate::backend::mir::layout::LayoutId::MAX,
+                    element: crate::compiling::mir::build::layout::LayoutId::MAX,
                     index: Operand::Local(2),
                 },
             ],
@@ -340,7 +340,7 @@ mod c_emit_tests {
             }],
             Term::Return(Operand::Local(1)),
         );
-        callee.param_reprs = vec![crate::backend::mir::layout::ParamRepr::Borrow(0)];
+        callee.param_reprs = vec![crate::compiling::mir::build::layout::ParamRepr::Borrow(0)];
         let out = emitted(vec![entry, callee], vec![flat_pair(pair)]);
         assert!(out.contains("talk_fn1(NULL, x1)"), "{out}");
         assert!(
@@ -394,7 +394,7 @@ mod c_emit_tests {
             }],
             Term::Return(Operand::Local(1)),
         );
-        callee.param_reprs = vec![crate::backend::mir::layout::ParamRepr::Value(0)];
+        callee.param_reprs = vec![crate::compiling::mir::build::layout::ParamRepr::Value(0)];
         let sink = function(1, 2, Vec::new(), Term::Return(Operand::Local(0)));
         let out = emitted(vec![entry, callee, sink], vec![flat_pair(pair)]);
         assert!(out.contains("talk_box_l0(x0)"), "{out}");

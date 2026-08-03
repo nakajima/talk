@@ -65,7 +65,7 @@ impl<'a> ProgramBuilder<'a> {
             return_repr: None,
             name: "heap_teardown".into(),
             arity: 1,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(Some(id))
@@ -155,7 +155,7 @@ impl<'a> ProgramBuilder<'a> {
                 Glue::Retain => "existential_retain".into(),
             },
             arity: 1,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
         };
         Ok(id)
@@ -427,8 +427,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         .callables
                         .get(symbol)
                         .map(|callable| match callable.body {
-                            crate::backend::mir::CallableBody::Func(func) => func.params.len(),
-                            crate::backend::mir::CallableBody::Init { params, .. } => params.len(),
+                            crate::compiling::mir::build::CallableBody::Func(func) => func.params.len(),
+                            crate::compiling::mir::build::CallableBody::Init { params, .. } => params.len(),
                         })
                         .unwrap_or(0);
                     let visible = u16::try_from(visible).unwrap_or_default();
@@ -502,7 +502,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             return_repr: None,
             name: "requirement_forwarder".into(),
             arity: visible,
-            locals: crate::backend::mir::LocalInfo::uniform(result + 1),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(result + 1),
             blocks: vec![block],
         };
         id
