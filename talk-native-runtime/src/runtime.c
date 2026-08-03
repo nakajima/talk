@@ -1,4 +1,4 @@
-/* Runtime prelude for the C backend (src/backend/c.rs).
+/* Shared native runtime (talk-native-runtime).
  *
  * Emitted verbatim at the top of every generated translation unit, so the
  * output is one self-contained file: `talk c x.tlk | cc -O2 -x c -`.

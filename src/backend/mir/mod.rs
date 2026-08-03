@@ -93,18 +93,20 @@ pub(crate) fn executable(symbol: Symbol) -> MirSymbol {
 }
 
 /// Well-known identities targets must recognize structurally: the
-/// runtime aggregates String and Storage (their well-known core ids)
-/// and the InlineArray pseudo-identity layout construction declares.
+/// runtime aggregates String and Storage and the InlineArray
+/// construction identity. The values live on `MirSymbol` itself; these
+/// conversions pin that the source mapping agrees (drift is a test
+/// failure, not a silent fork).
 pub(crate) fn mir_string() -> MirSymbol {
-    executable(Symbol::String)
+    MirSymbol::STRING
 }
 
 pub(crate) fn mir_storage() -> MirSymbol {
-    executable(Symbol::Storage)
+    MirSymbol::STORAGE
 }
 
 pub(crate) fn mir_inline_array() -> MirSymbol {
-    executable(Symbol::InlineArray)
+    MirSymbol::INLINE_ARRAY
 }
 /// How execution starts (`talk run`): a script's top-level statements, or a
 /// named zero-parameter public function. `Exports` compiles a service
@@ -9794,5 +9796,24 @@ fn scalar_op(op: crate::types::output::IrScalarOp) -> ScalarOp {
         I::ByteToInt => ScalarOp::ByteToInt,
         I::IntToByte => ScalarOp::IntToByte,
         I::PtrAdd => unreachable!("pointer arithmetic lowers to Inst::PtrAdd"),
+    }
+}
+
+#[cfg(test)]
+mod well_known_identity_tests {
+    #[test]
+    fn source_mapping_agrees_with_the_published_constants() {
+        assert_eq!(
+            super::executable(crate::name_resolution::symbol::Symbol::String),
+            talk_mir::MirSymbol::STRING
+        );
+        assert_eq!(
+            super::executable(crate::name_resolution::symbol::Symbol::Storage),
+            talk_mir::MirSymbol::STORAGE
+        );
+        assert_eq!(
+            super::executable(crate::name_resolution::symbol::Symbol::InlineArray),
+            talk_mir::MirSymbol::INLINE_ARRAY
+        );
     }
 }

@@ -5,7 +5,8 @@
 //! `talk-llvm` emits LLVM IR, and the C emitter below moves to `talk-c`
 //! in a later stage.
 
-mod c;
+#[cfg(all(test, feature = "cli"))]
+mod c_emit_tests;
 mod optimize;
 
 /// The compiler-to-runtime symbol mapping, for the frontend result
@@ -78,17 +79,6 @@ pub(crate) fn check(programs: &[ProgramInput<'_>], entry: Entry) -> Result<(), B
     // Checking means checking everything: every body compiles, called
     // or not, entry or no entry.
     mir::build(programs, entry, true).map(|_| ())
-}
-
-/// Emit C source for the program (a spike; see `c.rs` for the scope it
-/// accepts). The C shares `compile`'s pipeline up to lowering, so the two
-/// targets translate the same optimized, register-allocated MIR.
-pub(crate) fn render_c(
-    programs: &[ProgramInput<'_>],
-    entry: Entry,
-) -> Result<String, BackendError> {
-    let (program, _) = compile_mir(programs, entry)?;
-    c::emit(&program)
 }
 
 /// The one finalized producer every target shares (ADR 0047): build and

@@ -884,13 +884,22 @@ async fn main() {
             allow_effects,
         } => {
             let typed = check_or_exit(filenames);
-            let rendered = if exports.is_empty() {
-                typed.render_c(entry.as_deref())
+            let mir_entry = if exports.is_empty() {
+                match entry.as_deref() {
+                    Some(name) => talk::compiling::driver::MirEntry::Named(name),
+                    None => talk::compiling::driver::MirEntry::Script,
+                }
             } else {
-                typed.render_c_service(exports, allow_effects)
+                talk::compiling::driver::MirEntry::Exports {
+                    names: exports,
+                    allowed_effects: allow_effects,
+                }
             };
-            match rendered {
-                Ok(rendered) => print!("{rendered}"),
+            match typed
+                .compile_mir(mir_entry)
+                .and_then(|output| talk_c::emit(&output.module).map_err(|error| error.to_string()))
+            {
+                Ok(artifact) => print!("{}", artifact.source),
                 Err(message) => {
                     eprintln!("error: {message}");
                     std::process::exit(1);
@@ -1372,8 +1381,15 @@ fn build_native(
             std::process::exit(1);
         }
     };
-    let source = match check_or_exit(filenames).render_c(entry) {
-        Ok(source) => source,
+    let mir_entry = match entry {
+        Some(name) => talk::compiling::driver::MirEntry::Named(name),
+        None => talk::compiling::driver::MirEntry::Script,
+    };
+    let source = match check_or_exit(filenames)
+        .compile_mir(mir_entry)
+        .and_then(|output| talk_c::emit(&output.module).map_err(|error| error.to_string()))
+    {
+        Ok(artifact) => artifact.source,
         Err(message) => {
             eprintln!("error: {message}");
             std::process::exit(1);

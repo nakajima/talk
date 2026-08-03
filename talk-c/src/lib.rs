@@ -25,21 +25,64 @@
 
 use std::fmt::Write as _;
 
+/// A C-adapter rejection: malformed public MIR supplied manually, a
+/// target representability failure, or a target-internal invariant
+/// failure. Adapter errors carry no parser spans; the compiler locates
+/// source errors before publishing MIR (ADR 0047).
+#[derive(Debug)]
+pub struct Error {
+    message: String,
+}
+
+impl Error {
+    fn new(message: String) -> Self {
+        Self { message }
+    }
+
+    /// A deliberate fail-closed rejection of MIR this target does not
+    /// represent. Compiler-produced modules never trigger one (ADR
+    /// 0037's completeness requirement).
+    fn unsupported(message: String) -> Self {
+        debug_assert!(message.contains("not supported yet"));
+        Self::new(message)
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for Error {}
+
+
 use rustc_hash::FxHashMap;
 
-use super::BackendError;
-use super::mir::layout::{FieldRepr, Layout, LayoutId, Shape, SlotKind};
-use super::mir::{
-    CmpKind, Constant, DisplayNames, Function, Inst, Operand, Program, ScalarOp, Term, TypeKind,
+use talk_mir::layout::{FieldRepr, Layout, LayoutId, Shape, SlotKind};
+use talk_mir::{
+    CmpKind, Constant, DisplayNames, Function, Inst, MirSymbol, Module as Program, Operand,
+    ScalarOp, Term, TypeKind,
 };
-use crate::parsing::span::Span;
 
 /// The generated file's runtime half, emitted verbatim ahead of the
 /// translated functions. Owned by `talk-native-runtime` and shared with
 /// the LLVM backend (ADR 0047).
 const PRELUDE: &str = talk_native_runtime::source();
 
-pub(crate) fn emit(program: &Program) -> Result<String, BackendError> {
+/// The emitted translation unit.
+#[derive(Debug)]
+pub struct Artifact {
+    pub source: String,
+}
+
+/// Emit one self-contained C translation unit for a finalized MIR
+/// module.
+pub fn emit(program: &Program) -> Result<Artifact, Error> {
     let display = &program.display;
     let entry = program
         .functions
@@ -126,7 +169,7 @@ pub(crate) fn emit(program: &Program) -> Result<String, BackendError> {
             None => format!("{}(NULL)", symbol(program.entry)),
         }
     );
-    Ok(out)
+    Ok(Artifact { source: out })
 }
 
 /// Immortal literal bytes. One trailing zero keeps the array non-empty
@@ -189,8 +232,8 @@ fn emit_layout_table(
     out: &mut String,
     emitter: &mut Emitter,
     facts: &Facts,
-) -> Result<(), BackendError> {
-    let row = |emitter: &mut Emitter, offset: u32, repr: FieldRepr| -> Result<String, BackendError> {
+) -> Result<(), Error> {
+    let row = |emitter: &mut Emitter, offset: u32, repr: FieldRepr| -> Result<String, Error> {
         Ok(match repr {
             FieldRepr::Slot(_) => format!("{{ {offset}, 1, UINT32_MAX, 0 }}"),
             FieldRepr::Spliced(child) => {
@@ -332,7 +375,7 @@ fn emit_type_table(out: &mut String, emitter: &Emitter, display: &DisplayNames) 
 struct Emitter {
     /// Effect symbols numbered densely, the way `lower`'s `EffectPool`
     /// numbers them for the VM.
-    effects: FxHashMap<crate::backend::mir::MirSymbol, u32>,
+    effects: FxHashMap<MirSymbol, u32>,
     /// Immortal literal bytes, deduplicated as `lower`'s `StaticsPool`
     /// deduplicates them.
     statics: Vec<u8>,
@@ -342,19 +385,19 @@ struct Emitter {
     widest_arity: usize,
     /// Struct and enum symbols numbered densely from one; zero is the
     /// anonymous product.
-    display_ids: FxHashMap<crate::backend::mir::MirSymbol, u32>,
+    display_ids: FxHashMap<MirSymbol, u32>,
     /// Of those, the ids belonging to protocol existentials, which have
     /// no catalog entry and render as their payload.
     existential_ids: rustc_hash::FxHashSet<u32>,
 }
 
 impl Emitter {
-    fn effect(&mut self, symbol: crate::backend::mir::MirSymbol) -> u32 {
+    fn effect(&mut self, symbol: MirSymbol) -> u32 {
         let next = u32::try_from(self.effects.len()).unwrap_or_default();
         *self.effects.entry(symbol).or_insert(next)
     }
 
-    fn display_id(&mut self, symbol: crate::backend::mir::MirSymbol) -> u32 {
+    fn display_id(&mut self, symbol: MirSymbol) -> u32 {
         let next = u32::try_from(self.display_ids.len() + 1).unwrap_or(1);
         *self.display_ids.entry(symbol).or_insert(next)
     }
@@ -386,7 +429,7 @@ impl Emitter {
         id: usize,
         function: &Function,
         facts: &Facts,
-    ) -> Result<(), BackendError> {
+    ) -> Result<(), Error> {
         // Only a frame that names itself can ever be a continuation's
         // target or a handler's installer, so leaf functions stay free of
         // shadow-stack traffic.
@@ -539,7 +582,7 @@ impl Emitter {
         identified: bool,
         frame_slot: Option<usize>,
         frame: &Frame,
-    ) -> Result<(), BackendError> {
+    ) -> Result<(), Error> {
         match inst {
             Inst::Copy { dest, src } => {
                 // Register reuse can unify a copy's endpoints; a self-copy is
@@ -740,7 +783,7 @@ impl Emitter {
                 } else {
                     // The tagged fallback carries String's display
                     // identity so it renders as quoted text.
-                    let string_symbol = self.display_id(crate::backend::mir::mir_string());
+                    let string_symbol = self.display_id(MirSymbol::STRING);
                     let _ = writeln!(out, "    {{");
                     let _ = writeln!(
                         out,
@@ -1455,7 +1498,7 @@ impl<'p> Facts<'p> {
     }
 
     /// The shape behind any structurally representable layout.
-    fn shape_of(&self, layout: LayoutId) -> Result<&Shape, BackendError> {
+    fn shape_of(&self, layout: LayoutId) -> Result<&Shape, Error> {
         match self.table.get(usize::try_from(layout).unwrap_or(usize::MAX)) {
             Some(Layout::Inline(_, shape) | Layout::Boxed(_, shape)) => Ok(shape),
             _ => Err(internal("a representable layout without a shape")),
@@ -1463,7 +1506,7 @@ impl<'p> Facts<'p> {
     }
 
     /// A shaped layout's slot count.
-    fn width_of(&self, layout: LayoutId) -> Result<u32, BackendError> {
+    fn width_of(&self, layout: LayoutId) -> Result<u32, Error> {
         Ok(self.shape_of(layout)?.width())
     }
 
@@ -1513,7 +1556,7 @@ fn parameter_list(arity: u16, sig: &FnSig) -> String {
 /// Layouts a frame local can hold natively: the representable set,
 /// restricted to inline roots (spliced children are always inline, so
 /// the recursions agree; only the root class differs).
-fn eligible_layouts(table: &[Layout], structs: &[bool]) -> Vec<bool> {
+pub fn eligible_layouts(table: &[Layout], structs: &[bool]) -> Vec<bool> {
     table
         .iter()
         .zip(structs)
@@ -1526,7 +1569,7 @@ fn eligible_layouts(table: &[Layout], structs: &[bool]) -> Vec<bool> {
 /// spliced children are representable or zero-width, and sums whose
 /// payload elements are all single slots. Every id in this set gets a
 /// `TalkL` declaration.
-fn struct_layouts(table: &[Layout]) -> Vec<bool> {
+pub fn struct_layouts(table: &[Layout]) -> Vec<bool> {
     let mut ok = vec![false; table.len()];
     for id in 0..table.len() {
         let shape = match &table[id] {
@@ -1568,7 +1611,7 @@ fn box_native_layouts(table: &[Layout], structs: &[bool]) -> Vec<bool> {
             };
             structs.get(id).copied().unwrap_or(false)
                 && matches!(shape, Shape::Product { .. })
-                && *symbol != Some(crate::backend::mir::mir_inline_array())
+                && *symbol != Some(MirSymbol::INLINE_ARRAY)
         })
         .collect()
 }
@@ -1607,7 +1650,7 @@ impl Frame<'_> {
         }
     }
 
-    fn shape(&self, layout: LayoutId) -> Result<&Shape, BackendError> {
+    fn shape(&self, layout: LayoutId) -> Result<&Shape, Error> {
         match self
             .facts
             .table
@@ -1621,7 +1664,7 @@ impl Frame<'_> {
     /// The rendered return value for this frame: a native return hands
     /// the struct over directly (or unboxes a uniform source); a uniform
     /// return goes through `value`.
-    fn return_value(&self, op: Operand) -> Result<String, BackendError> {
+    fn return_value(&self, op: Operand) -> Result<String, Error> {
         match self.ret {
             Some(ret) => match (self.class(op), op) {
                 (Some(class), Operand::Local(id)) if class == ret => Ok(format!("x{id}")),
@@ -1647,7 +1690,7 @@ impl Frame<'_> {
     /// is reabstracted into its uniform boxed form here: into the
     /// local's frame buffer when the value provably stays in the frame,
     /// into the arena otherwise.
-    fn value(&self, op: Operand) -> Result<String, BackendError> {
+    fn value(&self, op: Operand) -> Result<String, Error> {
         match self.class(op) {
             Some(layout) => {
                 let Operand::Local(id) = op else { unreachable!() };
@@ -1775,7 +1818,7 @@ fn emit_construction(
     frame_slot: Option<usize>,
     frame: &Frame,
     sink: Sink,
-) -> Result<(), BackendError> {
+) -> Result<(), Error> {
     let shape = frame.facts.shape_of(layout)?;
     let placements: Vec<(u32, FieldRepr)> = match shape {
         Shape::Product {
@@ -1969,7 +2012,7 @@ fn emit_term(
     function: &Function,
     identified: bool,
     frame: &Frame,
-) -> Result<(), BackendError> {
+) -> Result<(), Error> {
     match term {
         Term::Goto(target, args) => emit_goto(out, *target, args, function, frame)?,
         Term::Branch {
@@ -2019,7 +2062,7 @@ fn emit_goto(
     args: &[Operand],
     function: &Function,
     frame: &Frame,
-) -> Result<(), BackendError> {
+) -> Result<(), Error> {
     if args.is_empty() {
         let _ = writeln!(out, "    goto b{target};");
         return Ok(());
@@ -2069,7 +2112,7 @@ fn scalar(
     a: Operand,
     b: Option<Operand>,
     frame: &Frame,
-) -> Result<String, BackendError> {
+) -> Result<String, Error> {
     let helper = match op {
         ScalarOp::IntAdd => "talk_add",
         ScalarOp::IntSub => "talk_sub",
@@ -2114,7 +2157,7 @@ impl Emitter {
     /// some function stored natively, plus the spliced children those
     /// layouts embed. Ascending id order is dependency order: interning
     /// assigns children before parents.
-    fn layout_decls(&mut self, out: &mut String, facts: &Facts) -> Result<(), BackendError> {
+    fn layout_decls(&mut self, out: &mut String, facts: &Facts) -> Result<(), Error> {
         // Children intern before parents, so ascending ids declare every
         // spliced member type before its first use.
         for id in 0..facts.table.len() {
@@ -2131,7 +2174,7 @@ impl Emitter {
     /// existential boundary's dynamic container), the tagged conversion
     /// rendering uses, and the region scan's walk. Emitted even when no
     /// layout boxes natively, so the prototypes always resolve.
-    fn native_dispatchers(&mut self, out: &mut String, facts: &Facts) -> Result<(), BackendError> {
+    fn native_dispatchers(&mut self, out: &mut String, facts: &Facts) -> Result<(), Error> {
         let boxed: Vec<LayoutId> = (0..facts.table.len())
             .filter(|id| facts.box_native[*id])
             .map(|id| u32::try_from(id).unwrap_or(u32::MAX))
@@ -2197,7 +2240,7 @@ static void talk_native_scan(TalkValue value, struct TalkObject ***out, size_t *
         out: &mut String,
         id: LayoutId,
         facts: &Facts,
-    ) -> Result<(), BackendError> {
+    ) -> Result<(), Error> {
         let table = facts.table;
         let Some(Layout::Inline(symbol, shape) | Layout::Boxed(symbol, shape)) =
             table.get(usize::try_from(id).unwrap_or(usize::MAX))
@@ -2261,7 +2304,7 @@ static void talk_native_scan(TalkValue value, struct TalkObject ***out, size_t *
         id: LayoutId,
         display: u32,
         shape: &Shape,
-    ) -> Result<(), BackendError> {
+    ) -> Result<(), Error> {
         slot_typedef(out, id, shape);
         let width = shape.width();
         let _ = writeln!(
@@ -2402,7 +2445,7 @@ fn comparison(kind: CmpKind) -> &'static str {
     }
 }
 
-fn operand(operand: Operand) -> Result<String, BackendError> {
+fn operand(operand: Operand) -> Result<String, Error> {
     Ok(match operand {
         Operand::Local(id) => format!("l[{id}]"),
         Operand::Const(Constant::Unit) => "talk_unit()".to_string(),
@@ -2428,15 +2471,12 @@ fn symbol(id: usize) -> String {
     format!("talk_fn{id}")
 }
 
-fn unsupported(what: &str) -> BackendError {
-    BackendError::unsupported(
-        format!("{what} is not supported yet by the C backend"),
-        Span::SYNTHESIZED,
-    )
+fn unsupported(what: &str) -> Error {
+    Error::unsupported(format!("{what} is not supported yet by the C backend"))
 }
 
-fn internal(message: &str) -> BackendError {
-    BackendError::new(format!("C backend: {message}"), Span::SYNTHESIZED)
+fn internal(message: &str) -> Error {
+    Error::new(format!("C backend: {message}"))
 }
 
 /// Function names reach the output inside `/* */`, which does not nest.
@@ -2446,544 +2486,4 @@ fn comment(name: &str) -> String {
 
 fn escape(text: &str) -> String {
     text.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::backend::mir::{BlockData, Constant, Function, Inst, Operand, Program, Term};
-
-    fn sym(id: u32) -> crate::backend::mir::MirSymbol {
-        crate::backend::mir::MirSymbol {
-            kind: crate::backend::mir::MirSymbolKind::Struct,
-            module: 9,
-            local: id,
-        }
-    }
-
-    fn flat_pair(symbol: crate::backend::mir::MirSymbol) -> Layout {
-        Layout::Inline(
-            Some(symbol),
-            Shape::Product {
-                width: 2,
-                offsets: vec![0, 1],
-                reprs: vec![FieldRepr::Slot(SlotKind::Int); 2],
-                kinds: vec![SlotKind::Int; 2],
-            },
-        )
-    }
-
-    fn function(arity: u16, n_locals: u16, insts: Vec<Inst>, term: Term) -> Function {
-        Function {
-            frame_sites: Default::default(),
-            param_reprs: Vec::new(),
-            return_repr: None,
-            name: String::new(),
-            arity,
-            locals: crate::backend::mir::LocalInfo::uniform(n_locals),
-            blocks: vec![BlockData {
-                params: Vec::new(),
-                insts,
-                term: Some(term),
-            }],
-        }
-    }
-
-    fn emitted(functions: Vec<Function>, layout_table: Vec<Layout>) -> String {
-        let mut program = Program {
-            functions,
-            entry: 0,
-            global_slots: 0,
-            exports: Vec::new(),
-            layout_table,
-            display: Default::default(),
-            string_symbol: crate::backend::mir::mir_string(),
-            storage_symbol: crate::backend::mir::mir_storage(),
-        };
-        // The real pipeline's frame shaping: regalloc's class stamping
-        // (here under the fixtures' identity numbering), then escape
-        // summaries and the published per-site facts the emitter reads.
-        let returns: Vec<_> = program.functions.iter().map(|f| f.return_repr).collect();
-        for function in &mut program.functions {
-            let classes = crate::backend::mir::layout::local_layouts(
-                function,
-                &program.layout_table,
-                &returns,
-            );
-            for (local, info) in function.locals.iter_mut().enumerate() {
-                info.layout = classes.get(local).copied().flatten();
-            }
-        }
-        let summaries = crate::backend::mir::escape::parameter_summaries(&program);
-        crate::backend::mir::escape::shape_frames(&mut program, &summaries);
-        emit(&program).expect("emission")
-    }
-
-    #[test]
-    fn native_products_store_members_and_box_at_boundaries() {
-        let pair = sym(1);
-        let entry = function(
-            0,
-            4,
-            vec![
-                Inst::Aggregate {
-                    tag: 0,
-                    dest: 1,
-                    layout: 0,
-                    args: vec![
-                        Operand::Const(Constant::Int(1)),
-                        Operand::Const(Constant::Int(2)),
-                    ],
-                },
-                Inst::Field {
-                    dest: 2,
-                    src: Operand::Local(1),
-                    container: 0,
-                    offset: 0,
-                    member: None,
-                },
-                Inst::Call {
-                    dest: 3,
-                    func: 1,
-                    args: vec![Operand::Local(1)],
-                    unwind: None,
-                },
-            ],
-            Term::Return(Operand::Local(2)),
-        );
-        // The callee only reads its parameter — nothing escapes, so the
-        // caller's boxing may reuse the frame buffer.
-        let callee = function(1, 2, Vec::new(), Term::Return(Operand::Const(Constant::Unit)));
-        let out = emitted(vec![entry, callee], vec![flat_pair(pair)]);
-        // The construction allocates nothing: native storage, member
-        // stores, and a direct member read.
-        assert!(out.contains("TalkL0 x1;"), "{out}");
-        assert!(out.contains("x1.m0 = talk_int(INT64_C(1)).v.i;"), "{out}");
-        assert!(out.contains("x1.m1 = talk_int(INT64_C(2)).v.i;"), "{out}");
-        assert!(out.contains("l[2] = talk_int(x1.m0);"), "{out}");
-        // Crossing into the uniform call boundary reabstracts — into the
-        // local's frame buffer, since the callee does not leak it.
-        assert!(out.contains("talk_box_l0_in(fx1, x1)"), "{out}");
-        assert!(out.contains("unsigned char fx1[sizeof(TalkAgg)"), "{out}");
-        assert!(
-            out.contains("static inline TalkValue talk_box_l0(TalkL0 v)"),
-            "{out}"
-        );
-    }
-
-    #[test]
-    fn spliced_fields_copy_native_sources_and_unbox_uniform_ones() {
-        let inner = sym(1);
-        let outer = sym(2);
-        let table = vec![
-            flat_pair(inner),
-            Layout::Inline(
-                Some(outer),
-                Shape::Product {
-                    width: 3,
-                    offsets: vec![0, 2],
-                    reprs: vec![FieldRepr::Spliced(0), FieldRepr::Slot(SlotKind::Int)],
-                    kinds: vec![SlotKind::Int; 3],
-                },
-            ),
-        ];
-        // One function receives the inner pair from a call (uniform), the
-        // other builds it natively in place.
-        let from_uniform = function(
-            0,
-            4,
-            vec![
-                Inst::Call {
-                    dest: 1,
-                    func: 2,
-                    args: Vec::new(),
-                    unwind: None,
-                },
-                Inst::Aggregate {
-                    tag: 0,
-                    dest: 2,
-                    layout: 1,
-                    args: vec![Operand::Local(1), Operand::Const(Constant::Int(7))],
-                },
-                Inst::Field {
-                    dest: 3,
-                    src: Operand::Local(2),
-                    container: 1,
-                    offset: 0,
-                    member: Some(0),
-                },
-            ],
-            Term::Return(Operand::Local(3)),
-        );
-        let from_native = function(
-            0,
-            3,
-            vec![
-                Inst::Aggregate {
-                    tag: 0,
-                    dest: 1,
-                    layout: 0,
-                    args: vec![
-                        Operand::Const(Constant::Int(1)),
-                        Operand::Const(Constant::Int(2)),
-                    ],
-                },
-                Inst::Aggregate {
-                    tag: 0,
-                    dest: 2,
-                    layout: 1,
-                    args: vec![Operand::Local(1), Operand::Const(Constant::Int(9))],
-                },
-            ],
-            Term::Return(Operand::Local(2)),
-        );
-        let source = function(0, 1, Vec::new(), Term::Return(Operand::Const(Constant::Unit)));
-        let out = emitted(vec![from_uniform, from_native, source], table);
-        // A uniform source for a spliced field unboxes once and copies
-        // slots (ADR 0046: the flat struct has one member per slot)...
-        assert!(out.contains("TalkL0 sub = talk_unbox_l0(l[1]);"), "{out}");
-        assert!(out.contains("x2.m0 = sub.m0;"), "{out}");
-        assert!(out.contains("x2.m1 = sub.m1;"), "{out}");
-        assert!(out.contains("x2.m2 = talk_int(INT64_C(7)).v.i;"), "{out}");
-        // ...a native one copies slots...
-        assert!(out.contains("x2.m0 = x1.m0;"), "{out}");
-        assert!(out.contains("x2.m1 = x1.m1;"), "{out}");
-        // ...and reading the spliced field back copies its slots into a
-        // destination classed by the field's own layout, re-boxed only
-        // when it crosses the uniform return.
-        assert!(out.contains("x3.m0 = x2.m0;"), "{out}");
-        assert!(out.contains("x3.m1 = x2.m1;"), "{out}");
-        assert!(out.contains("return talk_box_l0(x3);"), "{out}");
-        // Returning the native outer struct reabstracts it whole.
-        assert!(out.contains("return talk_box_l1(x2);"), "{out}");
-    }
-
-    #[test]
-    fn native_sums_write_and_read_statically() {
-        let option = sym(1);
-        let table = vec![Layout::Inline(
-            Some(option),
-            Shape::Sum {
-                width: 2,
-                payloads: vec![vec![1], Vec::new()],
-                reprs: vec![vec![FieldRepr::Slot(SlotKind::Int)], Vec::new()],
-                kinds: vec![SlotKind::Int; 2],
-            },
-        )];
-        let entry = function(
-            0,
-            4,
-            vec![
-                Inst::Aggregate {
-                    dest: 1,
-                    tag: 0,
-                    layout: 0,
-                    args: vec![Operand::Const(Constant::Int(3))],
-                },
-                Inst::GetTag {
-                    dest: 2,
-                    src: Operand::Local(1),
-                },
-                Inst::Field {
-                    dest: 3,
-                    src: Operand::Local(1),
-                    container: 0,
-                    offset: 1,
-                    member: None,
-                },
-            ],
-            Term::Return(Operand::Local(3)),
-        );
-        let out = emitted(vec![entry], table);
-        assert!(out.contains("x1.m0 = 0;"), "{out}");
-        assert!(out.contains("x1.m1 = talk_int(INT64_C(3)).v.i;"), "{out}");
-        assert!(out.contains("l[2] = talk_int(x1.m0);"), "{out}");
-        assert!(out.contains("l[3] = talk_int(x1.m1);"), "{out}");
-    }
-
-    #[test]
-    fn dynamically_indexed_sources_stay_uniform_and_tagged() {
-        // A `GetElement` source has no static member in a native struct
-        // (C cannot select a member by runtime index): the published
-        // locals table keeps the local uniform, and `InlineArray`'s
-        // boxed form stays the tagged aggregate `talk_get_element`
-        // indexes.
-        let entry = function(
-            0,
-            4,
-            vec![
-                Inst::Aggregate {
-                    tag: 0,
-                    dest: 1,
-                    layout: 0,
-                    args: vec![
-                        Operand::Const(Constant::Int(1)),
-                        Operand::Const(Constant::Int(2)),
-                    ],
-                },
-                Inst::Copy {
-                    dest: 2,
-                    src: Operand::Const(Constant::Int(0)),
-                },
-                Inst::GetElement {
-                    dest: 3,
-                    src: Operand::Local(1),
-                    element: crate::backend::mir::layout::LayoutId::MAX,
-                    index: Operand::Local(2),
-                },
-            ],
-            Term::Return(Operand::Local(3)),
-        );
-        let out = emitted(
-            vec![entry],
-            vec![flat_pair(crate::backend::mir::mir_inline_array())],
-        );
-        assert!(!out.contains("TalkL0 x1"), "{out}");
-        assert!(out.contains("l[1] = built;"), "{out}");
-    }
-
-    #[test]
-    fn native_signatures_pass_structs_directly() {
-        // The callee publishes an inline pair parameter; the caller owns
-        // one natively, so the call hands the struct over with no boxing
-        // on either side, and the callee's prologue fills its struct
-        // local straight from the parameter.
-        let pair = sym(1);
-        let entry = function(
-            0,
-            3,
-            vec![
-                Inst::Aggregate {
-                    tag: 0,
-                    dest: 1,
-                    layout: 0,
-                    args: vec![
-                        Operand::Const(Constant::Int(1)),
-                        Operand::Const(Constant::Int(2)),
-                    ],
-                },
-                Inst::Call {
-                    dest: 2,
-                    func: 1,
-                    args: vec![Operand::Local(1)],
-                    unwind: None,
-                },
-            ],
-            Term::Return(Operand::Local(2)),
-        );
-        let mut callee = function(
-            1,
-            2,
-            vec![Inst::Field {
-                dest: 1,
-                src: Operand::Local(0),
-                container: 0,
-                offset: 0,
-                member: None,
-            }],
-            Term::Return(Operand::Local(1)),
-        );
-        callee.param_reprs = vec![crate::backend::mir::layout::ParamRepr::Borrow(0)];
-        let out = emitted(vec![entry, callee], vec![flat_pair(pair)]);
-        assert!(out.contains("talk_fn1(NULL, x1)"), "{out}");
-        assert!(
-            out.contains("static TalkValue talk_fn1(const TalkValue *env, TalkL0 p0)"),
-            "{out}"
-        );
-        assert!(out.contains("x0 = p0;"), "{out}");
-        assert!(out.contains("l[1] = talk_int(x0.m0);"), "{out}");
-        // The dispatch case converts for indirect callers.
-        assert!(out.contains("talk_fn1(env, talk_unbox_l0(args[0]))"), "{out}");
-    }
-
-    #[test]
-    fn values_arriving_natively_box_in_the_arena() {
-        // A native parameter's value arrived from outside every site the
-        // escape analysis judged, so reabstracting it must not use a
-        // frame buffer: a callee returning its evolved parameter inside
-        // the writeback tuple would otherwise hand the caller a pointer
-        // into this dead frame.
-        let pair = sym(1);
-        let entry = function(
-            0,
-            2,
-            vec![
-                Inst::Aggregate {
-                    tag: 0,
-                    dest: 1,
-                    layout: 0,
-                    args: vec![
-                        Operand::Const(Constant::Int(1)),
-                        Operand::Const(Constant::Int(2)),
-                    ],
-                },
-                Inst::Call {
-                    dest: 1,
-                    func: 1,
-                    args: vec![Operand::Local(1)],
-                    unwind: None,
-                },
-            ],
-            Term::Return(Operand::Local(1)),
-        );
-        let mut callee = function(
-            1,
-            3,
-            vec![Inst::Call {
-                dest: 1,
-                func: 2,
-                args: vec![Operand::Local(0)],
-                unwind: None,
-            }],
-            Term::Return(Operand::Local(1)),
-        );
-        callee.param_reprs = vec![crate::backend::mir::layout::ParamRepr::Value(0)];
-        let sink = function(1, 2, Vec::new(), Term::Return(Operand::Local(0)));
-        let out = emitted(vec![entry, callee, sink], vec![flat_pair(pair)]);
-        assert!(out.contains("talk_box_l0(x0)"), "{out}");
-        assert!(!out.contains("talk_box_l0_in(fx0, x0)"), "{out}");
-    }
-
-    #[test]
-    fn native_returns_hand_back_structs() {
-        // The callee publishes an inline return: it hands its struct
-        // back directly (no arena box), the caller's destination is
-        // classed from the published fact, and unwind paths return a
-        // zeroed sentinel of the native type.
-        let pair = sym(1);
-        let entry = function(
-            0,
-            3,
-            vec![
-                Inst::Call {
-                    dest: 1,
-                    func: 1,
-                    args: Vec::new(),
-                    unwind: None,
-                },
-                Inst::Field {
-                    dest: 2,
-                    src: Operand::Local(1),
-                    container: 0,
-                    offset: 0,
-                    member: None,
-                },
-            ],
-            Term::Return(Operand::Local(2)),
-        );
-        let mut callee = function(
-            0,
-            2,
-            vec![
-                Inst::Call {
-                    dest: 0,
-                    func: 2,
-                    args: Vec::new(),
-                    unwind: None,
-                },
-                Inst::Aggregate {
-                    tag: 0,
-                    dest: 1,
-                    layout: 0,
-                    args: vec![Operand::Local(0), Operand::Const(Constant::Int(2))],
-                },
-            ],
-            Term::Return(Operand::Local(1)),
-        );
-        callee.return_repr = Some(0);
-        let helper = function(0, 1, Vec::new(), Term::Return(Operand::Const(Constant::Unit)));
-        let out = emitted(vec![entry, callee, helper], vec![flat_pair(pair)]);
-        assert!(
-            out.contains("static TalkL0 talk_fn1(const TalkValue *env)"),
-            "{out}"
-        );
-        assert!(out.contains("    return x1;"), "{out}");
-        // The callee contains a call, so its unwind path must return the
-        // native sentinel rather than Unit.
-        assert!(out.contains("return (TalkL0){0};"), "{out}");
-        // The caller's destination takes the struct without reboxing.
-        assert!(out.contains("x1 = talk_fn1(NULL);"), "{out}");
-        assert!(out.contains("l[2] = talk_int(x1.m0);"), "{out}");
-        assert!(out.contains("case 1: return talk_box_l0(talk_fn1(env));"), "{out}");
-    }
-
-    #[test]
-    fn blank_cells_box_native_and_zero() {
-        // The initializer's blank receiver: declared blankness. Nothing
-        // observes an unassigned field (definite assignment on the happy
-        // path, per-field shadows on the abort path), so a box-native
-        // receiver is zeroed native storage — no tagged placeholders.
-        let pair = sym(1);
-        let entry = function(
-            0,
-            3,
-            vec![
-                Inst::Blank {
-                    dest: 1,
-                    layout: 0,
-                },
-                Inst::Aggregate {
-                    tag: 0,
-                    dest: 2,
-                    layout: 0,
-                    args: vec![
-                        Operand::Const(Constant::Int(1)),
-                        Operand::Const(Constant::Int(2)),
-                    ],
-                },
-            ],
-            Term::Return(Operand::Local(1)),
-        );
-        let out = emitted(vec![entry], vec![flat_pair(pair)]);
-        // The blank builds as a zeroed native box (its local never
-        // classes — the value leaves through the init call)...
-        assert!(!out.contains("TalkL0 x1;"), "{out}");
-        assert!(
-            out.contains("memset(TALK_NATIVE_PAYLOAD(built), 0, sizeof(TalkL0));"),
-            "{out}"
-        );
-        // ...while the honest construction of the same layout goes
-        // native in its frame local.
-        assert!(out.contains("x2.m0 = talk_int(INT64_C(1)).v.i;"), "{out}");
-    }
-
-    #[test]
-    fn eligibility_excludes_boxed_empty_and_spliced_sums() {
-        let table = vec![
-            flat_pair(sym(1)),
-            Layout::Boxed(
-                Some(sym(2)),
-                Shape::Product {
-                    width: 5,
-                    offsets: vec![0, 1, 2, 3, 4],
-                    reprs: vec![FieldRepr::Slot(SlotKind::Int); 5],
-                    kinds: vec![SlotKind::Int; 5],
-                },
-            ),
-            Layout::Inline(
-                Some(sym(3)),
-                Shape::Product {
-                    width: 0,
-                    offsets: Vec::new(),
-                    reprs: Vec::new(),
-                    kinds: Vec::new(),
-                },
-            ),
-            Layout::Inline(
-                Some(sym(4)),
-                Shape::Sum {
-                    width: 3,
-                    payloads: vec![vec![1], Vec::new()],
-                    reprs: vec![vec![FieldRepr::Spliced(0)], Vec::new()],
-                    kinds: vec![SlotKind::Int; 3],
-                },
-            ),
-            Layout::Slot,
-            Layout::Opaque,
-        ];
-        assert_eq!(
-            eligible_layouts(&table, &struct_layouts(&table)),
-            vec![true, false, false, false, false, false]
-        );
-    }
 }

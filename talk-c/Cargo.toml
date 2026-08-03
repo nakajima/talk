@@ -1,0 +1,13 @@
+[package]
+name = "talk-c"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+talk-mir = { path = "../talk-mir" }
+talk-native-runtime = { path = "../talk-native-runtime" }
+rustc-hash = "2.1.1"
+
+[lints.clippy]
+approx_constant = "allow"

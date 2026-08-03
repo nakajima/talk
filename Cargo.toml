@@ -51,6 +51,7 @@ talk-vm = { path = "talk-vm" }
 talk-mir = { path = "talk-mir" }
 talk-native-runtime = { path = "talk-native-runtime" }
 talk-bytecode = { path = "talk-bytecode" }
+talk-c = { path = "talk-c", optional = true }
 num-bigint = { version = "0.5.1", features = ["serde"] }
 profiling = { version = "1.0.18", default-features = false }
 tracy-client = { version = "0.18.4", default-features = false, features = ["timer-fallback"], optional = true }
@@ -66,6 +67,7 @@ cli = [
   "dep:tower",
   "dep:tokio",
   "dep:ignore",
+  "dep:talk-c",
 ]
 profile-tracy = [
   "dep:tracy-client",

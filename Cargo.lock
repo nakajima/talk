@@ -2001,6 +2001,7 @@ dependencies = [
  "serde",
  "sha2",
  "talk-bytecode",
+ "talk-c",
  "talk-mir",
  "talk-native-runtime",
  "talk-vm",
@@ -2021,6 +2022,15 @@ dependencies = [
  "rustc-hash",
  "talk-mir",
  "talk-vm",
+]
+
+[[package]]
+name = "talk-c"
+version = "0.1.0"
+dependencies = [
+ "rustc-hash",
+ "talk-mir",
+ "talk-native-runtime",
 ]
 
 [[package]]

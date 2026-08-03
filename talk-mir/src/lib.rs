@@ -55,6 +55,30 @@ impl std::fmt::Debug for MirSymbol {
     }
 }
 
+impl MirSymbol {
+    /// The well-known runtime aggregate identities (ADR 0047): String,
+    /// its Storage field, and the InlineArray construction identity. The
+    /// compiler's own mapping is pinned against these constants by its
+    /// tests, so the two cannot drift.
+    pub const STRING: MirSymbol = MirSymbol {
+        kind: MirSymbolKind::Struct,
+        module: 1,
+        local: u32::MAX - 32,
+    };
+
+    pub const STORAGE: MirSymbol = MirSymbol {
+        kind: MirSymbolKind::Struct,
+        module: 1,
+        local: u32::MAX - 30,
+    };
+
+    pub const INLINE_ARRAY: MirSymbol = MirSymbol {
+        kind: MirSymbolKind::Struct,
+        module: 1,
+        local: u32::MAX - 22,
+    };
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CmpKind {
     Eq,
