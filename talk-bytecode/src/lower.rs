@@ -10,15 +10,16 @@ use talk_vm::{
     MemKind, Module, NO_LAYOUT,
 };
 
-use super::BackendError;
-use super::mir::layout::{FieldRepr, Layout, Shape};
-use super::mir::{
-    BlockData, CmpKind, Constant, Function, Inst, Operand, Program, ScalarOp, Term,
+use talk_mir::layout::{FieldRepr, Layout, Shape, SlotKind};
+use talk_mir::{
+    BlockData, CmpKind, Constant, Function, Inst, MirSymbol, Module as Program, Operand, ScalarOp,
+    Term,
 };
-use crate::backend::mir::MirSymbol;
 
-fn mem_kind(kind: super::mir::layout::SlotKind) -> MemKind {
-    use super::mir::layout::SlotKind;
+use crate::Error as BackendError;
+
+fn mem_kind(kind: SlotKind) -> MemKind {
+    use talk_mir::layout::SlotKind;
     match kind {
         SlotKind::Byte => MemKind::Byte,
         SlotKind::Int => MemKind::I64,
@@ -26,21 +27,6 @@ fn mem_kind(kind: super::mir::layout::SlotKind) -> MemKind {
         SlotKind::Bool => MemKind::Bool,
         SlotKind::Ptr => MemKind::Ptr,
         SlotKind::Value => MemKind::Boxed,
-    }
-}
-use crate::parsing::span::Span;
-
-/// Aggregate identities carried by the layout table map structurally to
-/// the runtime's own symbol type; anything else folds to the library
-/// fallback.
-pub(crate) fn vm_symbol(symbol: crate::backend::mir::MirSymbol) -> talk_vm::symbol::Symbol {
-    use crate::backend::mir::MirSymbolKind as K;
-    use talk_vm::symbol::{ModuleId, ModuleSymbolId, Symbol as R};
-    let id = ModuleSymbolId::new(ModuleId(symbol.module), symbol.local);
-    match symbol.kind {
-        K::Struct => R::Struct(id),
-        K::Enum => R::Enum(id),
-        _ => R::Library,
     }
 }
 
@@ -73,7 +59,7 @@ pub(crate) fn lower(program: &Program) -> Result<Module, BackendError> {
             &mut effects,
         )
         .map_err(|error| {
-            BackendError::new(format!("{} (in {})", error.message, function.name), error.span)
+            BackendError::new(format!("{} (in {})", error.message, function.name))
         })?;
         module.chunks.push(chunk);
     }
@@ -161,7 +147,7 @@ fn shape_desc(symbol: Option<MirSymbol>, shape: &Shape) -> LayoutDesc {
         }
     };
     LayoutDesc {
-        symbol: symbol.map(vm_symbol),
+        symbol: symbol.map(crate::vm_symbol),
         width,
         body,
     }
@@ -230,11 +216,11 @@ impl StaticsPool {
 /// Effect symbols interned to runtime effect ids.
 #[derive(Default)]
 struct EffectPool {
-    ids: FxHashMap<crate::backend::mir::MirSymbol, u32>,
+    ids: FxHashMap<MirSymbol, u32>,
 }
 
 impl EffectPool {
-    fn intern(&mut self, effect: crate::backend::mir::MirSymbol) -> u32 {
+    fn intern(&mut self, effect: MirSymbol) -> u32 {
         let next = u32::try_from(self.ids.len()).unwrap_or_default();
         *self.ids.entry(effect).or_insert(next)
     }
@@ -603,9 +589,7 @@ impl Lowering<'_> {
         self.next_reg = self.scratch_floor;
         let Some(term) = &block.term else {
             return Err(BackendError::new(
-                "backend bug: unterminated block".into(),
-                Span::SYNTHESIZED,
-            ));
+                "backend bug: unterminated block".into()));
         };
         match term {
             Term::Goto(target, edge_args) => {
@@ -629,9 +613,7 @@ impl Lowering<'_> {
                     || !self.block_params[*else_block].is_empty()
                 {
                     return Err(BackendError::new(
-                        "backend bug: branch edge into a parameterized block".into(),
-                        Span::SYNTHESIZED,
-                    ));
+                        "backend bug: branch edge into a parameterized block".into()));
                 }
                 let cond = self.reg(*cond);
                 self.patches.push(Patch::Branch {
@@ -656,21 +638,15 @@ impl Lowering<'_> {
                     .any(|target| !self.block_params[*target].is_empty())
                 {
                     return Err(BackendError::new(
-                        "backend bug: switch edge into a parameterized block".into(),
-                        Span::SYNTHESIZED,
-                    ));
+                        "backend bug: switch edge into a parameterized block".into()));
                 }
                 let targets_len = u16::try_from(targets.len() + 1).map_err(|_| {
                     BackendError::new(
-                        "backend bug: switch has too many targets".into(),
-                        Span::SYNTHESIZED,
-                    )
+                        "backend bug: switch has too many targets".into())
                 })?;
                 let targets_start = u32::try_from(self.module.switch_pool.len()).map_err(|_| {
                     BackendError::new(
-                        "backend bug: switch pool is too large".into(),
-                        Span::SYNTHESIZED,
-                    )
+                        "backend bug: switch pool is too large".into())
                 })?;
                 let pool_start = self.module.switch_pool.len();
                 self.module
@@ -800,9 +776,7 @@ impl Lowering<'_> {
                     }
                     _ => {
                         return Err(BackendError::new(
-                            "backend bug: malformed scalar operation".into(),
-                            Span::SYNTHESIZED,
-                        ));
+                            "backend bug: malformed scalar operation".into()));
                     }
                 }
             }
@@ -848,9 +822,7 @@ impl Lowering<'_> {
                 let LayoutBody::Product(fields) = &self.module.layouts[layout as usize].body
                 else {
                     return Err(BackendError::new(
-                        "backend bug: a blank receiver under a non-product layout".into(),
-                        Span::SYNTHESIZED,
-                    ));
+                        "backend bug: a blank receiver under a non-product layout".into()));
                 };
                 let args = vec![Operand::Const(Constant::Unit); fields.len()];
                 let (args_start, args_len) = self.arg_range(&args);
@@ -1257,9 +1229,7 @@ impl Lowering<'_> {
                 ];
                 let Some(op) = IO_OPS.get(usize::from(*op)).copied() else {
                     return Err(BackendError::new(
-                        "backend bug: io operation out of range".into(),
-                        Span::SYNTHESIZED,
-                    ));
+                        "backend bug: io operation out of range".into()));
                 };
                 let a = self.reg(*a);
                 let b = self.reg(*b);
@@ -1278,16 +1248,14 @@ impl Lowering<'_> {
 
     /// Every executed construction publishes a shaped layout (ADR 0045
     /// rule 6): an unshaped id reaching lowering is a compiler bug.
-    fn require_shaped(&self, layout: super::mir::layout::LayoutId) -> Result<u32, BackendError> {
+    fn require_shaped(&self, layout: talk_mir::layout::LayoutId) -> Result<u32, BackendError> {
         match self.module.layouts.get(layout as usize) {
             Some(desc) if !matches!(desc.body, LayoutBody::Unshaped) => Ok(layout),
             _ => Err(BackendError::new(
                 format!(
                     "backend bug: construction without a published layout (L{layout} = {:?})",
                     self.module.layouts.get(layout as usize)
-                ),
-                Span::SYNTHESIZED,
-            )),
+                ))),
         }
     }
 

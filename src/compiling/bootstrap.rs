@@ -70,14 +70,18 @@ fn compile_stage(
             .map(|root| crate::compiling::abi::describe(&typed.phase.program, root))
             .transpose()?
     };
-    let executable = {
+    let output = {
         profiling::scope!("bootstrap.compile_service");
-        typed.compile_service(exports, allowed_effects)?
+        typed.compile_mir(crate::compiling::driver::MirEntry::Exports {
+            names: exports,
+            allowed_effects,
+        })?
     };
-    let optimizations = executable.optimization_stats().clone();
+    let optimizations = output.optimizations.clone();
     let image = {
         profiling::scope!("bootstrap.encode");
-        executable
+        talk_bytecode::compile(&output.module)
+            .map_err(|error| error.message().to_string())?
             .encode_bytecode()
             .map_err(|error| format!("bootstrap encode failed: {error:?}"))?
     };
@@ -215,7 +219,11 @@ mod tests {
             .manifest
             .verify(&sources, &outcome.image, None)
             .expect("manifest verifies its own output");
-        assert_eq!(outcome.stage_optimizations[0].passes.len(), 9);
+        assert_eq!(
+            outcome.stage_optimizations[0].passes.len(),
+            8,
+            "compiler passes only; the bytecode adapter reports its own fusion count"
+        );
         assert_eq!(
             outcome.stage_optimizations[0],
             outcome.stage_optimizations[1],

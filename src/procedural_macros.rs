@@ -48,11 +48,7 @@ impl ProceduralMacroArtifact {
         let module = talk_vm::Module::decode_bytecode(&self.image)
             .map_err(|error| format!("invalid procedural macro artifact: {error:?}"))?;
         Ok(ProceduralMacroService {
-            executable: crate::backend::Executable {
-                module,
-                names: Default::default(),
-                optimizations: Default::default(),
-            },
+            executable: talk_bytecode::Executable::from_vm_module(module, crate::backend::string_shape()),
             schema: crate::compiling::abi::parse_schema(&self.schema)?,
             artifact: self.clone(),
         })
@@ -63,7 +59,7 @@ impl ProceduralMacroArtifact {
 /// a `*.macro.tlk` unit is an expression macro with the standard syntax API
 /// signature; generated wrappers keep opaque syntax values inside Talk.
 pub struct ProceduralMacroService {
-    executable: crate::backend::Executable,
+    executable: talk_bytecode::Executable,
     schema: AbiSchema,
     artifact: ProceduralMacroArtifact,
 }

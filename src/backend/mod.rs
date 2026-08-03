@@ -1,19 +1,11 @@
-//! The bytecode backend: one deep interface over private phases (ADR 0034).
-//!
-//! ```text
-//! compile(typed programs, entry) -> runtime module or diagnostics
-//! execute(module, host IO)       -> rendered result or runtime failure
-//! ```
-//!
-//! MIR construction, ownership checking, and bytecode lowering are private
-//! stages of `compile`. In-memory modules from this compiler run as
-//! constructed; modules loaded from bytes validate first (the JVM's
-//! placement of bytecode verification — Leroy 2003, "Java Bytecode
-//! Verification: Algorithms and Formalizations").
+//! The compiler's backend: MIR construction, ownership checking,
+//! optimization, register allocation, and frame shaping — everything up
+//! to the public finalized module (ADR 0047). Target adapters live in
+//! their own crates: `talk-bytecode` lowers the module to VM bytecode,
+//! `talk-llvm` emits LLVM IR, and the C emitter below moves to `talk-c`
+//! in a later stage.
 
 mod c;
-mod checked_indexed_load;
-mod lower;
 mod optimize;
 
 /// The compiler-to-runtime symbol mapping, for the frontend result
@@ -27,7 +19,7 @@ pub(crate) fn runtime_symbol(
     symbol: crate::name_resolution::symbol::Symbol,
 ) -> talk_vm::symbol::Symbol {
     match mir::from_source(symbol) {
-        Some(mir) => lower::vm_symbol(mir),
+        Some(mir) => talk_bytecode::vm_symbol(mir),
         None => talk_vm::symbol::Symbol::Library,
     }
 }
@@ -37,10 +29,6 @@ mod regalloc;
 pub(crate) use mir::{Entry, ProgramInput};
 
 use crate::parsing::span::Span;
-use talk_vm::interp::{ValueNames, run_displayed_counted};
-
-pub use talk_vm::VmStats;
-pub use talk_vm::interp::{Budgets, HostValue, RunOutcome};
 
 /// The number of concrete rewrites performed by one optimization pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,106 +41,6 @@ pub struct OptimizationPassStats {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OptimizationStats {
     pub passes: Vec<OptimizationPassStats>,
-}
-
-/// Compiler and VM statistics for one executable.
-#[derive(Debug)]
-pub struct ExecutableStats {
-    pub optimizations: OptimizationStats,
-    pub vm: VmStats,
-}
-
-impl ExecutableStats {
-    pub fn render(&self) -> String {
-        use std::fmt::Write as _;
-
-        let mut out = String::new();
-        let _ = writeln!(out, "Optimization statistics");
-        let _ = writeln!(out, "  {:<28} {:>12}", "pass", "applied");
-        for pass in &self.optimizations.passes {
-            let _ = writeln!(out, "  {:<28} {:>12}", pass.name, pass.applied);
-        }
-        let total: u64 = self
-            .optimizations
-            .passes
-            .iter()
-            .map(|pass| pass.applied)
-            .sum();
-        let _ = writeln!(out, "  {:<28} {:>12}", "total", total);
-        let _ = writeln!(out);
-        out.push_str(&self.vm.render());
-        out
-    }
-}
-
-/// A compiled program: the runtime module plus the display metadata that
-/// renders results Talk-style (enum case names, struct fields).
-pub struct Executable {
-    pub(crate) module: talk_vm::Module,
-    pub(crate) names: ValueNames,
-    pub(crate) optimizations: OptimizationStats,
-}
-
-impl Executable {
-    /// Serialize the executable module (TOOL-13). Display metadata is not
-    /// part of the wire format; an image renders values with symbols only.
-    pub fn encode_bytecode(&self) -> Result<Vec<u8>, talk_vm::bytecode::EncodeError> {
-        self.module.encode_bytecode()
-    }
-
-    /// Render the target bytecode for inspection (TOOL-12).
-    pub fn render_bytecode(&self) -> String {
-        self.module.render()
-    }
-
-    /// Optimization counts recorded while compiling this executable.
-    pub fn optimization_stats(&self) -> &OptimizationStats {
-        &self.optimizations
-    }
-
-    /// Create a statistics collector for this executable. Optimization
-    /// counts are fixed at compilation; VM counts accumulate across runs.
-    pub fn stats(&self) -> ExecutableStats {
-        ExecutableStats {
-            optimizations: self.optimizations.clone(),
-            vm: VmStats::for_module(&self.module),
-        }
-    }
-
-    /// Call an exported service function on a fresh machine (ADR 0043
-    /// call ABI). Only executables from `compile_service` have exports.
-    pub fn run_export<'io>(
-        &self,
-        name: &str,
-        args: &[HostValue],
-        budgets: Budgets,
-        io: &'io mut dyn talk_vm::io::IO,
-    ) -> Result<RunOutcome<'io>, String> {
-        talk_vm::interp::run_export(&self.module, name, args, string_shape(), budgets, io)
-    }
-
-    /// Run an export while collecting exact VM instruction counts.
-    pub fn run_export_with_stats<'io>(
-        &self,
-        name: &str,
-        args: &[HostValue],
-        budgets: Budgets,
-        io: &'io mut dyn talk_vm::io::IO,
-        stats: &mut ExecutableStats,
-    ) -> Result<RunOutcome<'io>, String> {
-        if stats.optimizations != self.optimizations {
-            return Err("statistics collector belongs to a different executable".into());
-        }
-        talk_vm::interp::run_export_with_stats(
-            &self.module,
-            name,
-            args,
-            string_shape(),
-            budgets,
-            io,
-            &mut stats.vm,
-        )
-    }
 }
 
 /// The core String record symbol, for fabricating host string
@@ -180,34 +68,6 @@ impl BackendError {
         debug_assert!(message.contains("not supported yet"));
         Self { message, span }
     }
-}
-
-/// Compile the reachable source graph as one unit. `programs[0]` is the
-/// user's program; the rest supply dependency bodies (core, stdlib).
-pub(crate) fn compile(
-    programs: &[ProgramInput<'_>],
-    entry: Entry,
-) -> Result<Executable, BackendError> {
-    crate::profile::init();
-    profiling::scope!("backend.compile");
-    let (program, mut optimizations) = {
-        profiling::scope!("backend.finalize");
-        compile_mir(programs, entry)?
-    };
-    let mut module = {
-        profiling::scope!("backend.lower");
-        lower::lower(&program)?
-    };
-    let checked_indexed_loads = checked_indexed_load::run(&mut module);
-    optimizations.passes.push(OptimizationPassStats {
-        name: "checked_indexed_load",
-        applied: checked_indexed_loads,
-    });
-    Ok(Executable {
-        module,
-        names: value_names(&program),
-        optimizations,
-    })
 }
 
 /// Run the ownership analysis without lowering or executing: `talk
@@ -282,58 +142,4 @@ pub(crate) fn render_mir(
         finalize(&mut program);
     }
     Ok(program.render())
-}
-
-/// Rendering metadata from the module's published display names: the
-/// runtime itself only carries symbols.
-fn value_names(program: &mir::Program) -> ValueNames {
-    let mut names = ValueNames::default();
-    for (symbol, entry) in &program.display.entries {
-        let runtime = lower::vm_symbol(*symbol);
-        names.types.insert(runtime, entry.name.clone());
-        match entry.kind {
-            mir::TypeKind::Enum => {
-                names.cases.insert(runtime, entry.members.clone());
-            }
-            _ => {
-                names.fields.insert(runtime, entry.members.clone());
-            }
-        }
-    }
-    names.string_struct = Some(lower::vm_symbol(program.string_symbol));
-    names
-}
-
-/// Execute a compiled module and return its Talk-rendered result (`None`
-/// for Unit). Every run is counted: a nonzero allocation or object balance
-/// at exit is a failure, not a warning.
-pub(crate) fn execute(
-    executable: &Executable,
-    io: &mut dyn talk_vm::io::IO,
-) -> Result<Option<String>, String> {
-    crate::profile::init();
-    profiling::scope!("backend.execute");
-    if std::env::var_os("TALK_BACKEND_DEBUG").is_some() {
-        eprintln!("{}", executable.module.render());
-    }
-    let (value, rendered, balance) =
-        run_displayed_counted(&executable.module, io, &executable.names)?;
-    // The result value's own footprint is alive at exit by definition;
-    // anything beyond it leaked.
-    if balance.result_exact
-        && (balance.live_allocations != balance.result_allocations
-            || balance.live_objects != balance.result_objects)
-    {
-        return Err(format!(
-            "resource leak: {} live allocations, {} live 'heap objects at exit (result owns {}, {})",
-            balance.live_allocations,
-            balance.live_objects,
-            balance.result_allocations,
-            balance.result_objects
-        ));
-    }
-    Ok(match value {
-        talk_vm::interp::Value::Void => None,
-        _ => Some(rendered),
-    })
 }

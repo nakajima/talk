@@ -2000,6 +2000,7 @@ dependencies = [
  "rustyline",
  "serde",
  "sha2",
+ "talk-bytecode",
  "talk-mir",
  "talk-native-runtime",
  "talk-vm",
@@ -2010,6 +2011,16 @@ dependencies = [
  "tracing-subscriber",
  "tracing-tree",
  "tracy-client",
+]
+
+[[package]]
+name = "talk-bytecode"
+version = "0.1.0"
+dependencies = [
+ "profiling",
+ "rustc-hash",
+ "talk-mir",
+ "talk-vm",
 ]
 
 [[package]]
@@ -2031,16 +2042,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "talk-vm"
-version = "0.1.0"
-dependencies = [
- "libc",
- "profiling",
- "rustc-hash",
- "tracy-client",
-]
-
-[[package]]
 name = "talk-mir"
 version = "0.1.0"
 
@@ -2053,6 +2054,16 @@ name = "talk-static"
 version = "0.1.0"
 dependencies = [
  "talk-vm",
+]
+
+[[package]]
+name = "talk-vm"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "profiling",
+ "rustc-hash",
+ "tracy-client",
 ]
 
 [[package]]

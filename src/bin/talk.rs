@@ -470,7 +470,7 @@ async fn main() {
             bin,
             offline,
         } => {
-            use talk::compiling::driver::{Driver, DriverConfig, execute_module};
+            use talk::compiling::driver::{Driver, DriverConfig};
 
             if *offline
                 && (filenames.is_empty()
@@ -503,7 +503,7 @@ async fn main() {
                         }
                     };
                 let mut io = talk_vm::io::StdioIO;
-                match execute_module(&executable, &mut io) {
+                match executable.run(&mut io) {
                     Ok(Some(rendered)) => println!("{rendered}"),
                     Ok(None) => {}
                     Err(message) => {
@@ -546,7 +546,7 @@ async fn main() {
                 }
             };
             let mut io = talk_vm::io::StdioIO;
-            match execute_module(&module, &mut io) {
+            match module.run(&mut io) {
                 Ok(Some(rendered)) => println!("{rendered}"),
                 Ok(None) => {}
                 Err(message) => {
@@ -856,7 +856,6 @@ async fn main() {
             }
         }
         Commands::RunImage { filename } => {
-            use talk::compiling::driver::execute_image;
             let bytes = match std::fs::read(filename) {
                 Ok(bytes) => bytes,
                 Err(err) => {
@@ -865,7 +864,7 @@ async fn main() {
                 }
             };
             let mut io = talk_vm::io::StdioIO;
-            match execute_image(&bytes, &mut io) {
+            match talk_bytecode::run_image(&bytes, &mut io) {
                 Ok(Some(rendered)) => println!("{rendered}"),
                 Ok(None) => {}
                 Err(message) => {

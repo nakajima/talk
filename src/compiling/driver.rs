@@ -624,10 +624,10 @@ impl Driver<Parsed> {
 }
 
 /// The compiled program handed between `compile_executable` and
-/// `execute_module`.
-pub use crate::backend::{
-    Executable, ExecutableStats, OptimizationPassStats, OptimizationStats,
-};
+/// execution, re-exported from the bytecode adapter (ADR 0047).
+pub use talk_bytecode::Executable;
+
+pub use crate::backend::{OptimizationPassStats, OptimizationStats};
 
 /// How the published MIR module is entered (ADR 0047): a script's
 /// top-level statements, a named zero-parameter public function, or a
@@ -647,33 +647,6 @@ pub enum MirEntry<'a> {
 pub struct MirOutput {
     pub module: talk_mir::Module,
     pub optimizations: OptimizationStats,
-}
-
-/// Validate and execute a serialized bytecode image (TOOL-14). Images are
-/// untrusted bytes: decoding validates every index, register, and opcode
-/// before execution (ADR 0034's trust seam).
-pub fn execute_image(
-    bytes: &[u8],
-    io: &mut dyn talk_vm::io::IO,
-) -> Result<Option<String>, String> {
-    let module = talk_vm::Module::decode_bytecode(bytes)
-        .map_err(|error| format!("invalid bytecode image: {error:?}"))?;
-    let executable = crate::backend::Executable {
-        module,
-        names: Default::default(),
-        optimizations: Default::default(),
-    };
-    crate::backend::execute(&executable, io)
-}
-
-/// The backend's execution seam (ADR 0034): run a compiled program and
-/// return its Talk-rendered result (`None` for Unit). Runtime failures and
-/// resource leaks come back as the error message.
-pub fn execute_module(
-    executable: &Executable,
-    io: &mut dyn talk_vm::io::IO,
-) -> Result<Option<String>, String> {
-    crate::backend::execute(executable, io)
 }
 
 fn has_error_diagnostics(diagnostics: &[AnyDiagnostic]) -> bool {
@@ -814,13 +787,11 @@ impl Driver<Typed> {
     /// is the program result.
     pub fn compile_executable(&self, entry: Option<&str>) -> Result<Executable, String> {
         let entry = match entry {
-            Some(name) => crate::backend::Entry::Named(name),
-            None => crate::backend::Entry::Script,
+            Some(name) => MirEntry::Named(name),
+            None => MirEntry::Script,
         };
-        self.with_backend_inputs(entry, |programs, entry| {
-            crate::backend::compile(programs, entry)
-        })
-        .map_err(|error| self.locate_backend_error(&error))
+        let output = self.compile_mir(entry)?;
+        talk_bytecode::compile(&output.module).map_err(|error| error.message().to_string())
     }
 
     /// Compile a service module (ADR 0043 call ABI): each named public
@@ -835,14 +806,11 @@ impl Driver<Typed> {
     ) -> Result<Executable, String> {
         crate::profile::init();
         profiling::scope!("compiler.compile_service");
-        let entry = crate::backend::Entry::Exports {
+        let output = self.compile_mir(MirEntry::Exports {
             names: exports,
             allowed_effects,
-        };
-        self.with_backend_inputs(entry, |programs, entry| {
-            crate::backend::compile(programs, entry)
-        })
-        .map_err(|error| self.locate_backend_error(&error))
+        })?;
+        talk_bytecode::compile(&output.module).map_err(|error| error.message().to_string())
     }
 
     /// Run the ownership analysis without lowering (`talk check`). A
@@ -1092,40 +1060,43 @@ pub mod tests {
     }
 
     #[test]
-    fn executable_stats_include_optimizations_and_vm_execution() {
-        let exe = service_executable(
-            "pub func answer() -> Int { 20 + 22 }\n",
-            &["answer"],
-        )
-        .expect("service compiles");
-        let mut stats = exe.stats();
-        assert_eq!(stats.vm.runs(), 0);
-        assert_eq!(stats.optimizations.passes.len(), 9);
+    fn executable_stats_stay_with_their_owners() {
+        let source = "pub func answer() -> Int { 20 + 22 }\n";
+        let typed = Driver::new(vec![Source::from(source)], DriverConfig::new("Svc"))
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check();
+        assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+
+        // Compiler counts come from MIR publication.
+        let output = typed
+            .compile_mir(MirEntry::Exports {
+                names: &["answer".to_string()],
+                allowed_effects: &[],
+            })
+            .expect("service publishes MIR");
         assert!(
-            stats
+            output
                 .optimizations
                 .passes
                 .iter()
                 .any(|pass| pass.name == "inline_small" && pass.applied > 0),
             "expected inlining in {:?}",
-            stats.optimizations
+            output.optimizations
         );
 
+        // The adapter reports its own counts; the VM accumulates per run.
+        let exe = talk_bytecode::compile(&output.module).expect("module lowers");
+        let mut stats = exe.vm_stats();
+        assert_eq!(stats.runs(), 0);
         let mut io = CaptureIO::default();
         let outcome = exe
-            .run_export_with_stats(
-                "answer",
-                &[],
-                Budgets::default(),
-                &mut io,
-                &mut stats,
-            )
+            .run_export_with_stats("answer", &[], Budgets::default(), &mut io, &mut stats)
             .expect("answer runs");
         assert_eq!(outcome.value, Value::I64(42));
-        assert_eq!(stats.vm.runs(), 1);
-        let rendered = stats.render();
-        assert!(rendered.contains("Optimization statistics"), "{rendered}");
-        assert!(rendered.contains("VM instruction statistics"), "{rendered}");
+        assert_eq!(stats.runs(), 1);
     }
 
     // The checked-load fusion matches a compiler-emitted instruction
@@ -1137,12 +1108,8 @@ pub mod tests {
         let source = "pub func pick() -> Int {\n\tlet values = [10, 20, 30]\n\tvalues.get(1)\n}\n";
         let exe = service_executable(source, &["pick"]).expect("service compiles");
         assert!(
-            exe.optimization_stats()
-                .passes
-                .iter()
-                .any(|pass| pass.name == "checked_indexed_load" && pass.applied > 0),
-            "expected checked indexed loads to fuse: {:?}",
-            exe.optimization_stats()
+            exe.adapter_stats().checked_indexed_loads > 0,
+            "expected checked indexed loads to fuse"
         );
     }
 
@@ -1150,13 +1117,6 @@ pub mod tests {
     fn enum_matches_lower_to_runtime_switch_dispatch() {
         let source = "enum Choice {\n\tcase zero, one, two\n}\npub func choose() -> Int {\n\tlet choice = Choice.two\n\tmatch choice {\n\t\t.zero -> 0,\n\t\t.one -> 1,\n\t\t.two -> 2\n\t}\n}\n";
         let exe = service_executable(source, &["choose"]).expect("service compiles");
-        assert!(
-            exe.optimization_stats()
-                .passes
-                .iter()
-                .any(|pass| pass.name == "match_switch" && pass.applied > 0),
-            "expected match switch optimization"
-        );
         assert!(exe.render_bytecode().contains("switch r"));
 
         let mut io = CaptureIO::default();
@@ -1682,7 +1642,7 @@ print_raw(rendered.into_string())
             .compile_executable(None)
             .expect("HTML source compiles");
         let mut io = talk_vm::io::CaptureIO::default();
-        let value = execute_module(&executable, &mut io).expect("HTML source executes");
+        let value = executable.run(&mut io).expect("HTML source executes");
         assert_eq!(value.as_deref(), Some("0"));
         assert_eq!(
             String::from_utf8(io.out).expect("HTML output is UTF-8"),
@@ -1748,7 +1708,7 @@ print_raw(rendered.into_string())
             .compile_executable(None)
             .expect("HTML compatibility source compiles");
         let mut io = talk_vm::io::CaptureIO::default();
-        let value = execute_module(&executable, &mut io).expect("HTML compatibility source executes");
+        let value = executable.run(&mut io).expect("HTML compatibility source executes");
         assert_eq!(value.as_deref(), Some("0"));
         assert_eq!(
             String::from_utf8(io.out).expect("HTML output is UTF-8"),

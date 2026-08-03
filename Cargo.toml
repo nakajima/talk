@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "wasm", "www", "talk-vm", "talk-static", "talk-ffi", "talk-llvm", "talk-mir", "talk-native-runtime"]
+members = [".", "wasm", "www", "talk-vm", "talk-static", "talk-ffi", "talk-llvm", "talk-mir", "talk-native-runtime", "talk-bytecode"]
 default-members = ["."]
 resolver = "2"
 
@@ -50,6 +50,7 @@ ignore = { version = "0.4", optional = true }
 talk-vm = { path = "talk-vm" }
 talk-mir = { path = "talk-mir" }
 talk-native-runtime = { path = "talk-native-runtime" }
+talk-bytecode = { path = "talk-bytecode" }
 num-bigint = { version = "0.5.1", features = ["serde"] }
 profiling = { version = "1.0.18", default-features = false }
 tracy-client = { version = "0.18.4", default-features = false, features = ["timer-fallback"], optional = true }
