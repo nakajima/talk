@@ -75,7 +75,7 @@ const STDLIB_FILES: &[(&str, &str)] = &[
     ),
 ];
 
-static STDLIB: OnceLock<Vec<CompiledStdlib>> = OnceLock::new();
+static STDLIB: OnceLock<Vec<OnceLock<CompiledStdlib>>> = OnceLock::new();
 // The syntax runtime module remains lazy for ordinary source imports. A
 // stdlib-owned procedural macro may still compile against the syntax sources
 // while its owning module artifact is built.
@@ -184,53 +184,93 @@ fn module_id_for_index(index: usize) -> ModuleId {
     ModuleId::WellKnown(u16::try_from(index).expect("stdlib module count fits the reserved band"))
 }
 
-pub fn modules_with_ids() -> Vec<(ModuleId, Arc<Module>)> {
-    STDLIB
-        .get_or_init(compile_all)
+/// Stdlib-internal import edges, read from each module's root source: a
+/// module's typed bodies may call into the modules it `use`s (for
+/// example testing calls into ansi), so backend inputs must close over
+/// them. A missed edge fails compilation loudly rather than silently.
+pub(crate) fn dependencies_of(name: &str) -> Vec<&'static str> {
+    let Some((_, _, text)) = STDLIB_MODULES
         .iter()
-        .map(|(name, module, _)| {
-            let index = STDLIB_MODULES
+        .find(|(candidate, _, _)| *candidate == name)
+    else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix("use package::")?;
+            let end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len());
+            let dependency = &rest[..end];
+            STDLIB_MODULES
                 .iter()
-                .position(|(candidate, _, _)| candidate == name)
-                .expect("compiled stdlib module is registered");
+                .any(|(candidate, _, _)| *candidate == dependency)
+                .then_some(dependency)
+        })
+        .collect()
+}
+
+/// Compile and register every stdlib module interface. Only the editor
+/// wants this: auto-import completions and cross-module navigation need
+/// every export available, not just the ones a document already names.
+pub fn modules_with_ids() -> Vec<(ModuleId, Arc<Module>)> {
+    STDLIB_MODULES
+        .iter()
+        .enumerate()
+        .filter(|(_, (name, _, _))| {
+            *name != "syntax" && !(cfg!(target_family = "wasm") && *name == "testing")
+        })
+        .map(|(index, _)| {
+            let (_, module, _) = compiled_at(index);
             (module_id_for_index(index), module.clone())
         })
         .collect()
 }
 
-/// Load one stdlib module by its public import name. The driver uses this
-/// after parsing imports to activate modules that are intentionally lazy.
+/// Load one stdlib module by its public import name, compiling only that
+/// module. The driver uses this after parsing imports to activate modules
+/// that are intentionally lazy.
 pub fn module_with_id(name: &str) -> Option<(ModuleId, Arc<Module>)> {
     let index = STDLIB_MODULES
         .iter()
         .position(|(candidate, _, _)| *candidate == name)?;
-    if name == "syntax" {
-        let (_, module, _) = SYNTAX.get_or_init(compile_syntax);
-        return Some((module_id_for_index(index), module.clone()));
-    }
-    STDLIB
-        .get_or_init(compile_all)
-        .iter()
-        .find(|(candidate, _, _)| *candidate == name)
-        .map(|(_, module, _)| (module_id_for_index(index), module.clone()))
+    let (_, module, _) = compiled_at(index);
+    Some((module_id_for_index(index), module.clone()))
 }
 
-/// The typed bodies behind every stdlib module interface, by module name.
-/// The backend compiles the reachable source graph as one unit, so stdlib
-/// callables supply their bodies from here.
-pub(crate) fn typed_programs() -> Vec<(
-    &'static str,
-    Arc<crate::compiling::typed_program::TypedProgram>,
-)> {
-    let mut programs: Vec<_> = STDLIB
-        .get_or_init(compile_all)
+/// One module's typed bodies, compiled on demand. The backend compiles
+/// the reachable source graph as one unit, so imported stdlib modules
+/// supply their bodies from here.
+pub(crate) fn typed_program(
+    name: &str,
+) -> Option<Arc<crate::compiling::typed_program::TypedProgram>> {
+    let index = STDLIB_MODULES
         .iter()
-        .map(|(name, _, program)| (*name, program.clone()))
-        .collect();
-    if let Some((name, _, program)) = SYNTAX.get() {
-        programs.push((*name, program.clone()));
+        .position(|(candidate, _, _)| *candidate == name)?;
+    let (_, _, program) = compiled_at(index);
+    Some(program.clone())
+}
+
+fn slots() -> &'static [OnceLock<CompiledStdlib>] {
+    STDLIB.get_or_init(|| STDLIB_MODULES.iter().map(|_| OnceLock::new()).collect())
+}
+
+fn compiled_at(index: usize) -> &'static CompiledStdlib {
+    let (name, _, _) = STDLIB_MODULES[index];
+    if name == "syntax" {
+        return SYNTAX.get_or_init(|| compile_index(index));
     }
-    programs
+    slots()[index].get_or_init(|| compile_index(index))
+}
+
+fn compile_index(index: usize) -> CompiledStdlib {
+    let (name, _, _) = STDLIB_MODULES[index];
+    if let Some(cached) = load_cached(name) {
+        return cached;
+    }
+    let compiled = compile_module(name, module_sources(name), module_id_for_index(index));
+    store_cached(name, &compiled);
+    compiled
 }
 
 type CompiledStdlib = (
@@ -239,191 +279,63 @@ type CompiledStdlib = (
     Arc<crate::compiling::typed_program::TypedProgram>,
 );
 
-fn compile_all() -> Vec<CompiledStdlib> {
-    if let Some(cached) = load_cached() {
-        return cached;
-    }
-    let compiled: Vec<CompiledStdlib> = compilation_sources()
-        .into_iter()
-        .filter(|(name, _)| {
-            *name != "syntax" && !(cfg!(target_family = "wasm") && *name == "testing")
-        })
-        .map(|(name, sources)| {
-            let index = STDLIB_MODULES
-                .iter()
-                .position(|(candidate, _, _)| *candidate == name)
-                .expect("stdlib module is registered");
-            compile_module(name, sources, module_id_for_index(index))
-        })
-        .collect();
-    store_cached(&compiled);
-    compiled
-}
+
 
 // ===== The compiled-stdlib disk cache =====
 //
-// The same shape as core's (src/compiling/core.rs): products are a
-// pure function of (sources, compiler), keyed by the source contents
-// plus this binary's identity.
+// One file per module under the shared cache root (src/compiling/cache.rs):
+// products are a pure function of (sources, compiler), keyed on the full
+// stdlib source set plus this binary's identity.
 
 fn cache_key() -> Option<[u8; 32]> {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    if let Some(stdlib_dir) = path_override() {
+    let sources: Vec<(String, String)> = if let Some(stdlib_dir) = path_override() {
         // The html module's macro service compiles against the syntax source
-        // set, so those sources are inputs to the ordinary stdlib cache too.
-        for (path, _) in STDLIB_FILES {
-            let content = std::fs::read(stdlib_dir.join(path)).ok()?;
-            hasher.update(path.as_bytes());
-            hasher.update(&content);
-        }
+        // set, so those sources are inputs to every stdlib module's key too.
+        STDLIB_FILES
+            .iter()
+            .map(|(path, _)| {
+                std::fs::read_to_string(stdlib_dir.join(path))
+                    .ok()
+                    .map(|content| (path.to_string(), content))
+            })
+            .collect::<Option<Vec<_>>>()?
     } else {
-        for (path, content) in STDLIB_FILES {
-            hasher.update(path.as_bytes());
-            hasher.update(content.as_bytes());
-        }
-    }
-    let (stamp, len) = super::core::exe_fingerprint()?;
-    hasher.update(stamp.to_le_bytes());
-    hasher.update(len.to_le_bytes());
-    Some(hasher.finalize().into())
+        STDLIB_FILES
+            .iter()
+            .map(|(path, content)| (path.to_string(), content.to_string()))
+            .collect()
+    };
+    let refs: Vec<(&str, &str)> = sources
+        .iter()
+        .map(|(path, content)| (path.as_str(), content.as_str()))
+        .collect();
+    super::cache::key(&refs, super::core::exe_fingerprint())
 }
 
-fn cache_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/.talk-cache/stdlib.bin")
-}
-
-type CachedStdlib = Vec<(Module, crate::compiling::typed_program::TypedProgram)>;
-
-fn load_cached() -> Option<Vec<CompiledStdlib>> {
+fn load_cached(name: &'static str) -> Option<CompiledStdlib> {
     let key = cache_key()?;
-    let data = std::fs::read(cache_path()).ok()?;
-    let (stored, payload) = data.split_at_checked(32)?;
-    if stored != key {
-        return None;
-    }
-    let cached: CachedStdlib = bincode::deserialize(payload).ok()?;
-    let names: Vec<&'static str> = stdlib_sources()
-        .into_iter()
-        .map(|(name, _)| name)
-        .filter(|name| *name != "syntax")
-        .collect();
-    if cached.len() != names.len() {
-        return None;
-    }
-    Some(
-        names
-            .into_iter()
-            .zip(cached)
-            .map(|(name, (module, program))| (name, Arc::new(module), Arc::new(program)))
-            .collect(),
-    )
-}
-
-fn store_cached(compiled: &[CompiledStdlib]) {
-    let Some(key) = cache_key() else { return };
-    let payload: Vec<(&Module, &crate::compiling::typed_program::TypedProgram)> = compiled
-        .iter()
-        .map(|(_, module, program)| (module.as_ref(), program.as_ref()))
-        .collect();
-    let Ok(payload) = bincode::serialize(&payload) else {
-        return;
-    };
-    let path = cache_path();
-    if let Some(parent) = path.parent()
-        && std::fs::create_dir_all(parent).is_err()
-    {
-        return;
-    }
-    let mut bytes = key.to_vec();
-    bytes.extend_from_slice(&payload);
-    let tmp = path.with_extension(format!("bin.{}", std::process::id()));
-    if std::fs::write(&tmp, &bytes).is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
-    }
-}
-
-fn compile_syntax() -> CompiledStdlib {
-    if let Some(cached) = load_syntax_cached() {
-        return cached;
-    }
-    let (_, sources) = compilation_sources()
-        .into_iter()
-        .find(|(name, _)| *name == "syntax")
-        .expect("syntax stdlib sources are registered");
-    let index = STDLIB_MODULES
-        .iter()
-        .position(|(name, _, _)| *name == "syntax")
-        .expect("syntax stdlib module is registered");
-    let compiled = compile_module("syntax", sources, module_id_for_index(index));
-    store_syntax_cached(&compiled);
-    compiled
-}
-
-// Syntax has a separate cache because populating the ordinary stdlib cache
-// must not force the parser module to compile.
-fn syntax_cache_key() -> Option<[u8; 32]> {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    if let Some(stdlib_dir) = path_override() {
-        for (path, _) in STDLIB_FILES
-            .iter()
-            .filter(|(path, _)| Path::new(path).starts_with("syntax"))
-        {
-            let content = std::fs::read(stdlib_dir.join(path)).ok()?;
-            hasher.update(path.as_bytes());
-            hasher.update(&content);
-        }
-    } else {
-        for (path, content) in STDLIB_FILES
-            .iter()
-            .filter(|(path, _)| Path::new(path).starts_with("syntax"))
-        {
-            hasher.update(path.as_bytes());
-            hasher.update(content.as_bytes());
-        }
-    }
-    let (stamp, len) = super::core::exe_fingerprint()?;
-    hasher.update(stamp.to_le_bytes());
-    hasher.update(len.to_le_bytes());
-    Some(hasher.finalize().into())
-}
-
-fn syntax_cache_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/.talk-cache/syntax.bin")
-}
-
-fn load_syntax_cached() -> Option<CompiledStdlib> {
-    let key = syntax_cache_key()?;
-    let data = std::fs::read(syntax_cache_path()).ok()?;
-    let (stored, payload) = data.split_at_checked(32)?;
-    if stored != key {
-        return None;
-    }
+    let payload = super::cache::load(&format!("stdlib/{name}"), &key)?;
     let (module, program): (Module, crate::compiling::typed_program::TypedProgram) =
-        bincode::deserialize(payload).ok()?;
-    Some(("syntax", Arc::new(module), Arc::new(program)))
+        bincode::deserialize(&payload).ok()?;
+    Some((name, Arc::new(module), Arc::new(program)))
 }
 
-fn store_syntax_cached(compiled: &CompiledStdlib) {
-    let Some(key) = syntax_cache_key() else {
-        return;
-    };
+fn store_cached(name: &'static str, compiled: &CompiledStdlib) {
+    let Some(key) = cache_key() else { return };
     let Ok(payload) = bincode::serialize(&(compiled.1.as_ref(), compiled.2.as_ref())) else {
         return;
     };
-    let path = syntax_cache_path();
-    if let Some(parent) = path.parent()
-        && std::fs::create_dir_all(parent).is_err()
-    {
-        return;
-    }
-    let mut bytes = key.to_vec();
-    bytes.extend_from_slice(&payload);
-    let tmp = path.with_extension(format!("bin.{}", std::process::id()));
-    if std::fs::write(&tmp, &bytes).is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
-    }
+    super::cache::store(&format!("stdlib/{name}"), &key, &payload);
+}
+
+/// One module's compilation sources: the bundled text under the active
+/// stdlib directory (a path override or the extracted bundle).
+fn module_sources(name: &'static str) -> Vec<Source> {
+    compilation_sources()
+        .into_iter()
+        .find(|(candidate, _)| *candidate == name)
+        .unwrap_or_else(|| panic!("{name} stdlib sources are registered"))
+        .1
 }
 
 fn compile_module(name: &'static str, sources: Vec<Source>, module_id: ModuleId) -> CompiledStdlib {

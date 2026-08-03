@@ -1,11 +1,12 @@
 pub mod abi;
 pub mod bootstrap;
+pub(crate) mod cache;
 pub mod bridge;
 pub mod core;
 pub mod driver;
 pub mod frontend;
-pub mod manifest;
 pub(crate) mod interface;
+pub mod manifest;
 pub(crate) mod mir;
 pub mod module;
 pub mod module_path;

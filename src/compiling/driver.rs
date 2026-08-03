@@ -407,17 +407,11 @@ fn resolve_import_path(
 
 impl Driver {
     pub fn new(files: Vec<Source>, mut config: DriverConfig) -> Self {
-        let compiling_stdlib_source = Self::files_are_stdlib_sources(&files);
         {
             let modules = Rc::make_mut(&mut config.modules);
             modules.import_core(super::core::compile());
-            if !compiling_stdlib_source {
-                for (id, module) in super::stdlib::modules_with_ids() {
-                    modules
-                        .import_compiled((*module).clone(), id)
-                        .expect("stdlib modules register once per session");
-                }
-            }
+            // Stdlib modules register on demand: `use` discovery during
+            // parsing activates exactly the modules a program names.
         }
 
         Self {
@@ -425,13 +419,6 @@ impl Driver {
             phase: Initial {},
             config,
         }
-    }
-
-    fn files_are_stdlib_sources(files: &[Source]) -> bool {
-        !files.is_empty()
-            && files.iter().all(|source| {
-                super::stdlib::module_name_for_path(Path::new(source.path().as_ref())).is_some()
-            })
     }
 
     pub fn new_bare(files: Vec<Source>, config: DriverConfig) -> Self {
@@ -454,20 +441,6 @@ impl Driver {
         }
         let local_modules =
             LocalModulePaths::new(self.config.source_root.clone().unwrap_or_default());
-        let procedural_macros = if self.config.module_name != "PackageMacros" {
-            let local = self
-                .config
-                .workspace_root
-                .as_deref()
-                .map(crate::procedural_macros::ProceduralMacroService::discover)
-                .transpose()
-                .map_err(CompileError::Macro)?
-                .flatten();
-            crate::procedural_macros::ProceduralMacroEnvironment::load(local, &self.config.modules)
-                .map_err(CompileError::Macro)?
-        } else {
-            Default::default()
-        };
         let mut asts: IndexMap<Source, AST<_>> = IndexMap::default();
         let mut source_texts = std::collections::HashMap::new();
         let mut diagnostics = vec![];
@@ -517,14 +490,12 @@ impl Driver {
                 // is the parser; there is no fallback. Core's compile
                 // products come from the disk cache, so the interpreted
                 // parse cost is paid once per compiler build.
-                ParseMode::Strict => {
-                    crate::compiling::frontend::parse_ast_in(
-                        self.config.parser.as_deref(),
-                        &input,
-                        file_id,
-                        file.path().as_ref(),
-                    )
-                }
+                ParseMode::Strict => crate::compiling::frontend::parse_ast_in(
+                    self.config.parser.as_deref(),
+                    &input,
+                    file_id,
+                    file.path().as_ref(),
+                ),
                 // The lenient contract (ADR 0043): a hard failure
                 // degrades to an empty AST plus the failure as a
                 // diagnostic.
@@ -571,6 +542,24 @@ impl Driver {
                 }
             }
         }
+
+        // Imports discovered while parsing may have activated stdlib
+        // modules that carry procedural macros (html): load the macro
+        // environment only now, from the final module set.
+        let procedural_macros = if self.config.module_name != "PackageMacros" {
+            let local = self
+                .config
+                .workspace_root
+                .as_deref()
+                .map(crate::procedural_macros::ProceduralMacroService::discover)
+                .transpose()
+                .map_err(CompileError::Macro)?
+                .flatten();
+            crate::procedural_macros::ProceduralMacroEnvironment::load(local, &self.config.modules)
+                .map_err(CompileError::Macro)?
+        } else {
+            Default::default()
+        };
 
         Ok(Driver {
             files: self.files,
@@ -848,7 +837,10 @@ impl Driver<Typed> {
     fn with_backend_inputs<R>(
         &self,
         entry: crate::compiling::mir::Entry<'_>,
-        run: impl FnOnce(&[crate::compiling::mir::ProgramInput<'_>], crate::compiling::mir::Entry<'_>) -> R,
+        run: impl FnOnce(
+            &[crate::compiling::mir::ProgramInput<'_>],
+            crate::compiling::mir::Entry<'_>,
+        ) -> R,
     ) -> R {
         let core = crate::compiling::core::typed_program();
         // Bare services, including the service used to compile stdlib-owned
@@ -856,14 +848,29 @@ impl Driver<Typed> {
         // stdlib just to produce an empty backend input set; doing so while a
         // stdlib module is itself compiling would recursively enter its
         // OnceLock.
-        let has_stdlib = crate::compiling::stdlib::stdlib_sources()
+        let mut stdlib_names: Vec<&'static str> = crate::compiling::stdlib::stdlib_sources()
             .iter()
-            .any(|(name, _)| self.config.modules.get_module_id_by_name(name).is_some());
-        let stdlib = if has_stdlib {
-            crate::compiling::stdlib::typed_programs()
-        } else {
-            Vec::new()
-        };
+            .filter(|(name, _)| self.config.modules.get_module_id_by_name(name).is_some())
+            .map(|(name, _)| *name)
+            .collect();
+        // Stdlib modules' bodies may call into the modules they `use`
+        // (testing calls into ansi): close the body set over those
+        // edges even when the program never names them itself.
+        let mut index = 0;
+        while index < stdlib_names.len() {
+            for dependency in crate::compiling::stdlib::dependencies_of(stdlib_names[index]) {
+                if !stdlib_names.contains(&dependency) {
+                    stdlib_names.push(dependency);
+                }
+            }
+            index += 1;
+        }
+        let stdlib = stdlib_names
+            .iter()
+            .filter_map(|name| {
+                crate::compiling::stdlib::typed_program(name).map(|program| (*name, program))
+            })
+            .collect::<Vec<_>>();
         // Absolute identity at mint (ADR 0038): every program's symbols
         // already carry their real module stamp.
         let user_module = self.config.module_id;
@@ -989,7 +996,10 @@ pub mod tests {
             .type_check();
         assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
         let names: Vec<String> = exports.iter().map(|name| name.to_string()).collect();
-        let allowed: Vec<String> = allowed_effects.iter().map(|name| name.to_string()).collect();
+        let allowed: Vec<String> = allowed_effects
+            .iter()
+            .map(|name| name.to_string())
+            .collect();
         typed.compile_service(&names, &allowed)
     }
 
@@ -1013,7 +1023,12 @@ pub mod tests {
 
         let mut io = CaptureIO::default();
         let outcome = exe
-            .run_export("shout", &[HostValue::String(b"hey".to_vec())], Budgets::default(), &mut io)
+            .run_export(
+                "shout",
+                &[HostValue::String(b"hey".to_vec())],
+                Budgets::default(),
+                &mut io,
+            )
             .expect("shout runs");
         assert_eq!(
             outcome.string_bytes(&outcome.value).expect("string result"),
@@ -1097,12 +1112,15 @@ pub mod tests {
 
     #[test]
     fn service_export_effects_reach_the_host() {
-        let exe = service_executable("pub func speak() -> Int {\n\tprint(\"hi\")\n\t7\n}\n", &[
-            "speak",
-        ])
+        let exe = service_executable(
+            "pub func speak() -> Int {\n\tprint(\"hi\")\n\t7\n}\n",
+            &["speak"],
+        )
         .expect("service compiles");
         let mut io = CaptureIO::default();
-        let outcome = exe.run_export("speak", &[], Budgets::default(), &mut io).expect("speak runs");
+        let outcome = exe
+            .run_export("speak", &[], Budgets::default(), &mut io)
+            .expect("speak runs");
         assert_eq!(outcome.value, Value::I64(7));
         assert_eq!(io.out, b"hi\n");
     }
@@ -1213,7 +1231,12 @@ pub mod tests {
         let exe = service_executable(source, &["direct"]).expect("service compiles");
         let mut io = CaptureIO::default();
         let outcome = exe
-            .run_export("direct", &[HostValue::String(b"hey".to_vec())], Budgets::default(), &mut io)
+            .run_export(
+                "direct",
+                &[HostValue::String(b"hey".to_vec())],
+                Budgets::default(),
+                &mut io,
+            )
             .expect("direct runs");
         assert_eq!(outcome.value, Value::I64(6));
         let balance = outcome.balance();
@@ -1265,7 +1288,12 @@ pub mod tests {
         let exe = service_executable(source, &["tally"]).expect("service compiles");
         let mut io = CaptureIO::default();
         let outcome = exe
-            .run_export("tally", &[HostValue::String(b"hey".to_vec())], Budgets::default(), &mut io)
+            .run_export(
+                "tally",
+                &[HostValue::String(b"hey".to_vec())],
+                Budgets::default(),
+                &mut io,
+            )
             .expect("tally runs");
         assert_eq!(outcome.value, Value::I64(10));
         let balance = outcome.balance();
@@ -1304,14 +1332,20 @@ pub mod tests {
         let effectful = "pub func nap() -> Int { sleep(ms: 0) }\n";
 
         // A pure export compiles under an empty capability list.
-        service_with_effects("pub func double(n: Int) -> Int { n * 2 }\n", &["double"], &[])
-            .expect("pure export needs no capabilities");
+        service_with_effects(
+            "pub func double(n: Int) -> Int { n * 2 }\n",
+            &["double"],
+            &[],
+        )
+        .expect("pure export needs no capabilities");
 
         // 'io within the allowed list compiles and runs.
-        let exe = service_with_effects(effectful, &["nap"], &["io"])
-            .expect("allowed effect compiles");
+        let exe =
+            service_with_effects(effectful, &["nap"], &["io"]).expect("allowed effect compiles");
         let mut io = CaptureIO::default();
-        let outcome = exe.run_export("nap", &[], Budgets::default(), &mut io).expect("nap runs");
+        let outcome = exe
+            .run_export("nap", &[], Budgets::default(), &mut io)
+            .expect("nap runs");
         assert_eq!(outcome.value, Value::I64(0));
 
         // 'io outside the allowed list is a compile error naming the
@@ -1677,7 +1711,9 @@ print_raw(rendered.into_string())
             .compile_executable(None)
             .expect("HTML compatibility source compiles");
         let mut io = talk_vm::io::CaptureIO::default();
-        let value = executable.run(&mut io).expect("HTML compatibility source executes");
+        let value = executable
+            .run(&mut io)
+            .expect("HTML compatibility source executes");
         assert_eq!(value.as_deref(), Some("0"));
         assert_eq!(
             String::from_utf8(io.out).expect("HTML output is UTF-8"),
