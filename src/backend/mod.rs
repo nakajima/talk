@@ -191,18 +191,10 @@ pub(crate) fn compile(
 ) -> Result<Executable, BackendError> {
     crate::profile::init();
     profiling::scope!("backend.compile");
-    let mut program = {
-        profiling::scope!("backend.mir_build");
-        mir::build(programs, entry, false)?
+    let (program, mut optimizations) = {
+        profiling::scope!("backend.finalize");
+        compile_mir(programs, entry)?
     };
-    let mut optimizations = {
-        profiling::scope!("backend.optimize");
-        optimize::run(&mut program)
-    };
-    {
-        profiling::scope!("backend.regalloc");
-        allocate_registers(&mut program);
-    }
     let mut module = {
         profiling::scope!("backend.lower");
         lower::lower(&program)?
@@ -214,7 +206,7 @@ pub(crate) fn compile(
     });
     Ok(Executable {
         module,
-        names: display_names(programs),
+        names: value_names(&program),
         optimizations,
     })
 }
@@ -236,16 +228,33 @@ pub(crate) fn render_c(
     programs: &[ProgramInput<'_>],
     entry: Entry,
 ) -> Result<String, BackendError> {
+    let (program, _) = compile_mir(programs, entry)?;
+    c::emit(&program)
+}
+
+/// The one finalized producer every target shares (ADR 0047): build and
+/// ownership-check, optimize, pre-allocation escape summaries, register
+/// allocation, and post-allocation frame stamping. The bytecode adapter
+/// ignores the frame facts; stamping them uniformly is what lets C
+/// consume the same module without a compiler-private prepass.
+pub(crate) fn compile_mir(
+    programs: &[ProgramInput<'_>],
+    entry: Entry,
+) -> Result<(mir::Program, OptimizationStats), BackendError> {
     let mut program = mir::build(programs, entry, false)?;
-    optimize::run(&mut program);
-    // The escape-derived frame facts only the C emitter reads (ADR
-    // 0045). Parameter escape summaries must read the pre-allocation
-    // program, where a parameter's slot is still only ever the
-    // parameter; the shaping itself runs on the final numbering.
-    let summaries = mir::escape::parameter_summaries(&program);
-    allocate_registers(&mut program);
-    mir::escape::shape_frames(&mut program, &summaries);
-    c::emit(&program, &c::display_names(programs))
+    let optimizations = finalize(&mut program);
+    Ok((program, optimizations))
+}
+
+fn finalize(program: &mut mir::Program) -> OptimizationStats {
+    let optimizations = optimize::run(program);
+    // Parameter escape summaries must read the pre-allocation program,
+    // where a parameter's slot is still only ever the parameter; the
+    // shaping itself runs on the final numbering (ADR 0045).
+    let summaries = mir::escape::parameter_summaries(program);
+    allocate_registers(program);
+    mir::escape::shape_frames(program, &summaries);
+    optimizations
 }
 
 /// Register allocation over the whole program. Layout classes are
@@ -268,9 +277,7 @@ pub(crate) fn codegen(
     programs: &[ProgramInput<'_>],
     entry: Entry,
 ) -> Result<crate::codegen::Compilation<crate::name_resolution::symbol::Symbol>, BackendError> {
-    let mut program = mir::build(programs, entry, false)?;
-    optimize::run(&mut program);
-    allocate_registers(&mut program);
+    let (program, _) = compile_mir(programs, entry)?;
     Ok(codegen::project(&program, programs))
 }
 
@@ -282,39 +289,28 @@ pub(crate) fn render_mir(
 ) -> Result<String, BackendError> {
     let mut program = mir::build(programs, entry, false)?;
     if optimized {
-        optimize::run(&mut program);
-        allocate_registers(&mut program);
+        finalize(&mut program);
     }
     Ok(program.render())
 }
 
-/// Rendering metadata from the compiled programs' catalogs: the runtime
-/// itself only carries symbols.
-fn display_names(programs: &[ProgramInput<'_>]) -> ValueNames {
+/// Rendering metadata from the module's published display names: the
+/// runtime itself only carries symbols.
+fn value_names(program: &mir::Program) -> ValueNames {
     let mut names = ValueNames::default();
-    for input in programs {
-        let types = input.program.types();
-        let resolved = input.program.resolved_names();
-        for (symbol, def) in &types.catalog.enums {
-            let runtime = runtime_symbol(*symbol);
-            if let Some(name) = resolved.symbol_names.get(symbol) {
-                names.types.insert(runtime, name.clone());
+    for (symbol, entry) in &program.display.entries {
+        let runtime = lower::vm_symbol(*symbol);
+        names.types.insert(runtime, entry.name.clone());
+        match entry.kind {
+            mir::TypeKind::Enum => {
+                names.cases.insert(runtime, entry.members.clone());
             }
-            names
-                .cases
-                .insert(runtime, def.variants.keys().cloned().collect());
-        }
-        for (symbol, def) in &types.catalog.structs {
-            let runtime = runtime_symbol(*symbol);
-            if let Some(name) = resolved.symbol_names.get(symbol) {
-                names.types.insert(runtime, name.clone());
+            _ => {
+                names.fields.insert(runtime, entry.members.clone());
             }
-            names
-                .fields
-                .insert(runtime, def.fields.keys().cloned().collect());
         }
     }
-    names.string_struct = Some(runtime_symbol(crate::name_resolution::symbol::Symbol::String));
+    names.string_struct = Some(lower::vm_symbol(program.string_symbol));
     names
 }
 

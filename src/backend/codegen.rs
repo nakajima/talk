@@ -11,9 +11,10 @@ pub(crate) fn project(
     program: &source::Program,
     programs: &[ProgramInput<'_>],
 ) -> crate::codegen::Compilation<Symbol> {
+    let _ = programs;
     crate::codegen::Compilation {
         program: Projection::program(program),
-        display_names: Projection::display_names(programs),
+        display_names: Projection::display_names(program),
         string_symbol: Symbol::String,
         storage_symbol: Symbol::Storage,
     }
@@ -489,38 +490,20 @@ impl Projection {
         }
     }
 
-    fn display_names(programs: &[ProgramInput<'_>]) -> crate::codegen::DisplayNames<Symbol> {
+    fn display_names(program: &source::Program) -> crate::codegen::DisplayNames<Symbol> {
         let mut names = crate::codegen::DisplayNames::default();
-        for input in programs {
-            let types = input.program.types();
-            let resolved = input.program.resolved_names();
-            let name_of = |symbol: &Symbol| {
-                resolved
-                    .symbol_names
-                    .get(symbol)
-                    .cloned()
-                    .unwrap_or_else(|| format!("{symbol:?}"))
+        for (symbol, entry) in &program.display.entries {
+            let kind = match entry.kind {
+                talk_mir::TypeKind::Record => crate::codegen::TypeKind::Record,
+                talk_mir::TypeKind::Enum => crate::codegen::TypeKind::Enum,
+                talk_mir::TypeKind::String => crate::codegen::TypeKind::String,
             };
-            for (symbol, def) in &types.catalog.enums {
-                names.insert(
-                    *symbol,
-                    name_of(symbol),
-                    crate::codegen::TypeKind::Enum,
-                    def.variants.keys().cloned().collect(),
-                );
-            }
-            for (symbol, def) in &types.catalog.structs {
-                names.insert(
-                    *symbol,
-                    name_of(symbol),
-                    if *symbol == Symbol::String {
-                        crate::codegen::TypeKind::String
-                    } else {
-                        crate::codegen::TypeKind::Record
-                    },
-                    def.fields.keys().cloned().collect(),
-                );
-            }
+            names.insert(
+                source::to_source(*symbol),
+                entry.name.clone(),
+                kind,
+                entry.members.clone(),
+            );
         }
         names
     }

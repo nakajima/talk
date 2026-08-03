@@ -629,6 +629,26 @@ pub use crate::backend::{
     Executable, ExecutableStats, OptimizationPassStats, OptimizationStats,
 };
 
+/// How the published MIR module is entered (ADR 0047): a script's
+/// top-level statements, a named zero-parameter public function, or a
+/// service's named exports with its capability list.
+pub enum MirEntry<'a> {
+    Script,
+    Named(&'a str),
+    Exports {
+        names: &'a [String],
+        allowed_effects: &'a [String],
+    },
+}
+
+/// The finalized public MIR module plus the compiler's own optimization
+/// statistics. Bytecode-adapter and VM statistics stay with their
+/// owners; this is the compiler's share.
+pub struct MirOutput {
+    pub module: talk_mir::Module,
+    pub optimizations: OptimizationStats,
+}
+
 /// Validate and execute a serialized bytecode image (TOOL-14). Images are
 /// untrusted bytes: decoding validates every index, register, and opcode
 /// before execution (ADR 0034's trust seam).
@@ -753,6 +773,31 @@ impl Driver<NameResolved> {
 }
 
 impl Driver<Typed> {
+    /// The one target compilation interface (ADR 0047): publish the
+    /// finalized, target-independent MIR module. C, bytecode, and LLVM
+    /// adapters consume exactly this output.
+    pub fn compile_mir(&self, entry: MirEntry<'_>) -> Result<MirOutput, String> {
+        let entry = match entry {
+            MirEntry::Script => crate::backend::Entry::Script,
+            MirEntry::Named(name) => crate::backend::Entry::Named(name),
+            MirEntry::Exports {
+                names,
+                allowed_effects,
+            } => crate::backend::Entry::Exports {
+                names,
+                allowed_effects,
+            },
+        };
+        self.with_backend_inputs(entry, |programs, entry| {
+            crate::backend::compile_mir(programs, entry)
+        })
+        .map(|(module, optimizations)| MirOutput {
+            module,
+            optimizations,
+        })
+        .map_err(|error| self.locate_backend_error(&error))
+    }
+
     pub fn has_errors(&self) -> bool {
         has_error_diagnostics(&self.phase.diagnostics)
     }

@@ -2116,6 +2116,22 @@ impl PackageProject {
             .map_err(PackageError::Compile)
     }
 
+    /// Publish the finalized MIR module for a package binary (ADR 0047):
+    /// the input every external backend consumes.
+    pub fn mir_binary(
+        &self,
+        requested: Option<&str>,
+        entry: Option<&str>,
+    ) -> Result<crate::compiling::driver::MirOutput, PackageError> {
+        let entry = match entry {
+            Some(name) => crate::compiling::driver::MirEntry::Named(name),
+            None => crate::compiling::driver::MirEntry::Script,
+        };
+        self.typecheck_binary(requested)?
+            .compile_mir(entry)
+            .map_err(PackageError::Compile)
+    }
+
     fn typecheck_binary(&self, requested: Option<&str>) -> Result<Driver<Typed>, PackageError> {
         let graph = self.compile_graph()?;
         let binary = self.manifest.binary(requested)?;

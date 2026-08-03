@@ -129,6 +129,9 @@ mod tests {
             global_slots: 0,
             exports: Vec::new(),
             layout_table: Vec::new(),
+            display: Default::default(),
+            string_symbol: crate::backend::mir::mir_string(),
+            storage_symbol: crate::backend::mir::mir_storage(),
         }
     }
 

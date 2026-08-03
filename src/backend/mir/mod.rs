@@ -37,8 +37,9 @@ use crate::types::ty::{ParamKind, Perm, ProtocolRef, StaticValue, Ty, TyFold};
 use super::BackendError;
 
 pub(crate) use talk_mir::{
-    BlockData, BlockId, CmpKind, Constant, FuncId, Function, Inst, LocalId, LocalInfo, MirSymbol,
-    MirSymbolKind, Operand, Program, ScalarOp, Term,
+    BlockData, BlockId, CmpKind, Constant, DisplayEntry, DisplayNames, FuncId, Function, Inst,
+    LocalId, LocalInfo, MirSymbol, MirSymbolKind, Module as Program, Operand, ScalarOp, Term,
+    TypeKind,
 };
 
 /// The executable identity of a source symbol, when one exists: only
@@ -1081,7 +1082,53 @@ pub(crate) fn build(
             + u32::from(builder.result_slot.is_some()),
         exports: builder.exports,
         layout_table,
+        display: display_names(programs),
+        string_symbol: mir_string(),
+        storage_symbol: mir_storage(),
     })
+}
+
+/// Type and member names for result rendering: the one production point
+/// for the module's display metadata (ADR 0047). Names are metadata,
+/// never identity.
+fn display_names(programs: &[ProgramInput<'_>]) -> DisplayNames {
+    let mut names = DisplayNames::default();
+    for input in programs {
+        let types = input.program.types();
+        let resolved = input.program.resolved_names();
+        let name_of = |symbol: &Symbol| {
+            resolved
+                .symbol_names
+                .get(symbol)
+                .cloned()
+                .unwrap_or_else(|| format!("{symbol:?}"))
+        };
+        for (symbol, def) in &types.catalog.enums {
+            names.entries.insert(
+                executable(*symbol),
+                DisplayEntry {
+                    name: name_of(symbol),
+                    kind: TypeKind::Enum,
+                    members: def.variants.keys().cloned().collect(),
+                },
+            );
+        }
+        for (symbol, def) in &types.catalog.structs {
+            names.entries.insert(
+                executable(*symbol),
+                DisplayEntry {
+                    name: name_of(symbol),
+                    kind: if *symbol == Symbol::String {
+                        TypeKind::String
+                    } else {
+                        TypeKind::Record
+                    },
+                    members: def.fields.keys().cloned().collect(),
+                },
+            );
+        }
+    }
+    names
 }
 
 
@@ -2628,6 +2675,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     global_slots: 0,
                     exports: Vec::new(),
                     layout_table: Vec::new(),
+                    display: DisplayNames::default(),
+                    string_symbol: mir_string(),
+                    storage_symbol: mir_storage(),
                 }
                 .render();
                 panic!(

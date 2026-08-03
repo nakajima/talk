@@ -403,6 +403,9 @@ mod tests {
             global_slots: 0,
             exports: Vec::new(),
             layout_table: Vec::new(),
+            display: Default::default(),
+            string_symbol: crate::backend::mir::mir_string(),
+            storage_symbol: crate::backend::mir::mir_storage(),
         };
         assert_eq!(run(&mut program).applied, 1);
         let insts = &program.functions[1].blocks[0].insts;
@@ -491,6 +494,9 @@ mod tests {
             global_slots: 0,
             exports: Vec::new(),
             layout_table: Vec::new(),
+            display: Default::default(),
+            string_symbol: crate::backend::mir::mir_string(),
+            storage_symbol: crate::backend::mir::mir_storage(),
         };
         assert_eq!(run(&mut program).applied, 1);
         let function = &program.functions[1];
@@ -554,6 +560,9 @@ mod tests {
             global_slots: 0,
             exports: Vec::new(),
             layout_table: Vec::new(),
+            display: Default::default(),
+            string_symbol: crate::backend::mir::mir_string(),
+            storage_symbol: crate::backend::mir::mir_storage(),
         };
         assert_eq!(run(&mut program).applied, 0);
         assert!(
@@ -592,6 +601,9 @@ mod tests {
             global_slots: 0,
             exports: Vec::new(),
             layout_table: Vec::new(),
+            display: Default::default(),
+            string_symbol: crate::backend::mir::mir_string(),
+            storage_symbol: crate::backend::mir::mir_storage(),
         };
         assert_eq!(run(&mut program).applied, 1);
         let function = &program.functions[1];

@@ -478,10 +478,34 @@ impl Function {
     }
 }
 
-/// The finalized module: every function of the program plus the layout
-/// table aggregate instructions reference by `LayoutId` (ADR 0045).
+/// How a displayed aggregate is rendered (its type-table kind).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TypeKind {
+    Record,
+    Enum,
+    String,
+}
+
+/// One aggregate's display facts: its source name and its member names
+/// (fields for records, variants for enums).
+#[derive(Clone, Debug)]
+pub struct DisplayEntry {
+    pub name: String,
+    pub kind: TypeKind,
+    pub members: Vec<String>,
+}
+
+/// Type and member names for rendering a result the way the runtime
+/// renders one. Names are metadata, never identity.
+#[derive(Clone, Debug, Default)]
+pub struct DisplayNames {
+    pub entries: std::collections::HashMap<MirSymbol, DisplayEntry>,
+}
+
+/// The finalized module: every function of the program plus the facts
+/// targets need to execute and render it (ADR 0047).
 #[derive(Debug)]
-pub struct Program {
+pub struct Module {
     pub functions: Vec<Function>,
     pub entry: FuncId,
     /// Number of program globals (one 8-byte static slot each).
@@ -491,9 +515,16 @@ pub struct Program {
     /// The interned layouts the aggregate instructions reference by
     /// `LayoutId` (ADR 0045): the shapes a backend must produce.
     pub layout_table: Vec<Layout>,
+    /// Display metadata for the identities the layout table and
+    /// existential packs carry.
+    pub display: DisplayNames,
+    /// The well-known runtime aggregate identities for String and
+    /// Storage.
+    pub string_symbol: MirSymbol,
+    pub storage_symbol: MirSymbol,
 }
 
-impl Program {
+impl Module {
     /// Render the middle representation for inspection (`talk mir`,
     /// TOOL-10). The shape is debug output, not a stable format.
     pub fn render(&self) -> String {

@@ -29,68 +29,17 @@ use rustc_hash::FxHashMap;
 
 use super::BackendError;
 use super::mir::layout::{FieldRepr, Layout, LayoutId, Shape, SlotKind};
-use super::mir::{CmpKind, Constant, Function, Inst, Operand, Program, ScalarOp, Term};
-use crate::name_resolution::symbol::Symbol as CompilerSymbol;
+use super::mir::{
+    CmpKind, Constant, DisplayNames, Function, Inst, Operand, Program, ScalarOp, Term, TypeKind,
+};
 use crate::parsing::span::Span;
 
 /// The generated file's runtime half, emitted verbatim ahead of the
 /// translated functions.
 const PRELUDE: &str = include_str!("c_prelude.c");
 
-/// Whether a display entry names a struct, an enum, or the core String,
-/// which the runtime renders as quoted text rather than as a record.
-pub(crate) enum TypeKind {
-    Record,
-    Enum,
-    String,
-}
-
-/// Type and member names for rendering a result the way the runtime
-/// renders one. MIR carries symbols; the names live in the programs'
-/// catalogs, so they are read here and emitted as static tables.
-#[derive(Default)]
-pub(crate) struct DisplayNames {
-    entries: FxHashMap<CompilerSymbol, (String, TypeKind, Vec<String>)>,
-}
-
-pub(crate) fn display_names(programs: &[super::ProgramInput<'_>]) -> DisplayNames {
-    let mut names = DisplayNames::default();
-    for input in programs {
-        let types = input.program.types();
-        let resolved = input.program.resolved_names();
-        let name_of = |symbol: &CompilerSymbol| {
-            resolved
-                .symbol_names
-                .get(symbol)
-                .cloned()
-                .unwrap_or_else(|| format!("{symbol:?}"))
-        };
-        for (symbol, def) in &types.catalog.enums {
-            names.entries.insert(
-                *symbol,
-                (
-                    name_of(symbol),
-                    TypeKind::Enum,
-                    def.variants.keys().cloned().collect(),
-                ),
-            );
-        }
-        for (symbol, def) in &types.catalog.structs {
-            let kind = if *symbol == CompilerSymbol::String {
-                TypeKind::String
-            } else {
-                TypeKind::Record
-            };
-            names.entries.insert(
-                *symbol,
-                (name_of(symbol), kind, def.fields.keys().cloned().collect()),
-            );
-        }
-    }
-    names
-}
-
-pub(crate) fn emit(program: &Program, display: &DisplayNames) -> Result<String, BackendError> {
+pub(crate) fn emit(program: &Program) -> Result<String, BackendError> {
+    let display = &program.display;
     let entry = program
         .functions
         .get(program.entry)
@@ -327,8 +276,8 @@ fn emit_type_table(out: &mut String, emitter: &Emitter, display: &DisplayNames) 
     for (symbol, id) in &ordered {
         let members = display
             .entries
-            .get(&crate::backend::mir::to_source(**symbol))
-            .map(|(_, _, members)| members.as_slice())
+            .get(*symbol)
+            .map(|entry| entry.members.as_slice())
             .unwrap_or_default();
         if members.is_empty() {
             continue;
@@ -350,8 +299,8 @@ fn emit_type_table(out: &mut String, emitter: &Emitter, display: &DisplayNames) 
             let _ = writeln!(out, "    {{ \"\", TALK_TYPE_EXISTENTIAL, 0, NULL }},");
             continue;
         }
-        let (name, kind, members) = match display.entries.get(&crate::backend::mir::to_source(**symbol)) {
-            Some(entry) => entry,
+        let (name, kind, members) = match display.entries.get(*symbol) {
+            Some(entry) => (&entry.name, entry.kind, &entry.members),
             // A symbol with no catalog entry renders structurally.
             None => {
                 let _ = writeln!(out, "    {{ \"\", TALK_TYPE_TUPLE, 0, NULL }},");
@@ -2546,6 +2495,9 @@ mod tests {
             global_slots: 0,
             exports: Vec::new(),
             layout_table,
+            display: Default::default(),
+            string_symbol: crate::backend::mir::mir_string(),
+            storage_symbol: crate::backend::mir::mir_storage(),
         };
         // The real pipeline's frame shaping: regalloc's class stamping
         // (here under the fixtures' identity numbering), then escape
@@ -2563,7 +2515,7 @@ mod tests {
         }
         let summaries = crate::backend::mir::escape::parameter_summaries(&program);
         crate::backend::mir::escape::shape_frames(&mut program, &summaries);
-        emit(&program, &DisplayNames::default()).expect("emission")
+        emit(&program).expect("emission")
     }
 
     #[test]
