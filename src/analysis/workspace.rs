@@ -139,7 +139,19 @@ impl Workspace {
             WorkspaceCompileContext::Core | WorkspaceCompileContext::Stdlib(_) => {
                 Driver::new_bare(sources, config)
             }
-            WorkspaceCompileContext::Normal => Driver::new(sources, config),
+            WorkspaceCompileContext::Normal => {
+                // The editor registers every stdlib module up front:
+                // auto-import completions and cross-module navigation
+                // need every export available, not just the ones a
+                // document already names.
+                let modules = Rc::make_mut(&mut config.modules);
+                for (id, module) in crate::compiling::stdlib::modules_with_ids() {
+                    modules
+                        .import_compiled((*module).clone(), id)
+                        .expect("stdlib modules register once per session");
+                }
+                Driver::new(sources, config)
+            }
         };
         let stdlib_module_ids = crate::compiling::stdlib::stdlib_sources()
             .into_iter()

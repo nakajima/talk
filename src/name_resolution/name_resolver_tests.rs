@@ -170,14 +170,15 @@ pub mod tests {
         let mut parsed = parse(source);
         let file_id = parsed.file_id;
         let root_scope = NodeID(file_id, 0);
-        let introduced = SyntaxContext::lexical(root_scope).with_scope(
-            SyntaxScope::Expansion {
-                namespace: 7,
-                ordinal: 1,
-            },
-        );
+        let introduced = SyntaxContext::lexical(root_scope).with_scope(SyntaxScope::Expansion {
+            namespace: 7,
+            ordinal: 1,
+        });
         let use_site = SyntaxContext::lexical(root_scope);
-        let positions: Vec<usize> = source.match_indices('x').map(|(offset, _)| offset).collect();
+        let positions: Vec<usize> = source
+            .match_indices('x')
+            .map(|(offset, _)| offset)
+            .collect();
         assert_eq!(positions.len(), 4);
         let identifier = |offset: usize, context: SyntaxContext| MaterializedIdentifier {
             text: "x".into(),
@@ -218,7 +219,11 @@ pub mod tests {
         let mut parseds = vec![parsed];
         crate::desugar::desugar(&mut parseds);
         let (asts, resolved) = resolver.resolve(parseds);
-        assert!(resolved.diagnostics.is_empty(), "{:?}", resolved.diagnostics);
+        assert!(
+            resolved.diagnostics.is_empty(),
+            "{:?}",
+            resolved.diagnostics
+        );
 
         let outer = match &asts[0].roots[0] {
             crate::node::Node::Decl(Decl {
@@ -244,8 +249,14 @@ pub mod tests {
         }
         drop(collector);
         assert_eq!(references.len(), 2);
-        assert_ne!(references[0], outer_symbol, "introduced reference missed its binder");
-        assert_eq!(references[1], outer_symbol, "use-site reference was captured");
+        assert_ne!(
+            references[0], outer_symbol,
+            "introduced reference missed its binder"
+        );
+        assert_eq!(
+            references[1], outer_symbol,
+            "use-site reference was captured"
+        );
     }
 
     #[test]
@@ -254,12 +265,10 @@ pub mod tests {
         let mut parsed = parse(source);
         let file_id = parsed.file_id;
         let root_scope = NodeID(file_id, 0);
-        let context = SyntaxContext::lexical(root_scope).with_scope(
-            SyntaxScope::Expansion {
-                namespace: 9,
-                ordinal: 1,
-            },
-        );
+        let context = SyntaxContext::lexical(root_scope).with_scope(SyntaxScope::Expansion {
+            namespace: 9,
+            ordinal: 1,
+        });
         let positions: Vec<usize> = source
             .match_indices("helper")
             .map(|(offset, _)| offset)
@@ -286,7 +295,11 @@ pub mod tests {
         let mut parseds = vec![parsed];
         crate::desugar::desugar(&mut parseds);
         let (asts, resolved) = resolver.resolve(parseds);
-        assert!(resolved.diagnostics.is_empty(), "{:?}", resolved.diagnostics);
+        assert!(
+            resolved.diagnostics.is_empty(),
+            "{:?}",
+            resolved.diagnostics
+        );
 
         let outer = match &asts[0].roots[0] {
             crate::node::Node::Decl(Decl {
@@ -2598,7 +2611,10 @@ pub mod tests {
 
     #[test]
     fn same_file_duplicate_nominals_diagnose() {
-        for code in ["struct Twice {}\nstruct Twice {}", "struct Twice {}\nenum Twice { case a }"] {
+        for code in [
+            "struct Twice {}\nstruct Twice {}",
+            "struct Twice {}\nenum Twice { case a }",
+        ] {
             let (_, resolved) = resolve_err(code);
             assert!(
                 resolved.diagnostics.iter().any(|d| matches!(

@@ -111,9 +111,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         &witness_labels,
                         self.catalog.callable_contracts.get(&requirement.symbol),
                     ) {
-                        (Some(witnessing), Some(required)) => {
-                            required.name.labels == *witnessing
-                        }
+                        (Some(witnessing), Some(required)) => required.name.labels == *witnessing,
                         _ => true,
                     }
                 });

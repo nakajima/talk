@@ -14,14 +14,36 @@ use crate::{
 };
 
 /// Visibility of a declaration - defaults to private (internal to file)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Drive,
+    DriveMut,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub enum Visibility {
     #[default]
     Private,
     Public,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Drive,
+    DriveMut,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub enum ReceiverMode {
     #[default]
     None,

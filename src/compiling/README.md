@@ -81,5 +81,5 @@ the frontend-only reset.
   `hover`, `format`, and package installation.
 - `src/repl.rs` retains source-backed type queries and completion. Evaluation
   reports that execution is unavailable.
-- `talk-c` and `wasm` preserve their embedding interfaces where practical;
+- `talk-ffi` and `wasm` preserve their embedding interfaces where practical;
   execution and backend-output calls return explicit frontend-only errors.

@@ -3,8 +3,8 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use talk::compiling::driver::{Driver, DriverConfig, Source, execute_module};
-use talk_runtime::io::CaptureIO;
+use talk::compiling::driver::{Driver, DriverConfig, Source};
+use talk_vm::io::CaptureIO;
 
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -55,7 +55,7 @@ fn interpreted(program: &Path, entry: Option<&str>) -> Vec<u8> {
     assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
     let executable = typed.compile_executable(entry).expect("VM compiles");
     let mut io = CaptureIO::default();
-    if let Some(rendered) = execute_module(&executable, &mut io).expect("VM runs") {
+    if let Some(rendered) = executable.run(&mut io).expect("VM runs") {
         io.out.extend_from_slice(rendered.as_bytes());
         io.out.push(b'\n');
     }

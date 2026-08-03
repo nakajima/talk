@@ -9,7 +9,9 @@ code and tests.
 
 - [Backend crate extraction plan](backend-crate-extraction-plan.md) - staged
   migration to public MIR and separate bytecode, VM, C, LLVM, native-runtime,
-  FFI, and Swift modules.
+  FFI, and Swift modules. Implemented by ADR 0047.
+- [Backend extraction baseline](backend-extraction-baseline.md) - stage 0
+  measurements, the ABI symbol oracle, and final post-extraction accounting.
 - [Ownership](ownership.md) - implicit-sharing semantics and MIR ownership
   dataflow.
 - [Effects](effects.md) - generic effect rows, handlers, and effect parameters

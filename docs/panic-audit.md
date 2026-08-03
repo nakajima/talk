@@ -62,7 +62,7 @@ diagnostic-returning APIs.
   - Better end state: use `TryFrom`/`Option` in LSP-facing paths and reserve
     panicking conversions for proven internal invariants.
 
-- `src/backend/optimize/inline_small.rs`
+- `src/compiling/mir/optimize/inline_small.rs`
   - The inliner expects a value it has just classified as present.
   - Keep the allowance local to that invariant; backend failures reached from
     the LSP remain behind `recover_lsp`.
@@ -73,7 +73,7 @@ The 2026-07-28 enforcement run found unallowed production panics in these
 areas:
 
 - formatter generic-shape assertions in `src/parsing/formatter.rs`;
-- typed-fact and CFG invariants in `src/backend/mir/mod.rs`;
+- typed-fact and CFG invariants in `src/compiling/mir/build/mod.rs`;
 - module and stdlib registration invariants in `src/compiling/driver.rs`,
   `module.rs`, `package.rs`, and `stdlib.rs`;
 - typed-program construction invariants in

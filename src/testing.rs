@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 use crate::{
     analysis::{Diagnostic, DocumentId},
     ast::{AST, NameResolved},
-    compiling::driver::{Driver, DriverConfig, Source, Typed, execute_module},
+    compiling::driver::{Driver, DriverConfig, Source, Typed},
     diagnostic::AnyDiagnostic,
 };
 
@@ -547,11 +547,11 @@ impl Runner {
             }
         }
         let executable = typed.compile_executable(None).map_err(TestError::Compile)?;
-        let mut io = talk_runtime::io::CaptureIO::default();
+        let mut io = talk_vm::io::CaptureIO::default();
         // An aborting run reports through captured stderr — Core's panic
         // fallback writes the message there before asking the host to
         // exit — so the cause leads the error rather than being dropped.
-        let value = match execute_module(&executable, &mut io) {
+        let value = match executable.run(&mut io) {
             Ok(value) => value,
             Err(error) => {
                 let reported = String::from_utf8_lossy(&io.err);

@@ -43,8 +43,8 @@ pub struct AbiSymbol {
 }
 
 impl AbiSymbol {
-    pub fn runtime(&self) -> Result<talk_runtime::symbol::Symbol, String> {
-        use talk_runtime::symbol::{ModuleId, ModuleSymbolId, Symbol};
+    pub fn runtime(&self) -> Result<talk_vm::symbol::Symbol, String> {
+        use talk_vm::symbol::{ModuleId, ModuleSymbolId, Symbol};
         let module = u16::try_from(self.module)
             .map_err(|_| format!("ABI symbol module {} out of range", self.module))?;
         let id = ModuleSymbolId::new(ModuleId(module), self.local);
@@ -149,14 +149,7 @@ pub fn parse_schema(text: &str) -> Result<AbiSchema, String> {
         };
         let name = name.trim().to_string();
         if types
-            .insert(
-                name.clone(),
-                AbiType {
-                    name,
-                    symbol,
-                    kind,
-                },
-            )
+            .insert(name.clone(), AbiType { name, symbol, kind })
             .is_some()
         {
             return Err("duplicate type in ABI descriptor".into());
@@ -165,7 +158,11 @@ pub fn parse_schema(text: &str) -> Result<AbiSchema, String> {
     if !types.contains_key(&root) {
         return Err(format!("ABI descriptor root `{root}` has no schema entry"));
     }
-    Ok(AbiSchema { root, optional, types })
+    Ok(AbiSchema {
+        root,
+        optional,
+        types,
+    })
 }
 
 fn parse_symbol(text: &str, is_enum: bool) -> Result<AbiSymbol, String> {
@@ -352,7 +349,10 @@ pub fn describe(program: &TypedProgram, root: &str) -> Result<String, String> {
             // types sit in the catalog too, but they cross the ABI as
             // leaf names (`String`), not as schema entries.
             if (catalog.structs.contains_key(&reference) || catalog.enums.contains_key(&reference))
-                && program.resolved_names().symbol_names.contains_key(&reference)
+                && program
+                    .resolved_names()
+                    .symbol_names
+                    .contains_key(&reference)
                 && !visited.contains(&reference)
             {
                 visited.push(reference);

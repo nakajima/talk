@@ -10,7 +10,8 @@ find which parts of the IR resist translation. It now covers the entire
 instruction set, and the answer to the second question turned out to be
 "none of it".
 
-`src/backend/c.rs` is 898 lines and `src/backend/c_prelude.c` 1270;
+the emitter lives in `talk-c/src/lib.rs` and the shared native runtime
+in `talk-native-runtime/src/runtime.c`;
 `tests/c_backend_tests.rs` (563 lines) is the contract. The change to
 existing compiler code is 47 added lines across three files, all
 additive — the backend is a sibling of `lower`, not a modification of
@@ -184,7 +185,7 @@ storage. The default is the arena, which is not reclaimed until exit — and
 at three million iterations of `bench/fields.tlk` that showed up as kernel
 time exceeding user time: the cost was page faults, not the bump.
 
-`src/backend/c_escape.rs` finds the construction sites whose value
+`src/compiling/mir/build/escape.rs` finds the construction sites whose value
 provably never leaves the frame, and gives each one a storage slot in the
 activation, reused on every execution of that site. `fields` went from
 19ms to 9ms, and at three million iterations system time fell from 107ms
@@ -268,7 +269,7 @@ reclaimed — so an allocate/free loop grew memory forever even with every
 buffer correctly freed and the exit balance satisfied. `'heap` objects
 were worse, at roughly 175 bytes per object against 24 per buffer.
 
-Both are fixed in `talk-runtime`, and both are now flat:
+Both are fixed in `talk-vm`, and both are now flat:
 
 | | before | after |
 | --- | ---: | ---: |
@@ -330,7 +331,7 @@ arithmetic, `'heap` objects with merge-only regions, the host IO table,
 and result rendering for aggregates. Coverage is complete: every MIR
 instruction is translated.
 
-**Settled: no new dependence on `talk-runtime`.** Buffers use machine
+**Settled: no new dependence on `talk-vm`.** Buffers use machine
 pointers with a reference-counted header rather than the VM's simulated
 byte memory, and the 24 `Io` operations are POSIX wrappers in the prelude
 — which is where they are most natural anyway. Result rendering needs the

@@ -3,8 +3,7 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use talk::codegen::Compilation;
-use talk::compiling::driver::{Driver, DriverConfig, Source, Typed};
+use talk::compiling::driver::{Driver, DriverConfig, MirEntry, Source, Typed};
 
 struct Options {
     build: bool,
@@ -128,12 +127,13 @@ fn compile(options: &Options) -> Result<talk_llvm::Artifact, String> {
     } else {
         None
     };
-    let compilation = if let Some(root) = package_root {
+    let module = if let Some(root) = package_root {
         let project = talk::compiling::package::PackageProject::open_at(root, options.offline)
             .map_err(|error| error.to_string())?;
         project
-            .codegen_binary(options.binary.as_deref(), options.entry.as_deref())
+            .mir_binary(options.binary.as_deref(), options.entry.as_deref())
             .map_err(|error| error.to_string())?
+            .module
     } else {
         if options.binary.is_some() {
             return Err("--bin requires package compilation without source files".into());
@@ -141,24 +141,15 @@ fn compile(options: &Options) -> Result<talk_llvm::Artifact, String> {
         if options.offline {
             return Err("--offline requires package compilation without source files".into());
         }
-        typecheck(&options.files)?.codegen(options.entry.as_deref())?
+        let entry = match options.entry.as_deref() {
+            Some(name) => MirEntry::Named(name),
+            None => MirEntry::Script,
+        };
+        typecheck(&options.files)?
+            .compile_mir(entry)
+            .map(|output| output.module)?
     };
-    let Compilation {
-        program,
-        display_names,
-        string_symbol,
-        storage_symbol,
-    } = compilation;
-    talk_llvm::emit(
-        &program,
-        talk_llvm::Runtime {
-            native_prelude: talk::codegen::native_runtime_c(),
-            display_names,
-            string_symbol,
-            storage_symbol,
-        },
-    )
-    .map_err(|error| error.to_string())
+    talk_llvm::emit(&module).map_err(|error| error.to_string())
 }
 
 fn typecheck(files: &[OsString]) -> Result<Driver<Typed>, String> {

@@ -1,6 +1,6 @@
 // swift-tools-version: 5.9
-// Builds against the talk-c static library:
-//   cargo build -p talk-c --release
+// Builds against the talk-ffi static library:
+//   cargo build -p talk-ffi --release
 //   swift test -Xlinker -L../target/release
 import PackageDescription
 
@@ -10,8 +10,8 @@ let package = Package(
         .library(name: "TalkSwift", targets: ["TalkSwift"])
     ],
     targets: [
-        .systemLibrary(name: "CTalkC", path: "Sources/CTalkC"),
-        .target(name: "TalkSwift", dependencies: ["CTalkC"]),
+        .systemLibrary(name: "CTalkFFI", path: "Sources/CTalkFFI"),
+        .target(name: "TalkSwift", dependencies: ["CTalkFFI"]),
         .testTarget(name: "TalkSwiftTests", dependencies: ["TalkSwift"]),
     ]
 )

@@ -20,7 +20,6 @@ use tar::Archive;
 use crate::{
     label::Label,
     lexing::unescape,
-    name_resolution::symbol::Symbol,
     node::Node,
     node_id::FileID,
     node_kinds::{
@@ -163,10 +162,14 @@ impl PackageManifest {
     }
 
     fn parse(path: &Path, source: &str) -> Result<Self, PackageError> {
-        let driver = Driver::new(
-            vec![Source::in_memory(path.to_path_buf(), source)],
-            DriverConfig::new("PackageManifest"),
-        );
+        let mut config = DriverConfig::new("PackageManifest");
+        // The manifest DSL names Package without a `use`.
+        if let Some((id, module)) = super::stdlib::module_with_id("Package") {
+            std::rc::Rc::make_mut(&mut config.modules)
+                .import_compiled((*module).clone(), id)
+                .expect("Package stdlib module registers once per session");
+        }
+        let driver = Driver::new(vec![Source::in_memory(path.to_path_buf(), source)], config);
         let parsed = driver.parse().map_err(|error| PackageError::Manifest {
             path: path.to_path_buf(),
             message: format!("{error:?}"),
@@ -2105,14 +2108,19 @@ impl PackageProject {
             .map_err(PackageError::Compile)
     }
 
-    /// Produce optimized target-neutral codegen input for a package binary.
-    pub fn codegen_binary(
+    /// Publish the finalized MIR module for a package binary (ADR 0047):
+    /// the input every external backend consumes.
+    pub fn mir_binary(
         &self,
         requested: Option<&str>,
         entry: Option<&str>,
-    ) -> Result<crate::codegen::Compilation<Symbol>, PackageError> {
+    ) -> Result<crate::compiling::driver::MirOutput, PackageError> {
+        let entry = match entry {
+            Some(name) => crate::compiling::driver::MirEntry::Named(name),
+            None => crate::compiling::driver::MirEntry::Script,
+        };
         self.typecheck_binary(requested)?
-            .codegen(entry)
+            .compile_mir(entry)
             .map_err(PackageError::Compile)
     }
 
@@ -2374,10 +2382,13 @@ impl PackageProject {
     fn base_environment() -> ModuleEnvironment {
         let mut environment = ModuleEnvironment::default();
         environment.import_core(super::core::compile());
-        for (id, module) in super::stdlib::modules_with_ids() {
+        // Manifests name the Package module's DSL without a `use`, so it
+        // registers here. Everything else stays demand-driven: stdlib
+        // modules register as each target's imports are discovered.
+        if let Some((id, module)) = super::stdlib::module_with_id("Package") {
             environment
                 .import_compiled((*module).clone(), id)
-                .expect("stdlib modules register once per session");
+                .expect("Package stdlib module registers once per session");
         }
         environment
     }

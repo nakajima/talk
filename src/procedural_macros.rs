@@ -45,14 +45,13 @@ impl ProceduralMacroArtifact {
     }
 
     fn load(&self) -> Result<ProceduralMacroService, String> {
-        let module = talk_runtime::Module::decode_bytecode(&self.image)
+        let module = talk_vm::Module::decode_bytecode(&self.image)
             .map_err(|error| format!("invalid procedural macro artifact: {error:?}"))?;
         Ok(ProceduralMacroService {
-            executable: crate::backend::Executable {
+            executable: talk_bytecode::Executable::from_vm_module(
                 module,
-                names: Default::default(),
-                optimizations: Default::default(),
-            },
+                crate::compiling::mir::string_shape(),
+            ),
             schema: crate::compiling::abi::parse_schema(&self.schema)?,
             artifact: self.clone(),
         })
@@ -63,7 +62,7 @@ impl ProceduralMacroArtifact {
 /// a `*.macro.tlk` unit is an expression macro with the standard syntax API
 /// signature; generated wrappers keep opaque syntax values inside Talk.
 pub struct ProceduralMacroService {
-    executable: crate::backend::Executable,
+    executable: talk_bytecode::Executable,
     schema: AbiSchema,
     artifact: ProceduralMacroArtifact,
 }
@@ -331,30 +330,27 @@ impl ProceduralMacroService {
             i64::try_from(value).map_err(|_| format!("{what} exceeds Talk's Int range"))
         };
         let args = [
-            talk_runtime::interp::HostValue::Int(i64::from(source_id.0)),
-            talk_runtime::interp::HostValue::String(source.as_bytes().to_vec()),
-            talk_runtime::interp::HostValue::Int(i64::from(input_start)),
-            talk_runtime::interp::HostValue::Int(i64::from(input_end)),
-            talk_runtime::interp::HostValue::String(
+            talk_vm::interp::HostValue::Int(i64::from(source_id.0)),
+            talk_vm::interp::HostValue::String(source.as_bytes().to_vec()),
+            talk_vm::interp::HostValue::Int(i64::from(input_start)),
+            talk_vm::interp::HostValue::Int(i64::from(input_end)),
+            talk_vm::interp::HostValue::String(
                 crate::node_kinds::expr::MacroToken::encode_all(input_tokens).into_bytes(),
             ),
-            talk_runtime::interp::HostValue::Int(
+            talk_vm::interp::HostValue::Int(
                 definition_module.map_or(-1, |module| i64::from(module.0)),
             ),
-            talk_runtime::interp::HostValue::Int(integer(
+            talk_vm::interp::HostValue::Int(integer(
                 expansion_namespace,
                 "macro expansion namespace",
             )?),
-            talk_runtime::interp::HostValue::Int(integer(
-                expansion_ordinal,
-                "macro expansion ordinal",
-            )?),
+            talk_vm::interp::HostValue::Int(integer(expansion_ordinal, "macro expansion ordinal")?),
         ];
-        let mut io = talk_runtime::io::CaptureIO::default();
+        let mut io = talk_vm::io::CaptureIO::default();
         let run = self.executable.run_export(
             wrapper,
             &args,
-            talk_runtime::interp::Budgets {
+            talk_vm::interp::Budgets {
                 instructions: MAX_MACRO_INSTRUCTIONS,
                 frames: MAX_MACRO_FRAMES,
                 memory_bytes: MAX_MACRO_MEMORY,

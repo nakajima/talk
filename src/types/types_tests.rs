@@ -8669,10 +8669,7 @@ mod nested_types {
             libraries: Vec::new(),
             parser: None,
         };
-        let driver_b = Driver::new(
-            vec![Source::from("use A::{ fizz }\nlet f = fizz")],
-            config,
-        );
+        let driver_b = Driver::new(vec![Source::from("use A::{ fizz }\nlet f = fizz")], config);
         let typed = driver_b
             .parse()
             .unwrap()

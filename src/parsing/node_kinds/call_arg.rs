@@ -22,7 +22,9 @@ pub enum ArgMode {
 /// the trailing-block label exception by origin — never by inspecting a
 /// synthesized function name or span — and compiler-generated sugar is not
 /// a source label occurrence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize,
+)]
 pub enum CallArgOrigin {
     /// Written inside the call's parentheses.
     #[default]

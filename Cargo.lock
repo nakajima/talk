@@ -2000,7 +2000,11 @@ dependencies = [
  "rustyline",
  "serde",
  "sha2",
- "talk-runtime",
+ "talk-bytecode",
+ "talk-c",
+ "talk-mir",
+ "talk-native-runtime",
+ "talk-vm",
  "tar",
  "tokio",
  "tower",
@@ -2011,11 +2015,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "talk-bytecode"
+version = "0.1.0"
+dependencies = [
+ "profiling",
+ "rustc-hash",
+ "talk-mir",
+ "talk-vm",
+]
+
+[[package]]
 name = "talk-c"
 version = "0.1.0"
 dependencies = [
+ "rustc-hash",
+ "talk-mir",
+ "talk-native-runtime",
+]
+
+[[package]]
+name = "talk-ffi"
+version = "0.1.0"
+dependencies = [
  "talk",
- "talk-runtime",
+ "talk-vm",
 ]
 
 [[package]]
@@ -2023,24 +2046,34 @@ name = "talk-llvm"
 version = "0.1.0"
 dependencies = [
  "talk",
- "talk-runtime",
+ "talk-mir",
+ "talk-native-runtime",
+ "talk-vm",
 ]
 
 [[package]]
-name = "talk-runtime"
+name = "talk-mir"
+version = "0.1.0"
+
+[[package]]
+name = "talk-native-runtime"
+version = "0.1.0"
+
+[[package]]
+name = "talk-static"
+version = "0.1.0"
+dependencies = [
+ "talk-vm",
+]
+
+[[package]]
+name = "talk-vm"
 version = "0.1.0"
 dependencies = [
  "libc",
  "profiling",
  "rustc-hash",
  "tracy-client",
-]
-
-[[package]]
-name = "talk-static"
-version = "0.1.0"
-dependencies = [
- "talk-runtime",
 ]
 
 [[package]]

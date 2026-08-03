@@ -1,0 +1,5 @@
+module CTalkFFI [system] {
+  header "../../../talk-ffi/include/talk_ffi.h"
+  link "talk_ffi"
+  export *
+}

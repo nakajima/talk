@@ -173,9 +173,8 @@ pub(crate) fn split_public_interface(
             // instance-head arguments, context, and associated bindings.
             // A private type anywhere in the conclusion keeps the row
             // file-private; witnesses are suppliers and do not gate.
-            let conclusion_nameable = !local_private(&row.head)
-                && !local_private(&row.protocol.protocol)
-                && {
+            let conclusion_nameable =
+                !local_private(&row.head) && !local_private(&row.protocol.protocol) && {
                     let mut named: FxHashSet<Symbol> = FxHashSet::default();
                     for arg in &row.protocol.args {
                         arg.referenced_symbols(&mut named);
@@ -219,9 +218,7 @@ pub(crate) fn split_public_interface(
                 found.insert(witness);
             }
             for entry in &row.dictionary {
-                if let crate::types::catalog::DictionaryEntry::Implementation {
-                    symbol, ..
-                } = entry
+                if let crate::types::catalog::DictionaryEntry::Implementation { symbol, .. } = entry
                 {
                     found.insert(*symbol);
                 }
@@ -241,7 +238,9 @@ pub(crate) fn split_public_interface(
     catalog.enums.retain(|symbol, _| keep.contains(symbol));
     catalog.protocols.retain(|symbol, _| keep.contains(symbol));
     catalog.effects.retain(|symbol, _| keep.contains(symbol));
-    catalog.type_aliases.retain(|symbol, _| keep.contains(symbol));
+    catalog
+        .type_aliases
+        .retain(|symbol, _| keep.contains(symbol));
     catalog
         .nominal_owners
         .retain(|symbol, _| keep.contains(symbol));
@@ -256,7 +255,11 @@ pub(crate) fn split_public_interface(
         .map(|(&id, row)| (row.head, id))
         .collect();
     for (head, id) in heads {
-        catalog.conformances_by_head.entry(head).or_default().push(id);
+        catalog
+            .conformances_by_head
+            .entry(head)
+            .or_default()
+            .push(id);
     }
     // Param-keyed side tables retain entries for kept contracts'
     // parameters and reachable associated types only.
@@ -270,23 +273,21 @@ pub(crate) fn split_public_interface(
     // cannot reach.
     for owners in catalog.member_owners.values_mut() {
         owners.retain(|owner| match owner {
-            MemberOwner::Protocol(symbol) | MemberOwner::Nominal(symbol) => {
-                keep.contains(symbol)
-            }
+            MemberOwner::Protocol(symbol) | MemberOwner::Nominal(symbol) => keep.contains(symbol),
         });
     }
     catalog.member_owners.retain(|_, owners| !owners.is_empty());
     // Extension rows of reachable heads, public members only.
-    catalog
-        .extend_members
-        .retain(|head, _| keep.contains(head));
+    catalog.extend_members.retain(|head, _| keep.contains(head));
     for members in catalog.extend_members.values_mut() {
         for rows in members.values_mut() {
             rows.retain(|row| keep.contains(&row.symbol));
         }
         members.retain(|_, rows| !rows.is_empty());
     }
-    catalog.extend_members.retain(|_, members| !members.is_empty());
+    catalog
+        .extend_members
+        .retain(|_, members| !members.is_empty());
     // Accessibility records must cover every member an importer can
     // still see in the retained tables, so all own records stay: an
     // absent entry means unrestricted.

@@ -11,19 +11,17 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
-use std::hash::Hash;
 
-use crate::{
-    Artifact, CmpKind, Constant, DisplayNames, Error, FieldRepr, Function, Inst, Layout, LayoutId,
-    Operand, Program, Runtime, ScalarOp, Shape, SlotKind, Term, TypeKind,
+use talk_mir::{
+    CmpKind, Constant, DisplayNames, FieldRepr, Function, Inst, Layout, LayoutId, MirSymbol,
+    Module, Operand, ScalarOp, Shape, SlotKind, Term, TypeKind,
 };
+
+use crate::{Artifact, Error};
 
 const RUNTIME_ABI: &str = include_str!("llvm_runtime.c");
 
-pub(crate) fn emit<S>(program: &Program<S>, runtime: Runtime<'_, S>) -> Result<Artifact, Error>
-where
-    S: Copy + Eq + Hash,
-{
+pub(crate) fn emit(program: &Module) -> Result<Artifact, Error> {
     let entry = program
         .functions
         .get(program.entry)
@@ -35,9 +33,9 @@ where
     }
 
     let mut emitter = Emitter::new(
-        runtime.string_symbol,
-        runtime.storage_symbol,
-        program.layouts.clone(),
+        program.string_symbol,
+        program.storage_symbol,
+        program.layout_table.clone(),
     );
     let mut bodies = String::new();
     for (id, function) in program.functions.iter().enumerate() {
@@ -48,11 +46,7 @@ where
 
     let mut ir = String::from(IR_HEADER);
     ir.push_str(&bodies);
-    let runtime_c = emitter.runtime_source(
-        program.global_slots,
-        &runtime.display_names,
-        runtime.native_prelude,
-    );
+    let runtime_c = emitter.runtime_source(program.global_slots, &program.display);
     Ok(Artifact { ir, runtime_c })
 }
 
@@ -116,26 +110,23 @@ declare void @talk_llvm_trap(ptr)
 
 "#;
 
-struct Emitter<S> {
-    effects: HashMap<S, u32>,
+struct Emitter {
+    effects: HashMap<MirSymbol, u32>,
     statics: Vec<u8>,
     static_offsets: HashMap<Vec<u8>, u32>,
-    display_ids: HashMap<S, u32>,
+    display_ids: HashMap<MirSymbol, u32>,
     existential_ids: HashSet<u32>,
     next_value: u64,
     constant_slot: usize,
     call_width: usize,
     operand_width: usize,
-    string_symbol: S,
-    storage_symbol: S,
-    layouts: Vec<Layout<S>>,
+    string_symbol: MirSymbol,
+    storage_symbol: MirSymbol,
+    layouts: Vec<Layout>,
 }
 
-impl<S> Emitter<S>
-where
-    S: Copy + Eq + Hash,
-{
-    fn new(string_symbol: S, storage_symbol: S, layouts: Vec<Layout<S>>) -> Self {
+impl Emitter {
+    fn new(string_symbol: MirSymbol, storage_symbol: MirSymbol, layouts: Vec<Layout>) -> Self {
         let mut emitter = Self {
             effects: HashMap::new(),
             statics: Vec::new(),
@@ -170,12 +161,12 @@ where
         format!("%{prefix}{id}")
     }
 
-    fn effect(&mut self, symbol: S) -> u32 {
+    fn effect(&mut self, symbol: MirSymbol) -> u32 {
         let next = u32::try_from(self.effects.len()).unwrap_or_default();
         *self.effects.entry(symbol).or_insert(next)
     }
 
-    fn display_id(&mut self, symbol: S) -> u32 {
+    fn display_id(&mut self, symbol: MirSymbol) -> u32 {
         let next = u32::try_from(self.display_ids.len() + 1).unwrap_or(1);
         *self.display_ids.entry(symbol).or_insert(next)
     }
@@ -227,12 +218,7 @@ where
         offset
     }
 
-    fn function(
-        &mut self,
-        out: &mut String,
-        id: usize,
-        function: &Function<S>,
-    ) -> Result<(), Error> {
+    fn function(&mut self, out: &mut String, id: usize, function: &Function) -> Result<(), Error> {
         self.next_value = 0;
         self.constant_slot = 0;
         self.call_width = function
@@ -266,7 +252,7 @@ where
             "define void @talk_fn{id}(ptr %out, ptr %env, ptr %args) {{"
         );
         let _ = writeln!(out, "entry:");
-        let count = function.n_locals.max(1);
+        let count = function.n_locals().max(1);
         let _ = writeln!(out, "  %locals = alloca [{count} x %TalkValue], align 8");
         let _ = writeln!(out, "  %constants = alloca [8 x %TalkValue], align 8");
         let call_width = self.call_width;
@@ -397,7 +383,7 @@ where
             .collect()
     }
 
-    fn inst(&mut self, out: &mut String, inst: &Inst<S>, identified: bool) -> Result<(), Error> {
+    fn inst(&mut self, out: &mut String, inst: &Inst, identified: bool) -> Result<(), Error> {
         match inst {
             Inst::Copy { dest, src } => {
                 let src = self.operand(out, *src);
@@ -1131,7 +1117,7 @@ where
         &mut self,
         out: &mut String,
         term: &Term,
-        function: &Function<S>,
+        function: &Function,
         identified: bool,
     ) -> Result<(), Error> {
         match term {
@@ -1237,7 +1223,7 @@ where
         buffer
     }
 
-    fn dispatch(&mut self, out: &mut String, program: &Program<S>) {
+    fn dispatch(&mut self, out: &mut String, program: &Module) {
         let _ = writeln!(
             out,
             "\ndefine void @talk_llvm_dispatch(ptr %out, i32 %function, ptr %env, ptr %args) {{"
@@ -1271,14 +1257,9 @@ where
         );
     }
 
-    fn runtime_source(
-        &self,
-        global_slots: u32,
-        names: &DisplayNames<S>,
-        native_prelude: &str,
-    ) -> String {
+    fn runtime_source(&self, global_slots: u32, names: &DisplayNames) -> String {
         let mut out = String::from("#include <stddef.h>\n");
-        out.push_str(native_prelude);
+        out.push_str(talk_native_runtime::source());
         out.push('\n');
         emit_statics(&mut out, &self.statics);
         emit_layout_table(&mut out, self);
@@ -1319,10 +1300,7 @@ fn emit_statics(out: &mut String, bytes: &[u8]) {
     let _ = writeln!(out, "}};");
 }
 
-fn emit_layout_table<S>(out: &mut String, emitter: &Emitter<S>)
-where
-    S: Copy + Eq + Hash,
-{
+fn emit_layout_table(out: &mut String, emitter: &Emitter) {
     for (id, layout) in emitter.layouts.iter().enumerate() {
         let shape = match layout {
             Layout::Inline(_, shape) | Layout::Boxed(_, shape) => shape,
@@ -1408,17 +1386,14 @@ where
     let _ = writeln!(out, "}};");
 }
 
-fn emit_type_table<S>(out: &mut String, emitter: &Emitter<S>, display: &DisplayNames<S>)
-where
-    S: Copy + Eq + Hash,
-{
+fn emit_type_table(out: &mut String, emitter: &Emitter, display: &DisplayNames) {
     let mut ordered: Vec<_> = emitter.display_ids.iter().collect();
     ordered.sort_by_key(|(_, id)| **id);
     for (symbol, id) in &ordered {
         let members = display
             .entries
             .get(symbol)
-            .map(|entry| entry.2.as_slice())
+            .map(|entry| entry.members.as_slice())
             .unwrap_or_default();
         if members.is_empty() {
             continue;
@@ -1440,15 +1415,17 @@ where
             let _ = writeln!(out, "    {{ \"\", TALK_TYPE_EXISTENTIAL, 0, NULL }},");
             continue;
         }
-        let Some((name, kind, members)) = display.entries.get(symbol) else {
+        let Some(entry) = display.entries.get(symbol) else {
             let _ = writeln!(out, "    {{ \"\", TALK_TYPE_TUPLE, 0, NULL }},");
             continue;
         };
-        let kind = match kind {
+        let kind = match entry.kind {
             TypeKind::Record => "TALK_TYPE_RECORD",
             TypeKind::Enum => "TALK_TYPE_ENUM",
             TypeKind::String => "TALK_TYPE_STRING",
         };
+        let members = &entry.members;
+        let name = &entry.name;
         let member_ref = if members.is_empty() {
             "NULL".into()
         } else {
@@ -1497,7 +1474,7 @@ fn float_predicate(kind: CmpKind) -> &'static str {
     }
 }
 
-fn needs_identity<S>(function: &Function<S>) -> bool {
+fn needs_identity(function: &Function) -> bool {
     function.blocks.iter().any(|block| {
         block.insts.iter().any(|inst| {
             matches!(

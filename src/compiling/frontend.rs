@@ -6,7 +6,7 @@
 //! loads the checked-in artifact through it — so none of them can
 //! drift on what the frontend artifact is.
 
-use crate::compiling::bootstrap::{bootstrap, BootstrapOutcome};
+use crate::compiling::bootstrap::{BootstrapOutcome, bootstrap};
 use crate::compiling::manifest::ArtifactManifest;
 use std::path::{Path, PathBuf};
 
@@ -86,7 +86,10 @@ fn export_strings() -> Vec<String> {
 }
 
 fn effect_strings() -> Vec<String> {
-    ALLOWED_EFFECTS.iter().map(|name| (*name).to_string()).collect()
+    ALLOWED_EFFECTS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
 }
 
 /// Rebuild the frontend artifact from the on-disk sources, requiring
@@ -104,7 +107,7 @@ pub fn regenerate(root: &Path) -> Result<BootstrapOutcome, String> {
 /// must match the on-disk sources, the artifact bytes, the ABI
 /// descriptor, and this compiler's bytecode format, and the image must
 /// decode. Fails closed on any mismatch — there is no fallback parser.
-pub fn load(root: &Path) -> Result<talk_runtime::Module, String> {
+pub fn load(root: &Path) -> Result<talk_vm::Module, String> {
     let artifact = artifact_path(root);
     let image = std::fs::read(&artifact)
         .map_err(|err| format!("failed to read {}: {err}", artifact.display()))?;
@@ -116,7 +119,7 @@ pub fn load(root: &Path) -> Result<talk_runtime::Module, String> {
         .map_err(|err| format!("failed to read {}: {err}", abi_file.display()))?;
     let manifest = ArtifactManifest::parse(&manifest_text)?;
     manifest.verify(&sources(root)?, &image, Some(&abi_text))?;
-    talk_runtime::Module::decode_bytecode(&image)
+    talk_vm::Module::decode_bytecode(&image)
         .map_err(|err| format!("frontend artifact failed to decode: {err:?}"))
 }
 
@@ -137,18 +140,18 @@ pub(crate) const EMBEDDED_ABI: &str = include_str!("../../bootstrap/frontend.abi
 /// artifacts is the harness gates' job
 /// (`checked_in_frontend_artifact_matches_sources` and the bootstrap
 /// fixed point). Fails closed; there is no fallback parser.
-fn load_embedded() -> Result<talk_runtime::Module, String> {
+fn load_embedded() -> Result<talk_vm::Module, String> {
     crate::profile::init();
     profiling::scope!("frontend.load_embedded");
     let manifest = ArtifactManifest::parse(EMBEDDED_MANIFEST)?;
     manifest.verify_artifact(EMBEDDED_ARTIFACT, Some(EMBEDDED_ABI))?;
-    talk_runtime::Module::decode_bytecode(EMBEDDED_ARTIFACT)
+    talk_vm::Module::decode_bytecode(EMBEDDED_ARTIFACT)
         .map_err(|err| format!("frontend artifact failed to decode: {err:?}"))
 }
 
 /// The immutable frontend program and ABI shared by every compiler thread.
 struct FrontendSession {
-    module: talk_runtime::Module,
+    module: talk_vm::Module,
     schema: crate::compiling::abi::AbiSchema,
 }
 
@@ -179,7 +182,7 @@ impl ParserSession {
     /// Fail-closed: the image must decode and the descriptor parse.
     pub fn from_artifact(image: &[u8], abi: &str) -> Result<Self, String> {
         Ok(Self(FrontendSession {
-            module: talk_runtime::Module::decode_bytecode(image)
+            module: talk_vm::Module::decode_bytecode(image)
                 .map_err(|err| format!("candidate artifact failed to decode: {err:?}"))?,
             schema: crate::compiling::abi::parse_schema(abi)?,
         }))
@@ -223,17 +226,17 @@ fn parse_source_in(
     crate::profile::init();
     profiling::scope!("frontend.parse_source");
     let session = resolve(parser)?;
-    let mut io = talk_runtime::io::CaptureIO::default();
+    let mut io = talk_vm::io::CaptureIO::default();
     let run = {
         profiling::scope!("frontend.execute");
-        talk_runtime::interp::run_export(
+        talk_vm::interp::run_export(
             &session.module,
             "parse_file_source",
-            &[talk_runtime::interp::HostValue::String(
+            &[talk_vm::interp::HostValue::String(
                 source.as_bytes().to_vec(),
             )],
-            crate::backend::string_shape(),
-            talk_runtime::interp::Budgets::default(),
+            crate::compiling::mir::string_shape(),
+            talk_vm::interp::Budgets::default(),
             &mut io,
         )?
     };
@@ -246,17 +249,17 @@ pub fn dump_export(name: &str, source: &str) -> Result<String, String> {
     crate::profile::init();
     profiling::scope!("frontend.dump_export");
     let session = FrontendSession::shared()?;
-    let mut io = talk_runtime::io::CaptureIO::default();
+    let mut io = talk_vm::io::CaptureIO::default();
     let run = {
         profiling::scope!("frontend.execute");
-        talk_runtime::interp::run_export(
+        talk_vm::interp::run_export(
             &session.module,
             name,
-            &[talk_runtime::interp::HostValue::String(
+            &[talk_vm::interp::HostValue::String(
                 source.as_bytes().to_vec(),
             )],
-            crate::backend::string_shape(),
-            talk_runtime::interp::Budgets::default(),
+            crate::compiling::mir::string_shape(),
+            talk_vm::interp::Budgets::default(),
             &mut io,
         )?
     };
@@ -274,17 +277,17 @@ pub fn lex(source: &str) -> Result<(Vec<crate::parsing::lexing::token::Token>, b
     crate::profile::init();
     profiling::scope!("frontend.lex");
     let session = FrontendSession::shared()?;
-    let mut io = talk_runtime::io::CaptureIO::default();
+    let mut io = talk_vm::io::CaptureIO::default();
     let run = {
         profiling::scope!("frontend.execute");
-        talk_runtime::interp::run_export(
+        talk_vm::interp::run_export(
             &session.module,
             "lex_tokens",
-            &[talk_runtime::interp::HostValue::String(
+            &[talk_vm::interp::HostValue::String(
                 source.as_bytes().to_vec(),
             )],
-            crate::backend::string_shape(),
-            talk_runtime::interp::Budgets::default(),
+            crate::compiling::mir::string_shape(),
+            talk_vm::interp::Budgets::default(),
             &mut io,
         )?
     };
@@ -356,12 +359,13 @@ fn parse_ast_with_comments_in(
     crate::parsing::parser_error::ParserError,
 > {
     use crate::parsing::parser_error::ParserError;
-    let bridged = parse_source_in(parser, input, file_id).map_err(|error| ParserError::Frontend {
-        code: "parser.frontend-bridge".into(),
-        message: error,
-        span: None,
-        expected: None,
-    })?;
+    let bridged =
+        parse_source_in(parser, input, file_id).map_err(|error| ParserError::Frontend {
+            code: "parser.frontend-bridge".into(),
+            message: error,
+            span: None,
+            expected: None,
+        })?;
     if let Some(failure) = bridged.failure {
         return Err(ParserError::Frontend {
             code: failure.code,
@@ -374,16 +378,18 @@ fn parse_ast_with_comments_in(
         .diags
         .into_iter()
         .map(|fail| {
-            crate::common::diagnostic::AnyDiagnostic::Parsing(crate::common::diagnostic::Diagnostic {
-                id: crate::node_id::NodeID(file_id, 0),
-                severity: crate::common::diagnostic::Severity::Error,
-                kind: ParserError::Frontend {
-                    code: fail.code,
-                    message: fail.message,
-                    span: fail.span,
-                    expected: fail.expected,
+            crate::common::diagnostic::AnyDiagnostic::Parsing(
+                crate::common::diagnostic::Diagnostic {
+                    id: crate::node_id::NodeID(file_id, 0),
+                    severity: crate::common::diagnostic::Severity::Error,
+                    kind: ParserError::Frontend {
+                        code: fail.code,
+                        message: fail.message,
+                        span: fail.span,
+                        expected: fail.expected,
+                    },
                 },
-            })
+            )
         })
         .collect();
     let mut meta = bridged.meta;
@@ -454,7 +460,7 @@ mod tests {
     #[test]
     fn embedded_session_is_shared_across_threads() {
         fn assert_shareable<T: Send + Sync>() {}
-        assert_shareable::<talk_runtime::Module>();
+        assert_shareable::<talk_vm::Module>();
 
         let expected = FrontendSession::shared().expect("frontend session") as *const _ as usize;
         let threads: Vec<_> = (0..8)
@@ -480,20 +486,20 @@ mod tests {
         let root = repo_root();
         let corpus = sources(root).expect("frontend sources load");
         let bootstrap = regenerate(root).expect("frontend bootstraps");
-        let module = talk_runtime::Module::decode_bytecode(&bootstrap.image)
+        let module = talk_vm::Module::decode_bytecode(&bootstrap.image)
             .expect("generated frontend artifact decodes");
-        let mut stats = talk_runtime::VmStats::for_module(&module);
+        let mut stats = talk_vm::VmStats::for_module(&module);
 
         for (name, source) in &corpus {
-            let mut io = talk_runtime::io::CaptureIO::default();
-            talk_runtime::interp::run_export_with_stats(
+            let mut io = talk_vm::io::CaptureIO::default();
+            talk_vm::interp::run_export_with_stats(
                 &module,
                 "parse_file_source",
-                &[talk_runtime::interp::HostValue::String(
+                &[talk_vm::interp::HostValue::String(
                     source.as_bytes().to_vec(),
                 )],
-                crate::backend::string_shape(),
-                talk_runtime::interp::Budgets::default(),
+                crate::compiling::mir::string_shape(),
+                talk_vm::interp::Budgets::default(),
                 &mut io,
                 &mut stats,
             )
@@ -537,15 +543,12 @@ mod tests {
     #[test]
     fn checked_in_frontend_artifact_matches_sources() {
         let root = repo_root();
-        let image = std::fs::read(artifact_path(root)).expect(
-            "bootstrap/frontend.tbc is missing; regenerate with `talk bootstrap`",
-        );
-        let manifest_text = std::fs::read_to_string(manifest_path(root)).expect(
-            "bootstrap/frontend.manifest is missing; regenerate with `talk bootstrap`",
-        );
-        let abi_text = std::fs::read_to_string(abi_path(root)).expect(
-            "bootstrap/frontend.abi is missing; regenerate with `talk bootstrap`",
-        );
+        let image = std::fs::read(artifact_path(root))
+            .expect("bootstrap/frontend.tbc is missing; regenerate with `talk bootstrap`");
+        let manifest_text = std::fs::read_to_string(manifest_path(root))
+            .expect("bootstrap/frontend.manifest is missing; regenerate with `talk bootstrap`");
+        let abi_text = std::fs::read_to_string(abi_path(root))
+            .expect("bootstrap/frontend.abi is missing; regenerate with `talk bootstrap`");
         let manifest = ArtifactManifest::parse(&manifest_text).expect("manifest parses");
         manifest
             .verify(
@@ -561,15 +564,13 @@ mod tests {
     #[test]
     fn checked_in_frontend_artifact_loads_and_parses() {
         let module = load(repo_root()).expect("frontend artifact loads");
-        let mut io = talk_runtime::io::CaptureIO::default();
-        let run = talk_runtime::interp::run_export(
+        let mut io = talk_vm::io::CaptureIO::default();
+        let run = talk_vm::interp::run_export(
             &module,
             "parse",
-            &[talk_runtime::interp::HostValue::String(
-                b"let x = 1\n".to_vec(),
-            )],
-            crate::backend::string_shape(),
-            talk_runtime::interp::Budgets::default(),
+            &[talk_vm::interp::HostValue::String(b"let x = 1\n".to_vec())],
+            crate::compiling::mir::string_shape(),
+            talk_vm::interp::Budgets::default(),
             &mut io,
         )
         .expect("parse export runs");

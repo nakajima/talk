@@ -5,8 +5,8 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::slice;
-use talk_runtime::Module;
-use talk_runtime::interp::Value;
+use talk_vm::Module;
+use talk_vm::interp::Value;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn talk_runtime_run(ptr: *const u8, len: usize) -> i32 {
@@ -42,8 +42,8 @@ impl Runtime {
                 return 1;
             }
         };
-        let mut io = talk_runtime::io::StdioIO;
-        match talk_runtime::interp::run(&module, &mut io) {
+        let mut io = talk_vm::io::StdioIO;
+        match talk_vm::interp::run(&module, &mut io) {
             Ok(Value::Void) => 0,
             Ok(value) => {
                 println!("{value:?}");

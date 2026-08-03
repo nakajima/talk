@@ -4,12 +4,10 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-[lib]
-crate-type = ["staticlib", "rlib"]
-
 [dependencies]
-talk = { path = "..", default-features = false }
-talk-runtime = { path = "../talk-runtime" }
+talk-mir = { path = "../talk-mir" }
+talk-native-runtime = { path = "../talk-native-runtime" }
+rustc-hash = "2.1.1"
 
 [lints.clippy]
 approx_constant = "allow"

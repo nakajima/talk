@@ -111,7 +111,7 @@ impl ReplSession {
     /// Compile and execute a source unit through the backend (ADR 0034),
     /// capturing IO for the session.
     fn run(path: Option<&std::path::Path>, source: &str) -> ReplEvalResult {
-        use crate::compiling::driver::{Driver, DriverConfig, Source, execute_module};
+        use crate::compiling::driver::{Driver, DriverConfig, Source};
 
         let unit = match path {
             Some(path) => Source::in_memory(path.to_path_buf(), source),
@@ -140,8 +140,8 @@ impl ReplSession {
             Ok(executable) => executable,
             Err(message) => return ReplEvalResult::Error(message),
         };
-        let mut io = talk_runtime::io::CaptureIO::default();
-        match execute_module(&executable, &mut io) {
+        let mut io = talk_vm::io::CaptureIO::default();
+        match executable.run(&mut io) {
             Ok(value) => ReplEvalResult::Output {
                 stdout: String::from_utf8_lossy(&io.out).into_owned(),
                 stderr: String::from_utf8_lossy(&io.err).into_owned(),

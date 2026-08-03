@@ -470,7 +470,7 @@ async fn main() {
             bin,
             offline,
         } => {
-            use talk::compiling::driver::{Driver, DriverConfig, execute_module};
+            use talk::compiling::driver::{Driver, DriverConfig};
 
             if *offline
                 && (filenames.is_empty()
@@ -502,8 +502,8 @@ async fn main() {
                             std::process::exit(1);
                         }
                     };
-                let mut io = talk_runtime::io::StdioIO;
-                match execute_module(&executable, &mut io) {
+                let mut io = talk_vm::io::StdioIO;
+                match executable.run(&mut io) {
                     Ok(Some(rendered)) => println!("{rendered}"),
                     Ok(None) => {}
                     Err(message) => {
@@ -545,8 +545,8 @@ async fn main() {
                     std::process::exit(1);
                 }
             };
-            let mut io = talk_runtime::io::StdioIO;
-            match execute_module(&module, &mut io) {
+            let mut io = talk_vm::io::StdioIO;
+            match module.run(&mut io) {
                 Ok(Some(rendered)) => println!("{rendered}"),
                 Ok(None) => {}
                 Err(message) => {
@@ -778,7 +778,8 @@ async fn main() {
                         }
                     }
                 }
-                match talk::compiling::bootstrap::bootstrap(&sources, exports, allow_effects, None) {
+                match talk::compiling::bootstrap::bootstrap(&sources, exports, allow_effects, None)
+                {
                     Ok(outcome) => (outcome, output),
                     Err(err) => {
                         eprintln!("error: {err}");
@@ -818,11 +819,12 @@ async fn main() {
                         .is_some_and(|existing| existing == *abi),
                     None => !abi_path.exists(),
                 };
-                let current = std::fs::read(&output).ok().is_some_and(|existing| {
-                    existing == outcome.image
-                }) && std::fs::read_to_string(&manifest_path)
+                let current = std::fs::read(&output)
                     .ok()
-                    .is_some_and(|existing| existing == outcome.manifest.to_text())
+                    .is_some_and(|existing| existing == outcome.image)
+                    && std::fs::read_to_string(&manifest_path)
+                        .ok()
+                        .is_some_and(|existing| existing == outcome.manifest.to_text())
                     && abi_current;
                 if !current {
                     eprintln!(
@@ -856,7 +858,6 @@ async fn main() {
             }
         }
         Commands::RunImage { filename } => {
-            use talk::compiling::driver::execute_image;
             let bytes = match std::fs::read(filename) {
                 Ok(bytes) => bytes,
                 Err(err) => {
@@ -864,8 +865,8 @@ async fn main() {
                     std::process::exit(1);
                 }
             };
-            let mut io = talk_runtime::io::StdioIO;
-            match execute_image(&bytes, &mut io) {
+            let mut io = talk_vm::io::StdioIO;
+            match talk_bytecode::run_image(&bytes, &mut io) {
                 Ok(Some(rendered)) => println!("{rendered}"),
                 Ok(None) => {}
                 Err(message) => {
@@ -885,13 +886,22 @@ async fn main() {
             allow_effects,
         } => {
             let typed = check_or_exit(filenames);
-            let rendered = if exports.is_empty() {
-                typed.render_c(entry.as_deref())
+            let mir_entry = if exports.is_empty() {
+                match entry.as_deref() {
+                    Some(name) => talk::compiling::driver::MirEntry::Named(name),
+                    None => talk::compiling::driver::MirEntry::Script,
+                }
             } else {
-                typed.render_c_service(exports, allow_effects)
+                talk::compiling::driver::MirEntry::Exports {
+                    names: exports,
+                    allowed_effects: allow_effects,
+                }
             };
-            match rendered {
-                Ok(rendered) => print!("{rendered}"),
+            match typed
+                .compile_mir(mir_entry)
+                .and_then(|output| talk_c::emit(&output.module).map_err(|error| error.to_string()))
+            {
+                Ok(artifact) => print!("{}", artifact.source),
                 Err(message) => {
                     eprintln!("error: {message}");
                     std::process::exit(1);
@@ -1373,8 +1383,15 @@ fn build_native(
             std::process::exit(1);
         }
     };
-    let source = match check_or_exit(filenames).render_c(entry) {
-        Ok(source) => source,
+    let mir_entry = match entry {
+        Some(name) => talk::compiling::driver::MirEntry::Named(name),
+        None => talk::compiling::driver::MirEntry::Script,
+    };
+    let source = match check_or_exit(filenames)
+        .compile_mir(mir_entry)
+        .and_then(|output| talk_c::emit(&output.module).map_err(|error| error.to_string()))
+    {
+        Ok(artifact) => artifact.source,
         Err(message) => {
             eprintln!("error: {message}");
             std::process::exit(1);

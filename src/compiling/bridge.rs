@@ -8,9 +8,9 @@
 
 use crate::compiling::abi::{AbiSchema, AbiTy, AbiTypeKind};
 use std::collections::HashMap;
-use talk_runtime::interp::{RunOutcome, Value};
-use talk_runtime::memory::Pointer;
-use talk_runtime::symbol::Symbol;
+use talk_vm::interp::{RunOutcome, Value};
+use talk_vm::memory::Pointer;
+use talk_vm::symbol::Symbol;
 
 pub struct ResultValidator<'a, 'io> {
     run: &'a RunOutcome<'io>,
@@ -36,19 +36,18 @@ impl<'a, 'io> ResultValidator<'a, 'io> {
             run,
             schema,
             symbols,
-            string_symbol: crate::backend::runtime_symbol(
+            string_symbol: crate::compiling::mir::runtime_symbol(
                 crate::name_resolution::symbol::Symbol::String,
             ),
-            array_symbol: crate::backend::runtime_symbol(
+            array_symbol: crate::compiling::mir::runtime_symbol(
                 crate::name_resolution::symbol::Symbol::Array,
             ),
-            storage_symbol: crate::backend::runtime_symbol(
+            storage_symbol: crate::compiling::mir::runtime_symbol(
                 crate::name_resolution::symbol::Symbol::Storage,
             ),
             optional_symbol: schema.optional.runtime()?,
         })
     }
-
 
     /// The UTF-8 text of a String-shaped value.
     pub fn string(&self, value: &Value) -> Result<String, String> {
@@ -88,7 +87,9 @@ impl<'a, 'io> ResultValidator<'a, 'io> {
         };
         let (count, capacity) = (&count, &capacity);
         if *count < 0 || *capacity < 0 || count > capacity {
-            return Err(format!("malformed array bounds: count {count}, capacity {capacity}"));
+            return Err(format!(
+                "malformed array bounds: count {count}, capacity {capacity}"
+            ));
         }
         let count = usize::try_from(*count).map_err(|_| "array count out of range")?;
         let mut elements = Vec::with_capacity(count);
@@ -155,9 +156,7 @@ use crate::node_kinds::decl::{
     ReceiverMode, Visibility,
 };
 use crate::node_kinds::expr::{Expr, ExprKind, MacroToken};
-use crate::node_kinds::func::{
-    CaptureMode, CaptureSpec, EffectSet, Func, FuncOrigin,
-};
+use crate::node_kinds::func::{CaptureMode, CaptureSpec, EffectSet, Func, FuncOrigin};
 use crate::node_kinds::func_signature::FuncSignature;
 use crate::node_kinds::generic_arg::{GenericArg, StaticExpr, StaticExprKind, StaticOpKind};
 use crate::node_kinds::generic_decl::GenericDecl;
@@ -242,8 +241,7 @@ pub fn lex_tokens(run: &RunOutcome, schema: &AbiSchema) -> Result<(Vec<Token>, b
         let Some(tag) = run.aggregate(&kind)?.tag else {
             return Err(format!("expected a TokenKind, got {kind:?}"));
         };
-        let Some(AbiTypeKind::Enum(variants)) =
-            schema.types.get("TokenKind").map(|ty| &ty.kind)
+        let Some(AbiTypeKind::Enum(variants)) = schema.types.get("TokenKind").map(|ty| &ty.kind)
         else {
             return Err("schema has no TokenKind".into());
         };
@@ -744,9 +742,7 @@ impl ResultAdapter<'_, '_> {
         fields
             .iter()
             .enumerate()
-            .map(|(index, (name, _))| {
-                Ok((name.clone(), self.v.run.element(value, index as u16)?))
-            })
+            .map(|(index, (name, _))| Ok((name.clone(), self.v.run.element(value, index as u16)?)))
             .collect()
     }
 
@@ -871,7 +867,10 @@ impl ResultAdapter<'_, '_> {
     fn one_expr(&mut self, value: &Value) -> Result<Expr, String> {
         let mut exprs = self.exprs(value)?;
         if exprs.len() != 1 {
-            return Err(format!("expected a one-element operand array, got {}", exprs.len()));
+            return Err(format!(
+                "expected a one-element operand array, got {}",
+                exprs.len()
+            ));
         }
         Ok(exprs.remove(0))
     }
@@ -879,7 +878,10 @@ impl ResultAdapter<'_, '_> {
     fn two_exprs(&mut self, value: &Value) -> Result<(Expr, Expr), String> {
         let mut exprs = self.exprs(value)?;
         if exprs.len() != 2 {
-            return Err(format!("expected a two-element operand array, got {}", exprs.len()));
+            return Err(format!(
+                "expected a two-element operand array, got {}",
+                exprs.len()
+            ));
         }
         let rhs = exprs.remove(1);
         Ok((exprs.remove(0), rhs))
@@ -1116,7 +1118,11 @@ impl ResultAdapter<'_, '_> {
             let arg_value = self.expr(&take(&mut fields, "value")?)?;
             let span = self.node_span(&mut fields)?;
             args.push(CallArg {
-                id: { let id = self.id(); self.put_meta(id, meta); id },
+                id: {
+                    let id = self.id();
+                    self.put_meta(id, meta);
+                    id
+                },
                 label,
                 // A positional argument's label span is its own span.
                 label_span: label_span.unwrap_or(span),
@@ -1155,7 +1161,11 @@ impl ResultAdapter<'_, '_> {
         }
         let span = self.node_span(&mut fields)?;
         Ok(Block {
-            id: { let id = self.id(); self.put_meta(id, meta); id },
+            id: {
+                let id = self.id();
+                self.put_meta(id, meta);
+                id
+            },
             args,
             body,
             span,
@@ -1205,7 +1215,11 @@ impl ResultAdapter<'_, '_> {
         let type_annotation = self.opt_type(&take(&mut fields, "annotation")?)?;
         let span = self.node_span(&mut fields)?;
         Ok(Parameter {
-            id: { let id = self.id(); self.put_meta(id, meta); id },
+            id: {
+                let id = self.id();
+                self.put_meta(id, meta);
+                id
+            },
             label,
             label_span,
             name,
@@ -1224,7 +1238,11 @@ impl ResultAdapter<'_, '_> {
         let body = self.block(&take(&mut fields, "body")?)?;
         let span = self.node_span(&mut fields)?;
         Ok(MatchArm {
-            id: { let id = self.id(); self.put_meta(id, meta); id },
+            id: {
+                let id = self.id();
+                self.put_meta(id, meta);
+                id
+            },
             pattern,
             body,
             span,
@@ -1242,7 +1260,11 @@ impl ResultAdapter<'_, '_> {
         let field_value = self.expr(&take(&mut fields, "value")?)?;
         let span = self.node_span(&mut fields)?;
         Ok(RecordField {
-            id: { let id = self.id(); self.put_meta(id, meta); id },
+            id: {
+                let id = self.id();
+                self.put_meta(id, meta);
+                id
+            },
             label,
             label_span,
             value: field_value,
@@ -1292,19 +1314,80 @@ impl ResultAdapter<'_, '_> {
                 ty: require_ty?,
                 op: op.ok_or_else(|| missing("comparator"))?,
             },
-            "add" => InlineIRInstructionKind::Add { dest: require_dest?, ty: require_ty?, a: next("a")?, b: next("b")? },
-            "sub" => InlineIRInstructionKind::Sub { dest: require_dest?, ty: require_ty?, a: next("a")?, b: next("b")? },
-            "mul" => InlineIRInstructionKind::Mul { dest: require_dest?, ty: require_ty?, a: next("a")?, b: next("b")? },
-            "div" => InlineIRInstructionKind::Div { dest: require_dest?, ty: require_ty?, a: next("a")?, b: next("b")? },
-            "and" => InlineIRInstructionKind::And { dest: require_dest?, ty: require_ty?, a: next("a")?, b: next("b")? },
-            "or" => InlineIRInstructionKind::Or { dest: require_dest?, ty: require_ty?, a: next("a")?, b: next("b")? },
-            "xor" => InlineIRInstructionKind::Xor { dest: require_dest?, ty: require_ty?, a: next("a")?, b: next("b")? },
-            "shl" => InlineIRInstructionKind::Shl { dest: require_dest?, ty: require_ty?, a: next("a")?, b: next("b")? },
-            "shr" => InlineIRInstructionKind::Shr { dest: require_dest?, ty: require_ty?, a: next("a")?, b: next("b")? },
-            "not" => InlineIRInstructionKind::Not { dest: require_dest?, ty: require_ty?, a: next("a")? },
-            "alloc" => InlineIRInstructionKind::Alloc { dest: require_dest?, ty: require_ty?, count: next("count")? },
-            "load" => InlineIRInstructionKind::Load { dest: require_dest?, ty: require_ty?, addr: next("addr")? },
-            "take" => InlineIRInstructionKind::Take { dest: require_dest?, ty: require_ty?, value: next("value")? },
+            "add" => InlineIRInstructionKind::Add {
+                dest: require_dest?,
+                ty: require_ty?,
+                a: next("a")?,
+                b: next("b")?,
+            },
+            "sub" => InlineIRInstructionKind::Sub {
+                dest: require_dest?,
+                ty: require_ty?,
+                a: next("a")?,
+                b: next("b")?,
+            },
+            "mul" => InlineIRInstructionKind::Mul {
+                dest: require_dest?,
+                ty: require_ty?,
+                a: next("a")?,
+                b: next("b")?,
+            },
+            "div" => InlineIRInstructionKind::Div {
+                dest: require_dest?,
+                ty: require_ty?,
+                a: next("a")?,
+                b: next("b")?,
+            },
+            "and" => InlineIRInstructionKind::And {
+                dest: require_dest?,
+                ty: require_ty?,
+                a: next("a")?,
+                b: next("b")?,
+            },
+            "or" => InlineIRInstructionKind::Or {
+                dest: require_dest?,
+                ty: require_ty?,
+                a: next("a")?,
+                b: next("b")?,
+            },
+            "xor" => InlineIRInstructionKind::Xor {
+                dest: require_dest?,
+                ty: require_ty?,
+                a: next("a")?,
+                b: next("b")?,
+            },
+            "shl" => InlineIRInstructionKind::Shl {
+                dest: require_dest?,
+                ty: require_ty?,
+                a: next("a")?,
+                b: next("b")?,
+            },
+            "shr" => InlineIRInstructionKind::Shr {
+                dest: require_dest?,
+                ty: require_ty?,
+                a: next("a")?,
+                b: next("b")?,
+            },
+            "not" => InlineIRInstructionKind::Not {
+                dest: require_dest?,
+                ty: require_ty?,
+                a: next("a")?,
+            },
+            "alloc" => InlineIRInstructionKind::Alloc {
+                dest: require_dest?,
+                ty: require_ty?,
+                count: next("count")?,
+            },
+            "load" => InlineIRInstructionKind::Load {
+                dest: require_dest?,
+                ty: require_ty?,
+                addr: next("addr")?,
+            },
+            "take" => InlineIRInstructionKind::Take {
+                dest: require_dest?,
+                ty: require_ty?,
+                value: next("value")?,
+            },
             "gep" => InlineIRInstructionKind::Gep {
                 dest: require_dest?,
                 ty: require_ty?,
@@ -1324,25 +1407,55 @@ impl ResultAdapter<'_, '_> {
                 b: next("b")?,
                 c: next("c")?,
             },
-            "trunc" => InlineIRInstructionKind::Trunc { dest: require_dest?, val: next("val")? },
-            "is_unique" => InlineIRInstructionKind::IsUnique { dest: require_dest?, ptr: next("ptr")? },
-            "itof" => InlineIRInstructionKind::IntToFloat { dest: require_dest?, val: next("val")? },
-            "btoi" => InlineIRInstructionKind::ByteToInt { dest: require_dest?, val: next("val")? },
-            "itob" => InlineIRInstructionKind::IntToByte { dest: require_dest?, val: next("val")? },
-            "store" => InlineIRInstructionKind::Store { value: next("value")?, ty: require_ty?, addr: next("addr")? },
+            "trunc" => InlineIRInstructionKind::Trunc {
+                dest: require_dest?,
+                val: next("val")?,
+            },
+            "is_unique" => InlineIRInstructionKind::IsUnique {
+                dest: require_dest?,
+                ptr: next("ptr")?,
+            },
+            "itof" => InlineIRInstructionKind::IntToFloat {
+                dest: require_dest?,
+                val: next("val")?,
+            },
+            "btoi" => InlineIRInstructionKind::ByteToInt {
+                dest: require_dest?,
+                val: next("val")?,
+            },
+            "itob" => InlineIRInstructionKind::IntToByte {
+                dest: require_dest?,
+                val: next("val")?,
+            },
+            "store" => InlineIRInstructionKind::Store {
+                value: next("value")?,
+                ty: require_ty?,
+                addr: next("addr")?,
+            },
             "free" => InlineIRInstructionKind::Free { ptr: next("ptr")? },
-            "retain" => InlineIRInstructionKind::Retain { ty: require_ty?, value: next("value")? },
+            "retain" => InlineIRInstructionKind::Retain {
+                ty: require_ty?,
+                value: next("value")?,
+            },
             "copy" => InlineIRInstructionKind::Copy {
                 ty: require_ty?,
                 from: next("from")?,
                 to: next("to")?,
                 length: next("length")?,
             },
-            "swap" => InlineIRInstructionKind::Swap { ty: require_ty?, a: next("a")?, b: next("b")? },
+            "swap" => InlineIRInstructionKind::Swap {
+                ty: require_ty?,
+                a: next("a")?,
+                b: next("b")?,
+            },
             other => return Err(format!("unknown #_ir instruction `{other}`")),
         };
         Ok(InlineIRInstruction {
-            id: { let id = self.id(); self.put_meta(id, meta); id },
+            id: {
+                let id = self.id();
+                self.put_meta(id, meta);
+                id
+            },
             span,
             binds,
             instr_name_span,
@@ -1441,10 +1554,7 @@ impl ResultAdapter<'_, '_> {
             "tuple" => PatternKind::Tuple(self.patterns(&p[0])?),
             "or_pattern" => PatternKind::Or(self.patterns(&p[0])?),
             "variant" => {
-                let enum_name = self
-                    .opt(&p[0])?
-                    .map(|name| self.name(&name))
-                    .transpose()?;
+                let enum_name = self.opt(&p[0])?.map(|name| self.name(&name)).transpose()?;
                 let mut enum_generics = Vec::new();
                 for segment in self.array(&p[1])? {
                     enum_generics.push(self.generic_args(&segment)?);
@@ -1521,7 +1631,11 @@ impl ResultAdapter<'_, '_> {
             other => return Err(format!("unknown RecordFieldPatternKind variant `{other}`")),
         };
         Ok(RecordFieldPattern {
-            id: { let id = self.id(); self.put_meta(id, meta); id },
+            id: {
+                let id = self.id();
+                self.put_meta(id, meta);
+                id
+            },
             span,
             kind,
         })
@@ -1571,7 +1685,11 @@ impl ResultAdapter<'_, '_> {
                     let field_value = self.type_annotation(&take(&mut inner, "value")?)?;
                     let field_span = self.node_span(&mut inner)?;
                     record_fields.push(RecordFieldTypeAnnotation {
-                        id: { let id = self.id(); self.put_meta(id, field_meta); id },
+                        id: {
+                            let id = self.id();
+                            self.put_meta(id, field_meta);
+                            id
+                        },
                         label,
                         label_span,
                         value: field_value,
@@ -1595,7 +1713,11 @@ impl ResultAdapter<'_, '_> {
                     let binding_value = self.type_annotation(&take(&mut inner, "value")?)?;
                     let binding_span = self.node_span(&mut inner)?;
                     bindings.push(AnyAssocBinding {
-                        id: { let id = self.id(); self.put_meta(id, binding_meta); id },
+                        id: {
+                            let id = self.id();
+                            self.put_meta(id, binding_meta);
+                            id
+                        },
                         name,
                         name_span,
                         value: binding_value,
@@ -1610,7 +1732,11 @@ impl ResultAdapter<'_, '_> {
             other => return Err(format!("unknown TypeAnnotationKind variant `{other}`")),
         };
         Ok(TypeAnnotation {
-            id: { let id = self.id(); self.put_meta(id, meta); id },
+            id: {
+                let id = self.id();
+                self.put_meta(id, meta);
+                id
+            },
             kind,
             span,
         })
@@ -1626,7 +1752,10 @@ impl ResultAdapter<'_, '_> {
     fn one_type(&mut self, value: &Value) -> Result<TypeAnnotation, String> {
         let mut types = self.types(value)?;
         if types.len() != 1 {
-            return Err(format!("expected a one-element type array, got {}", types.len()));
+            return Err(format!(
+                "expected a one-element type array, got {}",
+                types.len()
+            ));
         }
         Ok(types.remove(0))
     }
@@ -1713,7 +1842,11 @@ impl ResultAdapter<'_, '_> {
             other => return Err(format!("unknown StaticExprKind variant `{other}`")),
         };
         Ok(StaticExpr {
-            id: { let id = self.id(); self.put_meta(id, meta); id },
+            id: {
+                let id = self.id();
+                self.put_meta(id, meta);
+                id
+            },
             kind,
             span,
         })
@@ -1750,7 +1883,11 @@ impl ResultAdapter<'_, '_> {
         let static_ty = self.opt_type(&take(&mut fields, "static_ty")?)?;
         let span = self.node_span(&mut fields)?;
         Ok(GenericDecl {
-            id: { let id = self.id(); self.put_meta(id, meta); id },
+            id: {
+                let id = self.id();
+                self.put_meta(id, meta);
+                id
+            },
             name,
             name_span,
             generics,
@@ -1791,14 +1928,22 @@ impl ResultAdapter<'_, '_> {
                 other => return Err(format!("unknown WherePredicateKind variant `{other}`")),
             };
             predicates.push(WherePredicate {
-                id: { let id = self.id(); self.put_meta(id, predicate_meta); id },
+                id: {
+                    let id = self.id();
+                    self.put_meta(id, predicate_meta);
+                    id
+                },
                 span,
                 kind,
             });
         }
         let span = self.node_span(&mut fields)?;
         Ok(Some(WhereClause {
-            id: { let id = self.id(); self.put_meta(id, clause_meta); id },
+            id: {
+                let id = self.id();
+                self.put_meta(id, clause_meta);
+                id
+            },
             span,
             predicates,
         }))
@@ -1876,7 +2021,11 @@ impl ResultAdapter<'_, '_> {
         let ret = self.opt_type(&take(&mut fields, "ret")?)?.map(Box::new);
         let span = self.node_span(&mut fields)?;
         Ok(FuncSignature {
-            id: { let id = self.id(); self.put_meta(id, meta); id },
+            id: {
+                let id = self.id();
+                self.put_meta(id, meta);
+                id
+            },
             span,
             name,
             params,
@@ -1896,7 +2045,11 @@ impl ResultAdapter<'_, '_> {
         }
         let span = self.node_span(&mut fields)?;
         Ok(Body {
-            id: { let id = self.id(); self.put_meta(id, meta); id },
+            id: {
+                let id = self.id();
+                self.put_meta(id, meta);
+                id
+            },
             decls,
             span,
         })
@@ -2031,7 +2184,11 @@ impl ResultAdapter<'_, '_> {
                 DeclKind::Extend {
                     binders,
                     head: TypeApplication {
-                        id: { let id = self.id(); self.put_meta(id, head_meta); id },
+                        id: {
+                            let id = self.id();
+                            self.put_meta(id, head_meta);
+                            id
+                        },
                         span: head_span,
                         name: head_name,
                         name_span: head_name_span,

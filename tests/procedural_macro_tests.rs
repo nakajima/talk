@@ -4,7 +4,7 @@ use std::{
 };
 
 use talk::compiling::{
-    driver::{Driver, DriverConfig, Source, execute_module},
+    driver::{Driver, DriverConfig, Source},
     package::PackageProject,
 };
 
@@ -67,8 +67,8 @@ pub func call_helper(input: MacroInput, use_site: SyntaxContext, context: QuoteC
         .type_check();
     assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
     let executable = typed.compile_executable(None).expect("compile expansion");
-    let mut io = talk_runtime::io::CaptureIO::default();
-    let value = execute_module(&executable, &mut io).expect("execute expansion");
+    let mut io = talk_vm::io::CaptureIO::default();
+    let value = executable.run(&mut io).expect("execute expansion");
     assert_eq!(value.as_deref(), Some("42"));
     fs::remove_dir_all(root).expect("remove macro fixture");
 }
@@ -137,8 +137,10 @@ pub func twice(input: MacroInput, use_site: SyntaxContext, context: QuoteContext
     let executable = project
         .compile_binary(None)
         .expect("compile imported macro");
-    let mut io = talk_runtime::io::CaptureIO::default();
-    let value = execute_module(&executable, &mut io).expect("execute imported macro expansion");
+    let mut io = talk_vm::io::CaptureIO::default();
+    let value = executable
+        .run(&mut io)
+        .expect("execute imported macro expansion");
     assert_eq!(value.as_deref(), Some("42"));
     fs::remove_dir_all(temporary).expect("remove temporary directory");
 }

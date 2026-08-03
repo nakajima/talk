@@ -1,0 +1,15 @@
+[package]
+name = "talk-ffi"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+talk = { path = "..", default-features = false }
+talk-vm = { path = "../talk-vm" }
+
+[lints.clippy]
+approx_constant = "allow"

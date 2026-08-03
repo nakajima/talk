@@ -110,7 +110,7 @@ jobs:
 
       - name: Build TalkC for the host
         if: steps.version.outputs.changed == 'true'
-        run: cargo build -p talk-c --locked
+        run: cargo build -p talk-ffi --locked
 
       - name: Test TalkSwift with the host library
         if: steps.version.outputs.changed == 'true'
@@ -134,7 +134,7 @@ jobs:
           set -euo pipefail
           mkdir -p talk-swift/.build/release
           cd talk-swift/Artifacts
-          ditto -c -k --sequesterRsrc --keepParent TalkC.xcframework ../.build/release/TalkC.xcframework.zip
+          ditto -c -k --sequesterRsrc --keepParent TalkFFI.xcframework ../.build/release/TalkFFI.xcframework.zip
 
       - name: Compute SwiftPM checksum
         if: steps.version.outputs.changed == 'true'
@@ -142,9 +142,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          checksum="$(swift package compute-checksum talk-swift/.build/release/TalkC.xcframework.zip)"
+          checksum="$(swift package compute-checksum talk-swift/.build/release/TalkFFI.xcframework.zip)"
           echo "checksum=${checksum}" >> "$GITHUB_OUTPUT"
-          echo "TalkC.xcframework.zip checksum: ${checksum}"
+          echo "TalkFFI.xcframework.zip checksum: ${checksum}"
 
       - name: Stamp the release Package.swift
         if: steps.version.outputs.changed == 'true'
@@ -162,16 +162,16 @@ jobs:
 
           package = Path("Package.swift")
           text = package.read_text()
-          url = f"https://github.com/{os.environ['REPOSITORY']}/releases/download/{os.environ['TAG']}/TalkC.xcframework.zip"
+          url = f"https://github.com/{os.environ['REPOSITORY']}/releases/download/{os.environ['TAG']}/TalkFFI.xcframework.zip"
 
           text, url_replacements = re.subn(
-              r'let talkCReleaseURL = "[^"]*"',
-              f'let talkCReleaseURL = "{url}"',
+              r'let talkFFIReleaseURL = "[^"]*"',
+              f'let talkFFIReleaseURL = "{url}"',
               text,
           )
           text, checksum_replacements = re.subn(
-              r'let talkCReleaseChecksum = "[0-9a-fA-F]*"',
-              f'let talkCReleaseChecksum = "{os.environ["CHECKSUM"]}"',
+              r'let talkFFIReleaseChecksum = "[0-9a-fA-F]*"',
+              f'let talkFFIReleaseChecksum = "{os.environ["CHECKSUM"]}"',
               text,
           )
           if url_replacements != 1 or checksum_replacements != 1:
@@ -234,7 +234,7 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3 4 5; do
-            if gh release upload "$TAG" talk-swift/.build/release/TalkC.xcframework.zip --clobber; then
+            if gh release upload "$TAG" talk-swift/.build/release/TalkFFI.xcframework.zip --clobber; then
               exit 0
             fi
             if [[ "$attempt" == 5 ]]; then

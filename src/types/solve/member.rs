@@ -32,9 +32,7 @@ impl<'s> Solver<'s> {
     ) -> MemberDispatch {
         let mut candidates: Vec<(ProtocolRef, ProtocolRef, Requirement)> = vec![];
         for protocol in protocols {
-            for (owner, requirement) in
-                self.catalog.requirement_overloads_in_ref(protocol, label)
-            {
+            for (owner, requirement) in self.catalog.requirement_overloads_in_ref(protocol, label) {
                 // Two protocols inheriting one base share its requirement —
                 // that is one candidate, not an ambiguity.
                 if candidates
@@ -476,8 +474,7 @@ impl<'s> Solver<'s> {
                         .iter()
                         .map(|(_, requirement)| requirement.symbol)
                         .collect();
-                    let selected =
-                        self.select_method_overload(&symbols, &label_str, origin)?;
+                    let selected = self.select_method_overload(&symbols, &label_str, origin)?;
                     let (owner, requirement) = overloads
                         .into_iter()
                         .find(|(_, requirement)| requirement.symbol == selected)?;
@@ -573,11 +570,7 @@ impl<'s> Solver<'s> {
                                 })
                                 .collect();
                             let field_ty = field_ty
-                                .substitute(
-                                    &substitution,
-                                    &Default::default(),
-                                    &Default::default(),
-                                )
+                                .substitute(&substitution, &Default::default(), &Default::default())
                                 .substitute_eff_rows(&eff_rows);
                             queue.push(Constraint::Eq(member, field_ty, origin));
                             self.member_resolutions

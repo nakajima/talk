@@ -1650,12 +1650,9 @@ impl TypeCatalog {
             let entries = info
                 .requirements
                 .iter()
-                .flat_map(|(label, set)| {
-                    set.iter().map(move |requirement| (label, requirement))
-                })
+                .flat_map(|(label, set)| set.iter().map(move |requirement| (label, requirement)))
                 .map(|(label, requirement)| {
-                    let key =
-                        self.witness_key(row.protocol.protocol, label, requirement.symbol);
+                    let key = self.witness_key(row.protocol.protocol, label, requirement.symbol);
                     match row.witnesses.get(&key) {
                         Some(witness) => DictionaryEntry::Implementation {
                             symbol: *witness,
@@ -2270,11 +2267,15 @@ pub fn expandable_params(
                 if table[symbol][index] {
                     continue;
                 }
-                let expands = def.fields.values().any(|(_, ty)| {
-                    param_expands(ty, param.symbol, &snapshot, structs, enums)
-                });
+                let expands = def
+                    .fields
+                    .values()
+                    .any(|(_, ty)| param_expands(ty, param.symbol, &snapshot, structs, enums));
                 if expands {
-                    table.get_mut(symbol).into_iter().for_each(|e| e[index] = true);
+                    table
+                        .get_mut(symbol)
+                        .into_iter()
+                        .for_each(|e| e[index] = true);
                     changed = true;
                 }
             }
@@ -2287,16 +2288,20 @@ pub fn expandable_params(
                 if table[symbol][index] {
                     continue;
                 }
-                let expands = def.variants.values().any(|variant| {
-                    match &variant.constructor_scheme.ty {
-                        Ty::Func(params, _, _) => params.iter().any(|ty| {
-                            param_expands(ty, param.symbol, &snapshot, structs, enums)
-                        }),
-                        _ => false,
-                    }
-                });
+                let expands =
+                    def.variants
+                        .values()
+                        .any(|variant| match &variant.constructor_scheme.ty {
+                            Ty::Func(params, _, _) => params.iter().any(|ty| {
+                                param_expands(ty, param.symbol, &snapshot, structs, enums)
+                            }),
+                            _ => false,
+                        });
                 if expands {
-                    table.get_mut(symbol).into_iter().for_each(|e| e[index] = true);
+                    table
+                        .get_mut(symbol)
+                        .into_iter()
+                        .for_each(|e| e[index] = true);
                     changed = true;
                 }
             }
