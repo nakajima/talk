@@ -1,6 +1,6 @@
 # Backend crate extraction plan
 
-Status: proposed
+Status: implemented (ADR 0047)
 
 ## Summary
 
