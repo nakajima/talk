@@ -247,9 +247,9 @@ impl<'a> DeclDeclarer<'a> {
                     // An overload sibling must never reuse the earlier
                     // public Global by name: it mints fresh.
                     let resolved = if overloading {
-                        let minted =
-                            self.resolver
-                                .mint(name, SymbolKind::Global, lhs.id, lhs.span);
+                        let minted = self
+                            .resolver
+                            .mint(name, SymbolKind::Global, lhs.id, lhs.span);
                         if let Ok(sym) = minted.symbol() {
                             self.resolver.bind_value(&name_str, sym);
                         }
@@ -276,9 +276,7 @@ impl<'a> DeclDeclarer<'a> {
                             continue;
                         }
                         exported_names.insert(name_str, vec![None]);
-                        let resolved =
-                            self.resolver
-                                .declare(&name, SymbolKind::Global, id, span);
+                        let resolved = self.resolver.declare(&name, SymbolKind::Global, id, span);
                         if let Ok(sym) = resolved.symbol() {
                             self.resolver.mark_public(sym);
                             self.resolver.predeclared.insert(id, sym);
@@ -959,7 +957,6 @@ impl<'a> DeclDeclarer<'a> {
                 _ => {}
             }
         }
-
     }
 
     /// The symbol a declaration introduced, for single-symbol kinds.
@@ -980,7 +977,9 @@ impl<'a> DeclDeclarer<'a> {
             DeclKind::Associated { generic, .. } => generic.name.symbol().ok(),
             DeclKind::MethodRequirement { signature, .. }
             | DeclKind::InitRequirement { signature } => signature.name.symbol().ok(),
-            DeclKind::Import(_) | DeclKind::Macro { .. } | DeclKind::Extend { .. }
+            DeclKind::Import(_)
+            | DeclKind::Macro { .. }
+            | DeclKind::Extend { .. }
             | DeclKind::Let { .. } => None,
         }
     }

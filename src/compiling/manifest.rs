@@ -83,7 +83,9 @@ impl ArtifactManifest {
         }
         let actual = artifact_digest(image);
         if self.artifact_digest != actual {
-            return Err("artifact bytes do not match their manifest; regenerate the artifact".into());
+            return Err(
+                "artifact bytes do not match their manifest; regenerate the artifact".into(),
+            );
         }
         let actual = source_digest(sources);
         if self.source_digest != actual {
@@ -103,10 +105,10 @@ impl ArtifactManifest {
                 }
             }
             (Some(_), None) => {
-                return Err("the manifest records an ABI descriptor but none was supplied".into())
+                return Err("the manifest records an ABI descriptor but none was supplied".into());
             }
             (None, Some(_)) => {
-                return Err("an ABI descriptor was supplied but the manifest records none".into())
+                return Err("an ABI descriptor was supplied but the manifest records none".into());
             }
         }
         Ok(())

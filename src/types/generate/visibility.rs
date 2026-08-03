@@ -66,7 +66,9 @@ pub(super) fn check_public_api_closure(
                     && let Some(info) = catalog.enums.get(&owner)
                     && let Some(variant) = info.variants.get(name)
                 {
-                    variant.constructor_scheme.referenced_symbols(&mut dependencies);
+                    variant
+                        .constructor_scheme
+                        .referenced_symbols(&mut dependencies);
                 }
             }
             SymbolKind::Effect => {
@@ -123,7 +125,11 @@ pub(super) fn check_public_api_closure(
             .unwrap_or(NodeID(crate::node_id::FileID(0), 0));
         errors.push((
             TypeError::PublicApiExposesPrivate {
-                name: resolved.symbol_names.get(&symbol).cloned().unwrap_or_default(),
+                name: resolved
+                    .symbol_names
+                    .get(&symbol)
+                    .cloned()
+                    .unwrap_or_default(),
                 dependency: resolved
                     .symbol_names
                     .get(&dependency)

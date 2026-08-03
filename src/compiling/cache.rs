@@ -30,10 +30,7 @@ pub fn cache_root() -> Option<PathBuf> {
 
 /// Key a product on its source inputs and the executing binary's
 /// identity. `read_source` yields each input's (path, content).
-pub fn key(
-    sources: &[(&str, &str)],
-    exe_fingerprint: Option<(u128, u64)>,
-) -> Option<[u8; 32]> {
+pub fn key(sources: &[(&str, &str)], exe_fingerprint: Option<(u128, u64)>) -> Option<[u8; 32]> {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     for (path, content) in sources {
@@ -67,7 +64,9 @@ pub fn load(stem: &str, key: &[u8; 32]) -> Option<Vec<u8>> {
 /// entries. Concurrent processes compute identical bytes: write to a
 /// process-unique sibling and rename atomically.
 pub fn store(stem: &str, key: &[u8; 32], payload: &[u8]) {
-    let Some(path) = stamped_path(stem, key) else { return };
+    let Some(path) = stamped_path(stem, key) else {
+        return;
+    };
     if let Some(parent) = path.parent()
         && std::fs::create_dir_all(parent).is_err()
     {

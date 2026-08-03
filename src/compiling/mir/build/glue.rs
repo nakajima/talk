@@ -221,7 +221,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         acc = self.emit_string_concat(acc, comma, span)?;
                     }
                     let payload = self.fresh_local();
-                    self.push_field(payload, value, container, u16::try_from(index).unwrap_or_default(), Some(u16::try_from(variant_tag).unwrap_or_default()));
+                    self.push_field(
+                        payload,
+                        value,
+                        container,
+                        u16::try_from(index).unwrap_or_default(),
+                        Some(u16::try_from(variant_tag).unwrap_or_default()),
+                    );
                     let rendered =
                         self.emit_sub_show(Operand::Local(payload), payload_ty, protocol, span)?;
                     acc = self.emit_string_concat(acc, rendered, span)?;
@@ -259,7 +265,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 };
                 acc = self.emit_string_concat(acc, prefix, span)?;
                 let field = self.fresh_local();
-                self.push_field(field, value, container, u16::try_from(index).unwrap_or_default(), None);
+                self.push_field(
+                    field,
+                    value,
+                    container,
+                    u16::try_from(index).unwrap_or_default(),
+                    None,
+                );
                 let rendered =
                     self.emit_sub_show(Operand::Local(field), field_ty, protocol, span)?;
                 acc = self.emit_string_concat(acc, rendered, span)?;
@@ -332,9 +344,21 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             self.switch_to(arm);
             for (index, payload_ty) in payload_tys.iter().enumerate() {
                 let pa = self.fresh_local();
-                self.push_field(pa, a, container, u16::try_from(index).unwrap_or_default(), Some(u16::try_from(variant_tag).unwrap_or_default()));
+                self.push_field(
+                    pa,
+                    a,
+                    container,
+                    u16::try_from(index).unwrap_or_default(),
+                    Some(u16::try_from(variant_tag).unwrap_or_default()),
+                );
                 let pb = self.fresh_local();
-                self.push_field(pb, b, container, u16::try_from(index).unwrap_or_default(), Some(u16::try_from(variant_tag).unwrap_or_default()));
+                self.push_field(
+                    pb,
+                    b,
+                    container,
+                    u16::try_from(index).unwrap_or_default(),
+                    Some(u16::try_from(variant_tag).unwrap_or_default()),
+                );
                 let equal = self.emit_equality(
                     Operand::Local(pa),
                     Operand::Local(pb),
@@ -427,8 +451,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         .callables
                         .get(symbol)
                         .map(|callable| match callable.body {
-                            crate::compiling::mir::build::CallableBody::Func(func) => func.params.len(),
-                            crate::compiling::mir::build::CallableBody::Init { params, .. } => params.len(),
+                            crate::compiling::mir::build::CallableBody::Func(func) => {
+                                func.params.len()
+                            }
+                            crate::compiling::mir::build::CallableBody::Init { params, .. } => {
+                                params.len()
+                            }
                         })
                         .unwrap_or(0);
                     let visible = u16::try_from(visible).unwrap_or_default();

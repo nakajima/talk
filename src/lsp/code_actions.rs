@@ -155,9 +155,7 @@ pub(super) fn compute_code_actions(
             let CodeActionOrCommand::CodeAction(action) = action else {
                 continue;
             };
-            if action.is_preferred != Some(true)
-                || action.kind != Some(CodeActionKind::QUICKFIX)
-            {
+            if action.is_preferred != Some(true) || action.kind != Some(CodeActionKind::QUICKFIX) {
                 continue;
             }
             if let Some(edit) = &action.edit
@@ -438,11 +436,9 @@ fn parser_quick_fixes(
                     }
                     _ => return vec![],
                 };
-                let Some(edit) = insertion_before_diagnostic_line(
-                    text,
-                    diagnostic.range.start as usize,
-                    syntax,
-                ) else {
+                let Some(edit) =
+                    insertion_before_diagnostic_line(text, diagnostic.range.start as usize, syntax)
+                else {
                     return vec![];
                 };
                 vec![quick_fix_action(

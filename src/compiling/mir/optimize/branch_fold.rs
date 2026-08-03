@@ -1,7 +1,9 @@
 //! Fold known branches, canonicalize Boolean comparisons feeding branches,
 //! and thread edges whose branch outcome is already known.
 
-use crate::compiling::mir::build::{BlockId, CmpKind, Constant, Function, Inst, Operand, ScalarOp, Term};
+use crate::compiling::mir::build::{
+    BlockId, CmpKind, Constant, Function, Inst, Operand, ScalarOp, Term,
+};
 
 use super::PassResult;
 

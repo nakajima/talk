@@ -322,11 +322,9 @@ impl<'a> TypecheckSession<'a> {
                             .iter()
                             .flat_map(|(label, set)| set.iter().map(move |req| (label, req)))
                             .find(|(_, candidate)| candidate.symbol == requirement)?;
-                        let key = self.catalog.witness_key(
-                            protocol.protocol,
-                            label,
-                            candidate.symbol,
-                        );
+                        let key =
+                            self.catalog
+                                .witness_key(protocol.protocol, label, candidate.symbol);
                         // A row without a witness for the label is
                         // recipe-backed (a synthesized derivation) unless
                         // the requirement carries a default body; the

@@ -1134,11 +1134,7 @@ fn run_executes_an_explicit_entry_function() {
 
 #[test]
 fn run_falls_back_to_main_when_there_is_no_script_body() {
-    assert_runs(
-        b"pub func main() -> Int { return 41 + 1 }\n",
-        &[],
-        b"42\n",
-    );
+    assert_runs(b"pub func main() -> Int { return 41 + 1 }\n", &[], b"42\n");
 }
 
 #[test]
@@ -2581,7 +2577,10 @@ fn bootstrap_writes_artifact_and_manifest_and_check_detects_staleness() {
     assert!(artifact.exists(), "artifact written");
     let manifest = dir.join("frontend.manifest");
     let manifest_text = std::fs::read_to_string(&manifest).expect("manifest written");
-    assert!(manifest_text.contains("artifact_digest:"), "{manifest_text}");
+    assert!(
+        manifest_text.contains("artifact_digest:"),
+        "{manifest_text}"
+    );
 
     let check = bootstrap(&["--check"]);
     assert!(
@@ -2593,10 +2592,7 @@ fn bootstrap_writes_artifact_and_manifest_and_check_detects_staleness() {
     // Editing a source without regenerating must fail the check.
     std::fs::write(&source, "pub func double(n: Int) -> Int { n + n }\n").expect("edit source");
     let stale = bootstrap(&["--check"]);
-    assert!(
-        !stale.status.success(),
-        "stale artifact must fail --check"
-    );
+    assert!(!stale.status.success(), "stale artifact must fail --check");
     assert!(
         String::from_utf8_lossy(&stale.stderr).contains("stale"),
         "{}",

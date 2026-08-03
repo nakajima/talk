@@ -194,8 +194,7 @@ impl<'a> ProgramBuilder<'a> {
                         && fx.borrow_roots.contains_key(&view)
                     {
                         let root = fx.borrow_root(view);
-                        if !fx.global_loads.contains_key(&root) && fx.owns(root)
-                        {
+                        if !fx.global_loads.contains_key(&root) && fx.owns(root) {
                             return Err(BackendError::new(
                                 "a borrowed value cannot be stored in a global binding".into(),
                                 rhs.span,

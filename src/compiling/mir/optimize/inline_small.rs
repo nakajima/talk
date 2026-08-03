@@ -219,7 +219,9 @@ fn inline_round(program: &mut Program) -> u64 {
             let body = candidates.get(&func).expect("membership checked above");
             let base = function.n_locals();
             function.locals = crate::compiling::mir::build::LocalInfo::uniform(
-                function.n_locals().saturating_add(body.n_locals - body.arity),
+                function
+                    .n_locals()
+                    .saturating_add(body.n_locals - body.arity),
             );
 
             // Straight-line bodies splice in place — no block split, no
@@ -313,17 +315,21 @@ fn inline_round(program: &mut Program) -> u64 {
                     Some(Term::Trap(message)) => Some(Term::Trap(message)),
                     other => other.clone(),
                 };
-                function.blocks.push(crate::compiling::mir::build::BlockData {
-                    params,
-                    insts,
+                function
+                    .blocks
+                    .push(crate::compiling::mir::build::BlockData {
+                        params,
+                        insts,
+                        term,
+                    });
+            }
+            function
+                .blocks
+                .push(crate::compiling::mir::build::BlockData {
+                    params: Vec::new(),
+                    insts: tail,
                     term,
                 });
-            }
-            function.blocks.push(crate::compiling::mir::build::BlockData {
-                params: Vec::new(),
-                insts: tail,
-                term,
-            });
             applied += 1;
             // Rescan this block: nothing before `position` was a
             // candidate call, so move on; the join block comes later.

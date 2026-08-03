@@ -21,7 +21,9 @@
 use rustc_hash::FxHashMap;
 
 use super::build::layout::{Layout, LayoutId, local_layouts};
-use super::build::{BlockData, Function, Inst, LocalId, Operand, Slot, Term, visit_inst, visit_term};
+use super::build::{
+    BlockData, Function, Inst, LocalId, Operand, Slot, Term, visit_inst, visit_term,
+};
 
 /// A block's successors in the flow graph, unwind cleanup entries
 /// included.
@@ -635,7 +637,9 @@ mod tests {
     // tagged writes.
     #[test]
     fn affinity_touch_never_mixes_layout_classes() {
-        use crate::compiling::mir::build::layout::{FieldRepr, Layout, Shape, SlotKind, local_layouts};
+        use crate::compiling::mir::build::layout::{
+            FieldRepr, Layout, Shape, SlotKind, local_layouts,
+        };
         let table = vec![Layout::Inline(
             None,
             Shape::Product {
@@ -691,7 +695,11 @@ mod tests {
             }],
         );
         reuse_locals(&mut f, &[], &[]);
-        assert!(f.n_locals() <= 2, "expected reuse, got {} locals", f.n_locals());
+        assert!(
+            f.n_locals() <= 2,
+            "expected reuse, got {} locals",
+            f.n_locals()
+        );
     }
 
     #[test]

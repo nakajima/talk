@@ -6,7 +6,7 @@
 //! loads the checked-in artifact through it — so none of them can
 //! drift on what the frontend artifact is.
 
-use crate::compiling::bootstrap::{bootstrap, BootstrapOutcome};
+use crate::compiling::bootstrap::{BootstrapOutcome, bootstrap};
 use crate::compiling::manifest::ArtifactManifest;
 use std::path::{Path, PathBuf};
 
@@ -86,7 +86,10 @@ fn export_strings() -> Vec<String> {
 }
 
 fn effect_strings() -> Vec<String> {
-    ALLOWED_EFFECTS.iter().map(|name| (*name).to_string()).collect()
+    ALLOWED_EFFECTS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
 }
 
 /// Rebuild the frontend artifact from the on-disk sources, requiring
@@ -356,12 +359,13 @@ fn parse_ast_with_comments_in(
     crate::parsing::parser_error::ParserError,
 > {
     use crate::parsing::parser_error::ParserError;
-    let bridged = parse_source_in(parser, input, file_id).map_err(|error| ParserError::Frontend {
-        code: "parser.frontend-bridge".into(),
-        message: error,
-        span: None,
-        expected: None,
-    })?;
+    let bridged =
+        parse_source_in(parser, input, file_id).map_err(|error| ParserError::Frontend {
+            code: "parser.frontend-bridge".into(),
+            message: error,
+            span: None,
+            expected: None,
+        })?;
     if let Some(failure) = bridged.failure {
         return Err(ParserError::Frontend {
             code: failure.code,
@@ -374,16 +378,18 @@ fn parse_ast_with_comments_in(
         .diags
         .into_iter()
         .map(|fail| {
-            crate::common::diagnostic::AnyDiagnostic::Parsing(crate::common::diagnostic::Diagnostic {
-                id: crate::node_id::NodeID(file_id, 0),
-                severity: crate::common::diagnostic::Severity::Error,
-                kind: ParserError::Frontend {
-                    code: fail.code,
-                    message: fail.message,
-                    span: fail.span,
-                    expected: fail.expected,
+            crate::common::diagnostic::AnyDiagnostic::Parsing(
+                crate::common::diagnostic::Diagnostic {
+                    id: crate::node_id::NodeID(file_id, 0),
+                    severity: crate::common::diagnostic::Severity::Error,
+                    kind: ParserError::Frontend {
+                        code: fail.code,
+                        message: fail.message,
+                        span: fail.span,
+                        expected: fail.expected,
+                    },
                 },
-            })
+            )
         })
         .collect();
     let mut meta = bridged.meta;
@@ -537,15 +543,12 @@ mod tests {
     #[test]
     fn checked_in_frontend_artifact_matches_sources() {
         let root = repo_root();
-        let image = std::fs::read(artifact_path(root)).expect(
-            "bootstrap/frontend.tbc is missing; regenerate with `talk bootstrap`",
-        );
-        let manifest_text = std::fs::read_to_string(manifest_path(root)).expect(
-            "bootstrap/frontend.manifest is missing; regenerate with `talk bootstrap`",
-        );
-        let abi_text = std::fs::read_to_string(abi_path(root)).expect(
-            "bootstrap/frontend.abi is missing; regenerate with `talk bootstrap`",
-        );
+        let image = std::fs::read(artifact_path(root))
+            .expect("bootstrap/frontend.tbc is missing; regenerate with `talk bootstrap`");
+        let manifest_text = std::fs::read_to_string(manifest_path(root))
+            .expect("bootstrap/frontend.manifest is missing; regenerate with `talk bootstrap`");
+        let abi_text = std::fs::read_to_string(abi_path(root))
+            .expect("bootstrap/frontend.abi is missing; regenerate with `talk bootstrap`");
         let manifest = ArtifactManifest::parse(&manifest_text).expect("manifest parses");
         manifest
             .verify(
@@ -565,9 +568,7 @@ mod tests {
         let run = talk_vm::interp::run_export(
             &module,
             "parse",
-            &[talk_vm::interp::HostValue::String(
-                b"let x = 1\n".to_vec(),
-            )],
+            &[talk_vm::interp::HostValue::String(b"let x = 1\n".to_vec())],
             crate::compiling::mir::string_shape(),
             talk_vm::interp::Budgets::default(),
             &mut io,

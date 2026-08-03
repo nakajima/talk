@@ -580,7 +580,9 @@ impl Module {
             let _ = writeln!(
                 out,
                 "fn{id} {} (arity {}, locals {}{signature})",
-                function.name, function.arity, function.n_locals()
+                function.name,
+                function.arity,
+                function.n_locals()
             );
             for (block, data) in function.blocks.iter().enumerate() {
                 let _ = writeln!(out, "  b{block}:");
@@ -600,10 +602,8 @@ impl Module {
                             );
                         }
                         Inst::Blank { dest, layout } => {
-                            let _ = writeln!(
-                                out,
-                                "    Blank {{ dest: {dest}, layout: L{layout} }}"
-                            );
+                            let _ =
+                                writeln!(out, "    Blank {{ dest: {dest}, layout: L{layout} }}");
                         }
                         _ => {
                             let _ = writeln!(out, "    {inst:?}");

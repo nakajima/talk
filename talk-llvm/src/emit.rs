@@ -218,12 +218,7 @@ impl Emitter {
         offset
     }
 
-    fn function(
-        &mut self,
-        out: &mut String,
-        id: usize,
-        function: &Function,
-    ) -> Result<(), Error> {
+    fn function(&mut self, out: &mut String, id: usize, function: &Function) -> Result<(), Error> {
         self.next_value = 0;
         self.constant_slot = 0;
         self.call_width = function

@@ -17,7 +17,9 @@
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::{Escape, Function, Inst, LocalId, Operand, Program, Slot, Term, visit_inst, visit_term};
+use super::{
+    Escape, Function, Inst, LocalId, Operand, Program, Slot, Term, visit_inst, visit_term,
+};
 
 /// Whether each function lets each parameter outlive the call.
 ///

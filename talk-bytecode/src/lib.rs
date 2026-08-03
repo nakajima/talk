@@ -111,8 +111,7 @@ impl Executable {
         if std::env::var_os("TALK_BACKEND_DEBUG").is_some() {
             eprintln!("{}", self.module.render());
         }
-        let (value, rendered, balance) =
-            run_displayed_counted(&self.module, io, &self.names)?;
+        let (value, rendered, balance) = run_displayed_counted(&self.module, io, &self.names)?;
         // The result value's own footprint is alive at exit by
         // definition; anything beyond it leaked.
         if balance.result_exact

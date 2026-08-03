@@ -172,18 +172,16 @@ mod tests {
     #[test]
     fn stage_two_routes_parsing_through_the_supplied_session() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let image = std::fs::read(root.join("bootstrap/frontend.tbc"))
-            .expect("checked-in artifact");
+        let image =
+            std::fs::read(root.join("bootstrap/frontend.tbc")).expect("checked-in artifact");
         let abi = std::fs::read_to_string(root.join("bootstrap/frontend.abi"))
             .expect("checked-in descriptor");
         // The optional identity is checked on every Optional crossing;
         // pointing it at the wrong symbol fails the very first adapt.
         let poisoned = abi.replace("optional: enum:1.1", "optional: enum:1.2");
         assert_ne!(poisoned, abi, "the descriptor names the optional enum");
-        let session = crate::compiling::frontend::ParserSession::from_artifact(
-            &image, &poisoned,
-        )
-        .expect("candidate session builds");
+        let session = crate::compiling::frontend::ParserSession::from_artifact(&image, &poisoned)
+            .expect("candidate session builds");
         assert!(session.exports_parser());
         let sources = frontendish_sources();
         let error = match compile_stage(
@@ -225,8 +223,7 @@ mod tests {
             "compiler passes only; the bytecode adapter reports its own fusion count"
         );
         assert_eq!(
-            outcome.stage_optimizations[0],
-            outcome.stage_optimizations[1],
+            outcome.stage_optimizations[0], outcome.stage_optimizations[1],
             "fixed-point stages should perform the same rewrites"
         );
 
@@ -247,13 +244,17 @@ mod tests {
     #[test]
     fn manifest_goes_stale_when_a_source_changes() {
         let sources = frontendish_sources();
-        let outcome = bootstrap(&sources, &["double".into()], &[], None).expect("bootstrap succeeds");
+        let outcome =
+            bootstrap(&sources, &["double".into()], &[], None).expect("bootstrap succeeds");
 
         let mut edited = sources.clone();
         edited[0].1.push_str("\n// edited\n");
         let stale = outcome.manifest.verify(&edited, &outcome.image, None);
         assert!(
-            stale.err().expect("edited source must fail").contains("sources"),
+            stale
+                .err()
+                .expect("edited source must fail")
+                .contains("sources"),
             "source edits must invalidate the manifest"
         );
     }
@@ -273,15 +274,15 @@ mod tests {
         // one, byte for byte. The default tests catch inconsistent checked-in
         // sources, bytes, and ABI; this opt-in gate also catches compiler
         // codegen drift.
-        let checked_in = std::fs::read(crate::compiling::frontend::artifact_path(root)).expect(
-            "bootstrap/frontend.tbc is missing; regenerate with `talk bootstrap`",
-        );
+        let checked_in = std::fs::read(crate::compiling::frontend::artifact_path(root))
+            .expect("bootstrap/frontend.tbc is missing; regenerate with `talk bootstrap`");
         assert!(
             checked_in == outcome.image,
             "checked-in frontend artifact differs from a fresh bootstrap; regenerate with `talk bootstrap`"
         );
-        let manifest_text = std::fs::read_to_string(crate::compiling::frontend::manifest_path(root))
-            .expect("bootstrap/frontend.manifest is missing; regenerate with `talk bootstrap`");
+        let manifest_text =
+            std::fs::read_to_string(crate::compiling::frontend::manifest_path(root))
+                .expect("bootstrap/frontend.manifest is missing; regenerate with `talk bootstrap`");
         assert_eq!(
             manifest_text,
             outcome.manifest.to_text(),

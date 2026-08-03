@@ -187,8 +187,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     let protocol_default_extension =
                         self.protocol_extension_head(decl).is_some() && conformances.is_empty();
                     if !protocol_default_extension
-                        && let Some(work) =
-                            self.register_extend(decl, None, &mut protocol_defaults)
+                        && let Some(work) = self.register_extend(decl, None, &mut protocol_defaults)
                     {
                         extends.push(work);
                     }

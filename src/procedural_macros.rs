@@ -48,7 +48,10 @@ impl ProceduralMacroArtifact {
         let module = talk_vm::Module::decode_bytecode(&self.image)
             .map_err(|error| format!("invalid procedural macro artifact: {error:?}"))?;
         Ok(ProceduralMacroService {
-            executable: talk_bytecode::Executable::from_vm_module(module, crate::compiling::mir::string_shape()),
+            executable: talk_bytecode::Executable::from_vm_module(
+                module,
+                crate::compiling::mir::string_shape(),
+            ),
             schema: crate::compiling::abi::parse_schema(&self.schema)?,
             artifact: self.clone(),
         })
@@ -341,10 +344,7 @@ impl ProceduralMacroService {
                 expansion_namespace,
                 "macro expansion namespace",
             )?),
-            talk_vm::interp::HostValue::Int(integer(
-                expansion_ordinal,
-                "macro expansion ordinal",
-            )?),
+            talk_vm::interp::HostValue::Int(integer(expansion_ordinal, "macro expansion ordinal")?),
         ];
         let mut io = talk_vm::io::CaptureIO::default();
         let run = self.executable.run_export(

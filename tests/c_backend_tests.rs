@@ -249,7 +249,9 @@ fn compiled(dir: &Path, program: &Path) -> String {
         String::from_utf8_lossy(&output.stdout)
     );
 
-    let run = Command::new(&binary).output().expect("run compiled program");
+    let run = Command::new(&binary)
+        .output()
+        .expect("run compiled program");
     assert!(
         run.status.success(),
         "compiled program failed:\n{}",
@@ -371,7 +373,9 @@ fn bench_corpus_agrees_with_its_frozen_output() {
             "{name}: emitted C did not compile:\n{}",
             String::from_utf8_lossy(&compile.stderr)
         );
-        let run = Command::new(&binary).output().expect("run compiled program");
+        let run = Command::new(&binary)
+            .output()
+            .expect("run compiled program");
         assert!(
             run.status.success(),
             "{name}: compiled program failed:\n{}",
@@ -436,7 +440,9 @@ fn program_corpus_agrees_with_the_interpreter() {
             "{name}: emitted C did not compile:\n{}",
             String::from_utf8_lossy(&compile.stderr)
         );
-        let run = Command::new(&binary).output().expect("run compiled program");
+        let run = Command::new(&binary)
+            .output()
+            .expect("run compiled program");
         assert!(
             run.status.success(),
             "{name}: compiled program failed:\n{}",

@@ -110,7 +110,12 @@ mod c_emit_tests {
         );
         // The callee only reads its parameter — nothing escapes, so the
         // caller's boxing may reuse the frame buffer.
-        let callee = function(1, 2, Vec::new(), Term::Return(Operand::Const(Constant::Unit)));
+        let callee = function(
+            1,
+            2,
+            Vec::new(),
+            Term::Return(Operand::Const(Constant::Unit)),
+        );
         let out = emitted(vec![entry, callee], vec![flat_pair(pair)]);
         // The construction allocates nothing: native storage, member
         // stores, and a direct member read.
@@ -194,7 +199,12 @@ mod c_emit_tests {
             ],
             Term::Return(Operand::Local(2)),
         );
-        let source = function(0, 1, Vec::new(), Term::Return(Operand::Const(Constant::Unit)));
+        let source = function(
+            0,
+            1,
+            Vec::new(),
+            Term::Return(Operand::Const(Constant::Unit)),
+        );
         let out = emitted(vec![from_uniform, from_native, source], table);
         // A uniform source for a spliced field unboxes once and copies
         // slots (ADR 0046: the flat struct has one member per slot)...
@@ -291,10 +301,7 @@ mod c_emit_tests {
             ],
             Term::Return(Operand::Local(3)),
         );
-        let out = emitted(
-            vec![entry],
-            vec![flat_pair(MirSymbol::INLINE_ARRAY)],
-        );
+        let out = emitted(vec![entry], vec![flat_pair(MirSymbol::INLINE_ARRAY)]);
         assert!(!out.contains("TalkL0 x1"), "{out}");
         assert!(out.contains("l[1] = built;"), "{out}");
     }
@@ -350,7 +357,10 @@ mod c_emit_tests {
         assert!(out.contains("x0 = p0;"), "{out}");
         assert!(out.contains("l[1] = talk_int(x0.m0);"), "{out}");
         // The dispatch case converts for indirect callers.
-        assert!(out.contains("talk_fn1(env, talk_unbox_l0(args[0]))"), "{out}");
+        assert!(
+            out.contains("talk_fn1(env, talk_unbox_l0(args[0]))"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -448,7 +458,12 @@ mod c_emit_tests {
             Term::Return(Operand::Local(1)),
         );
         callee.return_repr = Some(0);
-        let helper = function(0, 1, Vec::new(), Term::Return(Operand::Const(Constant::Unit)));
+        let helper = function(
+            0,
+            1,
+            Vec::new(),
+            Term::Return(Operand::Const(Constant::Unit)),
+        );
         let out = emitted(vec![entry, callee, helper], vec![flat_pair(pair)]);
         assert!(
             out.contains("static TalkL0 talk_fn1(const TalkValue *env)"),
@@ -461,7 +476,10 @@ mod c_emit_tests {
         // The caller's destination takes the struct without reboxing.
         assert!(out.contains("x1 = talk_fn1(NULL);"), "{out}");
         assert!(out.contains("l[2] = talk_int(x1.m0);"), "{out}");
-        assert!(out.contains("case 1: return talk_box_l0(talk_fn1(env));"), "{out}");
+        assert!(
+            out.contains("case 1: return talk_box_l0(talk_fn1(env));"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -475,10 +493,7 @@ mod c_emit_tests {
             0,
             3,
             vec![
-                Inst::Blank {
-                    dest: 1,
-                    layout: 0,
-                },
+                Inst::Blank { dest: 1, layout: 0 },
                 Inst::Aggregate {
                     tag: 0,
                     dest: 2,

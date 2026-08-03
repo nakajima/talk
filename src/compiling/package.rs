@@ -169,10 +169,7 @@ impl PackageManifest {
                 .import_compiled((*module).clone(), id)
                 .expect("Package stdlib module registers once per session");
         }
-        let driver = Driver::new(
-            vec![Source::in_memory(path.to_path_buf(), source)],
-            config,
-        );
+        let driver = Driver::new(vec![Source::in_memory(path.to_path_buf(), source)], config);
         let parsed = driver.parse().map_err(|error| PackageError::Manifest {
             path: path.to_path_buf(),
             message: format!("{error:?}"),

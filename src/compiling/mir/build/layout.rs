@@ -18,8 +18,7 @@ use rustc_hash::FxHashMap;
 
 use super::visit::{Slot, visit_inst};
 use super::{
-    Function, Inst, LocalId, Operand, Term, executable as executable_identity,
-    mir_inline_array,
+    Function, Inst, LocalId, Operand, Term, executable as executable_identity, mir_inline_array,
 };
 use crate::name_resolution::symbol::Symbol;
 use crate::types::catalog::{Enum, StructInfo, TypeCatalog};
@@ -75,7 +74,8 @@ impl<'a> Layouts<'a> {
     /// (ADR 0046).
     pub(crate) fn is_shaped(&self, layout: LayoutId) -> bool {
         matches!(
-            self.interned.get_index(usize::try_from(layout).unwrap_or(usize::MAX)),
+            self.interned
+                .get_index(usize::try_from(layout).unwrap_or(usize::MAX)),
             Some(Layout::Inline(_, _) | Layout::Boxed(_, _))
         )
     }
@@ -306,7 +306,9 @@ impl<'a> Layouts<'a> {
                 shape.kinds().to_vec(),
                 FieldRepr::Spliced(self.id_of(ty)),
             )),
-            Layout::Boxed(_, _) => Some((1, vec![SlotKind::Value], FieldRepr::Slot(SlotKind::Value))),
+            Layout::Boxed(_, _) => {
+                Some((1, vec![SlotKind::Value], FieldRepr::Slot(SlotKind::Value)))
+            }
             Layout::Opaque => None,
         }
     }
@@ -477,7 +479,12 @@ pub(crate) fn shape_site(
             *offsets.get(usize::from(index))?,
             *reprs.get(usize::from(index))?,
         ),
-        (Shape::Sum { payloads, reprs, .. }, Some(variant)) => (
+        (
+            Shape::Sum {
+                payloads, reprs, ..
+            },
+            Some(variant),
+        ) => (
             *payloads
                 .get(usize::from(variant))?
                 .get(usize::from(index))?,
@@ -625,12 +632,10 @@ pub(crate) fn local_layouts(
                         Def::Uniform(*dest)
                     });
                 }
-                Inst::Call { dest, func, .. } => {
-                    match returns.get(*func).copied().flatten() {
-                        Some(layout) if native(layout) => defs.push(Def::Agg(*dest, layout)),
-                        _ => defs.push(Def::Uniform(*dest)),
-                    }
-                }
+                Inst::Call { dest, func, .. } => match returns.get(*func).copied().flatten() {
+                    Some(layout) if native(layout) => defs.push(Def::Agg(*dest, layout)),
+                    _ => defs.push(Def::Uniform(*dest)),
+                },
                 Inst::Copy {
                     dest,
                     src: Operand::Local(src),
@@ -791,8 +796,7 @@ mod tests {
         fn session(&self) -> Layouts<'_> {
             let structs: FxHashMap<Symbol, &StructInfo> =
                 self.structs.iter().map(|(k, v)| (*k, v)).collect();
-            let enums: FxHashMap<Symbol, &Enum> =
-                self.enums.iter().map(|(k, v)| (*k, v)).collect();
+            let enums: FxHashMap<Symbol, &Enum> = self.enums.iter().map(|(k, v)| (*k, v)).collect();
             Layouts::new(structs, enums, TypeCatalog::default())
         }
 
@@ -1156,7 +1160,10 @@ mod tests {
             .structs
             .insert(point, strukt(&[("x", int()), ("y", int())]));
         let mut layouts = fixture.session();
-        assert_ne!(layouts.id_of(&nominal(pair)), layouts.id_of(&nominal(point)));
+        assert_ne!(
+            layouts.id_of(&nominal(pair)),
+            layouts.id_of(&nominal(point))
+        );
     }
 
     #[test]
@@ -1362,7 +1369,10 @@ mod tests {
     fn scalar_kind_peels_ownership_wrappers() {
         let int = Ty::Nominal(Symbol::Int, Vec::new());
         assert_eq!(scalar_kind(&int), SlotKind::Int);
-        assert_eq!(scalar_kind(&Ty::Unique(Box::new(int.clone()))), SlotKind::Int);
+        assert_eq!(
+            scalar_kind(&Ty::Unique(Box::new(int.clone()))),
+            SlotKind::Int
+        );
         assert_eq!(
             scalar_kind(&Ty::Borrow(crate::types::ty::Perm::Shared, Box::new(int))),
             SlotKind::Int

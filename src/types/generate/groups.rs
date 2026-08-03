@@ -504,8 +504,12 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         } else {
                             CtReason::Recursion
                         };
-                        self.body()
-                            .check_expr(rhs, &expected, reason, &group_ctx.with_binder(*binder));
+                        self.body().check_expr(
+                            rhs,
+                            &expected,
+                            reason,
+                            &group_ctx.with_binder(*binder),
+                        );
                     }
                 }
                 // Value restriction (Wright 1995): only syntactic values of

@@ -12,8 +12,8 @@ use rustc_hash::FxHashMap;
 use crate::compiling::typed_program::TypedProgram;
 use crate::name::Name;
 mod entries;
-mod glue;
 pub(crate) mod escape;
+mod glue;
 pub(crate) mod layout;
 mod release;
 mod verify;
@@ -442,7 +442,6 @@ fn contains_object(builder: &ProgramBuilder<'_>, ty: &Ty) -> bool {
     computed
 }
 
-
 /// Frame-level (depth-0) variable use counts: the liveness source for
 /// last-use borrow tracking and loop-carried move checks. This is
 /// ownership-dataflow input, MIR's own concern — the semantic capture
@@ -846,11 +845,7 @@ fn ty_depth(ty: &Ty) -> usize {
     let children = match ty {
         Ty::Nominal(_, items) | Ty::Tuple(items) => items.iter().map(ty_depth).max(),
         Ty::Borrow(_, inner) | Ty::Unique(inner) => Some(ty_depth(inner)),
-        Ty::Func(params, ret, _) => params
-            .iter()
-            .chain([ret.as_ref()])
-            .map(ty_depth)
-            .max(),
+        Ty::Func(params, ret, _) => params.iter().chain([ret.as_ref()]).map(ty_depth).max(),
         Ty::Record(row) => row.fields.iter().map(|(_, item)| ty_depth(item)).max(),
         Ty::Any { assoc, .. } => assoc.iter().map(|(_, item)| ty_depth(item)).max(),
         Ty::Proj(base, _, _) => Some(ty_depth(base)),
@@ -1107,7 +1102,6 @@ fn display_names(programs: &[ProgramInput<'_>]) -> DisplayNames {
     }
     names
 }
-
 
 /// A monomorphic function instance: a callable symbol plus the concrete
 /// types substituted for its scheme parameters (whole-program
@@ -1670,9 +1664,10 @@ impl<'a> ProgramBuilder<'a> {
         // requirement names the slot; sugar (no per-node selection) takes
         // the base's first — an overloaded sugar target would be an
         // ambiguity in the sugar contract itself.
-        let index = match requirement
-            .and_then(|requirement| self.catalog.requirement_slot_index(protocol.protocol, requirement))
-        {
+        let index = match requirement.and_then(|requirement| {
+            self.catalog
+                .requirement_slot_index(protocol.protocol, requirement)
+        }) {
             Some(index) => index,
             None => info
                 .requirements
@@ -1754,9 +1749,7 @@ impl<'a> ProgramBuilder<'a> {
             def.variants
                 .values()
                 .map(|variant| match &variant.constructor_scheme.ty {
-                    Ty::Func(params, _, _) => {
-                        layout::instantiate(&def.params, args, params.iter())
-                    }
+                    Ty::Func(params, _, _) => layout::instantiate(&def.params, args, params.iter()),
                     _ => Vec::new(),
                 })
                 .collect(),
@@ -2574,7 +2567,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
         self.elaborate_and_verify();
         self.deferred_error()?;
-        Ok((self.n_locals(), self.blocks, self.published_return.flatten()))
+        Ok((
+            self.n_locals(),
+            self.blocks,
+            self.published_return.flatten(),
+        ))
     }
 
     /// Record what this frame's returns actually carry (ADR 0045): every
@@ -3018,7 +3015,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         matches!(field_ty, Ty::Nominal(head, _) if *head == Symbol::RawPtr);
                     if field_is_ptr {
                         let field = self.fresh_local();
-                        self.push_field(field, value, container, u16::try_from(index).unwrap_or_default(), None);
+                        self.push_field(
+                            field,
+                            value,
+                            container,
+                            u16::try_from(index).unwrap_or_default(),
+                            None,
+                        );
                         self.push(Inst::Free {
                             src: Operand::Local(field),
                         });
@@ -3028,7 +3031,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         continue;
                     }
                     let field = self.fresh_local();
-                    self.push_field(field, value, container, u16::try_from(index).unwrap_or_default(), None);
+                    self.push_field(
+                        field,
+                        value,
+                        container,
+                        u16::try_from(index).unwrap_or_default(),
+                        None,
+                    );
                     self.drop_value(Operand::Local(field), field_ty);
                 }
             }
@@ -3040,7 +3049,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         continue;
                     }
                     let item = self.fresh_local();
-                    self.push_field(item, value, container, u16::try_from(index).unwrap_or_default(), None);
+                    self.push_field(
+                        item,
+                        value,
+                        container,
+                        u16::try_from(index).unwrap_or_default(),
+                        None,
+                    );
                     self.drop_value(Operand::Local(item), item_ty);
                 }
             }
@@ -3052,7 +3067,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         continue;
                     }
                     let item = self.fresh_local();
-                    self.push_field(item, value, container, u16::try_from(index).unwrap_or_default(), None);
+                    self.push_field(
+                        item,
+                        value,
+                        container,
+                        u16::try_from(index).unwrap_or_default(),
+                        None,
+                    );
                     self.drop_value(Operand::Local(item), item_ty);
                 }
             }
@@ -3111,7 +3132,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             self.switch_to(arm);
             for (index, payload_ty) in droppable.iter().rev() {
                 let payload = self.fresh_local();
-                self.push_field(payload, value, container, u16::try_from(*index).unwrap_or_default(), Some(u16::try_from(variant_tag).unwrap_or_default()));
+                self.push_field(
+                    payload,
+                    value,
+                    container,
+                    u16::try_from(*index).unwrap_or_default(),
+                    Some(u16::try_from(variant_tag).unwrap_or_default()),
+                );
                 self.drop_value(Operand::Local(payload), payload_ty);
             }
             self.terminate(Term::Goto(join, Vec::new()));
@@ -3172,7 +3199,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             self.switch_to(arm);
             for (index, payload_ty) in retained.iter() {
                 let payload = self.fresh_local();
-                self.push_field(payload, value, container, u16::try_from(*index).unwrap_or_default(), Some(u16::try_from(variant_tag).unwrap_or_default()));
+                self.push_field(
+                    payload,
+                    value,
+                    container,
+                    u16::try_from(*index).unwrap_or_default(),
+                    Some(u16::try_from(variant_tag).unwrap_or_default()),
+                );
                 self.retain_value(Operand::Local(payload), payload_ty, span)?;
             }
             self.terminate(Term::Goto(join, Vec::new()));
@@ -3817,9 +3850,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             Inst::MakeClosure { dest, env, .. } if env.iter().any(|op| hits(set, op)) => {
                 Some(*dest)
             }
-            Inst::Aggregate {
-                tag: 0, args, .. }
-            | Inst::ObjectNew { args, .. }
+            Inst::Aggregate { tag: 0, args, .. } | Inst::ObjectNew { args, .. }
                 if args.iter().any(|op| hits(set, op)) =>
             {
                 self.deferred_errors.push(anchored_escape());
@@ -4398,7 +4429,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             ty = *inner;
         }
         let label = crate::label::Label::Named("show".into());
-        let func = match self.program_builder.forced_witness(&ty, protocol, &label, None) {
+        let func = match self
+            .program_builder
+            .forced_witness(&ty, protocol, &label, None)
+        {
             Some((
                 crate::types::catalog::DictionaryEntry::Implementation { symbol, .. },
                 mut subst,
@@ -4455,7 +4489,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         ..
                     },
                     mut subst,
-                )) = self.program_builder.forced_witness(&ty, protocol, &label, None)
+                )) = self
+                    .program_builder
+                    .forced_witness(&ty, protocol, &label, None)
                 {
                     subst.push((protocol.protocol, ty.clone()));
                     let func = self.program_builder.demand(implementation, subst, span)?;
@@ -4697,7 +4733,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 continue;
             };
             let updated = self.fresh_local();
-            self.push_field(updated, Operand::Local(dest), container, u16::try_from(position + 1).unwrap_or_default(), None);
+            self.push_field(
+                updated,
+                Operand::Local(dest),
+                container,
+                u16::try_from(position + 1).unwrap_or_default(),
+                None,
+            );
             match target {
                 WritebackTarget::Place(chain) => {
                     self.write_place(&chain, Operand::Local(updated), &Ty::Error, span, false)?;
@@ -4763,7 +4805,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             args.push(Operand::Local(item));
         }
         let dest = self.fresh_local();
-        self.push(Inst::Aggregate { dest, tag: 0, layout, args });
+        self.push(Inst::Aggregate {
+            dest,
+            tag: 0,
+            layout,
+            args,
+        });
         dest
     }
 
@@ -5068,7 +5115,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         continue;
                     }
                     let field = self.fresh_local();
-                    self.push_field(field, value, container, u16::try_from(index).unwrap_or_default(), None);
+                    self.push_field(
+                        field,
+                        value,
+                        container,
+                        u16::try_from(index).unwrap_or_default(),
+                        None,
+                    );
                     self.retain_value(Operand::Local(field), field_ty, span)?;
                 }
                 Ok(())
@@ -5080,7 +5133,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         continue;
                     }
                     let item = self.fresh_local();
-                    self.push_field(item, value, container, u16::try_from(index).unwrap_or_default(), None);
+                    self.push_field(
+                        item,
+                        value,
+                        container,
+                        u16::try_from(index).unwrap_or_default(),
+                        None,
+                    );
                     self.retain_value(Operand::Local(item), item_ty, span)?;
                 }
                 Ok(())
@@ -5092,7 +5151,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         continue;
                     }
                     let item = self.fresh_local();
-                    self.push_field(item, value, container, u16::try_from(index).unwrap_or_default(), None);
+                    self.push_field(
+                        item,
+                        value,
+                        container,
+                        u16::try_from(index).unwrap_or_default(),
+                        None,
+                    );
                     self.retain_value(Operand::Local(item), item_ty, span)?;
                 }
                 Ok(())
@@ -6133,7 +6198,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     self.propagate_view(Operand::Local(dest), *arg);
                 }
                 let layout = self.layout_id(&ty);
-                self.push(Inst::Aggregate { dest, tag: 0, layout, args });
+                self.push(Inst::Aggregate {
+                    dest,
+                    tag: 0,
+                    layout,
+                    args,
+                });
                 self.produce_temp(dest, &ty);
                 Ok(Operand::Local(dest))
             }
@@ -6247,7 +6317,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let layout = self.container_layout(&self.resolved(&receiver.ty));
                 let src = self.compile_expr(receiver)?;
                 let dest = self.fresh_local();
-                self.push_field(dest, src, layout, u16::try_from(index).unwrap_or_default(), None);
+                self.push_field(
+                    dest,
+                    src,
+                    layout,
+                    u16::try_from(index).unwrap_or_default(),
+                    None,
+                );
                 Ok(Operand::Local(dest))
             }
             ExprKind::Variable(Name::Resolved(symbol, name)) => {
@@ -6584,8 +6660,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     Ty::Nominal(_, args) => args.first().cloned().unwrap_or(Ty::Error),
                     _ => Ty::Error,
                 };
-                let storage_layout =
-                    self.layout_id(&Ty::Nominal(Symbol::Storage, vec![element]));
+                let storage_layout = self.layout_id(&Ty::Nominal(Symbol::Storage, vec![element]));
                 let storage = self.fresh_local();
                 self.push(Inst::Aggregate {
                     tag: 0,
@@ -6846,7 +6921,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
                 let dest = self.fresh_local();
                 let layout = self.layout_id(&record_ty);
-                self.push(Inst::Aggregate { dest, tag: 0, layout, args });
+                self.push(Inst::Aggregate {
+                    dest,
+                    tag: 0,
+                    layout,
+                    args,
+                });
                 self.produce_temp(dest, &record_ty);
                 Ok(Operand::Local(dest))
             }
@@ -7093,7 +7173,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         continue;
                     }
                     let extracted = self.fresh_local();
-                    self.push_field(extracted, scrutinee, container, u16::try_from(index).unwrap_or_default(), None);
+                    self.push_field(
+                        extracted,
+                        scrutinee,
+                        container,
+                        u16::try_from(index).unwrap_or_default(),
+                        None,
+                    );
                     self.settle_owned_match(
                         element,
                         Operand::Local(extracted),
@@ -7120,7 +7206,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         continue;
                     }
                     let extracted = self.fresh_local();
-                    self.push_field(extracted, scrutinee, container, u16::try_from(index).unwrap_or_default(), Some(variant_tag));
+                    self.push_field(
+                        extracted,
+                        scrutinee,
+                        container,
+                        u16::try_from(index).unwrap_or_default(),
+                        Some(variant_tag),
+                    );
                     self.settle_owned_match(
                         field,
                         Operand::Local(extracted),
@@ -7237,7 +7329,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             }
                             if !pattern_bind_symbols(&cell.pattern).is_empty() {
                                 let extracted = self.fresh_local();
-                                self.push_field(extracted, scrutinee, container, u16::try_from(index).unwrap_or_default(), None);
+                                self.push_field(
+                                    extracted,
+                                    scrutinee,
+                                    container,
+                                    u16::try_from(index).unwrap_or_default(),
+                                    None,
+                                );
                                 self.settle_owned_match(
                                     &cell.pattern,
                                     Operand::Local(extracted),
@@ -7254,7 +7352,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         continue;
                     }
                     let extracted = self.fresh_local();
-                    self.push_field(extracted, scrutinee, container, u16::try_from(index).unwrap_or_default(), None);
+                    self.push_field(
+                        extracted,
+                        scrutinee,
+                        container,
+                        u16::try_from(index).unwrap_or_default(),
+                        None,
+                    );
                     self.settle_owned_match(
                         &cell.pattern,
                         Operand::Local(extracted),
@@ -7288,7 +7392,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             index: u16::try_from(index).unwrap_or_default(),
                         });
                     } else {
-                        self.push_field(extracted, scrutinee, container, u16::try_from(index).unwrap_or_default(), None);
+                        self.push_field(
+                            extracted,
+                            scrutinee,
+                            container,
+                            u16::try_from(index).unwrap_or_default(),
+                            None,
+                        );
                     }
                     self.settle_owned_match(
                         &cell.pattern,
@@ -7697,7 +7807,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let extracted: Vec<Operand> = (0..fields.len())
                     .map(|index| {
                         let dest = self.fresh_local();
-                        self.push_field(dest, scrutinee, container, u16::try_from(index).unwrap_or_default(), Some(tag));
+                        self.push_field(
+                            dest,
+                            scrutinee,
+                            container,
+                            u16::try_from(index).unwrap_or_default(),
+                            Some(tag),
+                        );
                         Operand::Local(dest)
                     })
                     .collect();
@@ -7964,7 +8080,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         (0..len)
             .map(|index| {
                 let dest = self.fresh_local();
-                self.push_field(dest, scrutinee, container, u16::try_from(index).unwrap_or_default(), None);
+                self.push_field(
+                    dest,
+                    scrutinee,
+                    container,
+                    u16::try_from(index).unwrap_or_default(),
+                    None,
+                );
                 Operand::Local(dest)
             })
             .collect()
@@ -8059,7 +8181,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             args: operands,
             unwind,
         });
-        self.apply_writebacks(dest, targets, writeback_tys, &self.resolved(&expr.ty), expr.span)
+        self.apply_writebacks(
+            dest,
+            targets,
+            writeback_tys,
+            &self.resolved(&expr.ty),
+            expr.span,
+        )
     }
 
     fn compile_call(
@@ -8167,9 +8295,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 .program_builder
                                 .catalog
                                 .requirement_slot_index(protocol, *requirement),
-                            _ => self.program_builder.protocol_requirements(protocol).and_then(
-                                |requirements| requirements.iter().position(|slot| slot == name),
-                            ),
+                            _ => self
+                                .program_builder
+                                .protocol_requirements(protocol)
+                                .and_then(|requirements| {
+                                    requirements.iter().position(|slot| slot == name)
+                                }),
                         }
                         .ok_or_else(|| {
                             BackendError::new(
@@ -8705,8 +8836,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let dest = self.fresh_local();
         let first_operand = operands.first().copied();
         self.push_call(dest, func, operands);
-        let result =
-            self.apply_writebacks(dest, targets, writeback_tys, &self.resolved(&expr.ty), expr.span)?;
+        let result = self.apply_writebacks(
+            dest,
+            targets,
+            writeback_tys,
+            &self.resolved(&expr.ty),
+            expr.span,
+        )?;
         // A call returning a borrowed view derives from its receiver or
         // first argument: the view's owner for invalidation and escape
         // checks (per-argument provenance, RFC 2094's model).
@@ -9277,7 +9413,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         ..
                     },
                     row_subst,
-                )) = self.program_builder.forced_witness(&ty, &protocol, &label, None)
+                )) = self
+                    .program_builder
+                    .forced_witness(&ty, &protocol, &label, None)
                 else {
                     return Err(BackendError::new(
                         "protocol construction without a selectable conformance".into(),

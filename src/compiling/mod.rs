@@ -1,7 +1,7 @@
 pub mod abi;
 pub mod bootstrap;
-pub(crate) mod cache;
 pub mod bridge;
+pub(crate) mod cache;
 pub mod core;
 pub mod driver;
 pub mod frontend;

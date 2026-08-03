@@ -778,7 +778,8 @@ async fn main() {
                         }
                     }
                 }
-                match talk::compiling::bootstrap::bootstrap(&sources, exports, allow_effects, None) {
+                match talk::compiling::bootstrap::bootstrap(&sources, exports, allow_effects, None)
+                {
                     Ok(outcome) => (outcome, output),
                     Err(err) => {
                         eprintln!("error: {err}");
@@ -818,11 +819,12 @@ async fn main() {
                         .is_some_and(|existing| existing == *abi),
                     None => !abi_path.exists(),
                 };
-                let current = std::fs::read(&output).ok().is_some_and(|existing| {
-                    existing == outcome.image
-                }) && std::fs::read_to_string(&manifest_path)
+                let current = std::fs::read(&output)
                     .ok()
-                    .is_some_and(|existing| existing == outcome.manifest.to_text())
+                    .is_some_and(|existing| existing == outcome.image)
+                    && std::fs::read_to_string(&manifest_path)
+                        .ok()
+                        .is_some_and(|existing| existing == outcome.manifest.to_text())
                     && abi_current;
                 if !current {
                     eprintln!(

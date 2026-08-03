@@ -60,7 +60,6 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-
 use rustc_hash::FxHashMap;
 
 use talk_mir::layout::{FieldRepr, Layout, LayoutId, Shape, SlotKind};
@@ -220,7 +219,10 @@ fn emit_dispatch(out: &mut String, program: &Program, facts: &Facts) {
         };
         let _ = writeln!(out, "    case {id}: return {call};");
     }
-    let _ = writeln!(out, "    default: talk_trap(\"call to an unknown function\");");
+    let _ = writeln!(
+        out,
+        "    default: talk_trap(\"call to an unknown function\");"
+    );
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out, "}}");
 }
@@ -228,11 +230,7 @@ fn emit_dispatch(out: &mut String, program: &Program, facts: &Facts) {
 /// The published layout table as C data (ADR 0046): structure for the
 /// logical member operations and the renderer, mirroring the wire
 /// descriptors exactly.
-fn emit_layout_table(
-    out: &mut String,
-    emitter: &mut Emitter,
-    facts: &Facts,
-) -> Result<(), Error> {
+fn emit_layout_table(out: &mut String, emitter: &mut Emitter, facts: &Facts) -> Result<(), Error> {
     let row = |emitter: &mut Emitter, offset: u32, repr: FieldRepr| -> Result<String, Error> {
         Ok(match repr {
             FieldRepr::Slot(_) => format!("{{ {offset}, 1, UINT32_MAX, 0 }}"),
@@ -249,7 +247,12 @@ fn emit_layout_table(
             Layout::Slot => entries.push("    { 1, 0, NULL, 0, NULL, 0 },".into()),
             Layout::Opaque => entries.push("    { 0, 0, NULL, 0, NULL, 0 },".into()),
             Layout::Inline(_, shape) | Layout::Boxed(_, shape) => match shape {
-                Shape::Product { width, offsets, reprs, .. } => {
+                Shape::Product {
+                    width,
+                    offsets,
+                    reprs,
+                    ..
+                } => {
                     let mut rows = Vec::with_capacity(reprs.len());
                     for (offset, repr) in offsets.iter().zip(reprs) {
                         rows.push(row(emitter, *offset, *repr)?);
@@ -269,7 +272,12 @@ fn emit_layout_table(
                         rows.len()
                     ));
                 }
-                Shape::Sum { width, payloads, reprs, .. } => {
+                Shape::Sum {
+                    width,
+                    payloads,
+                    reprs,
+                    ..
+                } => {
                     let mut rows = Vec::new();
                     let mut starts = vec![0usize];
                     for (offsets, variant_reprs) in payloads.iter().zip(reprs) {
@@ -815,10 +823,18 @@ impl Emitter {
                 );
             }
             Inst::CellNew { dest, init } => {
-                let _ = writeln!(out, "    l[{dest}] = talk_cell_new({});", frame.value(*init)?);
+                let _ = writeln!(
+                    out,
+                    "    l[{dest}] = talk_cell_new({});",
+                    frame.value(*init)?
+                );
             }
             Inst::CellGet { dest, cell } => {
-                let _ = writeln!(out, "    l[{dest}] = talk_cell_get({});", frame.value(*cell)?);
+                let _ = writeln!(
+                    out,
+                    "    l[{dest}] = talk_cell_get({});",
+                    frame.value(*cell)?
+                );
             }
             Inst::CellSet { cell, src } => {
                 let _ = writeln!(
@@ -885,7 +901,10 @@ impl Emitter {
                 // Inline elements stride by their width and read as
                 // spliced children; every other element is one slot.
                 let inline = matches!(
-                    frame.facts.table.get(usize::try_from(*element).unwrap_or(usize::MAX)),
+                    frame
+                        .facts
+                        .table
+                        .get(usize::try_from(*element).unwrap_or(usize::MAX)),
                     Some(Layout::Inline(_, _))
                 );
                 if inline {
@@ -971,7 +990,11 @@ impl Emitter {
                 let _ = writeln!(out, "    talk_retain({});", frame.value(*src)?);
             }
             Inst::IsUnique { dest, src } => {
-                let _ = writeln!(out, "    l[{dest}] = talk_is_unique({});", frame.value(*src)?);
+                let _ = writeln!(
+                    out,
+                    "    l[{dest}] = talk_is_unique({});",
+                    frame.value(*src)?
+                );
             }
             Inst::PtrAdd {
                 dest,
@@ -1004,7 +1027,11 @@ impl Emitter {
                 );
             }
             Inst::Store { ptr, src, kind } => {
-                let _ = writeln!(out, "    {};", store(*kind, &frame.value(*ptr)?, &frame.value(*src)?));
+                let _ = writeln!(
+                    out,
+                    "    {};",
+                    store(*kind, &frame.value(*ptr)?, &frame.value(*src)?)
+                );
             }
             Inst::GlobalLoad { dest, global } => {
                 let _ = writeln!(
@@ -1134,9 +1161,8 @@ impl Emitter {
                         // A box-native container reads its flat payload's
                         // members; a tagged container reads flat slots.
                         if frame.facts.boxes_native(*container) {
-                            let payload = format!(
-                                "((const TalkL{container} *)TALK_NATIVE_PAYLOAD({value}))"
-                            );
+                            let payload =
+                                format!("((const TalkL{container} *)TALK_NATIVE_PAYLOAD({value}))");
                             match member {
                                 None => {
                                     let kind = *frame
@@ -1144,11 +1170,8 @@ impl Emitter {
                                         .shape_of(*container)?
                                         .kinds()
                                         .get(usize::from(*offset))
-                                        .ok_or_else(|| {
-                                            internal("a member slot past its layout")
-                                        })?;
-                                    let read =
-                                        retag_kind(kind, &format!("{payload}->m{offset}"));
+                                        .ok_or_else(|| internal("a member slot past its layout"))?;
+                                    let read = retag_kind(kind, &format!("{payload}->m{offset}"));
                                     match frame.class_of(*dest) {
                                         Some(child) => {
                                             let _ = writeln!(
@@ -1204,8 +1227,7 @@ impl Emitter {
                                 Some(child) if frame.facts.boxes_native(*child) => {
                                     let _ = writeln!(out, "    {{");
                                     let _ = writeln!(out, "        TalkL{child} tmp;");
-                                    let kinds =
-                                        frame.facts.shape_of(*child)?.kinds().to_vec();
+                                    let kinds = frame.facts.shape_of(*child)?.kinds().to_vec();
                                     for (slot, kind) in kinds.iter().enumerate() {
                                         let _ = writeln!(
                                             out,
@@ -1245,10 +1267,8 @@ impl Emitter {
                             // source degraded to uniform.
                             match frame.class_of(*dest) {
                                 Some(child) => {
-                                    let _ = writeln!(
-                                        out,
-                                        "    x{dest} = talk_unbox_l{child}({read});"
-                                    );
+                                    let _ =
+                                        writeln!(out, "    x{dest} = talk_unbox_l{child}({read});");
                                 }
                                 None => {
                                     let _ = writeln!(out, "    l[{dest}] = {read};");
@@ -1299,7 +1319,9 @@ impl Emitter {
                         }
                         Some(child) if frame.facts.width_of(*child)? == 0 => {}
                         Some(child) if frame.class(*src) == Some(*child) => {
-                            let Operand::Local(src) = src else { unreachable!() };
+                            let Operand::Local(src) = src else {
+                                unreachable!()
+                            };
                             let span = frame.facts.width_of(*child)?;
                             for slot in 0..span {
                                 let _ = writeln!(
@@ -1363,7 +1385,9 @@ impl Emitter {
                                 );
                             }
                             Some(child) if frame.class(*src) == Some(*child) => {
-                                let Operand::Local(src) = src else { unreachable!() };
+                                let Operand::Local(src) = src else {
+                                    unreachable!()
+                                };
                                 for slot in 0..span {
                                     let _ = writeln!(
                                         out,
@@ -1499,7 +1523,10 @@ impl<'p> Facts<'p> {
 
     /// The shape behind any structurally representable layout.
     fn shape_of(&self, layout: LayoutId) -> Result<&Shape, Error> {
-        match self.table.get(usize::try_from(layout).unwrap_or(usize::MAX)) {
+        match self
+            .table
+            .get(usize::try_from(layout).unwrap_or(usize::MAX))
+        {
             Some(Layout::Inline(_, shape) | Layout::Boxed(_, shape)) => Ok(shape),
             _ => Err(internal("a representable layout without a shape")),
         }
@@ -1693,7 +1720,9 @@ impl Frame<'_> {
     fn value(&self, op: Operand) -> Result<String, Error> {
         match self.class(op) {
             Some(layout) => {
-                let Operand::Local(id) = op else { unreachable!() };
+                let Operand::Local(id) = op else {
+                    unreachable!()
+                };
                 if self.buffered.get(usize::from(id)).copied().unwrap_or(false) {
                     Ok(format!("talk_box_l{layout}_in(fx{id}, x{id})"))
                 } else {
@@ -1764,7 +1793,10 @@ fn emit_unwind_check(out: &mut String, unwind: Option<usize>, identified: bool, 
         // native return unboxes it into the convention.
         match frame.ret {
             Some(ret) => {
-                let _ = writeln!(out, "            return talk_unbox_l{ret}(talk_unwind_take());");
+                let _ = writeln!(
+                    out,
+                    "            return talk_unbox_l{ret}(talk_unwind_take());"
+                );
             }
             None => {
                 let _ = writeln!(out, "            return talk_unwind_take();");
@@ -1821,15 +1853,15 @@ fn emit_construction(
 ) -> Result<(), Error> {
     let shape = frame.facts.shape_of(layout)?;
     let placements: Vec<(u32, FieldRepr)> = match shape {
-        Shape::Product {
-            offsets, reprs, ..
-        } => {
+        Shape::Product { offsets, reprs, .. } => {
             if tag != 0 || reprs.len() != args.len() {
                 return Err(internal("a construction's arity disagrees with its layout"));
             }
             offsets.iter().copied().zip(reprs.iter().copied()).collect()
         }
-        Shape::Sum { payloads, reprs, .. } => {
+        Shape::Sum {
+            payloads, reprs, ..
+        } => {
             let offsets = payloads
                 .get(usize::from(tag))
                 .ok_or_else(|| internal("a variant tag past its layout"))?;
@@ -1881,7 +1913,9 @@ fn emit_construction(
                         continue;
                     }
                     if frame.class(*arg) == Some(*child) {
-                        let Operand::Local(arg) = arg else { unreachable!() };
+                        let Operand::Local(arg) = arg else {
+                            unreachable!()
+                        };
                         let child_kinds = frame.facts.shape_of(*child)?.kinds().to_vec();
                         for (slot, kind) in child_kinds.iter().enumerate() {
                             let _ = writeln!(
@@ -1904,8 +1938,10 @@ fn emit_construction(
                         let child_kinds = frame.facts.shape_of(*child)?.kinds().to_vec();
                         let value = frame.value(*arg)?;
                         let _ = writeln!(out, "        {{");
-                        let _ =
-                            writeln!(out, "            TalkL{child} sub = talk_unbox_l{child}({value});");
+                        let _ = writeln!(
+                            out,
+                            "            TalkL{child} sub = talk_unbox_l{child}({value});"
+                        );
                         for (slot, kind) in child_kinds.iter().enumerate() {
                             let _ = writeln!(
                                 out,
@@ -1962,13 +1998,12 @@ fn emit_construction(
                     continue;
                 }
                 if frame.class(*arg) == Some(*child) {
-                    let Operand::Local(arg) = arg else { unreachable!() };
+                    let Operand::Local(arg) = arg else {
+                        unreachable!()
+                    };
                     for slot in 0..span {
-                        let _ = writeln!(
-                            out,
-                            "{indent}{target}.m{} = x{arg}.m{slot};",
-                            offset + slot
-                        );
+                        let _ =
+                            writeln!(out, "{indent}{target}.m{} = x{arg}.m{slot};", offset + slot);
                     }
                 } else {
                     // The dual-form unbox reads native boxes and flat
@@ -1994,7 +2029,10 @@ fn emit_construction(
     if matches!(sink, Sink::NativeTemp) {
         match frame_slot {
             Some(slot) => {
-                let _ = writeln!(out, "        l[{dest}] = talk_box_l{layout}_in(f{slot}, tmp);");
+                let _ = writeln!(
+                    out,
+                    "        l[{dest}] = talk_box_l{layout}_in(f{slot}, tmp);"
+                );
             }
             None => {
                 let _ = writeln!(out, "        l[{dest}] = talk_box_l{layout}(tmp);");
@@ -2004,7 +2042,6 @@ fn emit_construction(
     }
     Ok(())
 }
-
 
 fn emit_term(
     out: &mut String,
@@ -2073,7 +2110,9 @@ fn emit_goto(
         .ok_or_else(|| internal("branch to a block that does not exist"))?
         .params;
     if params.len() != args.len() {
-        return Err(internal("block argument count does not match its parameters"));
+        return Err(internal(
+            "block argument count does not match its parameters",
+        ));
     }
     let _ = writeln!(out, "    {{");
     for (index, (arg, param)) in args.iter().zip(params).enumerate() {
@@ -2107,12 +2146,7 @@ fn emit_goto(
     Ok(())
 }
 
-fn scalar(
-    op: ScalarOp,
-    a: Operand,
-    b: Option<Operand>,
-    frame: &Frame,
-) -> Result<String, Error> {
+fn scalar(op: ScalarOp, a: Operand, b: Option<Operand>, frame: &Frame) -> Result<String, Error> {
     let helper = match op {
         ScalarOp::IntAdd => "talk_add",
         ScalarOp::IntSub => "talk_sub",
@@ -2180,8 +2214,11 @@ impl Emitter {
             .map(|id| u32::try_from(id).unwrap_or(u32::MAX))
             .collect();
 
-        let _ = writeln!(out, "
-static TalkValue talk_native_retag(TalkValue value) {{");
+        let _ = writeln!(
+            out,
+            "
+static TalkValue talk_native_retag(TalkValue value) {{"
+        );
         let _ = writeln!(out, "    switch (value.v.native->layout) {{");
         for id in &boxed {
             let _ = writeln!(
@@ -2190,14 +2227,20 @@ static TalkValue talk_native_retag(TalkValue value) {{");
             );
         }
         let _ = writeln!(out, "    }}");
-        let _ = writeln!(out, "    return talk_unit();
-}}");
+        let _ = writeln!(
+            out,
+            "    return talk_unit();
+}}"
+        );
 
         // Children of box-native layouts must be TALK_NATIVE wherever
         // the emitter reasons statically; the table-driven paths rebox
         // the flat slices they build.
-        let _ = writeln!(out, "
-static TalkValue talk_rebox(uint32_t layout, TalkValue flat) {{");
+        let _ = writeln!(
+            out,
+            "
+static TalkValue talk_rebox(uint32_t layout, TalkValue flat) {{"
+        );
         let _ = writeln!(out, "    switch (layout) {{");
         for id in &boxed {
             let _ = writeln!(
@@ -2206,8 +2249,11 @@ static TalkValue talk_rebox(uint32_t layout, TalkValue flat) {{");
             );
         }
         let _ = writeln!(out, "    }}");
-        let _ = writeln!(out, "    return flat;
-}}");
+        let _ = writeln!(
+            out,
+            "    return flat;
+}}"
+        );
 
         let _ = writeln!(
             out,
@@ -2230,17 +2276,15 @@ static void talk_native_scan(TalkValue value, struct TalkObject ***out, size_t *
             }
         }
         let _ = writeln!(out, "    default: break;");
-        let _ = writeln!(out, "    }}
-}}");
+        let _ = writeln!(
+            out,
+            "    }}
+}}"
+        );
         Ok(())
     }
 
-    fn layout_decl(
-        &mut self,
-        out: &mut String,
-        id: LayoutId,
-        facts: &Facts,
-    ) -> Result<(), Error> {
+    fn layout_decl(&mut self, out: &mut String, id: LayoutId, facts: &Facts) -> Result<(), Error> {
         let table = facts.table;
         let Some(Layout::Inline(symbol, shape) | Layout::Boxed(symbol, shape)) =
             table.get(usize::try_from(id).unwrap_or(usize::MAX))
@@ -2282,7 +2326,10 @@ static void talk_native_scan(TalkValue value, struct TalkObject ***out, size_t *
             }
             let _ = writeln!(out, "    return built;\n}}");
         }
-        let _ = writeln!(out, "static inline TalkL{id} talk_unbox_l{id}(TalkValue b) {{");
+        let _ = writeln!(
+            out,
+            "static inline TalkL{id} talk_unbox_l{id}(TalkValue b) {{"
+        );
         let _ = writeln!(out, "    TalkL{id} v;");
         for (slot, kind) in shape.kinds().iter().enumerate() {
             let _ = writeln!(
@@ -2335,7 +2382,10 @@ static void talk_native_scan(TalkValue value, struct TalkObject ***out, size_t *
         // statically, but children sliced out of flat parents arrive
         // tagged — accept both forms.
         let _ = writeln!(out, "    if (b.tag == TALK_NATIVE) {{");
-        let _ = writeln!(out, "        return *(const TalkL{id} *)TALK_NATIVE_PAYLOAD(b);");
+        let _ = writeln!(
+            out,
+            "        return *(const TalkL{id} *)TALK_NATIVE_PAYLOAD(b);"
+        );
         let _ = writeln!(out, "    }}");
         let _ = writeln!(out, "    TalkL{id} v;");
         for (slot, kind) in shape.kinds().iter().enumerate() {
@@ -2348,10 +2398,7 @@ static void talk_native_scan(TalkValue value, struct TalkObject ***out, size_t *
         let _ = writeln!(out, "    return v;\n}}");
         // The flat form rendering and the logical boundary use (cold
         // path): the same per-slot retag as an eligible layout's box.
-        let _ = writeln!(
-            out,
-            "static TalkValue talk_retag_l{id}(TalkL{id} v) {{"
-        );
+        let _ = writeln!(out, "static TalkValue talk_retag_l{id}(TalkL{id} v) {{");
         let _ = writeln!(out, "    (void)v;");
         let _ = writeln!(
             out,

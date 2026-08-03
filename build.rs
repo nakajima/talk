@@ -34,14 +34,12 @@ fn main() {
 fn emit_git_head_watches() {
     let dotgit = std::path::PathBuf::from(".git");
     let gitdir = if dotgit.is_file() {
-        std::fs::read_to_string(&dotgit)
-            .ok()
-            .and_then(|content| {
-                content
-                    .trim()
-                    .strip_prefix("gitdir: ")
-                    .map(std::path::PathBuf::from)
-            })
+        std::fs::read_to_string(&dotgit).ok().and_then(|content| {
+            content
+                .trim()
+                .strip_prefix("gitdir: ")
+                .map(std::path::PathBuf::from)
+        })
     } else {
         Some(dotgit)
     };

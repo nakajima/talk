@@ -1,6 +1,5 @@
 use talk_mir::{
-    BlockData, Constant, Function, Inst, MirSymbol, MirSymbolKind, Module, Operand, ScalarOp,
-    Term,
+    BlockData, Constant, Function, Inst, MirSymbol, MirSymbolKind, Module, Operand, ScalarOp, Term,
 };
 
 fn string_symbol() -> MirSymbol {

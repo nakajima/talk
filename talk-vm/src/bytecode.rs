@@ -736,7 +736,6 @@ impl<'a> Decoder<'a> {
         Ok(fields)
     }
 
-
     fn exports(&mut self) -> Result<Vec<(String, u32)>, DecodeError> {
         let len = self.len_of(8)?;
         let mut exports = Vec::with_capacity(len);
@@ -1122,7 +1121,6 @@ impl<'a> Decoder<'a> {
             _ => Err(DecodeError::InvalidTag("symbol", tag)),
         }
     }
-
 
     fn module_symbol(&mut self) -> Result<ModuleSymbolId, DecodeError> {
         Ok(ModuleSymbolId::new(ModuleId(self.u16()?), self.u32()?))

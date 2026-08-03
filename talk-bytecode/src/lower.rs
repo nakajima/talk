@@ -58,9 +58,7 @@ pub(crate) fn lower(program: &Program) -> Result<Module, BackendError> {
             &mut statics,
             &mut effects,
         )
-        .map_err(|error| {
-            BackendError::new(format!("{} (in {})", error.message, function.name))
-        })?;
+        .map_err(|error| BackendError::new(format!("{} (in {})", error.message, function.name)))?;
         module.chunks.push(chunk);
     }
     module.consts = consts.values;
@@ -128,7 +126,9 @@ fn shape_desc(symbol: Option<MirSymbol>, shape: &Shape) -> LayoutDesc {
                 None => return unshaped,
             }
         }
-        Shape::Sum { payloads, reprs, .. } => {
+        Shape::Sum {
+            payloads, reprs, ..
+        } => {
             let variants: Option<Vec<Vec<_>>> = payloads
                 .iter()
                 .zip(reprs)
@@ -588,8 +588,7 @@ impl Lowering<'_> {
         }
         self.next_reg = self.scratch_floor;
         let Some(term) = &block.term else {
-            return Err(BackendError::new(
-                "backend bug: unterminated block".into()));
+            return Err(BackendError::new("backend bug: unterminated block".into()));
         };
         match term {
             Term::Goto(target, edge_args) => {
@@ -613,7 +612,8 @@ impl Lowering<'_> {
                     || !self.block_params[*else_block].is_empty()
                 {
                     return Err(BackendError::new(
-                        "backend bug: branch edge into a parameterized block".into()));
+                        "backend bug: branch edge into a parameterized block".into(),
+                    ));
                 }
                 let cond = self.reg(*cond);
                 self.patches.push(Patch::Branch {
@@ -638,15 +638,14 @@ impl Lowering<'_> {
                     .any(|target| !self.block_params[*target].is_empty())
                 {
                     return Err(BackendError::new(
-                        "backend bug: switch edge into a parameterized block".into()));
+                        "backend bug: switch edge into a parameterized block".into(),
+                    ));
                 }
                 let targets_len = u16::try_from(targets.len() + 1).map_err(|_| {
-                    BackendError::new(
-                        "backend bug: switch has too many targets".into())
+                    BackendError::new("backend bug: switch has too many targets".into())
                 })?;
                 let targets_start = u32::try_from(self.module.switch_pool.len()).map_err(|_| {
-                    BackendError::new(
-                        "backend bug: switch pool is too large".into())
+                    BackendError::new("backend bug: switch pool is too large".into())
                 })?;
                 let pool_start = self.module.switch_pool.len();
                 self.module
@@ -776,7 +775,8 @@ impl Lowering<'_> {
                     }
                     _ => {
                         return Err(BackendError::new(
-                            "backend bug: malformed scalar operation".into()));
+                            "backend bug: malformed scalar operation".into(),
+                        ));
                     }
                 }
             }
@@ -819,10 +819,10 @@ impl Lowering<'_> {
             // unit-valued fields under the receiver's published layout.
             Inst::Blank { dest, layout, .. } => {
                 let layout = self.require_shaped(*layout)?;
-                let LayoutBody::Product(fields) = &self.module.layouts[layout as usize].body
-                else {
+                let LayoutBody::Product(fields) = &self.module.layouts[layout as usize].body else {
                     return Err(BackendError::new(
-                        "backend bug: a blank receiver under a non-product layout".into()));
+                        "backend bug: a blank receiver under a non-product layout".into(),
+                    ));
                 };
                 let args = vec![Operand::Const(Constant::Unit); fields.len()];
                 let (args_start, args_len) = self.arg_range(&args);
@@ -1229,7 +1229,8 @@ impl Lowering<'_> {
                 ];
                 let Some(op) = IO_OPS.get(usize::from(*op)).copied() else {
                     return Err(BackendError::new(
-                        "backend bug: io operation out of range".into()));
+                        "backend bug: io operation out of range".into(),
+                    ));
                 };
                 let a = self.reg(*a);
                 let b = self.reg(*b);
@@ -1251,11 +1252,10 @@ impl Lowering<'_> {
     fn require_shaped(&self, layout: talk_mir::layout::LayoutId) -> Result<u32, BackendError> {
         match self.module.layouts.get(layout as usize) {
             Some(desc) if !matches!(desc.body, LayoutBody::Unshaped) => Ok(layout),
-            _ => Err(BackendError::new(
-                format!(
-                    "backend bug: construction without a published layout (L{layout} = {:?})",
-                    self.module.layouts.get(layout as usize)
-                ))),
+            _ => Err(BackendError::new(format!(
+                "backend bug: construction without a published layout (L{layout} = {:?})",
+                self.module.layouts.get(layout as usize)
+            ))),
         }
     }
 

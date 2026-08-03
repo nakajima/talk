@@ -87,7 +87,11 @@ fn publishes_well_formed_structure() {
                 }
             }
             // Invariant 2: every block has one terminator.
-            assert!(block.term.is_some(), "block of {} terminated", function.name);
+            assert!(
+                block.term.is_some(),
+                "block of {} terminated",
+                function.name
+            );
             // Invariant 3: block argument counts match block parameters.
             if let Some(Term::Goto(target, args)) = &block.term {
                 assert_eq!(
@@ -154,10 +158,7 @@ fn publishes_display_metadata_and_well_known_identities() {
         };
         if let Some(identity) = identity {
             assert!(
-                matches!(
-                    identity.kind,
-                    MirSymbolKind::Struct | MirSymbolKind::Enum
-                ),
+                matches!(identity.kind, MirSymbolKind::Struct | MirSymbolKind::Enum),
                 "layout identities are aggregate identities"
             );
         }

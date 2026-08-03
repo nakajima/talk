@@ -521,7 +521,9 @@ fn string_layout(module: &Module, string: Symbol) -> Result<Option<u32>, String>
             if desc.width != 3 {
                 return Err("vm: string layout has an unexpected shape".into());
             }
-            return Ok(Some(u32::try_from(id).map_err(|_| "vm: layout table too large")?));
+            return Ok(Some(
+                u32::try_from(id).map_err(|_| "vm: layout table too large")?,
+            ));
         }
     }
     Ok(None)
@@ -1126,7 +1128,10 @@ fn render_agg(
     };
     match &desc.body {
         LayoutBody::Product(fields) => {
-            let field_names = desc.symbol.as_ref().and_then(|symbol| names.fields.get(symbol));
+            let field_names = desc
+                .symbol
+                .as_ref()
+                .and_then(|symbol| names.fields.get(symbol));
             let rendered: Vec<String> = fields
                 .iter()
                 .enumerate()
@@ -1151,7 +1156,10 @@ fn render_agg(
             let payloads = variants
                 .get(usize::try_from(*tag).unwrap_or(usize::MAX))
                 .ok_or("vm: flat sum tag out of range")?;
-            let symbol = desc.symbol.as_ref().ok_or("vm: flat sum without identity")?;
+            let symbol = desc
+                .symbol
+                .as_ref()
+                .ok_or("vm: flat sum without identity")?;
             let name = type_name(symbol);
             let case = names
                 .cases
@@ -2063,8 +2071,7 @@ fn exec_local(
                 return Err("vm: existential_pack without a payload".into());
             }
             let payload = values.remove(0);
-            frame.regs[dest as usize] =
-                Value::Existential(Rc::new(payload), Rc::new(values));
+            frame.regs[dest as usize] = Value::Existential(Rc::new(payload), Rc::new(values));
         }
         Insn::ExistentialWitness { dest, src, index } => {
             let Value::Existential(_, witnesses) = &frame.regs[src as usize] else {
@@ -3601,7 +3608,11 @@ mod tests {
                     offset: 1,
                     layout: NO_LAYOUT,
                 },
-                Insn::Add { dest: 4, a: 2, b: 3 },
+                Insn::Add {
+                    dest: 4,
+                    a: 2,
+                    b: 3,
+                },
                 Insn::Ret { src: 4 },
             ],
             vec![Constant::I64(41)],
@@ -3678,7 +3689,11 @@ mod tests {
                     offset: 0,
                     layout: NO_LAYOUT,
                 },
-                Insn::Add { dest: 6, a: 3, b: 5 },
+                Insn::Add {
+                    dest: 6,
+                    a: 3,
+                    b: 5,
+                },
                 Insn::Ret { src: 6 },
             ],
             vec![Constant::Void, Constant::I64(5), Constant::I64(7)],
@@ -3777,10 +3792,11 @@ mod tests {
             &mut io,
         )
         .expect("export run");
-        assert!(matches!(outcome.value, Value::Agg(1, _)), "{:?}", outcome.value);
-        assert_eq!(
-            outcome.string_bytes(&outcome.value).expect("string"),
-            b"hi"
+        assert!(
+            matches!(outcome.value, Value::Agg(1, _)),
+            "{:?}",
+            outcome.value
         );
+        assert_eq!(outcome.string_bytes(&outcome.value).expect("string"), b"hi");
     }
 }

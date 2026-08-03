@@ -18,11 +18,7 @@ mod tests {
             .filter(|path| path.extension().is_some_and(|ext| ext == "tlk"))
             .collect();
         entries.sort();
-        assert!(
-            !entries.is_empty(),
-            "{} must not be empty",
-            dir.display()
-        );
+        assert!(!entries.is_empty(), "{} must not be empty", dir.display());
 
         for path in entries {
             let source = std::fs::read_to_string(&path).expect("read corpus source");

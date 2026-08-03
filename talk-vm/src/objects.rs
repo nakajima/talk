@@ -292,9 +292,9 @@ impl<V: Clone> Objects<V> {
                     .iter()
                     .copied()
                     .filter(|object| {
-                        self.records.get(object).is_some_and(|record| {
-                            !record.finalized && record.finalizer.is_some()
-                        })
+                        self.records
+                            .get(object)
+                            .is_some_and(|record| !record.finalized && record.finalizer.is_some())
                     })
                     .max()
             });

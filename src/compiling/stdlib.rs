@@ -279,8 +279,6 @@ type CompiledStdlib = (
     Arc<crate::compiling::typed_program::TypedProgram>,
 );
 
-
-
 // ===== The compiled-stdlib disk cache =====
 //
 // One file per module under the shared cache root (src/compiling/cache.rs):

@@ -1522,8 +1522,8 @@ mod tests {
             "func id(x: Int) -> Int {\n\tx\n}\nid(x: 1)\nid(x: 2)\n"
         );
 
-        let uri = Url::from_file_path(std::env::temp_dir().join("fix_all_kind.tlk"))
-            .expect("file uri");
+        let uri =
+            Url::from_file_path(std::env::temp_dir().join("fix_all_kind.tlk")).expect("file uri");
         let workspace = bare_workspace(&uri, code);
         let document_id = super::document_id_for_uri(&uri);
         let actions = super::compute_code_actions(
@@ -1793,9 +1793,8 @@ mod tests {
     fn member_completion_hides_other_files_private_members() {
         let lib_code = "pub struct Widget {\n\tpub let visible: Int\n\tlet hidden: Int\n\tpub func shown() -> Int { 1 }\n\tfunc concealed() -> Int { 2 }\n}\n";
         let main_code = "use package::member_completion_lib::{ Widget }\nlet w = Widget(visible: 1, hidden: 2)\nlet v = w.\n";
-        let uri_main =
-            Url::from_file_path(std::env::temp_dir().join("member_completion_main.tlk"))
-                .expect("main uri");
+        let uri_main = Url::from_file_path(std::env::temp_dir().join("member_completion_main.tlk"))
+            .expect("main uri");
         let uri_lib = Url::from_file_path(std::env::temp_dir().join("member_completion_lib.tlk"))
             .expect("lib uri");
         let workspace =
@@ -1807,7 +1806,10 @@ mod tests {
             main_code.find("w.").expect("dot") as u32 + 2,
         );
         let labels: Vec<&str> = items.iter().map(|item| item.label.as_str()).collect();
-        assert!(labels.contains(&"visible"), "expected visible in {labels:?}");
+        assert!(
+            labels.contains(&"visible"),
+            "expected visible in {labels:?}"
+        );
         assert!(labels.contains(&"shown"), "expected shown in {labels:?}");
         assert!(
             !labels.contains(&"hidden"),
