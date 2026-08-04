@@ -248,7 +248,7 @@ mod tests {
             .expect("manifest verifies its own output");
         assert_eq!(
             outcome.stage_optimizations[0].passes.len(),
-            8,
+            10,
             "compiler passes only; the bytecode adapter reports its own fusion count"
         );
         assert_eq!(

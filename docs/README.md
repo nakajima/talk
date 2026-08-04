@@ -12,6 +12,8 @@ code and tests.
   FFI, and Swift modules. Implemented by ADR 0047.
 - [Backend extraction baseline](backend-extraction-baseline.md) - stage 0
   measurements, the ABI symbol oracle, and final post-extraction accounting.
+- [MIR dead-code elimination plan](mir-dead-code-elimination-plan.md) - staged
+  whole-program function DCE and the ADR gate for effect-aware handler removal.
 - [Ownership](ownership.md) - implicit-sharing semantics and MIR ownership
   dataflow.
 - [Effects](effects.md) - generic effect rows, handlers, and effect parameters
@@ -64,6 +66,7 @@ Status vocabulary:
 - [0036 - Canonical instance heads](adr/0036-canonical-instance-heads-for-extensions.md)
 - [0037 - Eliminate backend capability rejections](adr/0037-eliminate-backend-unsupported-behavior.md)
 - [0044 - Unified memory model](adr/0044-the-unified-memory-model.md)
+- [0049 - Proof-gated effect handler elimination](adr/0049-proof-gated-effect-handler-elimination.md)
 
 ### Current implemented decisions
 

@@ -1070,6 +1070,24 @@ pub mod tests {
             "expected inlining in {:?}",
             output.optimizations
         );
+        assert!(
+            output
+                .optimizations
+                .passes
+                .iter()
+                .any(|pass| pass.name == "dead_functions" && pass.applied > 0),
+            "expected function DCE in {:?}",
+            output.optimizations
+        );
+        assert!(
+            output
+                .optimizations
+                .passes
+                .iter()
+                .any(|pass| pass.name == "dead_handlers" && pass.applied > 0),
+            "expected handler DCE in {:?}",
+            output.optimizations
+        );
 
         // The adapter reports its own counts; the VM accumulates per run.
         let exe = talk_bytecode::compile(&output.module).expect("module lowers");

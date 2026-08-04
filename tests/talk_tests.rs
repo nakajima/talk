@@ -58,13 +58,15 @@ fn mir_is_optimized_by_default_and_no_opt_renders_raw_mir() {
     );
 
     let optimized = String::from_utf8(optimized.stdout).expect("optimized MIR is UTF-8");
-    let optimized_f = optimized
-        .split("\nfn")
-        .find(|section| section.contains(" f "))
-        .expect("f in optimized MIR");
     assert!(
-        !optimized_f.contains("Call"),
-        "optimized MIR retained the unused computation:\n{optimized_f}"
+        !optimized
+            .split("\nfn")
+            .any(|section| section.contains(" f ")),
+        "optimized MIR retained the unreachable function:\n{optimized}"
+    );
+    assert!(
+        !optimized.contains("PushHandler") && !optimized.contains(" _io_host "),
+        "optimized MIR retained unused host handlers:\n{optimized}"
     );
 
     let raw = String::from_utf8(raw.stdout).expect("raw MIR is UTF-8");
@@ -75,6 +77,10 @@ fn mir_is_optimized_by_default_and_no_opt_renders_raw_mir() {
     assert!(
         raw_f.contains("Call"),
         "--no-opt did not retain the unused computation:\n{raw_f}"
+    );
+    assert!(
+        raw.contains("PushHandler") && raw.contains(" _io_host "),
+        "--no-opt did not retain host handlers:\n{raw}"
     );
 }
 
@@ -278,7 +284,7 @@ fn spliced_member_chains_fold_to_one_read() {
     let path = dir.join("chain.tlk");
     std::fs::write(
         &path,
-        b"struct Inner {\n\tlet x: Int\n\tlet y: Int\n}\nstruct Outer {\n\tlet inner: Inner\n\tlet z: Int\n}\nfunc pick(o: Outer) -> Int {\n\to.inner.x\n}\nprint(pick(o: Outer(inner: Inner(x: 7, y: 8), z: 9)))\n",
+        b"struct Inner {\n\tlet x: Int\n\tlet y: Int\n}\nstruct Outer {\n\tlet inner: Inner\n\tlet z: Int\n}\nfunc pick(o: Outer) -> Int {\n\to.inner.x\n}\nlet choose = pick\nprint(choose(Outer(inner: Inner(x: 7, y: 8), z: 9)))\n",
     )
     .expect("write chain program");
     let mir = Command::new(env!("CARGO_BIN_EXE_talk"))
@@ -1842,7 +1848,8 @@ fn constant_operands_read_the_pool_directly() {
         .as_nanos();
     let dir = std::env::temp_dir().join(format!("talk-rk-{}-{unique}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create fixture dir");
-    let source = "func bump(n: Int) -> Int {\n\tn + 1\n}\nprint(bump(n: 41))\n";
+    let source =
+        "func bump(n: Int) -> Int {\n\tn + 1\n}\nlet increment = bump\nprint(increment(41))\n";
     let file = dir.join("rk.tlk");
     std::fs::write(&file, source).expect("write fixture");
 
@@ -1860,7 +1867,10 @@ fn constant_operands_read_the_pool_directly() {
     let bump = rendered
         .split("chunk ")
         .find(|section| {
-            section.starts_with(|c: char| c.is_ascii_digit()) && section.contains("bump")
+            section
+                .lines()
+                .next()
+                .is_some_and(|line| line.contains(": bump ("))
         })
         .expect("bump chunk in render");
     assert!(
@@ -2064,12 +2074,11 @@ fn structural_drops_share_one_teardown_body() {
         .lines()
         .filter(|line| line.contains(" shared_drop "))
         .count();
-    // One body for Pair, one for Wrap — and exactly one each, however
-    // many sites drop them. The third body is core's io request enum,
-    // dropped by `_with_host`'s always-installed io fallback clause
-    // (ADR 0039).
+    // One body for Pair, one for Wrap - and exactly one each, however
+    // many sites drop them. Unreferenced core glue does not survive
+    // whole-program function DCE.
     assert_eq!(
-        shared_bodies, 3,
+        shared_bodies, 2,
         "expected one shared drop body per type, found {shared_bodies}:\n{rendered}"
     );
 

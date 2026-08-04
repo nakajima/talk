@@ -129,7 +129,7 @@ fn command_emits_language_functions_and_native_scalar_ops() {
     let program = dir.join("program.tlk");
     std::fs::write(
         &program,
-        "pub func bench() -> Int {\n\tlet x = 40\n\tx + 2\n}\n",
+        "pub func bench() -> Int {\n\tsleep(ms: 0) + 2\n}\n",
     )
     .expect("write program");
 

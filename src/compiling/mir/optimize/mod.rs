@@ -6,6 +6,8 @@
 mod branch_fold;
 mod constant_fold;
 mod dead_code;
+mod dead_functions;
+mod dead_handlers;
 mod forward_calls;
 mod inline_small;
 mod match_switch;
@@ -53,6 +55,8 @@ struct Counters {
     constant_fold: u64,
     branch_fold: u64,
     dead_code: u64,
+    dead_functions: u64,
+    dead_handlers: u64,
     forward_calls: u64,
     inline_small: u64,
     match_switch: u64,
@@ -75,6 +79,14 @@ impl Counters {
                 OptimizationPassStats {
                     name: "dead_code",
                     applied: self.dead_code,
+                },
+                OptimizationPassStats {
+                    name: "dead_functions",
+                    applied: self.dead_functions,
+                },
+                OptimizationPassStats {
+                    name: "dead_handlers",
+                    applied: self.dead_handlers,
                 },
                 OptimizationPassStats {
                     name: "forward_calls",
@@ -137,6 +149,15 @@ pub(crate) fn run(program: &mut Program) -> OptimizationStats {
     counters.inline_small += inline_small::run(program).applied;
     for function in &mut program.functions {
         simplify(function, &mut counters);
+    }
+    counters.dead_functions += dead_functions::run(program).applied;
+    let dead_handlers = dead_handlers::run(program);
+    counters.dead_handlers += dead_handlers.applied;
+    if dead_handlers.changed {
+        for function in &mut program.functions {
+            simplify(function, &mut counters);
+        }
+        counters.dead_functions += dead_functions::run(program).applied;
     }
     counters.finish()
 }
