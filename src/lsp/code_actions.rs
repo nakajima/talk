@@ -2420,10 +2420,11 @@ fn missing_witness_quick_fixes(
     let crate::node_kinds::decl::DeclKind::Extend { body, .. } = &extend.kind else {
         return vec![];
     };
-    let signature = source_requirement_signature(workspace, requirement, protocol)
-        .or_else(|| catalog_requirement_signature(workspace, requirement, protocol))
-        .unwrap_or_else(|| format!("func {requirement}()"));
-    let stub = method_stub(&signature);
+    let suggestion = crate::analysis::requirement_suggestion_by_name(workspace, protocol, requirement)
+        .unwrap_or_else(|| {
+            crate::analysis::requirements::RequirementSuggestion::fallback(protocol, requirement)
+        });
+    let stub = suggestion.stub(false);
     let Some((insert_offset, insert_text)) = insertion_before_closing_brace(text, body.span, &stub)
     else {
         return vec![];
@@ -2598,138 +2599,6 @@ fn enclosing_match_at(
             }
             _ => false,
         })
-}
-
-fn source_requirement_signature(
-    workspace: &AnalysisWorkspace,
-    requirement: &str,
-    protocol: &str,
-) -> Option<String> {
-    let protocol_name = protocol.split('<').next().unwrap_or(protocol);
-    for ast in workspace.asts.iter().flatten() {
-        let mut result = None;
-        let mut visitor =
-            derive_visitor::visitor_enter_fn(|decl: &crate::node_kinds::decl::Decl| {
-                if result.is_some() {
-                    return;
-                }
-                let crate::node_kinds::decl::DeclKind::Protocol { name, body, .. } = &decl.kind
-                else {
-                    return;
-                };
-                if name.name_str() != protocol_name {
-                    return;
-                }
-                for member in &body.decls {
-                    match &member.kind {
-                        crate::node_kinds::decl::DeclKind::MethodRequirement {
-                            signature, ..
-                        }
-                        | crate::node_kinds::decl::DeclKind::FuncSignature(signature)
-                            if signature.name.name_str() == requirement =>
-                        {
-                            result = Some(crate::parsing::formatter::format_node(
-                                &crate::node::Node::Decl(member.clone()),
-                                &ast.meta,
-                            ));
-                            return;
-                        }
-                        _ => {}
-                    }
-                }
-            });
-        for root in &ast.roots {
-            root.drive(&mut visitor);
-        }
-        drop(visitor);
-        if let Some(result) = result {
-            return Some(strip_implicit_self_param(result.trim()));
-        }
-    }
-    None
-}
-
-fn catalog_requirement_signature(
-    workspace: &AnalysisWorkspace,
-    requirement: &str,
-    protocol: &str,
-) -> Option<String> {
-    let _names =
-        crate::name_resolution::symbol::set_symbol_names(workspace.types.display_names.clone());
-    let mut refs: Vec<crate::types::ty::ProtocolRef> = workspace
-        .types
-        .catalog
-        .protocols
-        .keys()
-        .copied()
-        .map(crate::types::ty::ProtocolRef::bare)
-        .collect();
-    for row in workspace.types.catalog.conformances.values() {
-        if !refs.contains(&row.protocol) {
-            refs.push(row.protocol.clone());
-        }
-    }
-
-    for protocol_ref in refs {
-        for (owner, label, req) in workspace
-            .types
-            .catalog
-            .requirements_for_conformance(&protocol_ref)
-        {
-            if label == requirement && owner.to_string() == protocol {
-                return signature_from_requirement_scheme(&workspace.types, &label, req.symbol);
-            }
-        }
-    }
-    None
-}
-
-fn signature_from_requirement_scheme(
-    types: &crate::types::TypeOutput,
-    label: &str,
-    symbol: crate::name_resolution::symbol::Symbol,
-) -> Option<String> {
-    let scheme = types.schemes.get(&symbol)?;
-    let crate::types::ty::Ty::Func(params, ret, _) = &scheme.ty else {
-        return None;
-    };
-    let params = params
-        .iter()
-        .enumerate()
-        .map(|(index, ty)| format!("arg{index}: {}", ty.render_mono()))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Some(strip_implicit_self_param(&format!(
-        "func {label}({params}) -> {}",
-        ret.render_mono()
-    )))
-}
-
-fn strip_implicit_self_param(signature: &str) -> String {
-    let Some(open) = signature.find('(') else {
-        return signature.to_string();
-    };
-    let after_open = &signature[open + 1..];
-    let leading = after_open.len() - after_open.trim_start().len();
-    let params = &after_open[leading..];
-    if !params.starts_with("self:") {
-        return signature.to_string();
-    }
-    if let Some(comma) = params.find(',') {
-        return format!(
-            "{}{}",
-            &signature[..open + 1],
-            params[comma + 1..].trim_start()
-        );
-    }
-    if let Some(close) = params.find(')') {
-        return format!("{}{}", &signature[..open + 1], &params[close..]);
-    }
-    signature.to_string()
-}
-
-fn method_stub(signature: &str) -> String {
-    format!("{} {{\n\t{{}}\n}}", signature.trim())
 }
 
 fn missing_patterns_for_match(

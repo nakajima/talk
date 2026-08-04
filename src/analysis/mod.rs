@@ -3,6 +3,7 @@ pub mod definition;
 pub mod hover;
 pub mod occurrence;
 pub mod rename;
+pub mod requirements;
 pub mod workspace;
 
 use crate::{
@@ -100,6 +101,7 @@ pub use definition::{Location, goto_definition};
 pub use hover::{Hover, hover_at};
 pub use occurrence::{Occurrence, OccurrenceKind, occurrence_at};
 pub use rename::{DocumentEdit, TextEdit, WorkspaceEdit, rename_at};
+pub use requirements::{RequirementSuggestion, requirement_suggestion_by_name};
 pub use workspace::Workspace;
 
 pub(crate) fn node_ids_at_offset(

@@ -1,4 +1,3 @@
-use derive_visitor::Drive;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::workspace::Workspace;
@@ -29,6 +28,17 @@ pub struct CompletionAnalysis<'a> {
     pub all_asts: Option<&'a [Option<AST<NameResolved>>]>,
     pub resolved_names: &'a ResolvedNames,
     pub types: &'a TypeOutput,
+}
+
+impl CompletionAnalysis<'_> {
+    /// The ASTs a requirement-signature lookup may search: every file
+    /// in the workspace when available, the completion file otherwise.
+    fn requirement_source_asts(&self) -> Box<dyn Iterator<Item = &AST<NameResolved>> + '_> {
+        match self.all_asts {
+            Some(asts) => Box::new(asts.iter().flatten()),
+            None => Box::new(std::iter::once(self.ast)),
+        }
+    }
 }
 
 /// The access site completion answers for: the session module and the
@@ -558,14 +568,18 @@ fn conformance_requirement_completions(
             if implemented.methods.contains(&label) {
                 continue;
             }
-            let signature = source_requirement_signature(analysis, requirement.symbol)
-                .or_else(|| requirement_signature_from_scheme(analysis.types, &label, &requirement))
-                .unwrap_or_else(|| format!("func {label}()"));
+            let suggestion = crate::analysis::requirements::requirement_suggestion(
+                analysis.requirement_source_asts(),
+                analysis.types,
+                owner.to_string(),
+                label.clone(),
+                &requirement,
+            );
             items.entry(label.clone()).or_insert(CompletionItem {
                 label,
                 kind: Some(CompletionItemKind::Method),
-                detail: Some(format!("required by {owner}: {signature}")),
-                insert_text: Some(method_stub(&signature, true)),
+                detail: Some(format!("required by {}: {}", suggestion.owner, suggestion.signature)),
+                insert_text: Some(suggestion.stub(true)),
                 insert_text_is_snippet: true,
                 sort_text: None,
                 import_from: None,
@@ -696,95 +710,6 @@ fn type_annotation_symbol(annotation: &TypeAnnotation) -> Option<Symbol> {
         }
         _ => None,
     }
-}
-
-fn source_requirement_signature(
-    analysis: &CompletionAnalysis<'_>,
-    symbol: Symbol,
-) -> Option<String> {
-    if let Some(asts) = analysis.all_asts {
-        for ast in asts.iter().flatten() {
-            if let Some(signature) = source_requirement_signature_in_ast(ast, symbol) {
-                return Some(signature);
-            }
-        }
-        return None;
-    }
-    source_requirement_signature_in_ast(analysis.ast, symbol)
-}
-
-fn source_requirement_signature_in_ast(ast: &AST<NameResolved>, symbol: Symbol) -> Option<String> {
-    let mut result = None;
-    let mut visitor = derive_visitor::visitor_enter_fn(|decl: &Decl| {
-        if result.is_some() {
-            return;
-        }
-        match &decl.kind {
-            DeclKind::MethodRequirement { signature, .. } | DeclKind::FuncSignature(signature)
-                if signature.name.symbol().ok() == Some(symbol) =>
-            {
-                result = Some(crate::parsing::formatter::format_node(
-                    &Node::Decl(decl.clone()),
-                    &ast.meta,
-                ));
-            }
-            _ => {}
-        }
-    });
-    for root in &ast.roots {
-        root.drive(&mut visitor);
-    }
-    drop(visitor);
-    result.map(|signature: String| strip_implicit_self_param(signature.trim()))
-}
-
-fn strip_implicit_self_param(signature: &str) -> String {
-    let Some(open) = signature.find('(') else {
-        return signature.to_string();
-    };
-    let after_open = &signature[open + 1..];
-    let leading = after_open.len() - after_open.trim_start().len();
-    let params = &after_open[leading..];
-    if !params.starts_with("self:") {
-        return signature.to_string();
-    }
-    if let Some(comma) = params.find(',') {
-        return format!(
-            "{}{}",
-            &signature[..open + 1],
-            params[comma + 1..].trim_start()
-        );
-    }
-    if let Some(close) = params.find(')') {
-        return format!("{}{}", &signature[..open + 1], &params[close..]);
-    }
-    signature.to_string()
-}
-
-fn requirement_signature_from_scheme(
-    types: &TypeOutput,
-    label: &str,
-    requirement: &Requirement,
-) -> Option<String> {
-    let scheme = types.schemes.get(&requirement.symbol)?;
-    let Ty::Func(params, ret, _) = &scheme.ty else {
-        return None;
-    };
-    let params = params
-        .iter()
-        .enumerate()
-        .map(|(index, ty)| format!("arg{index}: {}", ty.render_mono()))
-        .collect::<Vec<_>>()
-        .join(", ");
-    Some(strip_implicit_self_param(&format!(
-        "func {label}({params}) -> {}",
-        ret.render_mono()
-    )))
-}
-
-fn method_stub(signature: &str, snippet: bool) -> String {
-    let body = if snippet { "$0" } else { "{}" };
-    format!("{} {{\n\t{}\n}}", signature.trim(), body)
 }
 
 fn visible_symbols(
