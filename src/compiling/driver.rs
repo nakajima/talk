@@ -20,7 +20,7 @@ use crate::{
     parser_error::ParserError,
 };
 use indexmap::IndexMap;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::{hash::Hash, hash::Hasher};
@@ -47,6 +47,11 @@ pub struct Parsed {
     pub source_texts: std::collections::HashMap<FileID, String>,
     pub diagnostics: Vec<AnyDiagnostic>,
     pub procedural_macros: crate::procedural_macros::ProceduralMacroEnvironment,
+    /// Canonical local import edges (importer, imported) recorded
+    /// during parse discovery (CLEAN-03): explicit `use` decls and
+    /// qualified local references alike, keyed by FileID rather than
+    /// reconstructed from paths or file stems later.
+    pub file_dependencies: Vec<(FileID, FileID)>,
 }
 
 /// Exported names, each carrying its full overload set (ADR 0041):
@@ -61,6 +66,7 @@ pub struct NameResolved {
     pub resolved_names: ResolvedNames,
     pub diagnostics: Vec<AnyDiagnostic>,
     pub procedural_macros: Option<crate::procedural_macros::ProceduralMacroArtifact>,
+    pub file_dependencies: Vec<(FileID, FileID)>,
 }
 
 impl DriverPhase for Typed {}
@@ -445,40 +451,39 @@ impl Driver {
         let mut source_texts = std::collections::HashMap::new();
         let mut diagnostics = vec![];
 
-        // Track which files we've already processed (by canonical path) to detect cycles
-        let mut processed_paths: FxHashSet<PathBuf> = FxHashSet::default();
+        // Canonical import graph (CLEAN-03): file ids are pre-assigned
+        // as a source enters the queue, so an import edge can name its
+        // target before the target is parsed. The map doubles as the
+        // cycle guard the old processed-paths set provided.
+        let mut file_ids: FxHashMap<PathBuf, FileID> = FxHashMap::default();
+        let mut file_dependencies: Vec<(FileID, FileID)> = Vec::new();
 
-        // Queue of files to parse - use VecDeque for FIFO ordering
-        let mut to_parse: VecDeque<Source> = self.files.iter().cloned().collect();
-
-        // Mark initial files as processed
+        // Queue of files to parse, FIFO, with their pre-assigned ids.
+        let mut next_file_id = 0u32;
+        let mut to_parse: VecDeque<(Source, FileID)> = VecDeque::new();
+        // In-memory sources never exist on disk, so they never
+        // canonicalize; their edges match the resolved path directly.
+        let mut in_memory_ids: FxHashMap<PathBuf, FileID> = FxHashMap::default();
         for file in &self.files {
-            match &file.kind {
-                SourceKind::File(path) => {
-                    if let Ok(canonical) = path.canonicalize() {
-                        processed_paths.insert(canonical);
-                    }
-                }
-                SourceKind::InMemory { path, .. } => {
-                    // For in-memory sources, try to canonicalize if the file exists on disk
-                    if let Ok(canonical) = path.canonicalize() {
-                        processed_paths.insert(canonical);
-                    }
-                }
-                SourceKind::String(_) => {
-                    // String sources don't have paths, nothing to track
-                }
+            let file_id = FileID(next_file_id);
+            next_file_id += 1;
+            // For in-memory sources, try to canonicalize if the file
+            // exists on disk; string sources have no path to track.
+            if let SourceKind::InMemory { path, .. } = &file.kind {
+                in_memory_ids.insert(path.clone(), file_id);
             }
+            if let Some(path) = file.source_path()
+                && let Ok(canonical) = path.canonicalize()
+            {
+                file_ids.insert(canonical, file_id);
+            }
+            to_parse.push_back((file.clone(), file_id));
         }
 
-        let mut file_index = 0u32;
-
-        while let Some(file) = to_parse.pop_front() {
+        while let Some((file, file_id)) = to_parse.pop_front() {
             profiling::scope!("compiler.parse_file");
             let input = file.read()?;
             tracing::info!("parsing {file:?}");
-            let file_id = FileID(file_index);
-            file_index += 1;
             source_texts.insert(file_id, input.clone());
             let result = match self.config.parse_mode {
                 // The strict compile path parses through the frontend
@@ -510,7 +515,8 @@ impl Driver {
                     parsed.skip_core_prelude = input.starts_with("// no-core");
                     diagnostics.extend(ast_diagnostics);
 
-                    // Discover imports and queue them for parsing
+                    // Discover imports and queue them for parsing,
+                    // recording the canonical edge either way.
                     let source_path = file.path();
                     for import_path in extract_import_paths(&parsed) {
                         if let ImportPath::Package(package) = &import_path {
@@ -528,10 +534,33 @@ impl Driver {
                             &import_path,
                             &local_modules,
                             self.config.workspace_root.as_deref(),
-                        )? && !processed_paths.contains(&canonical)
-                        {
-                            processed_paths.insert(canonical);
-                            to_parse.push_back(Source::from(resolved));
+                        )? {
+                            let target_id = match file_ids.get(&canonical) {
+                                Some(target_id) => *target_id,
+                                None => {
+                                    let target_id = FileID(next_file_id);
+                                    next_file_id += 1;
+                                    file_ids.insert(canonical, target_id);
+                                    to_parse.push_back((Source::from(resolved), target_id));
+                                    target_id
+                                }
+                            };
+                            if target_id != file_id
+                                && !file_dependencies.contains(&(file_id, target_id))
+                            {
+                                file_dependencies.push((file_id, target_id));
+                            }
+                        } else if let ImportPath::Local(module_path) = &import_path {
+                            // The target never canonicalized: match it
+                            // against the session's in-memory sources.
+                            if let Some(resolved) =
+                                local_modules.resolve(source_path.as_ref(), module_path)
+                                && let Some(target_id) = in_memory_ids.get(&resolved).copied()
+                                && target_id != file_id
+                                && !file_dependencies.contains(&(file_id, target_id))
+                            {
+                                file_dependencies.push((file_id, target_id));
+                            }
                         }
                     }
 
@@ -569,6 +598,7 @@ impl Driver {
                 source_texts,
                 diagnostics,
                 procedural_macros,
+                file_dependencies,
             },
         })
     }
@@ -585,6 +615,7 @@ impl Driver<Parsed> {
         );
 
         let procedural_macros = self.phase.procedural_macros.local_artifact();
+        let file_dependencies = self.phase.file_dependencies;
         let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
         self.phase.diagnostics.extend(
             crate::macro_expansion::expand_macros_with_sources_and_service(
@@ -607,6 +638,7 @@ impl Driver<Parsed> {
                 resolved_names: resolved,
                 diagnostics: self.phase.diagnostics,
                 procedural_macros,
+                file_dependencies,
             },
         })
     }
@@ -689,6 +721,7 @@ impl Driver<NameResolved> {
             exports,
             types: ModuleTypes::default(),
             procedural_macros: None,
+            dependencies: module_dependencies(&self.config.modules),
         }
         .with_procedural_macros(self.phase.procedural_macros)
     }
@@ -704,6 +737,7 @@ impl Driver<NameResolved> {
             resolved_names,
             mut diagnostics,
             procedural_macros,
+            file_dependencies,
         } = self.phase;
 
         let (types, type_diagnostics) = crate::types::generate::check_types(
@@ -720,6 +754,7 @@ impl Driver<NameResolved> {
             resolved_names,
             types,
             &blocked_files,
+            file_dependencies,
         );
 
         Driver {
@@ -854,13 +889,19 @@ impl Driver<Typed> {
             .map(|(name, _)| *name)
             .collect();
         // Stdlib modules' bodies may call into the modules they `use`
-        // (testing calls into ansi): close the body set over those
-        // edges even when the program never names them itself.
+        // (testing calls into ansi): close the body set over the edges
+        // each compiled stdlib module recorded when it was built, even
+        // when the program never names them itself.
         let mut index = 0;
         while index < stdlib_names.len() {
-            for dependency in crate::compiling::stdlib::dependencies_of(stdlib_names[index]) {
-                if !stdlib_names.contains(&dependency) {
-                    stdlib_names.push(dependency);
+            if let Some(module) = self.config.modules.get_module_by_name(stdlib_names[index]) {
+                for dependency in &module.dependencies {
+                    if let Some(dependency) =
+                        crate::compiling::stdlib::name_for_module_id(*dependency)
+                        && !stdlib_names.contains(&dependency)
+                    {
+                        stdlib_names.push(dependency);
+                    }
                 }
             }
             index += 1;
@@ -970,9 +1011,24 @@ impl Driver<Typed> {
             exports,
             types: interface.types,
             procedural_macros: None,
+            dependencies: module_dependencies(&self.config.modules),
         }
         .with_procedural_macros(self.phase.procedural_macros)
     }
+}
+
+/// The modules one compilation imported, excluding core: the canonical
+/// module-level dependency edges (CLEAN-03), recorded from the module
+/// environment import discovery populated rather than scraped from
+/// source text afterwards.
+fn module_dependencies(modules: &crate::compiling::module::ModuleEnvironment) -> Vec<ModuleId> {
+    let mut dependencies: Vec<ModuleId> = modules
+        .iter_modules()
+        .map(|(module_id, _)| module_id)
+        .filter(|module_id| *module_id != ModuleId::Core)
+        .collect();
+    dependencies.sort();
+    dependencies
 }
 
 #[cfg(test)]
@@ -1836,5 +1892,147 @@ print_raw(rendered.into_string())
         // Cleanup
         let _ = std::fs::remove_file(&importer_path);
         let _ = std::fs::remove_file(&exportee_path);
+    }
+
+    /// A temporary source tree for dependency-graph tests; removed on drop.
+    struct SourceTree(PathBuf);
+
+    impl SourceTree {
+        fn new(name: &str, files: &[(&str, &str)]) -> Self {
+            let root = std::env::temp_dir().join(format!(
+                "talk-graph-{name}-{}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&root);
+            for (relative, text) in files {
+                let path = root.join(relative);
+                std::fs::create_dir_all(path.parent().expect("parent dir")).unwrap();
+                std::fs::write(path, text).unwrap();
+            }
+            Self(root)
+        }
+
+        fn path(&self, relative: &str) -> PathBuf {
+            self.0.join(relative)
+        }
+
+        fn config(&self) -> DriverConfig {
+            DriverConfig::new("TestDriver")
+                .source_root(self.0.clone())
+                .workspace_root(self.0.clone())
+        }
+    }
+
+    impl Drop for SourceTree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn parse_records_canonical_file_edges() {
+        let tree = SourceTree::new(
+            "edges",
+            &[
+                ("main.tlk", "use package::lib::util::{ answer }\nanswer()\n"),
+                ("lib/util.tlk", "pub func answer() -> Int {\n\t42\n}\n"),
+            ],
+        );
+        let parsed = Driver::new(
+            vec![Source::from(tree.path("main.tlk"))],
+            tree.config(),
+        )
+        .parse()
+        .unwrap();
+        assert_eq!(parsed.phase.asts.len(), 2, "the import is discovered");
+        assert_eq!(
+            parsed.phase.file_dependencies,
+            vec![(FileID(0), FileID(1))],
+            "the edge names canonical file ids, not paths or stems"
+        );
+    }
+
+    #[test]
+    fn parse_records_qualified_reference_edges_without_a_use_decl() {
+        let tree = SourceTree::new(
+            "qualified",
+            &[
+                ("main.tlk", "package::dep::answer()\n"),
+                ("dep.tlk", "pub func answer() -> Int {\n\t42\n}\n"),
+            ],
+        );
+        let parsed = Driver::new(
+            vec![Source::from(tree.path("main.tlk"))],
+            tree.config(),
+        )
+        .parse()
+        .unwrap();
+        assert_eq!(parsed.phase.asts.len(), 2, "the reference discovers the file");
+        assert_eq!(parsed.phase.file_dependencies, vec![(FileID(0), FileID(1))]);
+    }
+
+    #[test]
+    fn parse_distinguishes_duplicate_file_stems() {
+        let tree = SourceTree::new(
+            "stems",
+            &[
+                (
+                    "main.tlk",
+                    "use package::a::util::{ from_a }\nuse package::b::util::{ from_b }\nfrom_a + from_b\n",
+                ),
+                ("a/util.tlk", "pub let from_a = 1\n"),
+                ("b/util.tlk", "pub let from_b = 2\n"),
+            ],
+        );
+        let parsed = Driver::new(
+            vec![Source::from(tree.path("main.tlk"))],
+            tree.config(),
+        )
+        .parse()
+        .unwrap();
+        assert_eq!(parsed.phase.asts.len(), 3);
+        // Both `util` files are distinct edge targets; stem matching
+        // could only ever name one of them.
+        assert_eq!(
+            parsed.phase.file_dependencies,
+            vec![(FileID(0), FileID(1)), (FileID(0), FileID(2))]
+        );
+    }
+
+    #[test]
+    fn initialization_order_follows_the_recorded_edges() {
+        // main references dep only through a qualified path, so no
+        // Import decl exists for stem matching to find; the recorded
+        // edge still orders dep's globals before main's.
+        let tree = SourceTree::new(
+            "order",
+            &[
+                ("main.tlk", "let value = package::dep::answer()\nprint(value)\n"),
+                ("dep.tlk", "pub func answer() -> Int {\n\t42\n}\n"),
+            ],
+        );
+        let typed = Driver::new(
+            vec![
+                Source::from(tree.path("main.tlk")),
+                Source::from(tree.path("dep.tlk")),
+            ],
+            tree.config(),
+        )
+        .parse()
+        .unwrap()
+        .resolve_names()
+        .unwrap()
+        .type_check();
+        assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+        let order: Vec<FileID> = typed
+            .phase
+            .program
+            .files()
+            .values()
+            .map(|file| file.file_id)
+            .collect();
+        let main = order.iter().position(|id| *id == FileID(0)).unwrap();
+        let dep = order.iter().position(|id| *id == FileID(1)).unwrap();
+        assert!(dep < main, "dep initializes before main: {order:?}");
     }
 }

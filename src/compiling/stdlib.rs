@@ -196,31 +196,14 @@ fn module_id_for_index(index: usize) -> ModuleId {
     ModuleId::WellKnown(u16::try_from(index).expect("stdlib module count fits the reserved band"))
 }
 
-/// Stdlib-internal import edges, read from each module's root source: a
-/// module's typed bodies may call into the modules it `use`s (for
-/// example testing calls into ansi), so backend inputs must close over
-/// them. A missed edge fails compilation loudly rather than silently.
-pub(crate) fn dependencies_of(name: &str) -> Vec<&'static str> {
-    let Some((_, _, text)) = STDLIB_MODULES
+/// The stdlib module a fixed id names: the inverse of
+/// `module_id_for_index`.
+pub(crate) fn name_for_module_id(module_id: ModuleId) -> Option<&'static str> {
+    STDLIB_MODULES
         .iter()
-        .find(|(candidate, _, _)| *candidate == name)
-    else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter_map(|line| {
-            let rest = line.trim().strip_prefix("use ")?;
-            let rest = rest.strip_prefix("package::").unwrap_or(rest);
-            let end = rest
-                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .unwrap_or(rest.len());
-            let dependency = &rest[..end];
-            STDLIB_MODULES
-                .iter()
-                .any(|(candidate, _, _)| *candidate == dependency)
-                .then_some(dependency)
-        })
-        .collect()
+        .enumerate()
+        .find(|(index, _)| module_id_for_index(*index) == module_id)
+        .map(|(_, (name, _, _))| *name)
 }
 
 /// Compile and register every stdlib module interface. Only the editor
@@ -450,15 +433,9 @@ fn bundled_compilation_dir() -> PathBuf {
 fn compile_driver(name: &'static str, sources: Vec<Source>, module_id: ModuleId) -> Driver<Typed> {
     let mut modules = ModuleEnvironment::default();
     modules.import_core(super::core::compile());
-    for dependency in dependencies_of(name) {
-        let (dependency_id, dependency_module) = module_with_id(dependency)
-            .unwrap_or_else(|| panic!("stdlib dependency {dependency} is registered"));
-        modules
-            .import_compiled(dependency_module.as_ref().clone(), dependency_id)
-            .unwrap_or_else(|error| {
-                panic!("failed to import stdlib dependency {dependency}: {error}")
-            });
-    }
+    // Stdlib-internal imports (`use ansi` in testing.tlk) activate
+    // their modules during parse discovery, which also records the
+    // canonical dependency edges on the compiled module artifact.
 
     let mut config = DriverConfig::new(name);
     config.module_id = module_id;
@@ -495,7 +472,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn discovers_external_stdlib_dependencies() {
+    fn compiled_modules_record_their_dependency_edges() {
+        // The canonical module graph (CLEAN-03): each compiled stdlib
+        // module carries the edges its own parse discovery activated.
+        let dependencies_of = |name: &str| {
+            let (_, module) = module_with_id(name).expect("stdlib module");
+            module
+                .dependencies
+                .iter()
+                .filter_map(|id| name_for_module_id(*id))
+                .collect::<Vec<_>>()
+        };
         assert_eq!(dependencies_of("testing"), vec!["ansi"]);
         assert_eq!(dependencies_of("http"), vec!["net"]);
     }

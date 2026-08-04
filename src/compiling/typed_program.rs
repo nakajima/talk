@@ -21,6 +21,10 @@ pub struct TypedProgram {
     files: IndexMap<Source, crate::typed_ast::TypedFile>,
     resolved_names: ResolvedNames,
     types: TypeOutput,
+    /// Canonical local import edges (importer, imported) recorded
+    /// during parse discovery (CLEAN-03).
+    #[serde(default)]
+    file_dependencies: Vec<(FileID, FileID)>,
 }
 
 impl TypedProgram {
@@ -29,6 +33,7 @@ impl TypedProgram {
         resolved_names: ResolvedNames,
         types: TypeOutput,
         blocked_files: &FxHashSet<FileID>,
+        file_dependencies: Vec<(FileID, FileID)>,
     ) -> Self {
         let mut files = IndexMap::default();
         for (source, ast) in asts {
@@ -39,9 +44,10 @@ impl TypedProgram {
             files.insert(source, file);
         }
         Self {
-            files: in_initialization_order(files),
+            files: in_initialization_order(files, &file_dependencies),
             resolved_names,
             types,
+            file_dependencies,
         }
     }
 
@@ -64,40 +70,30 @@ impl TypedProgram {
 
 /// Order a program's files so a file's local imports initialize before
 /// it (LINK-02: deterministic, dependency-first globals) — the published
-/// order every consumer of `files()` iterates in. Import edges come from
-/// `use package::Module` markers matched to sibling file stems; files
-/// without edges keep their discovery order, and a cycle falls back to
-/// discovery order for the remainder.
+/// order every consumer of `files()` iterates in. Edges are the canonical
+/// pairs parse discovery recorded (explicit `use` decls and qualified
+/// local references alike); files without edges keep their discovery
+/// order, and a cycle falls back to discovery order for the remainder.
 fn in_initialization_order(
     files: IndexMap<Source, crate::typed_ast::TypedFile>,
+    file_dependencies: &[(FileID, FileID)],
 ) -> IndexMap<Source, crate::typed_ast::TypedFile> {
-    use crate::node_kinds::decl::ImportPath;
-    use crate::typed_ast::{DeclKind, Node};
     use rustc_hash::FxHashMap;
 
-    let position: FxHashMap<String, usize> = files
-        .keys()
+    let position: FxHashMap<FileID, usize> = files
+        .values()
         .enumerate()
-        .filter_map(|(index, source)| {
-            source
-                .source_path()
-                .and_then(|path| path.file_stem())
-                .and_then(|stem| stem.to_str())
-                .map(|stem| (stem.to_string(), index))
-        })
+        .map(|(index, file)| (file.file_id, index))
         .collect();
     let mut deps: Vec<Vec<usize>> = vec![Vec::new(); files.len()];
-    for (index, file) in files.values().enumerate() {
-        for root in &file.roots {
-            if let Node::Decl(decl) = root
-                && let DeclKind::Import(import) = &decl.kind
-                && let ImportPath::Local(path) = &import.path
-                && let Some(stem) = path.rsplit("::").next()
-                && let Some(&target) = position.get(stem)
-                && target != index
-            {
-                deps[index].push(target);
-            }
+    for (importer, imported) in file_dependencies {
+        let (Some(&from), Some(&to)) = (position.get(importer), position.get(imported)) else {
+            // An edge can name a file blocked by earlier errors; the
+            // remaining graph still orders.
+            continue;
+        };
+        if from != to && !deps[from].contains(&to) {
+            deps[from].push(to);
         }
     }
     // Depth-first with insertion-order roots: every file keeps its

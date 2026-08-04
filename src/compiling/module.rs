@@ -212,6 +212,17 @@ impl ModuleEnvironment {
         self.modules.values().map(|arc| arc.as_ref())
     }
 
+    /// Iterate every imported module with its local session id.
+    pub fn iter_modules(&self) -> impl Iterator<Item = (ModuleId, &Module)> {
+        self.modules_by_local
+            .iter()
+            .filter_map(|(module_id, stable_id)| {
+                self.modules
+                    .get(stable_id)
+                    .map(|module| (*module_id, module.as_ref()))
+            })
+    }
+
     pub fn import_core(&mut self, module: Arc<Module>) {
         self.registry
             .borrow_mut()
@@ -266,6 +277,13 @@ pub struct Module {
     pub types: ModuleTypes,
     #[serde(default)]
     pub procedural_macros: Option<crate::procedural_macros::ProceduralMacroArtifact>,
+    /// The modules this module was compiled against (CLEAN-03's
+    /// canonical module graph): every import discovery activated,
+    /// excluding core. Backend input closure and stdlib compilation
+    /// read these edges instead of reconstructing them from source
+    /// text.
+    #[serde(default)]
+    pub dependencies: Vec<ModuleId>,
 }
 
 impl Module {
