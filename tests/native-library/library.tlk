@@ -1,0 +1,55 @@
+// The shared library-mode fixture (ADR 0048): exported scalar, String,
+// aggregate, effect, and failure cases, exercised identically by the C
+// and LLVM backend harnesses. `bench` is the VM oracle: it prints the
+// values the C harness must observe across the boundary.
+
+pub struct Pair {
+	let a: Int
+	let b: Int
+}
+
+effect 'bump(n: Int) -> Int
+
+pub func double(x: Int) -> Int {
+	x * 2
+}
+
+pub func crash(x: Int) -> Int {
+	10 / x
+}
+
+pub func greet() -> String {
+	"hello"
+}
+
+pub func shout(s: String) -> String {
+	s + "!"
+}
+
+pub func length(s: String) -> Int {
+	s.byte_count
+}
+
+pub func pair(x: Int) -> Pair {
+	Pair(a: x, b: x + 1)
+}
+
+pub func total(p: Pair) -> Int {
+	p.a + p.b
+}
+
+pub func handled(x: Int) -> Int {
+	#handle 'bump { n in n + 1 }
+	'bump(n: x) + 'bump(n: x * 10)
+}
+
+pub func leave(code: Int) 'io -> Never {
+	_io_exit(code: code)
+}
+
+pub func bench() {
+	print(double(x: 21))
+	print(length(s: shout(s: greet())))
+	print(total(p: pair(x: 20)))
+	print(handled(x: 4))
+}

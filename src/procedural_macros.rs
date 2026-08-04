@@ -357,7 +357,11 @@ impl ProceduralMacroService {
             },
             &mut io,
         )?;
-        crate::compiling::bridge::adapt_expr_macro(&run, &self.schema, source_id)
+        crate::compiling::bridge::adapt_expr_macro(
+            crate::compiling::bridge::FrontendRun::Vm(&run),
+            &self.schema,
+            source_id,
+        )
     }
 }
 

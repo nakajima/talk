@@ -164,13 +164,22 @@ async fn main() {
             filenames: Vec<String>,
             #[arg(long, value_name = "NAME")]
             entry: Option<String>,
-            /// Emit a service instead of a program: one host-callable
-            /// wrapper per exported function (repeatable).
+            /// Emit a library instead of a program: no `main`, one
+            /// host-callable wrapper per exported function (repeatable).
             #[arg(long = "export", value_name = "NAME")]
             exports: Vec<String>,
             /// Effects the exports may perform (repeatable).
             #[arg(long = "allow-effect", value_name = "EFFECT")]
             allow_effects: Vec<String>,
+            /// External symbol prefix for the library (default: talk).
+            #[arg(long, value_name = "PREFIX")]
+            prefix: Option<String>,
+            /// Write the library's generated C header here.
+            #[arg(long, value_name = "PATH", value_hint = ValueHint::FilePath)]
+            header: Option<String>,
+            /// Write the library's export-name-to-symbol manifest here.
+            #[arg(long, value_name = "PATH", value_hint = ValueHint::FilePath)]
+            manifest: Option<String>,
         },
         /// Render the optimized backend middle representation for the input.
         Mir {
@@ -778,8 +787,13 @@ async fn main() {
                         }
                     }
                 }
-                match talk::compiling::bootstrap::bootstrap(&sources, exports, allow_effects, None)
-                {
+                match talk::compiling::bootstrap::bootstrap(
+                    &sources,
+                    exports,
+                    allow_effects,
+                    None,
+                    None,
+                ) {
                     Ok(outcome) => (outcome, output),
                     Err(err) => {
                         eprintln!("error: {err}");
@@ -812,6 +826,7 @@ async fn main() {
             };
             let manifest_path = std::path::Path::new(&output).with_extension("manifest");
             let abi_path = std::path::Path::new(&output).with_extension("abi");
+            let c_path = std::path::Path::new(&output).with_extension("c");
             if *check {
                 let abi_current = match &outcome.abi {
                     Some(abi) => std::fs::read_to_string(&abi_path)
@@ -819,13 +834,20 @@ async fn main() {
                         .is_some_and(|existing| existing == *abi),
                     None => !abi_path.exists(),
                 };
+                let c_current = match &outcome.c_source {
+                    Some(c_source) => std::fs::read_to_string(&c_path)
+                        .ok()
+                        .is_some_and(|existing| existing == *c_source),
+                    None => !c_path.exists(),
+                };
                 let current = std::fs::read(&output)
                     .ok()
                     .is_some_and(|existing| existing == outcome.image)
                     && std::fs::read_to_string(&manifest_path)
                         .ok()
                         .is_some_and(|existing| existing == outcome.manifest.to_text())
-                    && abi_current;
+                    && abi_current
+                    && c_current;
                 if !current {
                     eprintln!(
                         "error: {output} is stale; regenerate with `talk bootstrap` (without --check)"
@@ -853,6 +875,12 @@ async fn main() {
                     && let Err(err) = std::fs::write(&abi_path, abi)
                 {
                     eprintln!("error: failed to write {}: {err}", abi_path.display());
+                    std::process::exit(1);
+                }
+                if let Some(c_source) = &outcome.c_source
+                    && let Err(err) = std::fs::write(&c_path, c_source)
+                {
+                    eprintln!("error: failed to write {}: {err}", c_path.display());
                     std::process::exit(1);
                 }
             }
@@ -884,28 +912,56 @@ async fn main() {
             entry,
             exports,
             allow_effects,
+            prefix,
+            header,
+            manifest,
         } => {
+            if exports.is_empty()
+                && (prefix.is_some() || header.is_some() || manifest.is_some())
+            {
+                eprintln!("error: --prefix, --header, and --manifest require --export");
+                std::process::exit(2);
+            }
             let typed = check_or_exit(filenames);
-            let mir_entry = if exports.is_empty() {
-                match entry.as_deref() {
+            if exports.is_empty() {
+                let mir_entry = match entry.as_deref() {
                     Some(name) => talk::compiling::driver::MirEntry::Named(name),
                     None => talk::compiling::driver::MirEntry::Script,
+                };
+                match typed.compile_mir(mir_entry).and_then(|output| {
+                    talk_c::emit(&output.module).map_err(|error| error.to_string())
+                }) {
+                    Ok(artifact) => print!("{}", artifact.source),
+                    Err(message) => {
+                        eprintln!("error: {message}");
+                        std::process::exit(1);
+                    }
                 }
             } else {
-                talk::compiling::driver::MirEntry::Exports {
+                let mir_entry = talk::compiling::driver::MirEntry::Exports {
                     names: exports,
                     allowed_effects: allow_effects,
+                };
+                let artifact = match typed.compile_mir(mir_entry).and_then(|output| {
+                    talk_c::emit_library(&output.module, prefix.as_deref().unwrap_or("talk"))
+                        .map_err(|error| error.to_string())
+                }) {
+                    Ok(artifact) => artifact,
+                    Err(message) => {
+                        eprintln!("error: {message}");
+                        std::process::exit(1);
+                    }
+                };
+                for (path, text) in [(&header, &artifact.header), (&manifest, &artifact.manifest)]
+                {
+                    if let Some(path) = path
+                        && let Err(err) = std::fs::write(path, text)
+                    {
+                        eprintln!("error: failed to write {path}: {err}");
+                        std::process::exit(1);
+                    }
                 }
-            };
-            match typed
-                .compile_mir(mir_entry)
-                .and_then(|output| talk_c::emit(&output.module).map_err(|error| error.to_string()))
-            {
-                Ok(artifact) => print!("{}", artifact.source),
-                Err(message) => {
-                    eprintln!("error: {message}");
-                    std::process::exit(1);
-                }
+                print!("{}", artifact.source);
             }
         }
         Commands::Mir {

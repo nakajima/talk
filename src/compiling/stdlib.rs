@@ -442,6 +442,9 @@ fn compile_driver(name: &'static str, sources: Vec<Source>, module_id: ModuleId)
     config.module_id = module_id;
     config.mode = CompilationMode::Library;
     config.modules = Rc::new(modules);
+    // The html workspace root is a filesystem path; wasm has no
+    // filesystem and resolves stdlib sources from the embedded set.
+    #[cfg(not(target_family = "wasm"))]
     if name == "html" {
         config.workspace_root = Some(active_stdlib_dir().join("html"));
     }

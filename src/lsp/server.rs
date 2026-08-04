@@ -1,4 +1,7 @@
-struct TickEvent;
+struct DocumentWorkWakeEvent {
+    uri: async_lsp::lsp_types::Url,
+    generation: u64,
+}
 
 use async_lsp::LanguageClient;
 use async_lsp::lsp_types::{
@@ -24,7 +27,7 @@ use async_lsp::{
     tracing::TracingLayer,
 };
 use ignore::WalkBuilder;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use std::any::Any;
 use std::fs::File;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -75,15 +78,61 @@ fn workspace_roots_from_initialize(params: &InitializeParams) -> Vec<PathBuf> {
     roots
 }
 
+const DOCUMENT_QUIET_PERIOD: Duration = Duration::from_millis(200);
+
 struct ServerState {
     client: ClientSocket,
-    counter: i32,
     documents: FxHashMap<Url, Document>,
-    dirty_documents: FxHashSet<Url>,
+    next_work_generation: u64,
+    pending_document_work: FxHashMap<Url, PendingDocumentWork>,
     workspaces: FxHashMap<PathBuf, Arc<AnalysisWorkspace>>,
     workspace_analysis_backoffs: FxHashMap<PathBuf, WorkspaceAnalysisBackoff>,
     core: Option<Arc<AnalysisWorkspace>>,
     workspace_roots: Vec<PathBuf>,
+}
+
+#[derive(Clone, Copy)]
+struct PendingDocumentWork {
+    generation: u64,
+    ready_at: Instant,
+}
+
+impl ServerState {
+    fn queue_document_work(&mut self, uri: Url, now: Instant) -> u64 {
+        self.next_work_generation = self
+            .next_work_generation
+            .checked_add(1)
+            .expect("document work generation exhausted");
+        let generation = self.next_work_generation;
+        self.pending_document_work.insert(
+            uri,
+            PendingDocumentWork {
+                generation,
+                ready_at: now + DOCUMENT_QUIET_PERIOD,
+            },
+        );
+        generation
+    }
+
+    fn schedule_document_work(&mut self, uri: Url) {
+        let generation = self.queue_document_work(uri.clone(), Instant::now());
+        let client = self.client.clone();
+        spawn(async move {
+            tokio::time::sleep(DOCUMENT_QUIET_PERIOD).await;
+            let _ = client.emit(DocumentWorkWakeEvent { uri, generation });
+        });
+    }
+
+    fn take_document_work(&mut self, uri: &Url, generation: u64, now: Instant) -> bool {
+        let is_ready = self
+            .pending_document_work
+            .get(uri)
+            .is_some_and(|work| work.generation == generation && work.ready_at <= now);
+        if is_ready {
+            self.pending_document_work.remove(uri);
+        }
+        is_ready
+    }
 }
 
 struct WorkspaceAnalysisBackoff {
@@ -200,24 +249,11 @@ fn recover_lsp<T>(
 
 pub async fn start() {
     let (server, _) = async_lsp::MainLoop::new_server(|client| {
-        tokio::spawn({
-            let client = client.clone();
-            async move {
-                let mut interval = tokio::time::interval(Duration::from_millis(200));
-                loop {
-                    interval.tick().await;
-                    if client.emit(TickEvent).is_err() {
-                        break;
-                    }
-                }
-            }
-        });
-
         let mut router = Router::new(ServerState {
             client: client.clone(),
-            counter: 0,
             documents: Default::default(),
-            dirty_documents: Default::default(),
+            next_work_generation: 0,
+            pending_document_work: Default::default(),
             workspaces: Default::default(),
             workspace_analysis_backoffs: Default::default(),
             core: None,
@@ -296,11 +332,10 @@ pub async fn start() {
                     Document {
                         version,
                         text,
-                        last_edited_tick: state.counter,
                         semantic_tokens: None,
                     },
                 );
-                state.dirty_documents.insert(document_url);
+                state.schedule_document_work(document_url);
                 state.workspaces.clear();
                 std::ops::ControlFlow::Continue(())
             })
@@ -318,8 +353,7 @@ pub async fn start() {
                         panic_payload = Some(payload);
                     }
                     document.version = version;
-                    document.last_edited_tick = state.counter;
-                    state.dirty_documents.insert(uri.clone());
+                    state.schedule_document_work(uri.clone());
                     state.workspaces.clear();
                 }
                 if let Some(payload) = panic_payload {
@@ -338,7 +372,7 @@ pub async fn start() {
                 tracing::info!("did close {document_url}");
 
                 state.documents.remove(&document_url);
-                state.dirty_documents.remove(&document_url);
+                state.pending_document_work.remove(&document_url);
                 state.workspaces.clear();
 
                 if is_tlk_uri(&document_url) {
@@ -563,7 +597,7 @@ pub async fn start() {
                     }
 
                     if state.documents.contains_key(&uri) {
-                        state.dirty_documents.insert(uri);
+                        state.schedule_document_work(uri);
                         continue;
                     }
 
@@ -581,67 +615,43 @@ pub async fn start() {
 
                 ControlFlow::Continue(())
             })
-            .event::<TickEvent>(|state, _| {
-                state.counter += 1;
-                let current_tick = state.counter;
-
-                // Pick documents whose last edit happened before this tick
-                let ready: Vec<Url> = state
-                    .dirty_documents
-                    .iter()
-                    .filter(|u| {
-                        state
-                            .documents
-                            .get(*u)
-                            .map(|d| d.last_edited_tick < current_tick)
-                            .unwrap_or(false)
-                    })
-                    .cloned()
-                    .collect();
-
-                let mut diagnostics_workspaces: FxHashMap<PathBuf, Url> = FxHashMap::default();
-                let mut needs_refresh = false;
-
-                for document_url in ready {
-                    if is_tlk_uri(&document_url)
-                        && let Some(root) = analysis_root_for_uri(state, &document_url)
-                    {
-                        diagnostics_workspaces
-                            .entry(root)
-                            .or_insert_with(|| document_url.clone());
-                    }
-
-                    let semantic_tokens = if let Some(text) = state
-                        .documents
-                        .get(&document_url)
-                        .map(|document| document.text.clone())
-                    {
-                        recover_lsp(
-                            state,
-                            Some(&document_url),
-                            "collecting semantic tokens",
-                            None,
-                            || {
-                                Some(SemanticTokensResult::Tokens(SemanticTokens {
-                                    result_id: None,
-                                    data: collect(text),
-                                }))
-                            },
-                        )
-                    } else {
-                        None
-                    };
-                    if let Some(document) = state.documents.get_mut(&document_url) {
-                        document.semantic_tokens = semantic_tokens;
-                        needs_refresh = true;
-                    }
-                    state.dirty_documents.remove(&document_url);
+            .event::<DocumentWorkWakeEvent>(|state, event| {
+                if !state.take_document_work(&event.uri, event.generation, Instant::now()) {
+                    return std::ops::ControlFlow::Continue(());
                 }
 
-                for focus_uri in diagnostics_workspaces.values() {
-                    if let Some(workspace) = workspace_analysis(state, focus_uri) {
-                        publish_workspace_diagnostics(state, &workspace);
-                    }
+                let document_url = event.uri;
+                let semantic_tokens = if let Some(text) = state
+                    .documents
+                    .get(&document_url)
+                    .map(|document| document.text.clone())
+                {
+                    recover_lsp(
+                        state,
+                        Some(&document_url),
+                        "collecting semantic tokens",
+                        None,
+                        || {
+                            Some(SemanticTokensResult::Tokens(SemanticTokens {
+                                result_id: None,
+                                data: collect(text),
+                            }))
+                        },
+                    )
+                } else {
+                    None
+                };
+                let needs_refresh = if let Some(document) = state.documents.get_mut(&document_url) {
+                    document.semantic_tokens = semantic_tokens;
+                    true
+                } else {
+                    false
+                };
+
+                if is_tlk_uri(&document_url)
+                    && let Some(workspace) = workspace_analysis(state, &document_url)
+                {
+                    publish_workspace_diagnostics(state, &workspace);
                 }
 
                 if needs_refresh {
@@ -1143,7 +1153,6 @@ mod tests {
     use async_lsp::lsp_types::Range;
     use async_lsp::lsp_types::Url;
     use async_lsp::lsp_types::WorkspaceEdit;
-    use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -2172,24 +2181,49 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::vec_init_then_push)]
-    fn test_debouncing_logic() {
-        // Test the debouncing counter logic
-        let mut counter = 0;
-        let mut pending_diagnostics: Vec<PathBuf> = Vec::new();
+    fn document_work_waits_for_quiet_and_coalesces_generations() {
+        let mut state = super::ServerState {
+            client: ClientSocket::new_closed(),
+            documents: Default::default(),
+            next_work_generation: 0,
+            pending_document_work: Default::default(),
+            workspaces: Default::default(),
+            workspace_analysis_backoffs: Default::default(),
+            core: None,
+            workspace_roots: Default::default(),
+        };
+        let uri = Url::parse("file:///test/file.tlk").expect("file uri");
+        let started = Instant::now();
 
-        // Simulate adding a pending diagnostic
-        pending_diagnostics.push(PathBuf::from("/test/file.tlk"));
-        let last_change_tick = counter;
+        let first = state.queue_document_work(uri.clone(), started);
+        assert!(!state.take_document_work(
+            &uri,
+            first,
+            started + super::DOCUMENT_QUIET_PERIOD - Duration::from_millis(1)
+        ));
+        assert!(state.take_document_work(&uri, first, started + super::DOCUMENT_QUIET_PERIOD));
 
-        // At the same tick - should not process
-        let should_process = !pending_diagnostics.is_empty() && counter > last_change_tick;
-        assert!(!should_process, "Should not process at same tick");
-
-        // After one tick - should process
-        counter += 1;
-        let should_process = !pending_diagnostics.is_empty() && counter > last_change_tick;
-        assert!(should_process, "Should process after tick");
+        let second = state.queue_document_work(uri.clone(), started);
+        let replacement_at = started + Duration::from_millis(100);
+        let third = state.queue_document_work(uri.clone(), replacement_at);
+        assert!(third > second);
+        assert!(
+            !state.take_document_work(&uri, second, started + super::DOCUMENT_QUIET_PERIOD),
+            "the superseded generation must not run"
+        );
+        assert!(
+            !state.take_document_work(&uri, third, started + super::DOCUMENT_QUIET_PERIOD),
+            "the replacement generation must restart the quiet period"
+        );
+        assert!(state.take_document_work(
+            &uri,
+            third,
+            replacement_at + super::DOCUMENT_QUIET_PERIOD
+        ));
+        assert!(
+            !state.take_document_work(&uri, third, replacement_at + super::DOCUMENT_QUIET_PERIOD),
+            "a generation must be taken only once"
+        );
     }
 
     #[test]
@@ -2536,9 +2570,9 @@ mod tests {
 
         let mut state = super::ServerState {
             client: ClientSocket::new_closed(),
-            counter: 0,
             documents: Default::default(),
-            dirty_documents: Default::default(),
+            next_work_generation: 0,
+            pending_document_work: Default::default(),
             workspaces: Default::default(),
             workspace_analysis_backoffs: Default::default(),
             core: None,
@@ -2549,7 +2583,6 @@ mod tests {
             Document {
                 version: 0,
                 text: code_a.to_string(),
-                last_edited_tick: 0,
                 semantic_tokens: None,
             },
         );

@@ -9,6 +9,7 @@ pub(crate) mod interface;
 pub mod manifest;
 pub(crate) mod mir;
 pub mod module;
+pub mod native_frontend;
 pub mod module_path;
 pub mod package;
 pub mod stdlib;

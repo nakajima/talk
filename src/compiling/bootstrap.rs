@@ -19,6 +19,10 @@ pub struct BootstrapOutcome {
     /// The ABI descriptor (ADR 0043 §5), when the service declares a
     /// schema root.
     pub abi: Option<String>,
+    /// The generated native library translation unit (ADR 0048), when a
+    /// native symbol prefix was requested. Emitted from the fixed-point
+    /// MIR, so it is the same verified frontend program as the seed.
+    pub c_source: Option<String>,
     /// Optimization rewrites performed by each side of the fixed point.
     pub stage_optimizations: [OptimizationStats; 2],
 }
@@ -26,16 +30,19 @@ pub struct BootstrapOutcome {
 struct CompiledStage {
     image: Vec<u8>,
     abi: Option<String>,
+    c_source: Option<String>,
     optimizations: OptimizationStats,
 }
 
 /// One compile of the source set to an encoded service image, plus the
-/// ABI descriptor and optimization counts.
+/// ABI descriptor, the native library C (when `native` names a symbol
+/// prefix), and optimization counts.
 fn compile_stage(
     sources: &[(String, String)],
     exports: &[String],
     allowed_effects: &[String],
     schema_root: Option<&str>,
+    native: Option<&str>,
     parser: Option<&std::sync::Arc<crate::compiling::frontend::ParserSession>>,
 ) -> Result<CompiledStage, String> {
     crate::profile::init();
@@ -78,6 +85,16 @@ fn compile_stage(
         })?
     };
     let optimizations = output.optimizations.clone();
+    // The native translation unit comes from the same finalized MIR the
+    // bytecode is lowered from, before the module is dropped (ADR 0048).
+    let c_source = native
+        .map(|prefix| {
+            profiling::scope!("bootstrap.emit_c");
+            talk_c::emit_library(&output.module, prefix)
+                .map(|artifact| artifact.source)
+                .map_err(|error| format!("bootstrap C emission failed: {error}"))
+        })
+        .transpose()?;
     let image = {
         profiling::scope!("bootstrap.encode");
         talk_bytecode::compile(&output.module)
@@ -88,6 +105,7 @@ fn compile_stage(
     Ok(CompiledStage {
         image,
         abi,
+        c_source,
         optimizations,
     })
 }
@@ -101,12 +119,13 @@ pub fn bootstrap(
     exports: &[String],
     allowed_effects: &[String],
     schema_root: Option<&str>,
+    native: Option<&str>,
 ) -> Result<BootstrapOutcome, String> {
     crate::profile::init();
     profiling::scope!("bootstrap");
     let stage1 = {
         profiling::scope!("bootstrap.stage_1");
-        compile_stage(sources, exports, allowed_effects, schema_root, None)?
+        compile_stage(sources, exports, allowed_effects, schema_root, native, None)?
     };
     // The self-hosting fixed point (ADR 0043 §3): when the artifact IS
     // a parser — it exposes the parse surface and carries a descriptor
@@ -134,19 +153,27 @@ pub fn bootstrap(
             exports,
             allowed_effects,
             schema_root,
+            native,
             candidate.as_ref(),
         )?
     };
-    if stage1.image != stage2.image || stage1.abi != stage2.abi {
+    if stage1.image != stage2.image || stage1.abi != stage2.abi || stage1.c_source != stage2.c_source
+    {
         return Err(
             "bootstrap did not reach a fixed point: stage-1 and stage-2 artifacts differ".into(),
         );
     }
-    let manifest = ArtifactManifest::compute(sources, &stage1.image, stage1.abi.as_deref());
+    let manifest = ArtifactManifest::compute(
+        sources,
+        &stage1.image,
+        stage1.abi.as_deref(),
+        stage1.c_source.as_deref(),
+    );
     Ok(BootstrapOutcome {
         image: stage1.image,
         manifest,
         abi: stage1.abi,
+        c_source: stage1.c_source,
         stage_optimizations: [stage1.optimizations, stage2.optimizations],
     })
 }
@@ -189,6 +216,7 @@ mod tests {
             &["double".into()],
             &["alloc".into()],
             None,
+            None,
             Some(&std::sync::Arc::new(session)),
         ) {
             Err(error) => error,
@@ -198,7 +226,7 @@ mod tests {
             error.contains("parse"),
             "the failure should come from parsing: {error}"
         );
-        compile_stage(&sources, &["double".into()], &["alloc".into()], None, None)
+        compile_stage(&sources, &["double".into()], &["alloc".into()], None, None, None)
             .expect("the shared session parses the same sources");
     }
 
@@ -210,12 +238,13 @@ mod tests {
             &["double".into(), "shout".into()],
             &["alloc".into()],
             None,
+            None,
         )
         .expect("bootstrap succeeds");
 
         outcome
             .manifest
-            .verify(&sources, &outcome.image, None)
+            .verify(&sources, &outcome.image, None, None)
             .expect("manifest verifies its own output");
         assert_eq!(
             outcome.stage_optimizations[0].passes.len(),
@@ -241,15 +270,56 @@ mod tests {
         assert_eq!(result.value, Value::I64(42));
     }
 
+    /// ADR 0048: a bootstrap asked for a native library emits it from
+    /// the fixed-point MIR and binds it into the manifest, so the C
+    /// artifact cannot go stale alone.
+    #[test]
+    fn bootstrap_emits_a_native_library_at_the_fixed_point() {
+        let sources = frontendish_sources();
+        let outcome = bootstrap(
+            &sources,
+            &["double".into(), "shout".into()],
+            &["alloc".into()],
+            None,
+            Some("svc"),
+        )
+        .expect("bootstrap succeeds");
+
+        let c_source = outcome.c_source.as_deref().expect("native C is emitted");
+        assert!(
+            c_source.contains("int svc_double(TalkValue *out, const TalkValue *args, size_t argc)"),
+            "the library exposes each export"
+        );
+        assert!(
+            !c_source.contains("int main("),
+            "a library artifact has no process entry"
+        );
+        assert!(
+            outcome.manifest.c_digest.is_some(),
+            "the manifest records the C artifact"
+        );
+        outcome
+            .manifest
+            .verify(&sources, &outcome.image, None, Some(c_source))
+            .expect("manifest verifies the C artifact");
+        let tampered = outcome
+            .manifest
+            .verify(&sources, &outcome.image, None, Some("int x;"));
+        assert!(
+            tampered.err().expect("tampered C must fail").contains("C artifact"),
+            "C tampering must invalidate the manifest"
+        );
+    }
+
     #[test]
     fn manifest_goes_stale_when_a_source_changes() {
         let sources = frontendish_sources();
         let outcome =
-            bootstrap(&sources, &["double".into()], &[], None).expect("bootstrap succeeds");
+            bootstrap(&sources, &["double".into()], &[], None, None).expect("bootstrap succeeds");
 
         let mut edited = sources.clone();
         edited[0].1.push_str("\n// edited\n");
-        let stale = outcome.manifest.verify(&edited, &outcome.image, None);
+        let stale = outcome.manifest.verify(&edited, &outcome.image, None, None);
         assert!(
             stale
                 .err()
@@ -295,12 +365,19 @@ mod tests {
             outcome.abi,
             "checked-in frontend ABI descriptor is stale; regenerate with `talk bootstrap`"
         );
+        let c_text = std::fs::read_to_string(crate::compiling::frontend::c_path(root))
+            .expect("bootstrap/frontend.c is missing; regenerate with `talk bootstrap`");
+        assert_eq!(
+            Some(c_text),
+            outcome.c_source,
+            "checked-in frontend C artifact is stale; regenerate with `talk bootstrap`"
+        );
     }
 
     #[test]
     fn bootstrap_surfaces_compile_errors() {
         let broken = vec![("Svc.tlk".into(), "pub func broken(".into())];
-        let error = bootstrap(&broken, &["broken".into()], &[], None)
+        let error = bootstrap(&broken, &["broken".into()], &[], None, None)
             .err()
             .expect("broken source must fail");
         assert!(error.contains("parse failed"), "{error}");
@@ -315,7 +392,7 @@ mod tests {
             "Svc.tlk".into(),
             "pub func nap() -> Int { sleep(ms: 0) }\n".into(),
         )];
-        let denied = bootstrap(&effectful, &["nap".into()], &[], None)
+        let denied = bootstrap(&effectful, &["nap".into()], &[], None, None)
             .err()
             .expect("denied effect must fail");
         assert!(denied.contains("'io"), "{denied}");

@@ -1980,6 +1980,7 @@ dependencies = [
  "anyhow",
  "async-lsp",
  "bincode",
+ "cc",
  "clap",
  "clap_complete",
  "color-eyre",

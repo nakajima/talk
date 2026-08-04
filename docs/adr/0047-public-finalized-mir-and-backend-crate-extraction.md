@@ -2,6 +2,10 @@
 
 Status: accepted
 
+ADR 0048 subsequently amends the frontend-specific parts of sections 2 and 5:
+C and LLVM gain native library artifacts, and the source frontend executes
+natively in production. `talk-ffi` remains the language-neutral host boundary.
+
 Amends the implementation-shape decisions of ADR 0034. The trust policy
 (ADR 0034 section 3), the provenance policy, and the size-accounting
 discipline remain in force. Execution plan:

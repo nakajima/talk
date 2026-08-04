@@ -1,0 +1,5 @@
+func double(value: Int) -> Int {
+	value * 2
+}
+
+let answer = double(value: 21)

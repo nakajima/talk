@@ -14,7 +14,18 @@ struct Options {
     compiler: Option<OsString>,
     compiler_flags: Vec<OsString>,
     keep: bool,
+    exports: Vec<String>,
+    allow_effects: Vec<String>,
+    prefix: Option<String>,
+    header: Option<PathBuf>,
+    manifest: Option<PathBuf>,
     files: Vec<OsString>,
+}
+
+/// What one invocation emits: a process or a library (ADR 0048).
+enum Emitted {
+    Executable(talk_llvm::Artifact),
+    Library(talk_llvm::LibraryArtifact),
 }
 
 fn main() {
@@ -23,23 +34,41 @@ fn main() {
         Ok(None) => return,
         Err(message) => fail(&message),
     };
-    let artifact = match compile(&options) {
-        Ok(artifact) => artifact,
+    let emitted = match compile(&options) {
+        Ok(emitted) => emitted,
         Err(message) => fail(&message),
+    };
+    let (ir, runtime_c, shared) = match &emitted {
+        Emitted::Executable(artifact) => (&artifact.ir, &artifact.runtime_c, false),
+        Emitted::Library(artifact) => {
+            for (path, text) in [
+                (&options.header, &artifact.header),
+                (&options.manifest, &artifact.manifest),
+            ] {
+                if let Some(path) = path
+                    && let Err(error) = std::fs::write(path, text)
+                {
+                    fail(&format!("failed to write {}: {error}", path.display()));
+                }
+            }
+            (&artifact.ir, &artifact.runtime_c, true)
+        }
     };
     if options.build {
         let Some(output) = options.output.as_deref() else {
             fail("build requires -o or --output");
         };
         build(
-            artifact,
+            ir,
+            runtime_c,
+            shared,
             output,
             options.compiler.as_deref(),
             &options.compiler_flags,
             options.keep,
         );
     } else {
-        print!("{}", artifact.ir);
+        print!("{ir}");
     }
 }
 
@@ -56,6 +85,11 @@ impl Options {
             compiler: None,
             compiler_flags: Vec::new(),
             keep: false,
+            exports: Vec::new(),
+            allow_effects: Vec::new(),
+            prefix: None,
+            header: None,
+            manifest: None,
             files: Vec::new(),
         };
         let mut positional = false;
@@ -93,6 +127,23 @@ impl Options {
                         .push(value("--cflag", arguments.next())?);
                 }
                 Some("--keep") => options.keep = true,
+                Some("--export") => {
+                    options.exports.push(string_value("--export", arguments.next())?);
+                }
+                Some("--allow-effect") => {
+                    options
+                        .allow_effects
+                        .push(string_value("--allow-effect", arguments.next())?);
+                }
+                Some("--prefix") => {
+                    options.prefix = Some(string_value("--prefix", arguments.next())?);
+                }
+                Some("--header") => {
+                    options.header = Some(PathBuf::from(value("--header", arguments.next())?));
+                }
+                Some("--manifest") => {
+                    options.manifest = Some(PathBuf::from(value("--manifest", arguments.next())?));
+                }
                 Some(value) if value.starts_with('-') && value != "-" => {
                     return Err(format!("unknown option `{value}`"));
                 }
@@ -106,6 +157,19 @@ impl Options {
             if options.compiler.is_some() || !options.compiler_flags.is_empty() || options.keep {
                 return Err("--cc, --cflag, and --keep only apply to `talk llvm build`".into());
             }
+        }
+        if options.exports.is_empty() {
+            if !options.allow_effects.is_empty()
+                || options.prefix.is_some()
+                || options.header.is_some()
+                || options.manifest.is_some()
+            {
+                return Err(
+                    "--allow-effect, --prefix, --header, and --manifest require --export".into(),
+                );
+            }
+        } else if options.entry.is_some() {
+            return Err("--entry does not apply to --export".into());
         }
         Ok(Some(options))
     }
@@ -121,7 +185,21 @@ fn string_value(flag: &str, argument: Option<OsString>) -> Result<String, String
         .map_err(|_| format!("{flag} requires UTF-8 text"))
 }
 
-fn compile(options: &Options) -> Result<talk_llvm::Artifact, String> {
+fn compile(options: &Options) -> Result<Emitted, String> {
+    if !options.exports.is_empty() {
+        if options.binary.is_some() || options.offline {
+            return Err("--export requires source files, not a package".into());
+        }
+        let module = typecheck(&options.files)?
+            .compile_mir(MirEntry::Exports {
+                names: &options.exports,
+                allowed_effects: &options.allow_effects,
+            })
+            .map(|output| output.module)?;
+        return talk_llvm::emit_library(&module, options.prefix.as_deref().unwrap_or("talk"))
+            .map(Emitted::Library)
+            .map_err(|error| error.to_string());
+    }
     let package_root = if options.files.is_empty() {
         talk::compiling::package::PackageProject::enclosing_root(".")
     } else {
@@ -149,7 +227,9 @@ fn compile(options: &Options) -> Result<talk_llvm::Artifact, String> {
             .compile_mir(entry)
             .map(|output| output.module)?
     };
-    talk_llvm::emit(&module).map_err(|error| error.to_string())
+    talk_llvm::emit(&module)
+        .map(Emitted::Executable)
+        .map_err(|error| error.to_string())
 }
 
 fn typecheck(files: &[OsString]) -> Result<Driver<Typed>, String> {
@@ -201,7 +281,9 @@ fn typecheck(files: &[OsString]) -> Result<Driver<Typed>, String> {
 }
 
 fn build(
-    artifact: talk_llvm::Artifact,
+    ir: &str,
+    runtime_c: &str,
+    shared: bool,
     output: &Path,
     compiler: Option<&std::ffi::OsStr>,
     compiler_flags: &[OsString],
@@ -213,20 +295,20 @@ fn build(
             output.with_extension("runtime.c"),
         )
     } else {
-        let ir_path = scratch_file(&artifact.ir, "ll").unwrap_or_else(|error| {
+        let ir_path = scratch_file(ir, "ll").unwrap_or_else(|error| {
             fail(&format!("failed to write generated IR: {error}"));
         });
-        let runtime_path = scratch_file(&artifact.runtime_c, "c").unwrap_or_else(|error| {
+        let runtime_path = scratch_file(runtime_c, "c").unwrap_or_else(|error| {
             let _ = std::fs::remove_file(&ir_path);
             fail(&format!("failed to write generated runtime: {error}"));
         });
         (ir_path, runtime_path)
     };
     if keep {
-        std::fs::write(&ir_path, &artifact.ir).unwrap_or_else(|error| {
+        std::fs::write(&ir_path, ir).unwrap_or_else(|error| {
             fail(&format!("failed to write {}: {error}", ir_path.display()));
         });
-        std::fs::write(&runtime_path, &artifact.runtime_c).unwrap_or_else(|error| {
+        std::fs::write(&runtime_path, runtime_c).unwrap_or_else(|error| {
             fail(&format!(
                 "failed to write {}: {error}",
                 runtime_path.display()
@@ -238,8 +320,14 @@ fn build(
         .map(OsString::from)
         .or_else(|| std::env::var_os("CLANG"))
         .unwrap_or_else(|| "clang".into());
-    let status = Command::new(&compiler)
-        .args(["-O2", "-std=c11"])
+    let mut command = Command::new(&compiler);
+    command.args(["-O2", "-std=c11"]);
+    if shared {
+        // A library artifact renders as a shared object the host links
+        // or loads (ADR 0048).
+        command.args(["-shared", "-fPIC"]);
+    }
+    let status = command
         .arg(&ir_path)
         .arg(&runtime_path)
         .arg("-o")
@@ -327,7 +415,14 @@ Options:
       --entry NAME       Compile a named zero-parameter entry
       --bin NAME         Select a package binary
       --offline          Use only locally installed package sources
-  -o, --output FILE      Output executable for build
+      --export NAME      Emit a library instead of a program: one
+                         host-callable wrapper per export; repeatable
+      --allow-effect E   Effects the exports may perform; repeatable
+      --prefix PREFIX    External symbol prefix for the library
+      --header PATH      Write the library's generated C header
+      --manifest PATH    Write the export-name-to-symbol manifest
+  -o, --output FILE      Output executable for build; a shared library
+                         with --export
       --cc PROGRAM       Clang-compatible compiler driver
       --cflag FLAG       Extra compiler argument; repeatable
       --keep             Keep .ll and .runtime.c files

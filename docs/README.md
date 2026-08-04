@@ -90,6 +90,7 @@ Status vocabulary:
 - [0041 - Callable argument labels](adr/0041-callable-argument-labels.md)
 - [0042 - Symbol visibility](adr/0042-symbol-visibility-and-public-module-interfaces.md)
 - [0043 - Self-hosted source frontend](adr/0043-self-hosted-source-frontend.md)
+- [0048 - One native source frontend and native library artifacts](adr/0048-native-source-frontend-and-library-artifacts.md)
 
 ### Historical, superseded, or rejected
 

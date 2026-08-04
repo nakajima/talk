@@ -53,6 +53,16 @@ pub fn abi_path(root: &Path) -> PathBuf {
     root.join("bootstrap").join("frontend.abi")
 }
 
+pub fn c_path(root: &Path) -> PathBuf {
+    root.join("bootstrap").join("frontend.c")
+}
+
+/// The external symbol prefix of the native frontend library
+/// (ADR 0048). Export symbols follow the shared boundary mangling in
+/// `talk_native_runtime::library` (underscores double: `parse_file_source`
+/// becomes `talk_frontend_parse__file__source`).
+pub const NATIVE_PREFIX: &str = "talk_frontend";
+
 /// The canonical frontend source set: every `.tlk` file in `stdlib/syntax/`,
 /// sorted by name. Names participate in the manifest digest, so renames
 /// invalidate the artifact exactly like edits.
@@ -92,14 +102,16 @@ fn effect_strings() -> Vec<String> {
         .collect()
 }
 
-/// Rebuild the frontend artifact from the on-disk sources, requiring
-/// the stage-1/stage-2 fixed point.
+/// Rebuild the frontend artifacts from the on-disk sources, requiring
+/// the stage-1/stage-2 fixed point over the bytecode, the ABI, and the
+/// native C translation unit (ADR 0048).
 pub fn regenerate(root: &Path) -> Result<BootstrapOutcome, String> {
     bootstrap(
         &sources(root)?,
         &export_strings(),
         &effect_strings(),
         Some(SCHEMA_ROOT),
+        Some(NATIVE_PREFIX),
     )
 }
 
@@ -117,8 +129,11 @@ pub fn load(root: &Path) -> Result<talk_vm::Module, String> {
     let abi_file = abi_path(root);
     let abi_text = std::fs::read_to_string(&abi_file)
         .map_err(|err| format!("failed to read {}: {err}", abi_file.display()))?;
+    let c_file = c_path(root);
+    let c_text = std::fs::read_to_string(&c_file)
+        .map_err(|err| format!("failed to read {}: {err}", c_file.display()))?;
     let manifest = ArtifactManifest::parse(&manifest_text)?;
-    manifest.verify(&sources(root)?, &image, Some(&abi_text))?;
+    manifest.verify(&sources(root)?, &image, Some(&abi_text), Some(&c_text))?;
     talk_vm::Module::decode_bytecode(&image)
         .map_err(|err| format!("frontend artifact failed to decode: {err:?}"))
 }
@@ -128,7 +143,9 @@ pub fn load(root: &Path) -> Result<talk_vm::Module, String> {
 /// runtime (wasm, installed binaries). `include_bytes!` tracks the
 /// files, so a `talk bootstrap` regeneration reaches the binary on
 /// the next cargo build.
+#[cfg(any(test, target_arch = "wasm32"))]
 const EMBEDDED_ARTIFACT: &[u8] = include_bytes!("../../bootstrap/frontend.tbc");
+#[cfg(any(test, target_arch = "wasm32"))]
 const EMBEDDED_MANIFEST: &str = include_str!("../../bootstrap/frontend.manifest");
 pub(crate) const EMBEDDED_ABI: &str = include_str!("../../bootstrap/frontend.abi");
 
@@ -140,6 +157,7 @@ pub(crate) const EMBEDDED_ABI: &str = include_str!("../../bootstrap/frontend.abi
 /// artifacts is the harness gates' job
 /// (`checked_in_frontend_artifact_matches_sources` and the bootstrap
 /// fixed point). Fails closed; there is no fallback parser.
+#[cfg(any(test, target_arch = "wasm32"))]
 fn load_embedded() -> Result<talk_vm::Module, String> {
     crate::profile::init();
     profiling::scope!("frontend.load_embedded");
@@ -156,6 +174,7 @@ struct FrontendSession {
 }
 
 impl FrontendSession {
+    #[cfg(any(test, target_arch = "wasm32"))]
     fn shared() -> Result<&'static Self, String> {
         static SESSION: std::sync::OnceLock<Result<FrontendSession, String>> =
             std::sync::OnceLock::new();
@@ -200,13 +219,6 @@ impl ParserSession {
     }
 }
 
-fn resolve(session: Option<&ParserSession>) -> Result<&FrontendSession, String> {
-    match session {
-        Some(candidate) => Ok(&candidate.0),
-        None => FrontendSession::shared(),
-    }
-}
-
 /// Parse one source through the frontend artifact into the compiler's
 /// own parse AST (ADR 0043 Stage 4): the strict whole-file entry.
 /// Fails closed — there is no fallback parser.
@@ -217,7 +229,22 @@ pub fn parse_source(
     parse_source_in(None, source, file_id)
 }
 
-/// [`parse_source`] through an explicit session.
+/// The parse-result schema alone, for the native production path — no
+/// bytecode is decoded or executed to parse (ADR 0048).
+#[cfg(not(target_arch = "wasm32"))]
+fn shared_schema() -> Result<&'static crate::compiling::abi::AbiSchema, String> {
+    static SCHEMA: std::sync::OnceLock<Result<crate::compiling::abi::AbiSchema, String>> =
+        std::sync::OnceLock::new();
+    SCHEMA
+        .get_or_init(|| crate::compiling::abi::parse_schema(EMBEDDED_ABI))
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+/// [`parse_source`] through an explicit session. Production parsing
+/// executes the native frontend (ADR 0048); a candidate session —
+/// bootstrap stage 2 proving the stage-1 artifact parses its own
+/// sources — executes as bytecode.
 fn parse_source_in(
     parser: Option<&ParserSession>,
     source: &str,
@@ -225,7 +252,38 @@ fn parse_source_in(
 ) -> Result<crate::compiling::bridge::BridgedParse, String> {
     crate::profile::init();
     profiling::scope!("frontend.parse_source");
-    let session = resolve(parser)?;
+    match parser {
+        Some(candidate) => parse_source_vm(&candidate.0, source, file_id),
+        #[cfg(not(target_arch = "wasm32"))]
+        None => {
+            let schema = shared_schema()?;
+            crate::compiling::native_frontend::run_export(
+                "parse_file_source",
+                &[source.as_bytes()],
+                |run| {
+                    crate::compiling::bridge::adapt(
+                        crate::compiling::bridge::FrontendRun::Native(run),
+                        schema,
+                        file_id,
+                    )
+                },
+            )
+        }
+        // wasm32 executes the same verified frontend program as
+        // bytecode: its toolchain cannot build the native artifact
+        // (ADR 0048 wasm carve-out).
+        #[cfg(target_arch = "wasm32")]
+        None => parse_source_vm(FrontendSession::shared()?, source, file_id),
+    }
+}
+
+/// One parse through a bytecode frontend session: bootstrap stage 2's
+/// candidate proof on every target, and the production path on wasm32.
+fn parse_source_vm(
+    session: &FrontendSession,
+    source: &str,
+    file_id: crate::node_id::FileID,
+) -> Result<crate::compiling::bridge::BridgedParse, String> {
     let mut io = talk_vm::io::CaptureIO::default();
     let run = {
         profiling::scope!("frontend.execute");
@@ -240,19 +298,33 @@ fn parse_source_in(
             &mut io,
         )?
     };
-    crate::compiling::bridge::adapt(&run, &session.schema, file_id)
+    crate::compiling::bridge::adapt(
+        crate::compiling::bridge::FrontendRun::Vm(&run),
+        &session.schema,
+        file_id,
+    )
 }
 
 /// Run one of the frontend's `String -> String` validation exports
-/// (the dump surface) through the embedded session.
+/// (the dump surface) through the native frontend.
 pub fn dump_export(name: &str, source: &str) -> Result<String, String> {
     crate::profile::init();
     profiling::scope!("frontend.dump_export");
-    let session = FrontendSession::shared()?;
-    let mut io = talk_vm::io::CaptureIO::default();
-    let run = {
-        profiling::scope!("frontend.execute");
-        talk_vm::interp::run_export(
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::compiling::native_frontend::run_export(name, &[source.as_bytes()], |run| {
+            let bytes = run
+                .string_bytes(run.value)
+                .map_err(|error| format!("{name} did not return a string: {error}"))?;
+            String::from_utf8(bytes.to_vec())
+                .map_err(|error| format!("{name} output is not UTF-8: {error}"))
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let session = FrontendSession::shared()?;
+        let mut io = talk_vm::io::CaptureIO::default();
+        let run = talk_vm::interp::run_export(
             &session.module,
             name,
             &[talk_vm::interp::HostValue::String(
@@ -261,26 +333,36 @@ pub fn dump_export(name: &str, source: &str) -> Result<String, String> {
             crate::compiling::mir::string_shape(),
             talk_vm::interp::Budgets::default(),
             &mut io,
-        )?
-    };
-    let bytes = run
-        .string_bytes(&run.value)
-        .map_err(|error| format!("{name} did not return a string: {error}"))?;
-    String::from_utf8(bytes.to_vec())
-        .map_err(|error| format!("{name} output is not UTF-8: {error}"))
+        )?;
+        let bytes = run
+            .string_bytes(&run.value)
+            .map_err(|error| format!("{name} did not return a string: {error}"))?;
+        String::from_utf8(bytes.to_vec())
+            .map_err(|error| format!("{name} output is not UTF-8: {error}"))
+    }
 }
 
-/// Lex one source through the frontend artifact (ADR 0043 Stage 5):
-/// the token stream with comments included as LineComment tokens,
-/// plus whether the scan completed without a lex error.
+/// Lex one source through the native frontend (ADR 0043 Stage 5, ADR
+/// 0048): the token stream with comments included as LineComment
+/// tokens, plus whether the scan completed without a lex error.
 pub fn lex(source: &str) -> Result<(Vec<crate::parsing::lexing::token::Token>, bool), String> {
     crate::profile::init();
     profiling::scope!("frontend.lex");
-    let session = FrontendSession::shared()?;
-    let mut io = talk_vm::io::CaptureIO::default();
-    let run = {
-        profiling::scope!("frontend.execute");
-        talk_vm::interp::run_export(
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let schema = shared_schema()?;
+        crate::compiling::native_frontend::run_export("lex_tokens", &[source.as_bytes()], |run| {
+            crate::compiling::bridge::lex_tokens(
+                crate::compiling::bridge::FrontendRun::Native(run),
+                schema,
+            )
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let session = FrontendSession::shared()?;
+        let mut io = talk_vm::io::CaptureIO::default();
+        let run = talk_vm::interp::run_export(
             &session.module,
             "lex_tokens",
             &[talk_vm::interp::HostValue::String(
@@ -289,9 +371,12 @@ pub fn lex(source: &str) -> Result<(Vec<crate::parsing::lexing::token::Token>, b
             crate::compiling::mir::string_shape(),
             talk_vm::interp::Budgets::default(),
             &mut io,
-        )?
-    };
-    crate::compiling::bridge::lex_tokens(&run, &session.schema)
+        )?;
+        crate::compiling::bridge::lex_tokens(
+            crate::compiling::bridge::FrontendRun::Vm(&run),
+            &session.schema,
+        )
+    }
 }
 
 /// One strict whole-file parse through the frontend artifact,
@@ -535,6 +620,46 @@ mod tests {
             .unwrap_or_else(|error| panic!("failed to write {}: {error}", output.display()));
     }
 
+    /// ADR 0048 acceptance: the native frontend and the bootstrap
+    /// bytecode agree, including on malformed and empty inputs, and a
+    /// native failure comes back as an error rather than terminating
+    /// this process.
+    #[test]
+    fn native_and_bytecode_frontends_agree() {
+        let session = FrontendSession::shared().expect("embedded session");
+        let inputs: &[&str] = &[
+            "",
+            "let x = 1\n",
+            "pub func f(x: Int) -> Int {\n\tx * 2\n}\nprint(f(x: 21))\n",
+            "func broken(\n",
+            "let \u{fffd} = \"\u{1F600} not ascii\"\n",
+            "match x { case",
+        ];
+        for input in inputs {
+            let native = dump_export("parse", input);
+            let mut io = talk_vm::io::CaptureIO::default();
+            let bytecode = talk_vm::interp::run_export(
+                &session.module,
+                "parse",
+                &[talk_vm::interp::HostValue::String(input.as_bytes().to_vec())],
+                crate::compiling::mir::string_shape(),
+                talk_vm::interp::Budgets::default(),
+                &mut io,
+            )
+            .and_then(|run| {
+                let bytes = run.string_bytes(&run.value)?.to_vec();
+                String::from_utf8(bytes).map_err(|error| error.to_string())
+            });
+            match (&native, &bytecode) {
+                (Ok(native), Ok(bytecode)) => {
+                    assert_eq!(native, bytecode, "dump diverged for {input:?}")
+                }
+                (Err(_), Err(_)) => {}
+                _ => panic!("one path failed for {input:?}: native {native:?} vs vm {bytecode:?}"),
+            }
+        }
+    }
+
     /// The fast staleness gate: the checked-in manifest must tie the
     /// checked-in artifact to the current frontend sources and this
     /// compiler's bytecode format. Editing a frontend source (or
@@ -549,12 +674,15 @@ mod tests {
             .expect("bootstrap/frontend.manifest is missing; regenerate with `talk bootstrap`");
         let abi_text = std::fs::read_to_string(abi_path(root))
             .expect("bootstrap/frontend.abi is missing; regenerate with `talk bootstrap`");
+        let c_text = std::fs::read_to_string(c_path(root))
+            .expect("bootstrap/frontend.c is missing; regenerate with `talk bootstrap`");
         let manifest = ArtifactManifest::parse(&manifest_text).expect("manifest parses");
         manifest
             .verify(
                 &sources(root).expect("frontend sources"),
                 &image,
                 Some(&abi_text),
+                Some(&c_text),
             )
             .expect("checked-in frontend artifact is stale; regenerate with `talk bootstrap`");
     }

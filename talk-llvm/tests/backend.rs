@@ -242,3 +242,156 @@ fn complete_program_corpus_agrees_with_the_vm() {
         );
     }
 }
+
+/// The export list every library-mode test emits from the shared
+/// fixture in tests/native-library: scalar, String, aggregate, effect,
+/// and failure cases.
+const LIBRARY_EXPORTS: [&str; 9] = [
+    "double", "crash", "greet", "shout", "length", "pair", "total", "handled", "leave",
+];
+
+fn library_fixtures() -> PathBuf {
+    repo_root().join("tests/native-library")
+}
+
+/// The host compiler for harness translation units, resolved the way the
+/// backend binary resolves its own driver.
+fn clang() -> String {
+    std::env::var("CLANG").unwrap_or_else(|_| "clang".to_string())
+}
+
+/// Emit a library through the CLI, keeping the .ll and runtime C next to
+/// the shared object so harnesses can link statically.
+fn build_library(dir: &Path, program: &Path, prefix: &str) -> (PathBuf, PathBuf) {
+    let object = dir.join(format!("lib{prefix}.so"));
+    let header = dir.join(format!("{prefix}.h"));
+    let manifest = dir.join(format!("{prefix}.manifest"));
+    let mut arguments = vec!["build"];
+    for export in LIBRARY_EXPORTS {
+        arguments.extend(["--export", export]);
+    }
+    arguments.extend(["--allow-effect", "io", "--prefix", prefix]);
+    let header_path = header.to_str().expect("UTF-8 header path").to_string();
+    let manifest_path = manifest.to_str().expect("UTF-8 manifest path").to_string();
+    arguments.extend(["--header", &header_path, "--manifest", &manifest_path]);
+    arguments.extend([
+        "--keep",
+        program.to_str().expect("UTF-8 program path"),
+        "-o",
+        object.to_str().expect("UTF-8 output path"),
+    ]);
+    let output = backend(&arguments);
+    assert!(
+        output.status.success(),
+        "LLVM library build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(object.exists(), "the shared object was not produced");
+    let manifest_text = std::fs::read_to_string(&manifest).expect("read manifest");
+    for export in LIBRARY_EXPORTS {
+        assert!(
+            manifest_text.contains(&format!("{export}\t{prefix}_{export}\n")),
+            "manifest is missing {export}:\n{manifest_text}"
+        );
+    }
+    (
+        object.with_extension("ll"),
+        object.with_extension("runtime.c"),
+    )
+}
+
+fn compile_harness(dir: &Path, name: &str, sources: &[&Path]) -> PathBuf {
+    let binary = dir.join(name);
+    let mut command = Command::new(clang());
+    command.args(["-O2", "-std=c11", "-I"]).arg(dir);
+    for source in sources {
+        command.arg(source);
+    }
+    let output = command
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .expect("run clang");
+    assert!(
+        output.status.success(),
+        "harness did not compile:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    binary
+}
+
+/// ADR 0048 library mode end to end on the LLVM backend, through the
+/// same shared fixture and harness the C backend runs: the versioned
+/// convention, the lifecycle, trap and exit containment, and agreement
+/// with the VM oracle on scalar, String, aggregate, effect, and failure
+/// cases.
+#[test]
+fn library_artifact_serves_the_shared_c_harness() {
+    let dir = scratch("library");
+    let program = library_fixtures().join("library.tlk");
+    let oracle = interpreted(&program, Some("bench"));
+    let oracle = String::from_utf8(oracle).expect("oracle output is UTF-8");
+    let oracle: Vec<&str> = oracle.split_whitespace().collect();
+    assert_eq!(oracle.len(), 4, "the VM oracle prints four values");
+    let (ir, runtime) = build_library(&dir, &program, "mylib");
+    let harness = library_fixtures().join("harness.c");
+    let binary = compile_harness(&dir, "harness.bin", &[&harness, &ir, &runtime]);
+    let run = Command::new(&binary)
+        .args(&oracle)
+        .output()
+        .expect("run harness");
+    assert!(
+        run.status.success(),
+        "harness failed (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+/// The acceptance criterion from ADR 0048: two generated libraries with
+/// distinct prefixes link into one process without symbol collisions,
+/// and both serve calls.
+#[test]
+fn two_libraries_with_distinct_prefixes_link_into_one_process() {
+    let dir = scratch("two_libraries");
+    let program = library_fixtures().join("library.tlk");
+    let (one_ir, one_runtime) = build_library(&dir, &program, "one");
+    let (two_ir, two_runtime) = build_library(&dir, &program, "two");
+    let harness = dir.join("pair.c");
+    std::fs::write(
+        &harness,
+        r#"
+#include "one.h"
+#include "two.h"
+
+int main(void) {
+    if (one_init() != ONE_OK) return 10;
+    if (two_init() != TWO_OK) return 11;
+    one_value a1[1]; one_value r1;
+    two_value a2[1]; two_value r2;
+    a1[0] = one_int(21);
+    a2[0] = two_int(10);
+    if (one_double(&r1, a1, 1) != ONE_OK) return 12;
+    if (two_double(&r2, a2, 1) != TWO_OK) return 13;
+    if (one_value_int(r1) != 42) return 14;
+    if (two_value_int(r2) != 20) return 15;
+    one_teardown();
+    two_teardown();
+    return 0;
+}
+"#,
+    )
+    .expect("write harness");
+    let binary = compile_harness(
+        &dir,
+        "pair.bin",
+        &[&harness, &one_ir, &one_runtime, &two_ir, &two_runtime],
+    );
+    let run = Command::new(&binary).output().expect("run harness");
+    assert!(
+        run.status.success(),
+        "pair harness failed (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+}

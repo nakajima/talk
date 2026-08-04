@@ -17,7 +17,7 @@ use talk_mir::{
     Module, Operand, ScalarOp, Shape, SlotKind, Term, TypeKind,
 };
 
-use crate::{Artifact, Error};
+use crate::{Artifact, Error, LibraryArtifact};
 
 const RUNTIME_ABI: &str = include_str!("llvm_runtime.c");
 
@@ -48,6 +48,66 @@ pub(crate) fn emit(program: &Module) -> Result<Artifact, Error> {
     ir.push_str(&bodies);
     let runtime_c = emitter.runtime_source(program.global_slots, &program.display);
     Ok(Artifact { ir, runtime_c })
+}
+
+pub(crate) fn emit_library(program: &Module, prefix: &str) -> Result<LibraryArtifact, Error> {
+    use talk_native_runtime::library;
+    if program.exports.is_empty() {
+        return Err(Error::new("a library artifact needs at least one export"));
+    }
+    let names: Vec<&str> = program
+        .exports
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
+    let symbols = library::resolve_symbols(prefix, &names).map_err(Error::new)?;
+    let mut exports: Vec<(library::Export, usize)> = Vec::with_capacity(symbols.len());
+    for ((name, func), symbol) in program.exports.iter().zip(symbols) {
+        let function = program.functions.get(*func).ok_or_else(|| {
+            Error::new(format!(
+                "export \"{name}\" names a function this module does not contain"
+            ))
+        })?;
+        exports.push((
+            library::Export {
+                name: name.clone(),
+                symbol,
+                arity: function.arity,
+            },
+            *func,
+        ));
+    }
+
+    let mut emitter = Emitter::new(
+        program.string_symbol,
+        program.storage_symbol,
+        program.layout_table.clone(),
+    );
+    let mut bodies = String::new();
+    for (id, function) in program.functions.iter().enumerate() {
+        emitter.function(&mut bodies, id, function)?;
+    }
+    emitter.dispatch(&mut bodies, program);
+    // No `@talk_llvm_entry`: a library never invokes the inert MIR entry.
+
+    let mut ir = String::from(IR_HEADER);
+    ir.push_str(&bodies);
+    // Namespace every cross-translation-unit symbol under the caller's
+    // prefix so two generated libraries link into one process. Textual
+    // renaming is sound here: Talk string literals live in the C statics
+    // blob as numeric bytes, never as text in the IR.
+    let ir = ir
+        .replace("talk_llvm_", &format!("{prefix}_llvm_"))
+        .replace("@talk_fn", &format!("@{prefix}_fn"));
+    let runtime_c =
+        emitter.library_runtime_source(program, prefix, &exports);
+    let exports: Vec<library::Export> = exports.into_iter().map(|(export, _)| export).collect();
+    Ok(LibraryArtifact {
+        ir,
+        runtime_c,
+        header: library::header(prefix, &exports),
+        manifest: library::manifest(&exports),
+    })
 }
 
 const IR_HEADER: &str = r#"; Talk LLVM backend
@@ -1287,6 +1347,85 @@ impl Emitter {
         out.push_str("    int status = talk_print(result); talk_arena_release(); talk_effects_release(); return status;\n}\n");
         out
     }
+
+    /// The library artifact's C half: the runtime compiled with its
+    /// boundary machinery, the data tables, the renamed bridge, and the
+    /// shared lifecycle and wrappers instead of `main`.
+    fn library_runtime_source(
+        &mut self,
+        program: &Module,
+        prefix: &str,
+        exports: &[(talk_native_runtime::library::Export, usize)],
+    ) -> String {
+        use talk_native_runtime::library;
+        // The boundary's string constructor needs core String's interned
+        // identity; interning happens before the type table is rendered.
+        let string_ids = program
+            .layout_table
+            .iter()
+            .position(|layout| {
+                matches!(
+                    layout,
+                    Layout::Inline(Some(symbol), _) | Layout::Boxed(Some(symbol), _)
+                        if *symbol == program.string_symbol
+                )
+            })
+            .map(|layout| {
+                let display = self.display_id(program.string_symbol);
+                (u32::try_from(layout).unwrap_or(u32::MAX), display)
+            });
+        let mut out = String::from("#define TALK_LIBRARY 1\n#include <stddef.h>\n");
+        out.push_str(talk_native_runtime::source());
+        out.push('\n');
+        emit_statics(&mut out, &self.statics);
+        emit_layout_table(&mut out, self);
+        emit_type_table(&mut out, self, &program.display);
+        emit_symbol_rows(&mut out, self);
+        let _ = writeln!(
+            out,
+            "static unsigned char talk_globals[{}];",
+            (u64::from(program.global_slots) * 8).max(1)
+        );
+        out.push_str(RUNTIME_ABI);
+        // The bridge is renamed before the boundary tail is appended, so
+        // wrapper symbols -- which carry the caller's prefix -- are never
+        // rewritten.
+        let mut out = out.replace("talk_llvm_", &format!("{prefix}_llvm_"));
+        out.push_str(&library::boundary_prelude());
+        out.push_str(&library::cleanup_helper(true));
+        out.push_str(&library::lifecycle(prefix, &self.layouts.len().to_string()));
+        out.push_str(&library::accessors(prefix, string_ids));
+        for (export, func) in exports {
+            let invoke = format!(
+                "TalkValue result = talk_unit();\n    \
+                 {prefix}_llvm_dispatch(&result, {func}, NULL, args);"
+            );
+            out.push_str(&library::wrapper(export, &invoke));
+        }
+        out
+    }
+}
+
+/// The display-id-to-module-symbol table (ADR 0048): one row per type
+/// table entry, so a host bridge can validate record identity against
+/// an ABI descriptor's module symbols.
+fn emit_symbol_rows(out: &mut String, emitter: &Emitter) {
+    out.push_str(talk_native_runtime::library::symbol_row_type());
+    let mut rows = vec![(255u8, 0u32, 0u32); emitter.display_ids.len() + 1];
+    for (symbol, id) in &emitter.display_ids {
+        let kind = match symbol.kind {
+            talk_mir::MirSymbolKind::Struct => 0u8,
+            talk_mir::MirSymbolKind::Enum => 1,
+            talk_mir::MirSymbolKind::Effect => 2,
+            talk_mir::MirSymbolKind::Protocol => 3,
+        };
+        rows[*id as usize] = (kind, u32::from(symbol.module), symbol.local);
+    }
+    out.push_str("static const TalkLibSymbolRow talk_lib_symbols[] = {\n");
+    for (kind, module, local) in rows {
+        let _ = writeln!(out, "    {{ {kind}, {module}, {local} }},");
+    }
+    out.push_str("};\n");
 }
 
 fn emit_statics(out: &mut String, bytes: &[u8]) {

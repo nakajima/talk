@@ -468,6 +468,12 @@ fn run_export_inner<'io, S: StatsSink>(
             HostValue::String(bytes) => {
                 let base = mem.len() as u32;
                 mem.extend_from_slice(bytes);
+                // A zero-length string still needs a base address inside
+                // the static range: one past the prefix would read as a
+                // managed pointer, and freeing it faults.
+                if bytes.is_empty() {
+                    mem.push(0);
+                }
                 let len = bytes.len() as i64;
                 // The flat String its code reads: storage spliced at
                 // slot 0, then byte count and capacity.

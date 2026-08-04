@@ -79,18 +79,28 @@ pub struct Artifact {
     pub source: String,
 }
 
-/// Emit one self-contained C translation unit for a finalized MIR
-/// module.
-pub fn emit(program: &Program) -> Result<Artifact, Error> {
-    let display = &program.display;
-    let entry = program
-        .functions
-        .get(program.entry)
-        .ok_or_else(|| internal("entry function is missing"))?;
-    if entry.arity != 0 {
-        return Err(unsupported("an entry function with parameters"));
-    }
+/// A library-mode emission (ADR 0048): the translation unit exposing one
+/// wrapper per `Module.exports` entry, the matching C header, and the
+/// export-name-to-symbol manifest.
+#[derive(Debug)]
+pub struct LibraryArtifact {
+    pub source: String,
+    pub header: String,
+    pub manifest: String,
+}
 
+/// Everything shared by the executable and library artifacts: the
+/// runtime prelude, data tables, and every translated function body.
+/// Library mode also carries the interned String identity for the
+/// boundary's string constructor.
+struct Translation<'p> {
+    source: String,
+    facts: Facts<'p>,
+    string_ids: Option<(u32, u32)>,
+}
+
+fn translate(program: &Program, library: bool) -> Result<Translation<'_>, Error> {
+    let display = &program.display;
     // Function bodies intern static data as they are emitted, so they are
     // built first and the blob is placed ahead of them.
     let mut emitter = Emitter {
@@ -118,10 +128,40 @@ pub fn emit(program: &Program) -> Result<Artifact, Error> {
     let mut layout_data = String::new();
     emit_layout_table(&mut layout_data, &mut emitter, &facts)?;
 
-    let mut out = String::from(PRELUDE);
+    // The boundary's string constructor needs core String's interned
+    // identity; interning happens before the type table is rendered.
+    let string_ids = if library {
+        program
+            .layout_table
+            .iter()
+            .position(|layout| {
+                matches!(
+                    layout,
+                    Layout::Inline(Some(symbol), _) | Layout::Boxed(Some(symbol), _)
+                        if *symbol == program.string_symbol
+                )
+            })
+            .map(|layout| {
+                let display = emitter.display_id(program.string_symbol);
+                (u32::try_from(layout).unwrap_or(u32::MAX), display)
+            })
+    } else {
+        None
+    };
+
+    let mut out = String::new();
+    if library {
+        // Compiles the runtime's boundary machinery in (setjmp trap
+        // containment, live-resource tracking, full reset).
+        out.push_str("#define TALK_LIBRARY 1\n");
+    }
+    out.push_str(PRELUDE);
     out.push('\n');
     emit_statics(&mut out, &emitter.statics);
     emit_type_table(&mut out, &emitter, display);
+    if library {
+        emit_symbol_rows(&mut out, &emitter);
+    }
     out.push_str(&layout_data);
     out.push_str(&layout_decls);
     if program.global_slots != 0 {
@@ -145,6 +185,50 @@ pub fn emit(program: &Program) -> Result<Artifact, Error> {
         );
     }
     out.push_str(&bodies);
+    Ok(Translation {
+        source: out,
+        facts,
+        string_ids,
+    })
+}
+
+/// The display-id-to-module-symbol table (ADR 0048): one row per type
+/// table entry, so a host bridge can validate record identity against
+/// an ABI descriptor's module symbols.
+fn emit_symbol_rows(out: &mut String, emitter: &Emitter) {
+    out.push_str(talk_native_runtime::library::symbol_row_type());
+    let mut rows = vec![(255u8, 0u32, 0u32); emitter.display_ids.len() + 1];
+    for (symbol, id) in &emitter.display_ids {
+        let kind = match symbol.kind {
+            talk_mir::MirSymbolKind::Struct => 0u8,
+            talk_mir::MirSymbolKind::Enum => 1,
+            talk_mir::MirSymbolKind::Effect => 2,
+            talk_mir::MirSymbolKind::Protocol => 3,
+        };
+        rows[*id as usize] = (kind, u32::from(symbol.module), symbol.local);
+    }
+    out.push_str("static const TalkLibSymbolRow talk_lib_symbols[] = {\n");
+    for (kind, module, local) in rows {
+        let _ = writeln!(out, "    {{ {kind}, {module}, {local} }},");
+    }
+    out.push_str("};\n");
+}
+
+/// Emit one self-contained C translation unit for a finalized MIR
+/// module.
+pub fn emit(program: &Program) -> Result<Artifact, Error> {
+    let entry = program
+        .functions
+        .get(program.entry)
+        .ok_or_else(|| internal("entry function is missing"))?;
+    if entry.arity != 0 {
+        return Err(unsupported("an entry function with parameters"));
+    }
+    let Translation {
+        source: mut out,
+        facts,
+        string_ids: _,
+    } = translate(program, false)?;
     // The process arguments are the host's, so `argc`/`arg_len`/
     // `arg_copy` read them straight from `main`.
     let _ = write!(
@@ -169,6 +253,77 @@ pub fn emit(program: &Program) -> Result<Artifact, Error> {
         }
     );
     Ok(Artifact { source: out })
+}
+
+/// Emit a library translation unit (ADR 0048): no `main`, every
+/// implementation function private, one externally visible wrapper per
+/// `Module.exports` entry under `prefix`, plus namespaced lifecycle
+/// entry points. Traps and exit requests are contained at the wrapper
+/// boundary and returned as statuses; they never terminate the host.
+/// The convention, lifecycle, header, and mangling are the shared
+/// boundary in `talk_native_runtime::library`.
+pub fn emit_library(program: &Program, prefix: &str) -> Result<LibraryArtifact, Error> {
+    use talk_native_runtime::library;
+    if program.exports.is_empty() {
+        return Err(Error::new(
+            "a library artifact needs at least one export".to_string(),
+        ));
+    }
+    let names: Vec<&str> = program.exports.iter().map(|(name, _)| name.as_str()).collect();
+    let symbols = library::resolve_symbols(prefix, &names).map_err(Error::new)?;
+    let mut exports: Vec<(library::Export, usize)> = Vec::with_capacity(symbols.len());
+    for ((name, func), symbol) in program.exports.iter().zip(symbols) {
+        let function = program.functions.get(*func).ok_or_else(|| {
+            Error::new(format!(
+                "export \"{name}\" names a function this module does not contain"
+            ))
+        })?;
+        exports.push((
+            library::Export {
+                name: name.clone(),
+                symbol,
+                arity: function.arity,
+            },
+            *func,
+        ));
+    }
+
+    let Translation {
+        source: mut out,
+        facts,
+        string_ids,
+    } = translate(program, true)?;
+    out.push_str(&library::boundary_prelude());
+    out.push_str(&library::cleanup_helper(program.global_slots != 0));
+    out.push_str(&library::lifecycle(
+        prefix,
+        "sizeof talk_layout_table / sizeof *talk_layout_table",
+    ));
+    out.push_str(&library::accessors(prefix, string_ids));
+    for (export, func) in &exports {
+        // The wrapper enters generated code the way `talk_dispatch`
+        // does: uniform values in, converted at the callee's published
+        // signature, reabstracted on the way out.
+        let sig = &facts.sigs[*func];
+        let arguments: String = (0..export.arity)
+            .map(|index| match sig.param(index) {
+                Some(layout) => format!(", talk_unbox_l{layout}(args[{index}])"),
+                None => format!(", args[{index}]"),
+            })
+            .collect();
+        let call = format!("{}(NULL{arguments})", symbol(*func));
+        let call = match sig.ret {
+            Some(layout) => format!("talk_box_l{layout}({call})"),
+            None => call,
+        };
+        out.push_str(&library::wrapper(export, &format!("TalkValue result = {call};")));
+    }
+    let exports: Vec<library::Export> = exports.into_iter().map(|(export, _)| export).collect();
+    Ok(LibraryArtifact {
+        header: library::header(prefix, &exports),
+        manifest: library::manifest(&exports),
+        source: out,
+    })
 }
 
 /// Immortal literal bytes. One trailing zero keeps the array non-empty

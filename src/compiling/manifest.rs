@@ -17,6 +17,9 @@ pub struct ArtifactManifest {
     /// Digest of the ABI descriptor (ADR 0043 §5), when the service
     /// declares a schema.
     pub abi_digest: Option<String>,
+    /// Digest of the generated native C translation unit (ADR 0048),
+    /// when the bootstrap emits one from the same fixed point.
+    pub c_digest: Option<String>,
 }
 
 /// Digest a source set independent of supply order: entries sort by name
@@ -46,33 +49,44 @@ pub fn artifact_digest(image: &[u8]) -> String {
 }
 
 impl ArtifactManifest {
-    pub fn compute(sources: &[(String, String)], image: &[u8], abi: Option<&str>) -> Self {
+    pub fn compute(
+        sources: &[(String, String)],
+        image: &[u8],
+        abi: Option<&str>,
+        c: Option<&str>,
+    ) -> Self {
         Self {
             format_version: talk_vm::bytecode::FORMAT_VERSION,
             source_digest: source_digest(sources),
             artifact_digest: artifact_digest(image),
             abi_digest: abi.map(|text| artifact_digest(text.as_bytes())),
+            c_digest: c.map(|text| artifact_digest(text.as_bytes())),
         }
     }
 
-    /// `verify` without the source comparison: for an embedded artifact
-    /// running outside a development checkout, where no frontend
-    /// sources exist on disk — the manifest still ties the artifact
-    /// bytes, the ABI descriptor, and the bytecode format together.
+    /// `verify` without the source or C-artifact comparison: for an
+    /// embedded artifact running outside a development checkout, where
+    /// neither frontend sources nor the generated C exist on disk — the
+    /// manifest still ties the artifact bytes, the ABI descriptor, and
+    /// the bytecode format together. The compiled C object is validated
+    /// at build time against the same manifest (ADR 0048).
     pub fn verify_artifact(&self, image: &[u8], abi: Option<&str>) -> Result<(), String> {
         let mut against_own_sources = self.clone();
         against_own_sources.source_digest = source_digest(&[]);
-        against_own_sources.verify(&[], image, abi)
+        against_own_sources.c_digest = None;
+        against_own_sources.verify(&[], image, abi, None)
     }
 
-    /// Fail-closed validation: the artifact bytes, the sources, and the
-    /// ABI descriptor (when the manifest records one) must all match,
-    /// and the recorded format version must be one this compiler loads.
+    /// Fail-closed validation: the artifact bytes, the sources, the ABI
+    /// descriptor, and the generated C (when the manifest records them)
+    /// must all match, and the recorded format version must be one this
+    /// compiler loads.
     pub fn verify(
         &self,
         sources: &[(String, String)],
         image: &[u8],
         abi: Option<&str>,
+        c: Option<&str>,
     ) -> Result<(), String> {
         if !talk_vm::bytecode::supports_format(self.format_version) {
             return Err(format!(
@@ -111,6 +125,25 @@ impl ArtifactManifest {
                 return Err("an ABI descriptor was supplied but the manifest records none".into());
             }
         }
+        match (&self.c_digest, c) {
+            (None, None) => {}
+            (Some(recorded), Some(text)) => {
+                if *recorded != artifact_digest(text.as_bytes()) {
+                    return Err(
+                        "the generated C artifact does not match its manifest; regenerate the artifact"
+                            .into(),
+                    );
+                }
+            }
+            (Some(_), None) => {
+                return Err(
+                    "the manifest records a C artifact digest but none was supplied".into(),
+                );
+            }
+            (None, Some(_)) => {
+                return Err("a C artifact was supplied but the manifest records none".into());
+            }
+        }
         Ok(())
     }
 
@@ -122,6 +155,9 @@ impl ArtifactManifest {
         if let Some(abi_digest) = &self.abi_digest {
             text.push_str(&format!("abi_digest: {abi_digest}\n"));
         }
+        if let Some(c_digest) = &self.c_digest {
+            text.push_str(&format!("c_digest: {c_digest}\n"));
+        }
         text
     }
 
@@ -130,6 +166,7 @@ impl ArtifactManifest {
         let mut source_digest = None;
         let mut artifact_digest = None;
         let mut abi_digest = None;
+        let mut c_digest = None;
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() {
@@ -150,6 +187,7 @@ impl ArtifactManifest {
                 "source_digest" => source_digest = Some(value.to_string()),
                 "artifact_digest" => artifact_digest = Some(value.to_string()),
                 "abi_digest" => abi_digest = Some(value.to_string()),
+                "c_digest" => c_digest = Some(value.to_string()),
                 unknown => return Err(format!("unknown manifest key: `{unknown}`")),
             }
         }
@@ -158,6 +196,7 @@ impl ArtifactManifest {
             source_digest: source_digest.ok_or("manifest missing source_digest")?,
             artifact_digest: artifact_digest.ok_or("manifest missing artifact_digest")?,
             abi_digest,
+            c_digest,
         })
     }
 }
@@ -175,9 +214,38 @@ mod tests {
 
     #[test]
     fn manifest_round_trips_through_text() {
-        let manifest = ArtifactManifest::compute(&sources(), b"image-bytes", Some("abi text"));
+        let manifest = ArtifactManifest::compute(&sources(), b"image-bytes", Some("abi text"), None);
         let parsed = ArtifactManifest::parse(&manifest.to_text()).expect("parse");
         assert_eq!(parsed, manifest);
+    }
+
+    #[test]
+    fn manifest_ties_the_native_c_artifact_to_the_fixed_point() {
+        let manifest =
+            ArtifactManifest::compute(&sources(), b"image-bytes", Some("abi text"), Some("int x;"));
+        let parsed = ArtifactManifest::parse(&manifest.to_text()).expect("parse");
+        assert_eq!(parsed, manifest);
+        manifest
+            .verify(&sources(), b"image-bytes", Some("abi text"), Some("int x;"))
+            .expect("clean");
+        let tampered =
+            manifest.verify(&sources(), b"image-bytes", Some("abi text"), Some("int y;"));
+        assert!(tampered.err().expect("tampered C").contains("C artifact"));
+        let missing = manifest.verify(&sources(), b"image-bytes", Some("abi text"), None);
+        assert!(missing.err().expect("missing C").contains("C artifact"));
+        let unexpected = ArtifactManifest::compute(&sources(), b"image-bytes", None, None).verify(
+            &sources(),
+            b"image-bytes",
+            None,
+            Some("int x;"),
+        );
+        assert!(unexpected.err().expect("unexpected C").contains("C artifact"));
+        // The embedded path carries no C source: the compiled object is
+        // validated at build time instead, so `verify_artifact` skips it
+        // the way it skips sources.
+        manifest
+            .verify_artifact(b"image-bytes", Some("abi text"))
+            .expect("embedded");
     }
 
     #[test]
@@ -194,22 +262,23 @@ mod tests {
 
     #[test]
     fn verification_fails_closed_on_any_mismatch() {
-        let manifest = ArtifactManifest::compute(&sources(), b"image-bytes", Some("abi text"));
+        let manifest =
+            ArtifactManifest::compute(&sources(), b"image-bytes", Some("abi text"), None);
         manifest
-            .verify(&sources(), b"image-bytes", Some("abi text"))
+            .verify(&sources(), b"image-bytes", Some("abi text"), None)
             .expect("clean");
 
-        let tampered = manifest.verify(&sources(), b"other-bytes", Some("abi text"));
+        let tampered = manifest.verify(&sources(), b"other-bytes", Some("abi text"), None);
         assert!(tampered.err().expect("tampered image").contains("artifact"));
 
         let mut edited = sources();
         edited[0].1.push_str("\n// edited");
-        let stale = manifest.verify(&edited, b"image-bytes", Some("abi text"));
+        let stale = manifest.verify(&edited, b"image-bytes", Some("abi text"), None);
         assert!(stale.err().expect("edited source").contains("sources"));
 
         let mut wrong_version = manifest.clone();
         wrong_version.format_version += 1;
-        let version = wrong_version.verify(&sources(), b"image-bytes", Some("abi text"));
+        let version = wrong_version.verify(&sources(), b"image-bytes", Some("abi text"), None);
         assert!(version.err().expect("format skew").contains("format"));
     }
 }

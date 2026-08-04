@@ -3,6 +3,8 @@
 //! LLVM backend links it against emitted IR. One tracked copy; neither
 //! backend depends on the other to obtain it.
 
+pub mod library;
+
 /// The complete native runtime as C source.
 pub const fn source() -> &'static str {
     include_str!("runtime.c")

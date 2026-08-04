@@ -23,6 +23,60 @@ fn main() {
     if let Some(sha) = sha {
         println!("cargo:rustc-env=TALK_BUILD_SHA={sha}");
     }
+
+    compile_native_frontend();
+}
+
+/// Compile the checked-in native frontend translation unit for the
+/// Cargo target and link the resulting object (ADR 0048). The manifest
+/// binds the C to the bootstrap fixed point, so a hand-edited or stale
+/// `frontend.c` fails the build here rather than misparsing later. A
+/// target without a working C toolchain fails explicitly; there is no
+/// bytecode fallback for production parsing.
+fn compile_native_frontend() {
+    use sha2::Digest as _;
+
+    // wasm32 has no C toolchain story under wasm-pack; it executes the
+    // verified bootstrap bytecode in the VM instead (ADR 0048 wasm
+    // carve-out) and skips the native artifact entirely.
+    if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() == Ok("wasm32") {
+        return;
+    }
+
+    println!("cargo:rerun-if-changed=bootstrap/frontend.c");
+    println!("cargo:rerun-if-changed=bootstrap/frontend.manifest");
+    let manifest = std::fs::read_to_string("bootstrap/frontend.manifest")
+        .expect("bootstrap/frontend.manifest is missing; regenerate with `talk bootstrap`");
+    let recorded = manifest
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("c_digest:"))
+        .map(str::trim)
+        .expect(
+            "bootstrap/frontend.manifest records no c_digest; regenerate with `talk bootstrap`",
+        );
+    let source = std::fs::read("bootstrap/frontend.c")
+        .expect("bootstrap/frontend.c is missing; regenerate with `talk bootstrap`");
+    let actual = format!("{:x}", sha2::Sha256::digest(&source));
+    assert_eq!(
+        recorded, actual,
+        "bootstrap/frontend.c does not match its manifest; regenerate with `talk bootstrap`"
+    );
+
+    // Full optimization regardless of the Cargo profile: parsing speed
+    // is the point of the native frontend, dev builds included, and the
+    // object is cached until the checked-in C changes.
+    cc::Build::new()
+        .file("bootstrap/frontend.c")
+        .opt_level(2)
+        .flag_if_supported("-std=c11")
+        .try_compile("talk_frontend_native")
+        .unwrap_or_else(|error| {
+            panic!(
+                "failed to compile the native frontend for this target: {error}\n\
+                 building Talk requires a target C compiler (ADR 0048); \
+                 a target that cannot build the native frontend is unsupported"
+            )
+        });
 }
 
 /// Watch the checked-out commit for changes. In a plain checkout

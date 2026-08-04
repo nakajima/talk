@@ -46,12 +46,16 @@ mod c_emit_tests {
         }
     }
 
-    fn emitted(functions: Vec<Function>, layout_table: Vec<Layout>) -> String {
+    fn shaped(
+        functions: Vec<Function>,
+        layout_table: Vec<Layout>,
+        exports: Vec<(String, usize)>,
+    ) -> Program {
         let mut program = Program {
             functions,
             entry: 0,
             global_slots: 0,
-            exports: Vec::new(),
+            exports,
             layout_table,
             display: Default::default(),
             string_symbol: MirSymbol::STRING,
@@ -73,7 +77,13 @@ mod c_emit_tests {
         }
         let summaries = crate::compiling::mir::build::escape::parameter_summaries(&program);
         crate::compiling::mir::build::escape::shape_frames(&mut program, &summaries);
-        emit(&program).expect("emission").source
+        program
+    }
+
+    fn emitted(functions: Vec<Function>, layout_table: Vec<Layout>) -> String {
+        emit(&shaped(functions, layout_table, Vec::new()))
+            .expect("emission")
+            .source
     }
 
     #[test]
@@ -517,6 +527,117 @@ mod c_emit_tests {
         // ...while the honest construction of the same layout goes
         // native in its frame local.
         assert!(out.contains("x2.m0 = talk_int(INT64_C(1)).v.i;"), "{out}");
+    }
+
+    /// A library fixture: an inert entry plus one exported identity-ish
+    /// function per name, all under the uniform convention, the shape
+    /// `Entry::Exports` produces.
+    fn library(exports: &[(&str, usize)]) -> Program {
+        let entry = function(0, 1, Vec::new(), Term::Return(Operand::Const(Constant::Unit)));
+        let wrapped = function(1, 2, Vec::new(), Term::Return(Operand::Local(0)));
+        shaped(
+            vec![entry, wrapped],
+            Vec::new(),
+            exports
+                .iter()
+                .map(|(name, id)| (name.to_string(), *id))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn library_emission_omits_main_and_wraps_each_export() {
+        let artifact = talk_c::emit_library(&library(&[("double", 1)]), "mylib")
+            .expect("library emission");
+        // No process entry, and the boundary section is compiled in.
+        assert!(!artifact.source.contains("int main("), "{}", artifact.source);
+        assert!(
+            artifact.source.starts_with("#define TALK_LIBRARY 1"),
+            "{}",
+            artifact.source
+        );
+        // One externally visible arity-checked wrapper per export, plus
+        // the lifecycle entry points; everything else stays static.
+        assert!(
+            artifact
+                .source
+                .contains("int mylib_double(TalkValue *out, const TalkValue *args, size_t argc)"),
+            "{}",
+            artifact.source
+        );
+        assert!(artifact.source.contains("argc != 1"), "{}", artifact.source);
+        assert!(artifact.source.contains("int mylib_init(void)"), "{}", artifact.source);
+        assert!(
+            artifact.source.contains("void mylib_teardown(void)"),
+            "{}",
+            artifact.source
+        );
+        assert!(
+            artifact.source.contains("const char *mylib_error_message(void)"),
+            "{}",
+            artifact.source
+        );
+        // The header speaks the same convention under public names.
+        assert!(
+            artifact.header.contains("#define MYLIB_ABI_VERSION 1"),
+            "{}",
+            artifact.header
+        );
+        assert!(
+            artifact
+                .header
+                .contains("int mylib_double(mylib_value *out, const mylib_value *args, size_t argc);"),
+            "{}",
+            artifact.header
+        );
+        assert!(artifact.header.contains("MYLIB_ERR_TRAP"), "{}", artifact.header);
+        // The manifest maps each export name to its external symbol.
+        assert_eq!(artifact.manifest, "double\tmylib_double\n");
+    }
+
+    #[test]
+    fn library_mangling_is_deterministic_and_collision_free() {
+        let artifact = talk_c::emit_library(
+            &library(&[("a_b", 1), ("café", 1), ("a?b", 1)]),
+            "lib",
+        )
+        .expect("library emission");
+        // Underscores double and non-alphanumeric bytes escape to hex,
+        // so distinct names cannot meet at one symbol.
+        assert_eq!(
+            artifact.manifest,
+            "a_b\tlib_a__b\ncafé\tlib_caf_c3_a9\na?b\tlib_a_3fb\n"
+        );
+    }
+
+    #[test]
+    fn library_emission_reports_adapter_errors() {
+        let invalid_prefix = talk_c::emit_library(&library(&[("f", 1)]), "1bad");
+        assert!(
+            invalid_prefix.is_err_and(|error| error.message().contains("prefix")),
+            "an invalid prefix must be rejected"
+        );
+        let empty_prefix = talk_c::emit_library(&library(&[("f", 1)]), "");
+        assert!(empty_prefix.is_err(), "an empty prefix must be rejected");
+        let lifecycle_collision = talk_c::emit_library(&library(&[("init", 1)]), "lib");
+        assert!(
+            lifecycle_collision.is_err_and(|error| error.message().contains("lib_init")),
+            "an export colliding with a lifecycle symbol must be rejected"
+        );
+        let duplicate = talk_c::emit_library(&library(&[("f", 1), ("f", 1)]), "lib");
+        assert!(
+            duplicate.is_err_and(|error| error.message().contains("duplicate")),
+            "duplicate external symbols must be rejected"
+        );
+        let empty_name = talk_c::emit_library(&library(&[("", 1)]), "lib");
+        assert!(empty_name.is_err(), "an empty export name must be rejected");
+        let missing_function = talk_c::emit_library(&library(&[("f", 9)]), "lib");
+        assert!(
+            missing_function.is_err(),
+            "an export naming a missing function must be rejected"
+        );
+        let no_exports = talk_c::emit_library(&library(&[]), "lib");
+        assert!(no_exports.is_err(), "a library with no exports must be rejected");
     }
 
     #[test]

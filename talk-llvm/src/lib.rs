@@ -13,6 +13,19 @@ pub struct Artifact {
     pub runtime_c: String,
 }
 
+/// A library-mode emission (ADR 0048): IR and runtime C with every
+/// cross-translation-unit symbol namespaced under the caller's prefix,
+/// no `main`, plus the matching C header and export-name-to-symbol
+/// manifest. The convention is the shared boundary in
+/// `talk_native_runtime::library`.
+#[derive(Debug)]
+pub struct LibraryArtifact {
+    pub ir: String,
+    pub runtime_c: String,
+    pub header: String,
+    pub manifest: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Error {
     message: String,
@@ -43,4 +56,14 @@ impl std::error::Error for Error {}
 /// display metadata, and the well-known String and Storage identities.
 pub fn emit(module: &talk_mir::Module) -> Result<Artifact, Error> {
     emit::emit(module)
+}
+
+/// Emit a library artifact for a finalized MIR module: one externally
+/// visible wrapper per `Module.exports` entry under `prefix`, namespaced
+/// lifecycle entry points, and contained traps (ADR 0048).
+pub fn emit_library(
+    module: &talk_mir::Module,
+    prefix: &str,
+) -> Result<LibraryArtifact, Error> {
+    emit::emit_library(module, prefix)
 }

@@ -4,6 +4,10 @@ Status: accepted; implemented (2026-07-27)
 
 Date: 2026-07-26
 
+Production execution is amended by ADR 0048: the checked-in bytecode remains
+the bootstrap seed, while the verified native artifact is the sole production
+source frontend. Source ownership and the fixed-point requirement are unchanged.
+
 ## Context
 
 Talk's lexer and parser are currently implemented in Rust. They produce the

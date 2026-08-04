@@ -3,7 +3,6 @@ use async_lsp::lsp_types::{Position, Range, SemanticTokensResult, TextDocumentCo
 pub struct Document {
     pub version: i32,
     pub text: String,
-    pub last_edited_tick: i32,
     pub semantic_tokens: Option<SemanticTokensResult>,
 }
 

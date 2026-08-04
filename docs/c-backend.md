@@ -51,6 +51,52 @@ Verified from x86-64 Linux: `x86_64-linux-musl`, `aarch64-linux-musl`,
 `x86-linux-musl`. The musl targets link statically — `ldd` reports "not a
 dynamic executable" — which is what makes them shippable.
 
+### Library artifacts (ADR 0048)
+
+`--export` switches from a program to a library: no `main`, every
+implementation function private, and one externally visible wrapper per
+exported function under a caller-supplied symbol prefix.
+
+```sh
+talk c prog.tlk --export double --export crash \
+    --prefix mylib --header mylib.h --manifest mylib.manifest > mylib.c
+cc -O2 -std=c11 -c mylib.c
+```
+
+The wrappers speak one versioned convention — an output slot, a
+contiguous argument array, and an argument count, over the runtime's
+16-byte tagged value — with arity checked before generated code runs.
+The library also exposes namespaced lifecycle entry points
+(`{prefix}_init`, `{prefix}_teardown`, `{prefix}_error_message`,
+`{prefix}_exit_status`), a string constructor, and logical value
+accessors, all declared in the generated header. Export names mangle
+deterministically (`_` doubles, other non-alphanumeric bytes become
+`_hh` hex), and the manifest records the name-to-symbol mapping.
+
+A library may not terminate its host: traps and `exit` requests longjmp
+back to the wrapper boundary and return as statuses, after which the
+library performs complete cleanup and must be re-initialized. One
+invocation is active at a time — the runtime's state is file-scope —
+and successful results stay valid until teardown. The convention,
+lifecycle, mangling, and header are one definition in
+`talk_native_runtime::library`, shared with the LLVM backend
+(`talk-llvm` takes the same `--export` options and additionally
+namespaces its runtime bridge symbols, so two generated libraries link
+into one process); `tests/native-library/` is the shared harness both
+backends must pass against the VM oracle.
+
+One honest caveat: the logical accessors read machine pointers, so a
+host that feeds back a corrupted value gets undefined behavior where the
+VM's simulated memory would trap. The bridge in the compiler validates
+every record identity and shape against the ABI descriptor before
+trusting a result, but the provenance checking itself does not exist on
+this path.
+
+The self-hosted frontend is the first consumer: `talk bootstrap` emits
+`bootstrap/frontend.c` from the fixed-point MIR, `build.rs` compiles it
+into every compiler build, and `talk::compiling::frontend` parses
+through it in production (ADR 0048).
+
 ### The ABI the generated C assumes
 
 Shippable binaries make the assumptions worth stating, so the prelude

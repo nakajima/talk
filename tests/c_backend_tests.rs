@@ -876,3 +876,90 @@ fn an_entry_with_parameters_is_rejected() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+/// The export list every library-mode test emits from the shared
+/// fixture: scalar, String, aggregate, effect, and failure cases.
+const LIBRARY_EXPORTS: [&str; 9] = [
+    "double", "crash", "greet", "shout", "length", "pair", "total", "handled", "leave",
+];
+
+/// ADR 0048 library mode end to end: `talk c --export` emits a real
+/// library artifact — no `main`, prefixed wrappers, a header, and a
+/// manifest — that links against the shared C harness. The harness takes
+/// the VM oracle's answers as arguments, so scalar, String, aggregate,
+/// effect, and failure cases all agree with the interpreter, and traps
+/// and exit requests come back as statuses instead of terminating the
+/// host.
+#[test]
+fn library_artifact_serves_the_shared_c_harness() {
+    let dir = scratch("library");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/native-library");
+    let program = fixtures.join("library.tlk");
+    let oracle = interpreted(&program);
+    let oracle: Vec<&str> = oracle.split_whitespace().collect();
+    assert_eq!(oracle.len(), 4, "the VM oracle prints four values");
+
+    let header = dir.join("mylib.h");
+    let manifest = dir.join("mylib.manifest");
+    let mut arguments = vec!["c"];
+    for export in LIBRARY_EXPORTS {
+        arguments.extend(["--export", export]);
+    }
+    let header_path = header.to_string_lossy().into_owned();
+    let manifest_path = manifest.to_string_lossy().into_owned();
+    let program_path = program.to_string_lossy().into_owned();
+    arguments.extend(["--allow-effect", "io", "--prefix", "mylib"]);
+    arguments.extend(["--header", &header_path, "--manifest", &manifest_path]);
+    arguments.push(&program_path);
+    let output = talk(&arguments);
+    assert!(
+        output.status.success(),
+        "`talk c --export` failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let library_source = String::from_utf8(output.stdout).expect("emitted C is UTF-8");
+    assert!(
+        !library_source.contains("int main("),
+        "a library artifact must not contain a process entry"
+    );
+    let manifest_text = std::fs::read_to_string(&manifest).expect("read manifest");
+    for export in LIBRARY_EXPORTS {
+        assert!(
+            manifest_text.contains(&format!("{export}\tmylib_{export}\n")),
+            "manifest is missing {export}:\n{manifest_text}"
+        );
+    }
+
+    let source = dir.join("library.c");
+    std::fs::write(&source, &library_source).expect("write emitted C");
+    let binary = dir.join("harness.bin");
+    let compile = Command::new("cc")
+        .arg("-O2")
+        .arg("-std=c11")
+        .arg("-Wall")
+        .arg("-Werror")
+        .arg("-I")
+        .arg(&dir)
+        .arg(&source)
+        .arg(fixtures.join("harness.c"))
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .expect("run `cc`");
+    assert!(
+        compile.status.success(),
+        "library + harness did not compile:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&binary)
+        .args(&oracle)
+        .output()
+        .expect("run harness");
+    assert!(
+        run.status.success(),
+        "harness failed (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+}

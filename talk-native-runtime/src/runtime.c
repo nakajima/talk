@@ -197,9 +197,41 @@ typedef struct {
 static const TalkLayoutInfo *talk_layouts;
 static uint32_t talk_layout_count;
 
+#if defined(TALK_LIBRARY)
+/* ---- library boundary (ADR 0048) -----------------------------------
+ *
+ * A library artifact may not terminate its host. Wrappers arm the
+ * boundary before entering generated Talk code; a trap or an exit
+ * request longjmps back to the wrapper, which returns it as an error
+ * status after complete invocation cleanup. All runtime state is
+ * file-scope, so one invocation is active at a time and the owner
+ * serializes calls.
+ */
+#include <setjmp.h>
+
+static jmp_buf talk_lib_boundary;
+static int talk_lib_boundary_armed;
+static char talk_lib_message[512];
+static int talk_lib_exit_status;
+static int talk_lib_initialized;
+/* Live-resource lists, so teardown after a result was handed out -- or
+ * after a trap left arbitrary state -- reclaims everything without
+ * running Talk code. */
+static struct TalkHeader *talk_lib_allocations;
+static struct TalkObject *talk_lib_objects;
+static struct TalkRegion *talk_lib_regions;
+#endif
+
 /* Noreturn so the C compiler knows a trapping block ends control flow and
  * does not report the function as falling off its end. */
 static _Noreturn void talk_trap(const char *message) {
+#if defined(TALK_LIBRARY)
+    if (talk_lib_boundary_armed) {
+        snprintf(talk_lib_message, sizeof talk_lib_message, "%s", message);
+        talk_lib_boundary_armed = 0;
+        longjmp(talk_lib_boundary, 1);
+    }
+#endif
     fprintf(stderr, "talk: %s\n", message);
     exit(1);
 }
@@ -427,10 +459,14 @@ static TalkValue talk_native_set_field(TalkValue record, uint32_t index, TalkVal
 
 #define TALK_ALLOC_MAGIC 0x7401C0DEu
 
-typedef struct {
+typedef struct TalkHeader {
     uint32_t magic;
     uint32_t rc;
     uint64_t len;
+#if defined(TALK_LIBRARY)
+    struct TalkHeader *lib_prev;
+    struct TalkHeader *lib_next;
+#endif
 } TalkHeader;
 
 static const unsigned char *talk_statics_base;
@@ -489,6 +525,13 @@ static TalkValue talk_alloc(TalkValue bytes) {
     header->magic = TALK_ALLOC_MAGIC;
     header->rc = 1;
     header->len = count;
+#if defined(TALK_LIBRARY)
+    header->lib_next = talk_lib_allocations;
+    if (talk_lib_allocations != NULL) {
+        talk_lib_allocations->lib_prev = header;
+    }
+    talk_lib_allocations = header;
+#endif
     talk_live_allocations++;
     return talk_pointer(block + sizeof(TalkHeader));
 }
@@ -504,6 +547,16 @@ static void talk_free(TalkValue value) {
     if (--header->rc == 0) {
         header->magic = 0;
         talk_live_allocations--;
+#if defined(TALK_LIBRARY)
+        if (header->lib_prev != NULL) {
+            header->lib_prev->lib_next = header->lib_next;
+        } else {
+            talk_lib_allocations = header->lib_next;
+        }
+        if (header->lib_next != NULL) {
+            header->lib_next->lib_prev = header->lib_prev;
+        }
+#endif
         free(header);
     }
 }
@@ -1117,6 +1170,10 @@ struct TalkRegion {
     TalkRegion **merged;
     size_t merged_count;
     size_t merged_capacity;
+#if defined(TALK_LIBRARY)
+    TalkRegion *lib_prev;
+    TalkRegion *lib_next;
+#endif
 };
 
 struct TalkObject {
@@ -1127,6 +1184,10 @@ struct TalkObject {
     TalkValue finalizer;
     int finalized;
     uint32_t field_count;
+#if defined(TALK_LIBRARY)
+    TalkObject *lib_prev;
+    TalkObject *lib_next;
+#endif
     TalkValue fields[];
 };
 
@@ -1219,6 +1280,18 @@ static TalkValue talk_object_new(uint32_t field_count) {
     region->parent = region;
     /* The +1 belongs to whatever binding receives the rvalue. */
     region->owner_count = 1;
+#if defined(TALK_LIBRARY)
+    object->lib_next = talk_lib_objects;
+    if (talk_lib_objects != NULL) {
+        talk_lib_objects->lib_prev = object;
+    }
+    talk_lib_objects = object;
+    region->lib_next = talk_lib_regions;
+    if (talk_lib_regions != NULL) {
+        talk_lib_regions->lib_prev = region;
+    }
+    talk_lib_regions = region;
+#endif
     object->region = region;
     object->ordinal = talk_next_ordinal++;
     object->finalizer = talk_unit();
@@ -1254,16 +1327,49 @@ static void talk_scan_handles(TalkValue value, TalkObject ***out, size_t *count,
     }
 }
 
+#if defined(TALK_LIBRARY)
+static void talk_lib_unlink_object(TalkObject *object) {
+    if (object->lib_prev != NULL) {
+        object->lib_prev->lib_next = object->lib_next;
+    } else {
+        talk_lib_objects = object->lib_next;
+    }
+    if (object->lib_next != NULL) {
+        object->lib_next->lib_prev = object->lib_prev;
+    }
+}
+
+static void talk_lib_unlink_region(TalkRegion *region) {
+    if (region->lib_prev != NULL) {
+        region->lib_prev->lib_next = region->lib_next;
+    } else {
+        talk_lib_regions = region->lib_next;
+    }
+    if (region->lib_next != NULL) {
+        region->lib_next->lib_prev = region->lib_prev;
+    }
+}
+#endif
+
 static void talk_region_free(TalkRegion *root) {
     for (size_t index = 0; index < root->member_count; index++) {
+#if defined(TALK_LIBRARY)
+        talk_lib_unlink_object(root->members[index]);
+#endif
         free(root->members[index]);
         talk_live_objects--;
     }
     free(root->members);
     for (size_t index = 0; index < root->merged_count; index++) {
+#if defined(TALK_LIBRARY)
+        talk_lib_unlink_region(root->merged[index]);
+#endif
         free(root->merged[index]);
     }
     free(root->merged);
+#if defined(TALK_LIBRARY)
+    talk_lib_unlink_region(root);
+#endif
     free(root);
 }
 
@@ -1359,6 +1465,50 @@ static void talk_object_set(TalkValue object, uint32_t index, TalkValue field) {
     free(handles);
     object.v.obj->fields[index] = field;
 }
+
+#if defined(TALK_LIBRARY)
+/* Complete invocation cleanup (ADR 0048): every arena chunk, refcounted
+ * allocation, object, and region returns to the host allocator, and
+ * every mutable runtime global returns to its boot value, so a fresh
+ * `init` behaves like a fresh process. Finalizers do not run -- no Talk
+ * code may execute outside an invocation. */
+static void talk_lib_reset(void) {
+    talk_arena_release();
+    talk_effects_release();
+    while (talk_lib_allocations != NULL) {
+        TalkHeader *header = talk_lib_allocations;
+        talk_lib_allocations = header->lib_next;
+        free(header);
+    }
+    while (talk_lib_objects != NULL) {
+        TalkObject *object = talk_lib_objects;
+        talk_lib_objects = object->lib_next;
+        free(object);
+    }
+    while (talk_lib_regions != NULL) {
+        TalkRegion *region = talk_lib_regions;
+        talk_lib_regions = region->lib_next;
+        free(region->members);
+        free(region->merged);
+        free(region);
+    }
+    free(talk_pending);
+    talk_pending = NULL;
+    talk_pending_count = 0;
+    talk_pending_capacity = 0;
+    talk_draining = 0;
+    talk_live_allocations = 0;
+    talk_live_objects = 0;
+    talk_next_ordinal = 0;
+    talk_next_frame_id = 1;
+    talk_unwinding = 0;
+    talk_unwind_depth = 0;
+    talk_unwind_frame = 0;
+    talk_unwind_value = talk_unit();
+    talk_handler_floor = SIZE_MAX;
+    talk_lib_boundary_armed = 0;
+}
+#endif
 
 /* ---- host IO --------------------------------------------------------
  *
@@ -1540,6 +1690,15 @@ static int64_t talk_io(uint8_t op, TalkValue a, TalkValue b, TalkValue c) {
 #endif
     }
     case TALK_IO_EXIT:
+#if defined(TALK_LIBRARY)
+        if (talk_lib_boundary_armed) {
+            talk_lib_exit_status = (int)a.v.i;
+            snprintf(talk_lib_message, sizeof talk_lib_message,
+                     "the program requested exit with status %d", (int)a.v.i);
+            talk_lib_boundary_armed = 0;
+            longjmp(talk_lib_boundary, 2);
+        }
+#endif
         talk_arena_release();
         talk_effects_release();
         exit((int)a.v.i);

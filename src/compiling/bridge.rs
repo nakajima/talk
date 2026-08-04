@@ -7,119 +7,284 @@
 //! walk.
 
 use crate::compiling::abi::{AbiSchema, AbiTy, AbiTypeKind};
+use crate::compiling::native_frontend::{self, NativeRun, NativeValue};
 use std::collections::HashMap;
-use talk_vm::interp::{RunOutcome, Value};
+use talk_vm::interp::{RunOutcome, Value as VmValue};
 use talk_vm::memory::Pointer;
 use talk_vm::symbol::Symbol;
 
+/// A frontend result from either production execution path: the native
+/// library (ADR 0048) or the VM (bootstrap candidate sessions and
+/// differential tests).
+#[derive(Clone, Copy)]
+pub enum FrontendRun<'a, 'io> {
+    Vm(&'a RunOutcome<'io>),
+    Native(&'a NativeRun),
+}
+
+impl FrontendRun<'_, '_> {
+    /// The export's root result value.
+    pub fn root(&self) -> Value {
+        match self {
+            FrontendRun::Vm(run) => Value::Vm(run.value.clone()),
+            FrontendRun::Native(run) => Value::Native(run.value),
+        }
+    }
+}
+
+/// A value from either path. The adapter walk shuttles these opaquely;
+/// only the validator primitives and the scalar readers look inside.
+#[derive(Clone, Debug)]
+pub enum Value {
+    Vm(VmValue),
+    Native(NativeValue),
+}
+
+/// A record identity in either path's terms: the VM names aggregates by
+/// module symbol; the native runtime names them by display-table index,
+/// mapped back to module symbols through the artifact's emitted symbol
+/// table.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum SymbolRef {
+    Vm(Symbol),
+    Native(u32),
+    /// A tuple (no identity), or a schema type this artifact never
+    /// displays; never equal to a value's real identity.
+    Missing,
+}
+
+/// One aggregate's shape probe: identity, live variant tag (None for
+/// records), and logical member count.
+struct View {
+    symbol: SymbolRef,
+    tag: Option<u16>,
+    len: usize,
+}
+
 pub struct ResultValidator<'a, 'io> {
-    run: &'a RunOutcome<'io>,
+    run: FrontendRun<'a, 'io>,
     schema: &'a AbiSchema,
-    /// Schema type name -> the runtime symbol its values must carry.
-    symbols: HashMap<&'a str, Symbol>,
-    string_symbol: Symbol,
-    array_symbol: Symbol,
-    storage_symbol: Symbol,
-    optional_symbol: Symbol,
+    /// Schema type name -> the identity its values must carry.
+    symbols: HashMap<&'a str, SymbolRef>,
+    string_symbol: SymbolRef,
+    array_symbol: SymbolRef,
+    storage_symbol: SymbolRef,
+    optional_symbol: SymbolRef,
 }
 
 /// Look up core's `Optional` enum: the descriptor leaves core types as
 /// leaf names, so the bridge resolves their identities from the core
 /// program it was compiled with.
 impl<'a, 'io> ResultValidator<'a, 'io> {
-    pub fn new(run: &'a RunOutcome<'io>, schema: &'a AbiSchema) -> Result<Self, String> {
-        let mut symbols = HashMap::new();
-        for (name, ty) in &schema.types {
-            symbols.insert(name.as_str(), ty.symbol.runtime()?);
-        }
+    pub fn new(run: FrontendRun<'a, 'io>, schema: &'a AbiSchema) -> Result<Self, String> {
+        let core = |symbol: crate::name_resolution::symbol::Symbol| {
+            crate::compiling::mir::runtime_symbol(symbol)
+        };
+        let (symbols, string_symbol, array_symbol, storage_symbol, optional_symbol) = match run {
+            FrontendRun::Vm(_) => {
+                let mut symbols = HashMap::new();
+                for (name, ty) in &schema.types {
+                    symbols.insert(name.as_str(), SymbolRef::Vm(ty.symbol.runtime()?));
+                }
+                (
+                    symbols,
+                    SymbolRef::Vm(core(crate::name_resolution::symbol::Symbol::String)),
+                    SymbolRef::Vm(core(crate::name_resolution::symbol::Symbol::Array)),
+                    SymbolRef::Vm(core(crate::name_resolution::symbol::Symbol::Storage)),
+                    SymbolRef::Vm(schema.optional.runtime()?),
+                )
+            }
+            FrontendRun::Native(_) => {
+                // Display id -> (kind, module, local); kinds follow
+                // `MirSymbolKind` order, so struct = 0 and enum = 1.
+                let rows = native_frontend::symbol_rows();
+                let display_of = |kind: u8, module: u32, local: u32| {
+                    rows.iter()
+                        .position(|row| *row == (kind, module, local))
+                        .map(|display| SymbolRef::Native(display as u32))
+                        .unwrap_or(SymbolRef::Missing)
+                };
+                let vm_display = |symbol: Symbol| match symbol {
+                    Symbol::Struct(id) => display_of(0, u32::from(id.module_id.0), id.local_id),
+                    Symbol::Enum(id) => display_of(1, u32::from(id.module_id.0), id.local_id),
+                    Symbol::Library => SymbolRef::Missing,
+                };
+                let mut symbols = HashMap::new();
+                for (name, ty) in &schema.types {
+                    let kind = if ty.symbol.is_enum { 1 } else { 0 };
+                    symbols.insert(
+                        name.as_str(),
+                        display_of(kind, ty.symbol.module, ty.symbol.local),
+                    );
+                }
+                let optional = &schema.optional;
+                (
+                    symbols,
+                    vm_display(core(crate::name_resolution::symbol::Symbol::String)),
+                    vm_display(core(crate::name_resolution::symbol::Symbol::Array)),
+                    vm_display(core(crate::name_resolution::symbol::Symbol::Storage)),
+                    display_of(
+                        if optional.is_enum { 1 } else { 0 },
+                        optional.module,
+                        optional.local,
+                    ),
+                )
+            }
+        };
         Ok(Self {
             run,
             schema,
             symbols,
-            string_symbol: crate::compiling::mir::runtime_symbol(
-                crate::name_resolution::symbol::Symbol::String,
-            ),
-            array_symbol: crate::compiling::mir::runtime_symbol(
-                crate::name_resolution::symbol::Symbol::Array,
-            ),
-            storage_symbol: crate::compiling::mir::runtime_symbol(
-                crate::name_resolution::symbol::Symbol::Storage,
-            ),
-            optional_symbol: schema.optional.runtime()?,
+            string_symbol,
+            array_symbol,
+            storage_symbol,
+            optional_symbol,
         })
+    }
+
+    /// One aggregate's identity, tag, and logical member count.
+    fn view(&self, value: &Value) -> Result<View, String> {
+        match (self.run, value) {
+            (FrontendRun::Vm(run), Value::Vm(value)) => {
+                let view = run.aggregate(value)?;
+                Ok(View {
+                    symbol: view.symbol.map_or(SymbolRef::Missing, SymbolRef::Vm),
+                    tag: view.tag,
+                    len: view.len,
+                })
+            }
+            (FrontendRun::Native(run), Value::Native(value)) => {
+                let (display, tag, len) = run.view(*value)?;
+                Ok(View {
+                    symbol: SymbolRef::Native(display),
+                    tag,
+                    len,
+                })
+            }
+            _ => Err("frontend bridge value crossed execution paths".into()),
+        }
+    }
+
+    /// One logical member: a record's declared field or the live
+    /// variant's payload.
+    fn element(&self, value: &Value, index: u16) -> Result<Value, String> {
+        match (self.run, value) {
+            (FrontendRun::Vm(run), Value::Vm(value)) => Ok(Value::Vm(run.element(value, index)?)),
+            (FrontendRun::Native(run), Value::Native(value)) => {
+                Ok(Value::Native(run.element(*value, index)?))
+            }
+            _ => Err("frontend bridge value crossed execution paths".into()),
+        }
     }
 
     /// The UTF-8 text of a String-shaped value.
     pub fn string(&self, value: &Value) -> Result<String, String> {
-        let view = self.run.aggregate(value)?;
-        if view.symbol != Some(self.string_symbol) {
+        let view = self.view(value)?;
+        if view.symbol != self.string_symbol {
             return Err(format!("expected a String, got {value:?}"));
         }
-        let bytes = self.run.string_bytes(value)?;
-        String::from_utf8(bytes.to_vec()).map_err(|err| format!("string is not UTF-8: {err}"))
+        let bytes = match (self.run, value) {
+            (FrontendRun::Vm(run), Value::Vm(value)) => run.string_bytes(value)?.to_vec(),
+            (FrontendRun::Native(run), Value::Native(value)) => {
+                run.string_bytes(*value)?.to_vec()
+            }
+            _ => return Err("frontend bridge value crossed execution paths".into()),
+        };
+        String::from_utf8(bytes).map_err(|err| format!("string is not UTF-8: {err}"))
     }
 
-    /// Read an array value's elements out of the machine: `[storage,
-    /// count, capacity]`, elements at `storage.base`, one byte per Byte
-    /// element, one 8-byte word otherwise (boxed-arena handles for
-    /// record, enum, string, optional, and nested-array elements).
+    /// Read an array value's elements out of the run: `[storage, count,
+    /// capacity]`, elements at `storage.base`, one byte per Byte
+    /// element, one 8-byte word otherwise (boxed handles for record,
+    /// enum, string, optional, and nested-array elements). Scalar
+    /// elements normalize to the path-independent VM shape.
     pub fn array_elements(&self, value: &Value, element: &AbiTy) -> Result<Vec<Value>, String> {
-        let view = self.run.aggregate(value)?;
-        if view.symbol != Some(self.array_symbol) {
+        let view = self.view(value)?;
+        if view.symbol != self.array_symbol {
             return Err(format!("expected an array, got {value:?}"));
         }
         if view.len != 3 {
             return Err("array record does not have Array's shape".into());
         }
-        let storage = self.run.element(value, 0)?;
-        let storage_view = self.run.aggregate(&storage)?;
-        if storage_view.symbol != Some(self.storage_symbol) {
+        let storage = self.element(value, 0)?;
+        let storage_view = self.view(&storage)?;
+        if storage_view.symbol != self.storage_symbol {
             return Err("array storage carries the wrong identity".into());
         }
-        let Value::Ptr(base) = self.run.element(&storage, 0)? else {
-            return Err("array storage does not have Storage's shape".into());
+        let base = match self.element(&storage, 0)? {
+            Value::Vm(VmValue::Ptr(base)) => ArrayBase::Vm(base),
+            Value::Native(value) if value.tag == native_frontend::TAG_PTR => {
+                ArrayBase::Native(value)
+            }
+            _ => return Err("array storage does not have Storage's shape".into()),
         };
-        let base = &base;
-        let (Value::I64(count), Value::I64(capacity)) =
-            (self.run.element(value, 1)?, self.run.element(value, 2)?)
-        else {
-            return Err("array count/capacity are not integers".into());
-        };
-        let (count, capacity) = (&count, &capacity);
-        if *count < 0 || *capacity < 0 || count > capacity {
+        let count = int(&self.element(value, 1)?)
+            .map_err(|_| "array count/capacity are not integers".to_string())?;
+        let capacity = int(&self.element(value, 2)?)
+            .map_err(|_| "array count/capacity are not integers".to_string())?;
+        if count < 0 || capacity < 0 || count > capacity {
             return Err(format!(
                 "malformed array bounds: count {count}, capacity {capacity}"
             ));
         }
-        let count = usize::try_from(*count).map_err(|_| "array count out of range")?;
+        let count = usize::try_from(count).map_err(|_| "array count out of range")?;
         let mut elements = Vec::with_capacity(count);
         for index in 0..count {
             let value = match element {
                 AbiTy::Named(name) if name == "Byte" => {
-                    let addr = element_addr(*base, index, 1)?;
-                    Value::Byte(self.run.read_byte(addr)?)
+                    Value::Vm(VmValue::Byte(self.slot_byte(&base, index)?))
                 }
                 AbiTy::Named(name) if name == "Int" => {
-                    let addr = element_addr(*base, index, 8)?;
-                    Value::I64(self.run.read_word(addr)? as i64)
+                    Value::Vm(VmValue::I64(self.slot_word(&base, index)? as i64))
                 }
                 AbiTy::Named(name) if name == "Bool" => {
-                    let addr = element_addr(*base, index, 8)?;
-                    Value::Bool(self.run.read_word(addr)? != 0)
+                    Value::Vm(VmValue::Bool(self.slot_word(&base, index)? != 0))
                 }
-                AbiTy::Named(name) if name == "Float" => {
-                    let addr = element_addr(*base, index, 8)?;
-                    Value::F64(f64::from_bits(self.run.read_word(addr)?))
-                }
+                AbiTy::Named(name) if name == "Float" => Value::Vm(VmValue::F64(f64::from_bits(
+                    self.slot_word(&base, index)?,
+                ))),
                 _ => {
-                    let addr = element_addr(*base, index, 8)?;
-                    self.run.boxed_value(self.run.read_word(addr)?)?.clone()
+                    let word = self.slot_word(&base, index)?;
+                    match (self.run, &base) {
+                        (FrontendRun::Vm(run), _) => Value::Vm(run.boxed_value(word)?.clone()),
+                        (FrontendRun::Native(run), _) => Value::Native(run.boxed_value(word)?),
+                    }
                 }
             };
             elements.push(value);
         }
         Ok(elements)
     }
+
+    fn slot_word(&self, base: &ArrayBase, index: usize) -> Result<u64, String> {
+        match (self.run, base) {
+            (FrontendRun::Vm(run), ArrayBase::Vm(base)) => {
+                run.read_word(element_addr(*base, index, 8)?)
+            }
+            (FrontendRun::Native(run), ArrayBase::Native(base)) => {
+                run.read_word(*base, index as u64)
+            }
+            _ => Err("frontend bridge value crossed execution paths".into()),
+        }
+    }
+
+    fn slot_byte(&self, base: &ArrayBase, index: usize) -> Result<u8, String> {
+        match (self.run, base) {
+            (FrontendRun::Vm(run), ArrayBase::Vm(base)) => {
+                run.read_byte(element_addr(*base, index, 1)?)
+            }
+            (FrontendRun::Native(run), ArrayBase::Native(base)) => {
+                run.read_byte(*base, index as u64)
+            }
+            _ => Err("frontend bridge value crossed execution paths".into()),
+        }
+    }
+}
+
+/// An array's storage base in either path's terms.
+enum ArrayBase {
+    Vm(Pointer),
+    Native(NativeValue),
 }
 
 fn element_addr(base: Pointer, index: usize, stride: u64) -> Result<Pointer, String> {
@@ -215,30 +380,30 @@ pub struct BridgedExprMacro {
 /// as LineComment tokens) and whether the scan completed. A trailing
 /// sentinel (start -1) marks a lex failure after the tokens produced
 /// up to it.
-pub fn lex_tokens(run: &RunOutcome, schema: &AbiSchema) -> Result<(Vec<Token>, bool), String> {
+pub fn lex_tokens(run: FrontendRun, schema: &AbiSchema) -> Result<(Vec<Token>, bool), String> {
     crate::profile::init();
     profiling::scope!("frontend.bridge_lex");
     let validator = ResultValidator::new(run, schema)?;
-    let elements = validator.array_elements(&run.value, &AbiTy::Named("MetaToken".into()))?;
+    let elements = validator.array_elements(&run.root(), &AbiTy::Named("MetaToken".into()))?;
     let mut tokens = Vec::new();
     let mut complete = true;
     for element in &elements {
-        let view = run.aggregate(element)?;
-        if view.symbol != Some(validator.symbols["MetaToken"]) {
+        let view = validator.view(element)?;
+        if view.symbol != validator.symbols["MetaToken"] {
             return Err(format!("expected a MetaToken, got {element:?}"));
         }
         if view.len != 5 {
             return Err("MetaToken does not have its declared shape".into());
         }
-        let kind = run.element(element, 0)?;
+        let kind = validator.element(element, 0)?;
         let (start, end, line, col) = (
-            run.element(element, 1)?,
-            run.element(element, 2)?,
-            run.element(element, 3)?,
-            run.element(element, 4)?,
+            validator.element(element, 1)?,
+            validator.element(element, 2)?,
+            validator.element(element, 3)?,
+            validator.element(element, 4)?,
         );
         let (start, end, line, col) = (&start, &end, &line, &col);
-        let Some(tag) = run.aggregate(&kind)?.tag else {
+        let Some(tag) = validator.view(&kind)?.tag else {
             return Err(format!("expected a TokenKind, got {kind:?}"));
         };
         let Some(AbiTypeKind::Enum(variants)) = schema.types.get("TokenKind").map(|ty| &ty.kind)
@@ -270,7 +435,7 @@ pub fn lex_tokens(run: &RunOutcome, schema: &AbiSchema) -> Result<(Vec<Token>, b
 /// `Syntax.syntax_metadata_output`. The materialized file owns virtual spans;
 /// every record carries its separate originating file identity.
 pub fn adapt_syntax_metadata(
-    run: &RunOutcome,
+    run: FrontendRun,
     schema: &AbiSchema,
     materialized_file: FileID,
 ) -> Result<SyntaxMetadata, String> {
@@ -283,13 +448,13 @@ pub fn adapt_syntax_metadata(
         meta_cursor: 0,
         file_id: materialized_file,
     };
-    adapter.syntax_metadata(&run.value)
+    adapter.syntax_metadata(&run.root())
 }
 
 /// Decode one procedural expression macro result. Its nested ParseOutcome is
 /// adapted directly; materialized source is never sent through another lexer.
 pub fn adapt_expr_macro(
-    run: &RunOutcome,
+    run: FrontendRun,
     schema: &AbiSchema,
     materialized_file: FileID,
 ) -> Result<BridgedExprMacro, String> {
@@ -302,7 +467,7 @@ pub fn adapt_expr_macro(
         meta_cursor: 0,
         file_id: materialized_file,
     };
-    let mut output = adapter.record(&run.value, "ExprMacroOutput")?;
+    let mut output = adapter.record(&run.root(), "ExprMacroOutput")?;
     let source = adapter.string(&take(&mut output, "source")?)?;
     let outcome = adapter.opt(&take(&mut output, "outcome")?)?;
     let metadata_value = take(&mut output, "metadata")?;
@@ -339,7 +504,7 @@ pub fn adapt_expr_macro(
 }
 
 pub fn adapt(
-    run: &RunOutcome,
+    run: FrontendRun,
     schema: &AbiSchema,
     file_id: FileID,
 ) -> Result<BridgedParse, String> {
@@ -354,7 +519,7 @@ pub fn adapt(
         meta_cursor: 0,
         file_id,
     };
-    adapter.parse_outcome(&run.value)
+    adapter.parse_outcome(&run.root())
 }
 
 struct ResultAdapter<'a, 'io> {
@@ -378,17 +543,19 @@ fn take(map: &mut std::collections::HashMap<String, Value>, key: &str) -> Result
 }
 
 fn int(value: &Value) -> Result<i64, String> {
-    let Value::I64(value) = value else {
-        return Err(format!("expected an Int, got {value:?}"));
-    };
-    Ok(*value)
+    match value {
+        Value::Vm(VmValue::I64(value)) => Ok(*value),
+        Value::Native(value) if value.tag == native_frontend::TAG_INT => Ok(value.int()),
+        _ => Err(format!("expected an Int, got {value:?}")),
+    }
 }
 
 fn boolean(value: &Value) -> Result<bool, String> {
-    let Value::Bool(value) = value else {
-        return Err(format!("expected a Bool, got {value:?}"));
-    };
-    Ok(*value)
+    match value {
+        Value::Vm(VmValue::Bool(value)) => Ok(*value),
+        Value::Native(value) if value.tag == native_frontend::TAG_BOOL => Ok(value.boolean()),
+        _ => Err(format!("expected a Bool, got {value:?}")),
+    }
 }
 
 /// A non-synthesized byte position (comment bounds).
@@ -728,8 +895,8 @@ impl ResultAdapter<'_, '_> {
         let AbiTypeKind::Struct(fields) = &schema_type.kind else {
             return Err(format!("ABI type `{ty}` is not a struct"));
         };
-        let view = self.v.run.aggregate(value)?;
-        if view.symbol != Some(self.v.symbols[ty]) || view.tag.is_some() {
+        let view = self.v.view(value)?;
+        if view.symbol != self.v.symbols[ty] || view.tag.is_some() {
             return Err(format!("expected a `{ty}` record, got {value:?}"));
         }
         if view.len != fields.len() {
@@ -742,7 +909,7 @@ impl ResultAdapter<'_, '_> {
         fields
             .iter()
             .enumerate()
-            .map(|(index, (name, _))| Ok((name.clone(), self.v.run.element(value, index as u16)?)))
+            .map(|(index, (name, _))| Ok((name.clone(), self.v.element(value, index as u16)?)))
             .collect()
     }
 
@@ -758,8 +925,8 @@ impl ResultAdapter<'_, '_> {
         let AbiTypeKind::Enum(variants) = &schema_type.kind else {
             return Err(format!("ABI type `{ty}` is not an enum"));
         };
-        let view = self.v.run.aggregate(value)?;
-        if view.symbol != Some(self.v.symbols[ty]) {
+        let view = self.v.view(value)?;
+        if view.symbol != self.v.symbols[ty] {
             return Err(format!("expected a `{ty}` variant, got {value:?}"));
         }
         let Some(tag) = view.tag else {
@@ -776,18 +943,18 @@ impl ResultAdapter<'_, '_> {
             ));
         }
         let payloads = (0..view.len)
-            .map(|index| self.v.run.element(value, index as u16))
+            .map(|index| self.v.element(value, index as u16))
             .collect::<Result<Vec<_>, _>>()?;
         Ok((name.clone(), payloads))
     }
 
     fn opt(&self, value: &Value) -> Result<Option<Value>, String> {
-        let view = self.v.run.aggregate(value)?;
-        if view.symbol != Some(self.v.optional_symbol) {
+        let view = self.v.view(value)?;
+        if view.symbol != self.v.optional_symbol {
             return Err(format!("expected an Optional value, got {value:?}"));
         }
         match (view.tag, view.len) {
-            (Some(0), 1) => Ok(Some(self.v.run.element(value, 0)?)),
+            (Some(0), 1) => Ok(Some(self.v.element(value, 0)?)),
             (Some(1), 0) => Ok(None),
             _ => Err("malformed Optional value".into()),
         }
@@ -1055,8 +1222,8 @@ impl ResultAdapter<'_, '_> {
             .map(|value| {
                 let mut fields = self.record(value, "MacroToken")?;
                 let kind = take(&mut fields, "kind")?;
-                let view = self.v.run.aggregate(&kind)?;
-                if view.symbol != Some(self.v.symbols["TokenKind"]) {
+                let view = self.v.view(&kind)?;
+                if view.symbol != self.v.symbols["TokenKind"] {
                     return Err(format!("expected a TokenKind, got {kind:?}"));
                 }
                 let Some(kind_tag) = view.tag else {
