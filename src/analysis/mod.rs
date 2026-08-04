@@ -1,6 +1,7 @@
 pub mod completion;
 pub mod definition;
 pub mod hover;
+pub mod occurrence;
 pub mod rename;
 pub mod workspace;
 
@@ -97,6 +98,7 @@ pub struct CompletionItem {
 
 pub use definition::{Location, goto_definition};
 pub use hover::{Hover, hover_at};
+pub use occurrence::{Occurrence, OccurrenceKind, occurrence_at};
 pub use rename::{DocumentEdit, TextEdit, WorkspaceEdit, rename_at};
 pub use workspace::Workspace;
 
