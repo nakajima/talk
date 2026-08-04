@@ -1128,4 +1128,91 @@ mod tests {
             "let f = func(item: Int) -> Int {\n\titem\n}\nf(1)\n"
         );
     }
+
+    #[test]
+    fn rename_a_struct_from_a_type_annotation() {
+        let code = "struct Box {\n\tlet value: Int\n}\nfunc f(b: Box) -> Box {\n\tb\n}\nf(b: Box(value: 1))\n";
+        let annotation = code.find("Box) ->").expect("annotation") as u32;
+        assert_eq!(
+            apply_rename(code, annotation, "Crate"),
+            "struct Crate {\n\tlet value: Int\n}\nfunc f(b: Crate) -> Crate {\n\tb\n}\nf(b: Crate(value: 1))\n"
+        );
+    }
+
+    #[test]
+    fn rename_an_associated_type_from_a_nominal_path_member() {
+        let code = "protocol Producer {\n\tassociated Element\n\tfunc get() -> Element\n}\nfunc first<T: Producer>(x: T) -> T.Element {\n\tx.get()\n}\n";
+        let member = code.rfind("Element").expect("nominal path member") as u32;
+        assert_eq!(
+            apply_rename(code, member, "Item"),
+            "protocol Producer {\n\tassociated Item\n\tfunc get() -> Item\n}\nfunc first<T: Producer>(x: T) -> T.Item {\n\tx.get()\n}\n"
+        );
+    }
+
+    #[test]
+    fn rename_an_associated_type_from_an_any_binding() {
+        let code = "protocol Producer {\n\tassociated Element\n\tfunc get() -> Element\n}\nstruct IntProducer {\n\tlet value: Int\n}\nextend IntProducer: Producer {\n\tfunc get() -> Int {\n\t\tself.value\n\t}\n}\nfunc make() -> any Producer<Element = Int> {\n\tIntProducer(value: 1)\n}\n";
+        let binding = code.rfind("Element").expect("assoc binding") as u32;
+        assert_eq!(
+            apply_rename(code, binding, "Item"),
+            "protocol Producer {\n\tassociated Item\n\tfunc get() -> Item\n}\nstruct IntProducer {\n\tlet value: Int\n}\nextend IntProducer: Producer {\n\tfunc get() -> Int {\n\t\tself.value\n\t}\n}\nfunc make() -> any Producer<Item = Int> {\n\tIntProducer(value: 1)\n}\n"
+        );
+    }
+
+    #[test]
+    fn rename_an_effect_from_a_handler() {
+        let code = "effect 'bail(error) -> Never\nfunc build() 'bail -> Int {\n\t'bail(\"stop\")\n}\n#handle 'bail { err in\n\t0\n}\nbuild()\n";
+        let handler = code.find("'bail {").expect("handler") as u32;
+        assert_eq!(
+            apply_rename(code, handler, "halt"),
+            "effect 'halt(error) -> Never\nfunc build() 'halt -> Int {\n\t'halt(\"stop\")\n}\n#handle 'halt { err in\n\t0\n}\nbuild()\n"
+        );
+    }
+
+    #[test]
+    fn rename_an_imported_symbol_edits_both_documents() {
+        let main = "use package::other::{ answer }\nprint(answer)\n";
+        let other = "pub let answer = 42\n";
+        let docs = vec![
+            DocumentInput {
+                id: "src/main.tlk".to_string(),
+                path: "src/main.tlk".to_string(),
+                version: 0,
+                text: main.to_string(),
+            },
+            DocumentInput {
+                id: "src/other.tlk".to_string(),
+                path: "src/other.tlk".to_string(),
+                version: 0,
+                text: other.to_string(),
+            },
+        ];
+        let workspace = Workspace::new(docs).expect("workspace");
+        let offset = main.find("answer }").expect("import entry") as u32;
+        let edit = rename_at(
+            &workspace,
+            &"src/main.tlk".to_string(),
+            offset,
+            "meaning",
+        )
+        .expect("workspace edit");
+
+        let mut main_edits = Vec::new();
+        let mut other_edits = Vec::new();
+        for document in &edit.documents {
+            match document.document_id.as_str() {
+                "src/main.tlk" => main_edits = document.edits.clone(),
+                "src/other.tlk" => other_edits = document.edits.clone(),
+                other => panic!("unexpected document {other}"),
+            }
+        }
+        // The import entry and the use site in main, the export in other.
+        assert_eq!(main_edits.len(), 2, "{main_edits:?}");
+        assert_eq!(other_edits.len(), 1, "{other_edits:?}");
+        let export = &other_edits[0];
+        assert_eq!(
+            &other[export.range.start as usize..export.range.end as usize],
+            "answer"
+        );
+    }
 }

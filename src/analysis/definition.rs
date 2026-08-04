@@ -536,3 +536,155 @@ fn node_span(
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::analysis::{DocumentId, DocumentInput, Workspace, goto_definition};
+
+    fn workspace_for(docs: &[(&str, &str)]) -> Workspace {
+        let inputs = docs
+            .iter()
+            .map(|(path, text)| DocumentInput {
+                id: path.to_string(),
+                path: path.to_string(),
+                version: 0,
+                text: text.to_string(),
+            })
+            .collect();
+        Workspace::new(inputs).expect("workspace")
+    }
+
+    /// The source text under the definition of the last occurrence of
+    /// `needle` in `code`.
+    fn definition_text(code: &str, needle: &str) -> Option<(DocumentId, String)> {
+        definition_text_at(code, code.rfind(needle).expect("needle in code") as u32)
+    }
+
+    fn definition_text_at(code: &str, offset: u32) -> Option<(DocumentId, String)> {
+        let ws = workspace_for(&[("main.tlk", code)]);
+        let location = goto_definition(&ws, None, &"main.tlk".to_string(), offset)?;
+        let file_id = ws.document_to_file_id.get(&location.document_id)?;
+        let text = ws.texts.get(file_id.0 as usize)?;
+        Some((
+            location.document_id.clone(),
+            text[location.range.start as usize..location.range.end as usize].to_string(),
+        ))
+    }
+
+    #[test]
+    fn definition_on_a_local_variable_use() {
+        let code = "let greeting = 1\ngreeting\n";
+        let (doc, text) = definition_text(code, "greeting").expect("definition");
+        assert_eq!(doc, "main.tlk");
+        assert_eq!(text, "greeting");
+    }
+
+    #[test]
+    fn definition_on_a_function_call() {
+        let code = "func double(x: Int) -> Int {\n\tx\n}\ndouble(1)\n";
+        let (_, text) = definition_text(code, "double").expect("definition");
+        // Top-level funcs declare a global whose node is not the `Func`
+        // node, so the current location spans the whole declaration
+        // rather than just the name.
+        assert_eq!(text, "func double(x: Int) -> Int {\n\tx\n}");
+    }
+
+    #[test]
+    fn definition_on_a_member_access() {
+        let code = "struct Point {\n\tlet x: Int\n}\nlet p = Point(x: 1)\np.x\n";
+        let offset = code.rfind(".x").expect("member") as u32 + 1;
+        let (doc, text) = definition_text_at(code, offset).expect("definition");
+        assert_eq!(doc, "main.tlk");
+        assert_eq!(text, "x");
+    }
+
+    #[test]
+    fn definition_on_a_nominal_type_annotation() {
+        let code =
+            "struct Box {\n\tlet value: Int\n}\nfunc f(b: Box) -> Int {\n\tb.value\n}\n";
+        let (_, text) = definition_text(code, "Box)").expect("definition");
+        assert_eq!(text, "Box");
+    }
+
+    #[test]
+    fn definition_through_nested_generic_arguments() {
+        let code = "struct Box<T> {\n\tlet value: T\n}\nfunc f(b: Box<Box<Int>>) -> Int {\n\t1\n}\n";
+        // The inner `Box` resolves to the same declaration as the outer.
+        let inner = code.rfind("Box<Int").expect("inner Box") as u32;
+        let (_, text) = definition_text_at(code, inner).expect("definition");
+        assert_eq!(text, "Box");
+        let outer = code.find("Box<Box").expect("outer Box") as u32;
+        let (_, text) = definition_text_at(code, outer).expect("definition");
+        assert_eq!(text, "Box");
+    }
+
+    #[test]
+    fn definition_through_tuple_type() {
+        let code =
+            "struct Box {\n\tlet value: Int\n}\nfunc f(b: (Int, Box)) -> Int {\n\t1\n}\n";
+        let (_, text) = definition_text(code, "Box").expect("definition");
+        assert_eq!(text, "Box");
+    }
+
+    #[test]
+    fn definition_through_record_type() {
+        let code =
+            "struct Box {\n\tlet value: Int\n}\nfunc f(b: { value: Box }) -> Int {\n\t1\n}\n";
+        let (_, text) = definition_text(code, "Box").expect("definition");
+        assert_eq!(text, "Box");
+    }
+
+    #[test]
+    fn definition_on_a_self_type_annotation() {
+        let code = "struct Box {\n\tlet value: Int\n}\nextend Box {\n\tfunc get() -> Self {\n\t\tself\n\t}\n}\n";
+        let (_, text) = definition_text(code, "Self").expect("definition");
+        assert_eq!(text, "Box");
+    }
+
+    #[test]
+    fn definition_on_effect_names() {
+        let code = "effect 'bail(error) -> Never\nfunc build() 'bail -> Int {\n\t'bail(\"stop\")\n}\n#handle 'bail { err in\n\t0\n}\nbuild()\n";
+        // The effect declaration's name span is the target for the call
+        // site, the function's effect list, and the handler.
+        for needle in ["'bail(\"", "'bail ->", "'bail {"] {
+            let offset = code.find(needle).expect("needle in code") as u32;
+            let (_, text) = definition_text_at(code, offset).expect("definition");
+            assert_eq!(text, "bail", "needle {needle}");
+        }
+    }
+
+    #[test]
+    fn definition_on_a_named_import() {
+        let main = "use package::other::{ answer }\nprint(answer)\n";
+        let other = "pub let answer = 42\n";
+        let ws = workspace_for(&[("src/main.tlk", main), ("src/other.tlk", other)]);
+
+        // The use-site import entry jumps to the exported binding.
+        let offset = main.find("answer }").expect("import entry") as u32;
+        let location =
+            goto_definition(&ws, None, &"src/main.tlk".to_string(), offset).expect("definition");
+        assert_eq!(location.document_id, "src/other.tlk");
+        assert_eq!(
+            &other[location.range.start as usize..location.range.end as usize],
+            "answer"
+        );
+
+        // A later use of the imported name jumps there too.
+        let offset = main.rfind("answer").expect("use site") as u32;
+        let location =
+            goto_definition(&ws, None, &"src/main.tlk".to_string(), offset).expect("definition");
+        assert_eq!(location.document_id, "src/other.tlk");
+    }
+
+    #[test]
+    fn definition_on_an_import_path_lands_at_the_file_start() {
+        let main = "use package::other::{ answer }\nprint(answer)\n";
+        let other = "pub let answer = 42\n";
+        let ws = workspace_for(&[("src/main.tlk", main), ("src/other.tlk", other)]);
+        let offset = main.find("other").expect("import path") as u32;
+        let location =
+            goto_definition(&ws, None, &"src/main.tlk".to_string(), offset).expect("definition");
+        assert_eq!(location.document_id, "src/other.tlk");
+        assert_eq!((location.range.start, location.range.end), (0, 0));
+    }
+}
