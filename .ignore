@@ -1,0 +1,21 @@
+/target
+/.build
+dev/editors/vscode/node_modules
+dev/editors/vscode/.vscode-test
+examples/cove-talk
+wasm/pkg
+log.txt
+*.vsix
+talk-ex/index.wit
+*.dot
+*.png
+.docs-cache
+/documents
+server.log
+*.log
+.tmp
+
+# Artifacts from the C backend: emitted translation units and the
+# executables built from them.
+bench/c-spike/*.c
+bench/c-spike/*.bin
