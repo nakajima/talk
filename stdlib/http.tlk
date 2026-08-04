@@ -1,12 +1,4 @@
-// no-core
-use package::Memory::{ _alloc }
-use package::IO::{ _io_read, _io_write, _io_close, _io_clamp }
-use package::Net::{ _io_socket, _io_bind, _io_listen, _io_accept, AF_INET, SOCK_STREAM }
-use package::Convert::{ From, Into }
-use package::Operators::{ Add, Comparable, Equatable, Subtract }
-use package::Showable::{ Showable }
-use package::String::{ String, Substring, UTF8View }
-use package::Optional::{ Optional }
+use package::net::{ _io_socket, _io_bind, _io_listen, _io_accept, AF_INET, SOCK_STREAM }
 
 pub struct Request {
 	pub let raw: String
@@ -47,7 +39,7 @@ pub struct RouteHandler {
 }
 
 // Routes live in a region-allocated ('heap) chain: registration conses,
-// dispatch walks — no fixed slot count.
+// dispatch walks, with no fixed slot count.
 pub struct RouteNode 'heap {
 	pub let path: String
 	pub let handler: RouteHandler
@@ -150,30 +142,32 @@ pub struct HttpServer 'heap {
 	}
 
 	pub func run(port: Int) -> () {
-		let listener_fd = _io_socket(domain: AF_INET, socktype: SOCK_STREAM, proto: 0)
-		_io_bind(fd: listener_fd, addr: 0, port: port)
-		_io_listen(fd: listener_fd, backlog: 128)
+		#unsafe {
+			let listener_fd = _io_socket(domain: AF_INET, socktype: SOCK_STREAM, proto: 0)
+			_io_bind(fd: listener_fd, addr: 0, port: port)
+			_io_listen(fd: listener_fd, backlog: 128)
 
-		loop {
-			let client_fd = _io_accept(fd: listener_fd)
-			if client_fd < 0 {
-				continue
-			}
+			loop {
+				let client_fd = _io_accept(fd: listener_fd)
+				if client_fd < 0 {
+					continue
+				}
 
-			let max_request_size = 8192
-			let buf = _alloc<Byte>(count: max_request_size)
-			let n = _io_read(fd: client_fd, buf: buf, count: max_request_size)
+				let max_request_size = 8192
+				let buf = _alloc<Byte>(count: max_request_size)
+				let n = _io_read(fd: client_fd, buf: buf, count: max_request_size)
 
-			if n <= 0 {
+				if n <= 0 {
+					_io_close(fd: client_fd)
+					continue
+				}
+
+				let n = _io_clamp(count: n, capacity: max_request_size)
+				let raw_request = String(base: buf, byte_count: n, capacity: max_request_size)
+				let wire = self.handle(raw_request: raw_request)
+				_io_write(fd: client_fd, buf: wire.storage.base, count: wire.byte_count)
 				_io_close(fd: client_fd)
-				continue
 			}
-
-			let n = _io_clamp(count: n, capacity: max_request_size)
-			let raw_request = String(base: buf, byte_count: n, capacity: max_request_size)
-			let wire = self.handle(raw_request: raw_request)
-			_io_write(fd: client_fd, buf: wire.storage.base, count: wire.byte_count)
-			_io_close(fd: client_fd)
 		}
 	}
 }

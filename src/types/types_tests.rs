@@ -5539,10 +5539,10 @@ mod with_core {
         Source::from(path)
     }
 
-    /// Every example in examples/ type-checks clean against the core
-    /// prelude. (AnonFunc.tlk currently parses its trailing `(123)` as a
-    /// separate grouped statement — a parser gap noted for the lowerer
-    /// milestones — but it checks clean either way.)
+    /// Every example in examples/ type-checks clean against the core prelude
+    /// and its explicit stdlib imports. (AnonFunc.tlk currently parses its
+    /// trailing `(123)` as a separate grouped statement, a parser gap noted
+    /// for the lowerer milestones, but it checks clean either way.)
     const CLEAN_EXAMPLES: &[&str] = &[
         "AnonFunc.tlk",
         "Array.tlk",

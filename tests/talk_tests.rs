@@ -3620,12 +3620,12 @@ fn run_io_handlers_delegate_to_the_host_fallback() {
 
 #[test]
 fn run_lying_io_handlers_cannot_break_memory_safety() {
-    // Core's io wrappers clamp reply counts to the capacity they
+    // The stdlib io wrappers clamp reply counts to the capacity they
     // allocated: a handler that answers cwd_len with 8 and cwd_copy with
     // 999999 yields a wrong (truncated) string, never an out-of-bounds
     // view.
     assert_runs(
-        b"let calls = 0\n#handle 'io { request in\n\tcalls = calls + 1\n\tif calls == 1 {\n\t\t'continue 8\n\t}\n\t'continue 999999\n}\nlet c = OS.cwd()\nprint(calls)\n",
+        b"use os::{ OS }\nlet calls = 0\n#handle 'io { request in\n\tcalls = calls + 1\n\tif calls == 1 {\n\t\t'continue 8\n\t}\n\t'continue 999999\n}\nlet c = OS.cwd()\nprint(calls)\n",
         &[],
         b"2\n",
     );

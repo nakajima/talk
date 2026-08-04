@@ -2878,7 +2878,7 @@ extend Person {
 
     #[test]
     fn goto_definition_on_stdlib_symbol_inside_call_argument_navigates_to_definition() {
-        let code = "use fs::{ Directory }\nfunc walk(directory: &Directory) {}\nfunc main() { walk(Directory(path: Path([\".\"]))) }\n";
+        let code = "use fs::{ Directory, Path }\nfunc walk(directory: &Directory) {}\nfunc main() { walk(Directory(path: Path([\".\"]))) }\n";
         let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_stdlib_call_arg.tlk"))
             .expect("file uri");
         let module = workspace_for_docs(vec![(uri.clone(), code)]);

@@ -1,3 +1,5 @@
+use http::{ HTTP }
+
 // Sinatra-esque API demo in pure Talk.
 //
 // Run:

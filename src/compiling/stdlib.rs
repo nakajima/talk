@@ -16,6 +16,10 @@ pub const STDLIB_SOURCE_NAMES: &[&str] = &[
     "Package.tlk",
     "syntax/Dump.tlk",
     "html/Html.tlk",
+    "dict.tlk",
+    "net.tlk",
+    "os.tlk",
+    "http.tlk",
 ];
 
 const STDLIB_MODULES: &[(&str, &str, &str)] = &[
@@ -41,6 +45,10 @@ const STDLIB_MODULES: &[(&str, &str, &str)] = &[
         "html/Html.tlk",
         include_str!("../../stdlib/html/Html.tlk"),
     ),
+    ("dict", "dict.tlk", include_str!("../../stdlib/dict.tlk")),
+    ("net", "net.tlk", include_str!("../../stdlib/net.tlk")),
+    ("os", "os.tlk", include_str!("../../stdlib/os.tlk")),
+    ("http", "http.tlk", include_str!("../../stdlib/http.tlk")),
 ];
 
 const STDLIB_FILES: &[(&str, &str)] = &[
@@ -73,6 +81,10 @@ const STDLIB_FILES: &[(&str, &str)] = &[
         "html/html.macro.tlk",
         include_str!("../../stdlib/html/html.macro.tlk"),
     ),
+    ("dict.tlk", include_str!("../../stdlib/dict.tlk")),
+    ("net.tlk", include_str!("../../stdlib/net.tlk")),
+    ("os.tlk", include_str!("../../stdlib/os.tlk")),
+    ("http.tlk", include_str!("../../stdlib/http.tlk")),
 ];
 
 static STDLIB: OnceLock<Vec<OnceLock<CompiledStdlib>>> = OnceLock::new();

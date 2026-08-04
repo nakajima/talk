@@ -1,3 +1,5 @@
+use dict::{ Dict }
+
 func check() -> Int {
 	let d = Dict<String>()
 	d.insert(key: "greet", value: "hello" + " world")

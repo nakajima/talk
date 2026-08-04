@@ -135,3 +135,48 @@ extend Directory: Showable {
 // 		}
 // 	}
 // }
+
+pub struct Path {
+	pub let components: [String]
+}
+
+pub enum FileMode {
+	case read
+	case write
+	case append
+}
+
+pub struct Rawfile {
+	pub let fd: Int
+
+	pub func open_read(path: String) -> Rawfile {
+		let fd = open_path(path: path, flags: O_RDONLY, mode: 0)
+		Rawfile(fd: fd)
+	}
+
+	pub func open_write(path: String) -> Rawfile {
+		let mode = S_IRUSR + S_IWUSR
+		let fd = open_path(path: path, flags: O_WRONLY + O_CREAT + O_TRUNC, mode: mode)
+		Rawfile(fd: fd)
+	}
+
+	pub func open_append(path: String) -> Rawfile {
+		let mode = S_IRUSR + S_IWUSR
+		let fd = open_path(path: path, flags: O_WRONLY + O_CREAT + O_APPEND, mode: mode)
+		Rawfile(fd: fd)
+	}
+
+	pub func read(buf: RawPtr, count: Int) -> Int {
+		_io_read(fd: self.fd, buf: buf, count: count)
+	}
+
+	pub func write(buf: RawPtr, count: Int) -> Int {
+		_io_write(fd: self.fd, buf: buf, count: count)
+	}
+
+	pub func close() -> Int {
+		_io_close(fd: self.fd)
+	}
+
+	pub func is_valid() -> Bool { self.fd >= 0 }
+}
