@@ -9,6 +9,7 @@ while fixing several type-checker and lexer correctness bugs.
 
 ### Added
 
+- **Positional inferred parameters.** A bare inferred parameter such as `func f(x)` is called positionally as `f(1)`. Writing the colon opts into a same-name label: `func f(x:)` and `func f(x: Int)` are called as `f(x: 1)`. Typed positional parameters continue to use `_ x: Int`.
 - **Effect-tracked `unreachable` and postfix force unwrap.** The `unreachable` expression performs Core's public abortive `'panic(message: String) -> Never` effect. Functions infer `'panic`, user handlers may intercept it, and Core's outer host fallback reports unhandled panics and terminates the process. On the same two-variant enums supported by postfix `?`, `value!` extracts the first variant's payload shape and evaluates `unreachable` for the second variant instead of returning it.
 - **Lexical unsafe boundaries.** Raw-pointer expressions and `#_ir` now carry
   the compiler-known `'unsafe` effect. `#unsafe { ... }` discharges it

@@ -3725,7 +3725,9 @@ struct Parser {
 	}
 
 	// A declared parameter list (funcs, inits, effects). ADR 0041 labels:
-	// `_ name` omits the external label, `foo fizz` names it.
+	// a bare `name` is positional, `name:` uses the binder as its external
+	// label, `_ name` is explicitly positional, and `foo fizz` separates
+	// the external label from the local binder.
 	mut func parameters() -> [Parameter] {
 		let params: [Parameter] = []
 		loop true {
@@ -3736,6 +3738,7 @@ struct Parser {
 			let name = ""
 			let name_start = 0
 			let name_end = 0
+			let bare_name = false
 			if self.peek_is(kind: .underscore) && self.next_kind() == .identifier {
 				let underscore_tok = self.current()
 				label_start = underscore_tok.lexeme.lower
@@ -3777,13 +3780,26 @@ struct Parser {
 					name = first
 					name_start = first_tok.lexeme.lower
 					name_end = first_tok.lexeme.upper
+					bare_name = true
 				}
 			}
 			let param_start = self.current().span.lower
 			let annotation: TypeAnnotation? = .none
 			if self.did_match(kind: .colon) {
-				annotation = .some(self.type_annotation())
-				if self.is_failed() { return params }
+				// On a one-name parameter the colon opts into using that name
+				// as the external label. It may stand alone (`x:`) or also
+				// introduce a type annotation (`x: Int`).
+				if bare_name {
+					label = .some(.named(name.clone()))
+					label_start = name_start
+					label_end = name_end
+				}
+				self.skip_newlines()
+				let closes_untyped_label = bare_name && (self.peek_is(kind: .comma) || self.peek_is(kind: .right_paren))
+				if closes_untyped_label == false {
+					annotation = .some(self.type_annotation())
+					if self.is_failed() { return params }
+				}
 			}
 			params.push(Parameter(label: label, label_start: label_start, label_end: label_end, name: name, name_start: name_start, name_end: name_end, mode: mode, mode_start: mode_start, mode_end: mode_end, annotation: annotation, start: param_start, end: self.span_end()))
 			if self.did_match(kind: .comma) { } else { break }

@@ -2018,24 +2018,27 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_parameter(&self, param: &Parameter) -> Doc {
+        let same_name_label = param.uses_same_name_label_syntax();
         let mut result = self.format_name(&param.name);
 
-        // ADR 0041: print the external label before the local binder.
+        // ADR 0041: a same-name label shares the binder token (`x:`);
+        // distinct labels and explicit omission precede the local binder.
         match &param.label {
             None => {}
-            Some(ParamLabel::Named(label)) => {
+            Some(ParamLabel::Named(label)) if !same_name_label => {
                 result = concat_space(text(label.clone()), result);
             }
+            Some(ParamLabel::Named(_)) => {}
             Some(ParamLabel::Omitted) => {
                 result = concat_space(text("_"), result);
             }
         }
 
+        if same_name_label || param.type_annotation.is_some() {
+            result = concat(result, text(":"));
+        }
         if let Some(ref ty) = param.type_annotation {
-            result = concat(
-                result,
-                concat_space(text(":"), self.format_type_annotation(ty)),
-            );
+            result = concat_space(result, self.format_type_annotation(ty));
         }
 
         // Only print a mode the source spelled (mode_span is the keyword's
@@ -3127,9 +3130,17 @@ mod formatter_tests {
 
     #[test]
     fn formats_parameter_labels() {
-        // ADR 0041 spellings round-trip: shorthand, two-name, and `_` forms,
-        // with and without ownership modes.
-        assert_eq!(format_code("func same(x) {}", 100), "func same(x) {}");
+        // ADR 0041 spellings round-trip: bare positional, same-name labeled,
+        // two-name labeled, and explicit `_` forms.
+        assert_eq!(format_code("func bare(x) {}", 100), "func bare(x) {}");
+        assert_eq!(
+            format_code("func inferred_label(x:) {}", 100),
+            "func inferred_label(x:) {}"
+        );
+        assert_eq!(
+            format_code("func typed_label(x: Int) {}", 100),
+            "func typed_label(x: Int) {}"
+        );
         assert_eq!(
             format_code("func split(foo fizz) {}", 100),
             "func split(foo fizz) {}"

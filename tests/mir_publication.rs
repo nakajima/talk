@@ -27,7 +27,7 @@ func area(shape: Shape) -> Int {
 }
 
 func ringing() 'alarm -> Int {
-	'alarm(urgency: 3)
+	'alarm(3)
 }
 
 pub func main() -> Int {

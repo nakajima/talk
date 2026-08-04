@@ -4,6 +4,6 @@ effect 'oops(error) -> Never
 	local.byte_count
 }
 func boom() 'oops -> Int {
-	'oops(error: "bang")
+	'oops("bang")
 }
 boom()

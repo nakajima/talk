@@ -1465,9 +1465,9 @@ fn run_specializes_recursive_inferred_generics() {
     assert_runs(
         b"func fact(n) {\n\
           \tif n <= 1 { return 1 }\n\
-          \treturn n * fact(n: n - 1)\n\
+          \treturn n * fact(n - 1)\n\
           }\n\
-          print(fact(n: 5))\n\
+          print(fact(5))\n\
           ",
         &[],
         b"120\n",
@@ -1476,7 +1476,7 @@ fn run_specializes_recursive_inferred_generics() {
     // working alongside the recursive case.
     assert_runs(
         b"func double(x) { x + x }\n\
-          print(double(x: 20) + double(x: 1))\n\
+          print(double(20) + double(1))\n\
           ",
         &[],
         b"42\n",
@@ -2855,7 +2855,7 @@ fn abort_through_an_init_unwinds_the_assigned_fields_only() {
           struct Holder {\n\
           \tlet data: [Int]\n\
           \tinit(n: Int) {\n\
-          \t\t'bail(error: \"stop\")\n\
+          \t\t'bail(\"stop\")\n\
           \t\tself.data = [n]\n\
           \t}\n\
           }\n\
@@ -2880,7 +2880,7 @@ fn abort_through_an_init_unwinds_the_assigned_fields_only() {
           \tlet right: [Int]\n\
           \tinit(n: Int) {\n\
           \t\tself.left = [n, n]\n\
-          \t\t'bail(error: \"stop\")\n\
+          \t\t'bail(\"stop\")\n\
           \t\tself.right = [n]\n\
           \t}\n\
           }\n\

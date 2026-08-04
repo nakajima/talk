@@ -5,7 +5,7 @@ effect 'oops(error) -> Never
 }
 func check(x: Bool) 'oops -> Int {
 	if x {
-		'oops(error: "nope")
+		'oops("nope")
 	}
 	42
 }

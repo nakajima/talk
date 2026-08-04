@@ -1,17 +1,17 @@
 func fib(n) {
 	if n <= 1 { return n }
-	fib(n: n - 2) + fib(n: n - 1)
+	fib(n - 2) + fib(n - 1)
 }
 
 func greet(name) {
 	print("hello " + name)
 }
 
-greet(name: "talktalk")
+greet("talktalk")
 
 for i in 0..<10 {
-	print(fib(n: i))
+	print(fib(i))
 	i = i + 1
 }
 
-print(fib(n: 10))
+print(fib(10))

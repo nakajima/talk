@@ -8,7 +8,7 @@ struct Wrapper {
 }
 func go() 'ask -> Int {
 	let w = Wrapper(f: func() {
-		'ask(prompt: "meaning?") + 1
+		'ask("meaning?") + 1
 	})
 	w.f()
 }

@@ -5,7 +5,7 @@ func run(n: Int) 'step -> Int {
 	let total = 0
 	let i = 0
 	loop i < n {
-		total = total + 'step(n: i)
+		total = total + 'step(i)
 		i = i + 1
 	}
 	total

@@ -1,6 +1,6 @@
 # 0041 - Callable argument labels and label-based overloading
 
-Status: accepted; implemented (2026-07-25)
+Status: accepted; implemented (2026-07-25); amended (2026-08-03)
 
 ## Context
 
@@ -54,22 +54,29 @@ name does not participate in lookup.
 A parameter has an external argument label and a local binder name.
 
 ```talk
-func same(x) { x }
-func split(foo fizz) { fizz }
-func positional(_ value) { value }
+func positional(value) { value }
+func inferredLabel(value:) { value }
+func typedLabel(value: Int) { value }
+func split(foo value) { value }
+func explicitPositional(_ value: Int) { value }
 ```
 
 The declarations have these source-level callable names:
 
 ```text
-same(x:)
-split(foo:)
 positional(_:)
+inferredLabel(value:)
+typedLabel(value:)
+split(foo:)
+explicitPositional(_:)
 ```
 
-The one-name form is shorthand for using the same spelling externally and
-locally. The two-name form uses the first name as the external label and the
-second as the local binder. `_` means that the argument must be unlabeled.
+A bare one-name parameter is positional. A colon after a one-name parameter
+opts into using the binder spelling as its external label: it may stand alone
+when the type is inferred (`value:`), or also introduce a type annotation
+(`value: Int`). The two-name form uses the first name as the external label and
+the second as the local binder. `_` explicitly requires an unlabeled argument
+and remains useful for typed positional parameters.
 
 Ownership modes remain prefixes on the parameter and do not participate in the
 callable name:
@@ -93,16 +100,19 @@ for the remaining arguments.
 A normal argument must have exactly the label declared at its position.
 
 ```talk
-func id(x) {
-    x
-}
+func positional(x) { x }
+func labeled(x:) { x }
+func typed(x: Int) { x }
 
-id(x: 123)       // valid
-id(123)          // missing label
-id(other: 123)   // incorrect label
+positional(123)       // valid
+positional(x: 123)    // unexpected label
+labeled(x: 123)       // valid
+labeled(123)          // missing label
+typed(x: 123)         // valid
+typed(123)            // missing label
 ```
 
-A parameter declared with `_` requires an unlabeled argument.
+A parameter declared with `_` also requires an unlabeled argument.
 
 ```talk
 func id(_ x) {
@@ -356,29 +366,31 @@ the LSP boundary, preserving ADR 0028's structured-diagnostic rule.
 
 External labels and local parameter binders are distinct semantic roles.
 Ordinary parameter rename continues to rename the local binder and its body
-references. When the declaration uses one-token shorthand, renaming the local
-binder preserves the callable API by expanding the declaration:
+references. When one token supplies both a same-name external label and the
+local binder, renaming the binder preserves the callable API by expanding the
+declaration:
 
 ```talk
-func id(value) { value }
+func id(value: Int) { value }
 ```
 
 renamed locally from `value` to `item` becomes:
 
 ```talk
-func id(value item) { item }
+func id(value item: Int) { item }
 ```
 
-It does not silently rename every call from `value:` to `item:`. An external
+A bare positional parameter simply renames from `value` to `item`. A labeled
+rename does not silently rename every call from `value:` to `item:`. An external
 API-label rename is a separate symbol-and-slot-aware operation and is not
 required in the first implementation. Go-to-definition from a checked call
 label may select the external-label token in the selected callable declaration.
 
 ## Implementation order
 
-1. Add the external label and its span to `Parameter`, parse the one-name,
-   two-name, and `_` forms, and parse `_:` as a written call label. Update the
-   formatter, highlighter, AST constructors, and parser tests.
+1. Add the external label and its span to `Parameter`, parse the bare,
+   same-name-colon, two-name, and `_` forms, and parse `_:` as a written call
+   label. Update the formatter, highlighter, AST constructors, and parser tests.
 2. Preserve named-declaration versus anonymous-closure origin through function
    desugaring. Give desugared trailing blocks an explicit argument origin.
 3. Introduce `ArgumentLabel`, `CallableName`, and the serializable callable
@@ -399,8 +411,9 @@ label may select the external-label token in the selected callable declaration.
    tables, and module exports. Add exact-label selection, duplicate detection,
    unique recovery, and ambiguous-reference diagnostics.
 8. Migrate core, stdlib, examples, benchmarks, tests, and generated fixtures.
-   Add labels at calls by default; declare `_` only where the API is genuinely
-   positional. Existing trailing-block APIs keep meaningful final labels and
+   Add labels at calls for colon-bearing and two-name declarations; bare inferred
+   parameters are positional, while typed positional APIs declare `_`. Existing
+   trailing-block APIs keep meaningful final labels and
    need no `_` migration solely for trailing syntax.
 9. Remove compatibility paths that treated ordinary source labels as
    decorative and make the full validation suite the rollout gate.
@@ -412,8 +425,8 @@ up front so label enforcement is not later retrofitted around overloads.
 
 Required coverage includes:
 
-- parser and formatter round trips for `x`, `foo fizz`, `_ x`, and each
-  ownership-mode combination;
+- parser and formatter round trips for `x`, `x:`, `x: T`, `foo fizz`, `_ x`,
+  and each ownership-mode combination;
 - `_:` reaching semantic analysis rather than failing parsing;
 - valid, missing, incorrect, and unexpected labels on direct functions;
 - instance methods, static methods, explicit and memberwise initializers,
@@ -438,7 +451,8 @@ Required coverage includes:
   multiline calls, nested expressions, and UTF-16 ranges after non-ASCII text;
 - no missing-label action for a trailing block;
 - arity placeholders using named and omitted callable slots; and
-- local rename of a shorthand parameter preserving its external label.
+- local rename of a same-name labeled parameter preserving its external label,
+  and bare parameter rename remaining positional.
 
 The repository migration is complete only when the Rust test suite, Talk core
 and stdlib tests, examples, and benchmark corpus all pass under mandatory
@@ -518,7 +532,8 @@ replaced by this ADR.
 
 ## Consequences
 
-- Ordinary parameter names become enforced external API by default.
+- Bare inferred parameter names are local-only and positional; writing a colon
+  makes the name an enforced external API.
 - APIs can use concise local binder names without sacrificing descriptive call
   sites.
 - `_` is an explicit declaration of positional calling rather than an ignored
@@ -532,6 +547,7 @@ replaced by this ADR.
   from single base-name entries to overload sets.
 - The compiler and module interface gain callable-contract metadata, but the
   runtime representation of symbols and function calls does not gain labels.
-- Parameter rename must preserve the external API when expanding shorthand.
-- Existing Talk source requires a broad, intentional migration; positional
-  declarations are chosen explicitly rather than inferred from legacy calls.
+- Parameter rename must preserve the external API when expanding same-name
+  labeled syntax to the two-name form.
+- Existing Talk source requires an intentional migration: calls to bare inferred
+  parameters become positional, while annotated parameters remain labeled.

@@ -124,8 +124,8 @@ pub fn rename_at(
             .into_iter()
             .map(|(start, end)| TextEdit {
                 range: TextRange::new(start, end),
-                // A shorthand parameter declaration keeps its external
-                // label by expanding to the two-name form (ADR 0041).
+                // A same-name labeled parameter keeps its external label
+                // by expanding to the two-name form (ADR 0041).
                 replacement: match label_expansions.get(&(start, end)) {
                     Some(label) => format!("{label} {new_name}"),
                     None => new_name.to_string(),
@@ -733,9 +733,10 @@ struct RenameCollector<'a> {
     target: Symbol,
     target_import_aliases: FxHashSet<String>,
     spans: FxHashSet<(u32, u32)>,
-    // Shorthand parameter declarations whose external label must survive
-    // a binder rename (ADR 0041): declaration span -> the label to keep.
-    // `func id(value)` renamed to `item` becomes `func id(value item)`.
+    // Same-name labeled parameter declarations whose external label must
+    // survive a binder rename (ADR 0041): declaration span -> label to keep.
+    // `func id(value: Int)` renamed to `item` becomes
+    // `func id(value item: Int)`.
     label_expansions: FxHashMap<(u32, u32), String>,
     // Enclosing function origins; anonymous closures never expand.
     func_origins: Vec<crate::node_kinds::func::FuncOrigin>,
@@ -841,15 +842,18 @@ impl RenameCollector<'_> {
     fn enter_parameter(&mut self, param: &crate::node_kinds::parameter::Parameter) {
         if param.name.symbol().ok() == Some(self.target) {
             self.push_span(param.name_span);
-            // A named callable's shorthand parameter expands so the binder
-            // rename preserves the external API (ADR 0041). Anonymous
-            // closure parameters are local binders only.
+            // A named callable's same-name label expands so a binder rename
+            // preserves the external API (ADR 0041). Bare parameters are
+            // positional, and anonymous closure parameters have no labels.
             let in_closure =
                 self.func_origins.last() == Some(&crate::node_kinds::func::FuncOrigin::Expr);
-            let name = param.name.name_str();
-            if param.label.is_none() && !in_closure && name != "self" {
+            if param.uses_same_name_label_syntax() && !in_closure {
+                let Some(crate::node_kinds::parameter::ParamLabel::Named(label)) = &param.label
+                else {
+                    unreachable!("same-name label syntax must carry a named label")
+                };
                 self.label_expansions
-                    .insert((param.name_span.start, param.name_span.end), name);
+                    .insert((param.name_span.start, param.name_span.end), label.clone());
             }
         }
     }
@@ -1083,13 +1087,23 @@ mod tests {
     }
 
     #[test]
-    fn parameter_rename_expands_shorthand_to_preserve_the_external_label() {
-        // ADR 0041: renaming the local binder must not change split(value:).
+    fn parameter_rename_expands_same_name_label_to_preserve_the_api() {
+        // ADR 0041: renaming the local binder must not change id(value:).
         let code = "func id(value: Int) -> Int {\n\tvalue\n}\nid(value: 1)\n";
         let body_use = code.rfind("value\n").expect("body reference") as u32;
         assert_eq!(
             apply_rename(code, body_use, "item"),
             "func id(value item: Int) -> Int {\n\titem\n}\nid(value: 1)\n"
+        );
+    }
+
+    #[test]
+    fn bare_parameter_rename_stays_positional() {
+        let code = "func id(value) {\n\tvalue\n}\nid(1)\n";
+        let body_use = code.rfind("value\n").expect("body reference") as u32;
+        assert_eq!(
+            apply_rename(code, body_use, "item"),
+            "func id(item) {\n\titem\n}\nid(1)\n"
         );
     }
 
@@ -1104,7 +1118,7 @@ mod tests {
     }
 
     #[test]
-    fn closure_parameter_rename_stays_shorthand() {
+    fn closure_parameter_rename_stays_same_name() {
         // Anonymous closure parameters are local binders only; no label
         // expansion applies.
         let code = "let f = func(value: Int) -> Int {\n\tvalue\n}\nf(1)\n";

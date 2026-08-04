@@ -6,7 +6,7 @@ Here, have some math.
 
 ok ok, that was exciting, let’s write a function now
 
-```tlk
+```tlk accumulate norun
 func add(x, y) {
   x + y
 }
@@ -14,13 +14,13 @@ func add(x, y) {
 
 Let's call the function with `Int`s:
 
-```tlk
+```tlk accumulate
 add(x: 1, y: 2) // => 3
 ```
 
 Now let's call it with `String`s:
 
-```tlk
+```tlk accumulate
 add(x: "hello ", y: "world") // => "hello world"
 ```
 

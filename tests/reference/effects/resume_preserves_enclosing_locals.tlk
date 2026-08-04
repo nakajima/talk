@@ -4,7 +4,7 @@ func f() -> Int {
 	#handle 'ask { p in
 		'continue 41
 	}
-	let answer = 'ask(prompt: "q")
+	let answer = 'ask("q")
 	answer + s.byte_count
 }
 print(f())

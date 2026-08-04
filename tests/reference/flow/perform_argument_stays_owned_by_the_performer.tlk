@@ -6,7 +6,7 @@ func f(flag: Bool) 'log -> Int {
 	let s = "hello" + " world"
 	let n = 0
 	if flag {
-		n = 'log(msg: s)
+		n = 'log(s)
 	}
 	n
 }

@@ -1050,7 +1050,7 @@ Function result annotations are optional when inferable, and so are effect paylo
 
 ## Expressions and control flow
 
-Literals: integers, floats, strings, `true`, `false`, arrays `[a, b]`, records `{ field: expr, other: expr }`, closures `func(x: Int) -> Int { x + 1 }`. Call arguments are positional (`f(a, b)`) or labeled (`f(x: 1, y: 2)`). Constructors look like calls: `Point(x: 1, y: 2)`, enum cases may be qualified or inferred: `Optional<Int>.some(1)` or `.some(1)`. Field/member access is `value.field` and `value.method(args)`. Generic arguments may be explicit: `id<Int>(1)`. Arguments are always passed plainly — `&x` is not expression syntax; a parameter's `&T`/`&mut T` type alone makes the call site a borrow.
+Literals: integers, floats, strings, `true`, `false`, arrays `[a, b]`, records `{ field: expr, other: expr }`, closures `func(x: Int) -> Int { x + 1 }`. A bare inferred parameter is positional (`func f(x)` is called as `f(1)`); writing a colon opts into its label (`func f(x:)` or `func f(x: Int)` is called as `f(x: 1)`). Use `_ x: Int` for a typed positional parameter. Constructors look like calls: `Point(x: 1, y: 2)`, enum cases may be qualified or inferred: `Optional<Int>.some(1)` or `.some(1)`. Field/member access is `value.field` and `value.method(args)`. Generic arguments may be explicit: `id<Int>(1)`. Arguments are always passed plainly — `&x` is not expression syntax; a parameter's `&T`/`&mut T` type alone makes the call site a borrow.
 
 Bindings and mutation: `let x = expr`; assignment is `x = expr` or `self.field = expr`. `let` variables are mutable by assignment in current Talk. Type ascription is `let x: Type = expr`.
 

@@ -512,19 +512,19 @@ pub mod tests {
         let cases: &[(&str, &str, bool, bool)] = &[
             (
                 "types::row_projection_polymorphic",
-                "\n        func fstA(r) { r.a }\n        (fstA(r: { a: 1 }), fstA(r: { a: 2, b: true }))\n    ",
+                "\n        func fstA(r) { r.a }\n        (fstA({ a: 1 }), fstA({ a: 2, b: true }))\n    ",
                 true,
                 false,
             ),
             (
                 "types::row_presence_constraint_is_polymorphic",
-                "\n        func useA(r) { r.a } // imposes HasField(row_var, \"a\", Int)\n        (useA(r: { a: 1 }), useA(r: { a: 2, c: true }))\n    ",
+                "\n        func useA(r) { r.a } // imposes HasField(row_var, \"a\", Int)\n        (useA({ a: 1 }), useA({ a: 2, c: true }))\n    ",
                 true,
                 false,
             ),
             (
                 "types::types_non_annotated_record_param",
-                "\n        func foo(x) {\n            (x.y, x.z)\n        }\n\n        foo(x: { y: 123, z: 1.23 })\n        foo(x: { y: 123, z: 123 })\n        ",
+                "\n        func foo(x) {\n            (x.y, x.z)\n        }\n\n        foo({ y: 123, z: 1.23 })\n        foo({ y: 123, z: 123 })\n        ",
                 true,
                 false,
             ),
@@ -542,7 +542,7 @@ pub mod tests {
             ),
             (
                 "types::record_field_func_generalizes_with_row_forall",
-                "\n            func getX(r) { r.x }\n            getX(r: { x: 1 })\n            ",
+                "\n            func getX(r) { r.x }\n            getX({ x: 1 })\n            ",
                 true,
                 false,
             ),
@@ -608,7 +608,7 @@ pub mod tests {
             ("types::types_array_properties", "[1,2,3].count", true, true),
             (
                 "types::types_basic_binary",
-                "func a(x) { x + 1 } ; a(x: 123)",
+                "func a(x) { x + 1 } ; a(123)",
                 true,
                 true,
             ),
@@ -632,13 +632,13 @@ pub mod tests {
             ),
             (
                 "types::types_identity",
-                "\n        func identity(x) { x }\n        identity(x: 123)\n        identity(x: true)\n        ",
+                "\n        func identity(x) { x }\n        identity(123)\n        identity(true)\n        ",
                 true,
                 false,
             ),
             (
                 "types::stores_func_instantiations",
-                "\n        func identity(x) { x }\n        identity(x: 123)\n        identity(x: true)\n        ",
+                "\n        func identity(x) { x }\n        identity(123)\n        identity(true)\n        ",
                 true,
                 false,
             ),
@@ -655,7 +655,7 @@ pub mod tests {
             // — exactly like the annotated twin `func fizz<T>(x: T)`.
             (
                 "types::infers_simple_recursion",
-                "\n        func rec(x, y, z) {\n            if x == y { x } else { rec(x: y-z, y: y, z: z) }\n        }\n\n        rec(x: 0, y: 2, z: 1)\n        rec(x: 0.0, y: 2.0, z: 1.0)\n        ",
+                "\n        func rec(x, y, z) {\n            if x == y { x } else { rec(y-z, y, z) }\n        }\n\n        rec(0, 2, 1)\n        rec(0.0, 2.0, 1.0)\n        ",
                 true,
                 true,
             ),
@@ -667,7 +667,7 @@ pub mod tests {
             ),
             (
                 "types::explicit_call_args",
-                "\n        func id<T>(x) { x }\n        id<Byte>(x: 123)\n    ",
+                "\n        func id<T>(x) { x }\n        id<Byte>(123)\n    ",
                 true,
                 false,
             ),
@@ -679,19 +679,19 @@ pub mod tests {
             ),
             (
                 "types::types_call_let",
-                "\n        func id(x) { x }\n        let a = id(x: 123)\n        let b = id(x: 1.23)\n        a\n        b\n        ",
+                "\n        func id(x) { x }\n        let a = id(123)\n        let b = id(1.23)\n        a\n        b\n        ",
                 true,
                 false,
             ),
             (
                 "types::types_nested_identity",
-                "\n        func identity(x) { x }\n        identity(x: identity(x: 123))\n        identity(x: identity(x: true))\n        ",
+                "\n        func identity(x) { x }\n        identity(identity(123))\n        identity(identity(true))\n        ",
                 true,
                 false,
             ),
             (
                 "types::types_multiple_args",
-                "\n        func makeTuple(x, y) {\n            (x, y)\n        }\n\n        makeTuple(x: 123, y: true)\n            ",
+                "\n        func makeTuple(x, y) {\n            (x, y)\n        }\n\n        makeTuple(123, true)\n            ",
                 true,
                 false,
             ),
@@ -817,13 +817,13 @@ pub mod tests {
             ),
             (
                 "types::types_recursive_func",
-                "\n        func fizz(n) {\n            if true {\n                123\n            } else {\n                fizz(n: n)\n            }\n        }\n\n        fizz(n: 456)\n        ",
+                "\n        func fizz(n) {\n            if true {\n                123\n            } else {\n                fizz(n)\n            }\n        }\n\n        fizz(456)\n        ",
                 true,
                 false,
             ),
             (
                 "types::recursion_is_monomorphic_within_binding_group",
-                "\n        func g(x) {\n            // Force a shape change on the recursive call to try to “polymorphically” recurse.\n            g( x: (x, x) )\n        }\n        g(x: 1)\n    ",
+                "\n        func g(x) {\n            // Force a shape change on the recursive call to try to “polymorphically” recurse.\n            g((x, x))\n        }\n        g(1)\n    ",
                 false,
                 false,
             ),
@@ -1261,7 +1261,7 @@ pub mod tests {
             ),
             (
                 "types::types_add_method_in_func",
-                "func add(x) { x + 1 }\n\n            add(x: 2)\n            ",
+                "func add(x) { x + 1 }\n\n            add(2)\n            ",
                 true,
                 true,
             ),
@@ -1285,7 +1285,7 @@ pub mod tests {
             ),
             (
                 "types::types_fib",
-                "\n        func fib(n) {\n            if n <= 1 { return n }\n\n            return fib(n: n - 2) + fib(n: n - 1)\n        }\n\n        fib(n: 3)\n        ",
+                "\n        func fib(n) {\n            if n <= 1 { return n }\n\n            return fib(n - 2) + fib(n - 1)\n        }\n\n        fib(3)\n        ",
                 true,
                 true,
             ),
@@ -1369,7 +1369,7 @@ pub mod tests {
             ),
             (
                 "types::finalize_ty_produces_correct_poly_entry",
-                "\n            func id(x) { x }\n            id(x: 123)\n            ",
+                "\n            func id(x) { x }\n            id(123)\n            ",
                 true,
                 false,
             ),
@@ -1953,7 +1953,7 @@ pub mod tests {
         // to inferred params too — plan 3.3(b)), so identity returns a
         // borrow of its argument; Copy instantiations erase the wrap.
         let t = check(
-            "// no-core\nfunc identity(x) { x }\nlet a = identity(x: 123)\nlet b = identity(x: 1.5)",
+            "// no-core\nfunc identity(x) { x }\nlet a = identity(123)\nlet b = identity(1.5)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "identity"), "<T0>(&T0) -> &T0");
@@ -2022,7 +2022,7 @@ pub mod tests {
         // Monomorphic recursion within a binding group (THIH binding groups):
         // the recursive call types against the group's skeleton, generalization
         // happens after.
-        let t = check("// no-core\nfunc f(n) { f(n: n) }");
+        let t = check("// no-core\nfunc f(n) { f(n) }");
         assert_clean(&t);
         assert_eq!(ty_of(&t, "f"), "<T0, T1>(&T0) -> T1");
     }
@@ -2471,7 +2471,7 @@ pub mod tests {
         // The same ambiguity reached through a scheme-carried constraint:
         // the discharge site (the call) gets the error.
         let t = check(
-            "// no-core\nprotocol Aa {\n\tfunc m() -> Int\n}\nprotocol Bb {\n\tfunc m() -> Int\n}\nextend Int: Aa {\n\tfunc m() -> Int { 1 }\n}\nextend Int: Bb {\n\tfunc m() -> Int { 2 }\n}\nfunc f(x) { x.m() }\nlet r = f(x: 2)",
+            "// no-core\nprotocol Aa {\n\tfunc m() -> Int\n}\nprotocol Bb {\n\tfunc m() -> Int\n}\nextend Int: Aa {\n\tfunc m() -> Int { 1 }\n}\nextend Int: Bb {\n\tfunc m() -> Int { 2 }\n}\nfunc f(x) { x.m() }\nlet r = f(2)",
         );
         let errors = type_errors(&t);
         assert_eq!(errors.len(), 1, "{errors:?}");
@@ -2505,7 +2505,7 @@ pub mod tests {
         // against Int's conformances (Chakravarty/Keller/Peyton Jones,
         // Associated Type Synonyms).
         let t = check(
-            "// no-core\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nprotocol Subtract<RHS> {\n\tassociated Ret\n\tfunc minus(rhs: RHS) -> Ret\n}\nprotocol Comparable<RHS> {\n\tfunc lte(rhs: RHS) -> Bool\n}\nextend Int: Add<Int> {\n\tfunc add(rhs: Int) -> Int { 0 }\n}\nextend Int: Subtract<Int> {\n\tfunc minus(rhs: Int) -> Int { 0 }\n}\nextend Int: Comparable<Int> {\n\tfunc lte(rhs: Int) -> Bool { true }\n}\nfunc fib(n) {\n\tif n <= 1 { return n }\n\treturn fib(n: n - 2) + fib(n: n - 1)\n}\nlet x = fib(n: 24)",
+            "// no-core\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nprotocol Subtract<RHS> {\n\tassociated Ret\n\tfunc minus(rhs: RHS) -> Ret\n}\nprotocol Comparable<RHS> {\n\tfunc lte(rhs: RHS) -> Bool\n}\nextend Int: Add<Int> {\n\tfunc add(rhs: Int) -> Int { 0 }\n}\nextend Int: Subtract<Int> {\n\tfunc minus(rhs: Int) -> Int { 0 }\n}\nextend Int: Comparable<Int> {\n\tfunc lte(rhs: Int) -> Bool { true }\n}\nfunc fib(n) {\n\tif n <= 1 { return n }\n\treturn fib(n - 2) + fib(n - 1)\n}\nlet x = fib(24)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "x"), "Int");
@@ -2986,7 +2986,7 @@ pub mod tests {
         // The stamped mode is the authority: an explicit `consume` on an
         // unannotated param keeps today's owned-parameter typing.
         let t = check(
-            "// no-core\nstruct S {}\nfunc eat(consume x) -> Int {\n\t0\n}\nlet s = S()\nlet n = eat(x: s)",
+            "// no-core\nstruct S {}\nfunc eat(consume x) -> Int {\n\t0\n}\nlet s = S()\nlet n = eat(s)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "eat"), "<T0>(T0) -> Int");
@@ -2997,7 +2997,7 @@ pub mod tests {
         // Copy erasure must stay decidable for inferred borrow params:
         // `&?a` meeting Int erases to Int (the annotated twin's param never
         // wraps a Copy head at all).
-        let t = check("func add(a, b) {\n\ta + b\n}\nlet r: Int = add(a: 1, b: 2)");
+        let t = check("func add(a, b) {\n\ta + b\n}\nlet r: Int = add(1, 2)");
         assert_clean(&t);
     }
 
@@ -3008,7 +3008,7 @@ pub mod tests {
         // at the boundary, so the param's inferred type stays a borrow
         // rather than defaulting to owned.
         let t = check(
-            "// no-core\nstruct Str {}\nfunc steal(x) -> Str {\n\tx\n}\nlet s = Str()\nlet y = steal(x: s)",
+            "// no-core\nstruct Str {}\nfunc steal(x) -> Str {\n\tx\n}\nlet s = Str()\nlet y = steal(s)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "steal"), "(&Str) -> Str");
@@ -3567,7 +3567,7 @@ pub mod tests {
         // extent (here, the prescanned top-level `#handle`), not at the
         // perform site.
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\n#handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(e: 1)\n\t2\n}\nsafe()",
+            "// no-core\neffect 'oops(e) -> Never\n#handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}\nsafe()",
         );
         assert_clean(&t);
         let safe = ty_of(&t, "safe");
@@ -3585,7 +3585,7 @@ pub mod tests {
         // catalog signature, which the lowerer builds capability types
         // from.
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\n#handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(e: 1)\n\t2\n}\nfunc outer() {\n\tsafe()\n}\nouter()",
+            "// no-core\neffect 'oops(e) -> Never\n#handle 'oops { e in 0 }\nfunc safe() {\n\t'oops(1)\n\t2\n}\nfunc outer() {\n\tsafe()\n}\nouter()",
         );
         assert_clean(&t);
         let safe = ty_of(&t, "safe");
@@ -3652,7 +3652,7 @@ pub mod tests {
         // row and is discharged where the call meets the handler's
         // extent, never escaping the caller.
         let t = check(
-            "// no-core\neffect 'throw(ret) -> ()\nfunc this_is_fine() {\n\t#handle 'throw { err in () }\n\tthis_is_not_fine()\n}\nfunc this_is_not_fine() {\n\t'throw(ret: 1)\n\t()\n}\nthis_is_fine()",
+            "// no-core\neffect 'throw(ret) -> ()\nfunc this_is_fine() {\n\t#handle 'throw { err in () }\n\tthis_is_not_fine()\n}\nfunc this_is_not_fine() {\n\t'throw(1)\n\t()\n}\nthis_is_fine()",
         );
         assert_clean(&t);
         let callee = ty_of(&t, "this_is_not_fine");
@@ -3824,13 +3824,12 @@ pub mod tests {
         // solver's fixpoint; the row tail generalizes (Gaster & Jones,
         // POPL 1996 / Leijen, Trends in FP 2005), and each call
         // instantiates it afresh.
-        let t = check(
-            "// no-core\nfunc fstA(r) { r.a }\n(fstA(r: { a: 1 }), fstA(r: { a: 2, b: true }))",
-        );
+        let t =
+            check("// no-core\nfunc fstA(r) { r.a }\n(fstA({ a: 1 }), fstA({ a: 2, b: true }))");
         assert_clean(&t);
 
         let t = check(
-            "// no-core\nfunc foo(x) {\n\t(x.y, x.z)\n}\nfoo(x: { y: 123, z: 1.23 })\nfoo(x: { y: 123, z: 123 })",
+            "// no-core\nfunc foo(x) {\n\t(x.y, x.z)\n}\nfoo({ y: 123, z: 1.23 })\nfoo({ y: 123, z: 123 })",
         );
         assert_clean(&t);
     }
@@ -4401,8 +4400,7 @@ pub mod tests {
 
     #[test]
     fn unhandled_effects_grow_the_latent_row() {
-        let t =
-            check("// no-core\neffect 'oops(e) -> Never\nfunc risky() {\n\t'oops(e: 1)\n\t2\n}");
+        let t = check("// no-core\neffect 'oops(e) -> Never\nfunc risky() {\n\t'oops(1)\n\t2\n}");
         assert_clean(&t);
         assert_eq!(ty_of(&t, "risky"), "() -> Int ! <'oops>");
     }
@@ -4468,7 +4466,7 @@ pub mod tests {
         // handler's parameter meet in the effect signature's shared
         // placeholder, so both get Int here.
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\nfunc wants(i: Int) { i }\n#handle 'oops { e in wants(i: e) }\n'oops(e: 123)",
+            "// no-core\neffect 'oops(e) -> Never\nfunc wants(i: Int) { i }\n#handle 'oops { e in wants(i: e) }\n'oops(123)",
         );
         assert_clean(&t);
     }
@@ -4476,7 +4474,7 @@ pub mod tests {
     #[test]
     fn handler_parameter_type_conflicts_error() {
         let t = check(
-            "// no-core\neffect 'oops(e) -> Never\nfunc wants(i: Int) { i }\n#handle 'oops { e in wants(i: e) }\n'oops(e: 1.5)",
+            "// no-core\neffect 'oops(e) -> Never\nfunc wants(i: Int) { i }\n#handle 'oops { e in wants(i: e) }\n'oops(1.5)",
         );
         assert_eq!(type_errors(&t).len(), 1, "{:?}", type_errors(&t));
     }
@@ -4896,7 +4894,7 @@ pub mod tests {
 
     #[test]
     fn instantiations_recorded_at_call_sites() {
-        let t = check("// no-core\nfunc identity(x) { x }\nlet a = identity(x: 123)");
+        let t = check("// no-core\nfunc identity(x) { x }\nlet a = identity(123)");
         assert_clean(&t);
         let instantiations = &t.phase.program.types().instantiations;
         let int_instantiation = instantiations
@@ -5908,7 +5906,7 @@ mod with_core {
     #[test]
     fn fib_against_core_is_int() {
         let typed = check_with_core(Source::from(
-            "let x = fib(n: 24)\nfunc fib(n) {\n\tif n <= 1 { return n }\n\treturn fib(n: n - 2) + fib(n: n - 1)\n}",
+            "let x = fib(24)\nfunc fib(n) {\n\tif n <= 1 { return n }\n\treturn fib(n - 2) + fib(n - 1)\n}",
         ));
         let errors = type_errors(&typed);
         assert!(errors.is_empty(), "{errors:?}");
@@ -6367,7 +6365,7 @@ mod with_core {
         // scope with its value: an Int-valued handler over a ()-valued
         // scope must be a type error, not a lowering panic.
         let t = check_with_core(Source::from(
-            "effect 'oops(e) -> Never\n#handle 'oops { e in\n\t42\n}\nfunc boom() 'oops -> () {\n\t'oops(e: \"x\")\n}\nboom()",
+            "effect 'oops(e) -> Never\n#handle 'oops { e in\n\t42\n}\nfunc boom() 'oops -> () {\n\t'oops(\"x\")\n}\nboom()",
         ));
         let errors = type_errors(&t);
         assert!(
@@ -6379,7 +6377,7 @@ mod with_core {
     #[test]
     fn aborting_handler_body_must_match_the_function_return_type() {
         let t = check_with_core(Source::from(
-            "effect 'oops(e) -> Never\nfunc f() -> Int {\n\t#handle 'oops { e in\n\t\t\"nope\"\n\t}\n\t'oops(e: \"x\")\n\t42\n}\nf()",
+            "effect 'oops(e) -> Never\nfunc f() -> Int {\n\t#handle 'oops { e in\n\t\t\"nope\"\n\t}\n\t'oops(\"x\")\n\t42\n}\nf()",
         ));
         let errors = type_errors(&t);
         assert!(
@@ -6393,7 +6391,7 @@ mod with_core {
         // An aborting handler whose value matches the scope, and an
         // always-resuming handler (Never body), both check clean.
         let t = check_with_core(Source::from(
-            "effect 'oops(e) -> Never\neffect 'ask(q) -> Int\n#handle 'oops { e in\n\t0\n}\n#handle 'ask { q in\n\t'continue 1\n}\nfunc go() '[oops, ask] -> Int {\n\t'ask(q: \"?\")\n}\ngo()",
+            "effect 'oops(e) -> Never\neffect 'ask(q) -> Int\n#handle 'oops { e in\n\t0\n}\n#handle 'ask { q in\n\t'continue 1\n}\nfunc go() '[oops, ask] -> Int {\n\t'ask(\"?\")\n}\ngo()",
         ));
         assert_no_errors(&t);
     }
@@ -8250,6 +8248,38 @@ mod nested_types {
                 .any(|e| e.contains("Expected argument label 'x', found 'other'")),
             "{errors:?}"
         );
+    }
+
+    #[test]
+    fn inferred_parameters_are_positional_unless_the_colon_is_written() {
+        let positional = check("func id(x) { x }\nid(1)");
+        assert_clean(&positional);
+
+        let unexpected = check("func id(x) { x }\nid(x: 1)");
+        let errors = type_errors(&unexpected);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Unexpected argument label 'x'")),
+            "{errors:?}"
+        );
+
+        let labeled = check("func id(x:) { x }\nid(x: 1)");
+        assert_clean(&labeled);
+
+        let missing = check("func id(x:) { x }\nid(1)");
+        let errors = type_errors(&missing);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("Missing argument label 'x'")),
+            "{errors:?}"
+        );
+
+        let overloads = check(
+            "// no-core\nfunc fizz(x) { 0 }\nfunc fizz(x:) { 1 }\nlet a = fizz(1)\nlet b = fizz(x: 1)",
+        );
+        assert_clean(&overloads);
     }
 
     #[test]

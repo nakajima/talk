@@ -3,7 +3,7 @@ effect 'ask(prompt) -> Int
 	'continue 10
 }
 func inner() 'ask -> Int {
-	let v = 'ask(prompt: "x")
+	let v = 'ask("x")
 	v + 1
 }
 func outer() 'ask -> Int {

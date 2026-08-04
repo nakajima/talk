@@ -13,6 +13,7 @@ use comrak::{
 // it would be neat if we could just write this in talk.
 fn main() {
     let template = std::fs::read_to_string("./content/index.html.template").unwrap();
+    let template = highlight_intro_examples(&template);
     let template = template.replace(
         "/page.js",
         &format!(
@@ -100,6 +101,66 @@ fn highlight(code: &str) -> String {
     output.trim_end_matches(&['\n', '\r'][..]).to_string()
 }
 
+fn highlight_intro_examples(template: &str) -> String {
+    let decode_attribute = |value: &str| {
+        value
+            .replace("&quot;", "\"")
+            .replace("&#39;", "'")
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&")
+    };
+
+    let Some(intro_start) = template
+        .find("<code class=\"intro-text\">")
+        .or_else(|| template.find("<code class=\"intro-txt\">"))
+    else {
+        return template.to_string();
+    };
+    let Some(intro_end_offset) = template[intro_start..].find("</code>") else {
+        return template.to_string();
+    };
+    let intro_end = intro_start + intro_end_offset;
+    let intro = &template[intro_start..intro_end];
+    let mut rendered_intro = String::with_capacity(intro.len());
+    let mut cursor = 0;
+
+    while let Some(title_offset) = intro[cursor..].find("title=\"") {
+        let value_start = cursor + title_offset + "title=\"".len();
+        let Some(value_end_offset) = intro[value_start..].find('"') else {
+            break;
+        };
+        let value_end = value_start + value_end_offset;
+        rendered_intro.push_str(&intro[cursor..=value_end]);
+
+        let source = decode_attribute(&intro[value_start..value_end]);
+        let highlighted = escape_html(&highlight(&source));
+        rendered_intro.push_str(" data-highlighted=\"");
+        rendered_intro.push_str(&highlighted);
+        rendered_intro.push('"');
+        cursor = value_end + 1;
+    }
+    rendered_intro.push_str(&intro[cursor..]);
+
+    let mut result = template.to_string();
+    result.replace_range(intro_start..intro_end, &rendered_intro);
+
+    let Some(code_container_start) = result.find("<div class=\"intro-code\">") else {
+        return result;
+    };
+    let Some(pre_start_offset) = result[code_container_start..].find("<pre>") else {
+        return result;
+    };
+    let source_start = code_container_start + pre_start_offset + "<pre>".len();
+    let Some(source_end_offset) = result[source_start..].find("</pre>") else {
+        return result;
+    };
+    let source_end = source_start + source_end_offset;
+    let source = decode_attribute(&result[source_start..source_end]);
+    result.replace_range(source_start..source_end, &highlight(&source));
+    result
+}
+
 fn _format(code: &str) -> String {
     let mut child = std::process::Command::new("../target/debug/talk")
         .arg("format")
@@ -120,13 +181,18 @@ fn _format(code: &str) -> String {
     output.trim_end_matches(&['\n', '\r'][..]).to_string()
 }
 
-fn runnable(code: &str) -> String {
+fn runnable(code: &str, accumulates: bool) -> String {
     let code = code.trim_end_matches(&['\n', '\r'][..]);
     let highlighted = highlight(code);
     let raw = escape_html(code);
     let rows = line_count(code);
+    let accumulates = if accumulates {
+        " data-accumulates='true'"
+    } else {
+        ""
+    };
     format!(
-        "<div class='runnable'>
+        "<div class='runnable'{accumulates}>
             <div class='code-block'>
                 <pre class='code-highlight' aria-hidden='true'>{highlighted}</pre>
                 <div class='code-diagnostics' aria-hidden='true'></div>
@@ -142,11 +208,19 @@ fn runnable(code: &str) -> String {
     )
 }
 
-fn norun(code: &str) -> String {
+fn norun(code: &str, accumulates: bool) -> String {
     let code = code.trim_end_matches(&['\n', '\r'][..]);
     let highlighted = highlight(code);
+    let accumulation = if accumulates {
+        format!(
+            " data-accumulates='true' data-source='{}'",
+            escape_html(code)
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "<div class='code-block no-run'>
+        "<div class='code-block no-run'{accumulation}>
             <pre class='code-highlight'>{highlighted}</pre>
         </div>
         "
@@ -163,9 +237,9 @@ fn replace_code_blocks<'a>(node: &'a AstNode<'a>) {
         data.value = NodeValue::HtmlBlock(NodeHtmlBlock {
             block_type: 1,
             literal: if block.info.contains("norun") {
-                norun(&block.literal)
+                norun(&block.literal, block.info.contains("accumulate"))
             } else {
-                runnable(&block.literal)
+                runnable(&block.literal, block.info.contains("accumulate"))
             },
         })
     };

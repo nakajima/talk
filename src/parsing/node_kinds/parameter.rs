@@ -33,11 +33,11 @@ impl ParamMode {
 }
 
 /// A parameter's external argument label (ADR 0041). `None` on
-/// `Parameter.label` means the one-token shorthand was used: the local
-/// binder name doubles as the external label.
+/// `Parameter.label` means a bare binder was used and the argument is
+/// positional. `x:` and `x: T` store `Named("x")`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ParamLabel {
-    /// `foo fizz` — callers write `foo:`; the body reads `fizz`.
+    /// `x:` / `x: T` or `foo fizz` / `foo fizz: T`.
     Named(String),
     /// `_ fizz` — callers pass the argument unlabeled.
     Omitted,
@@ -92,8 +92,17 @@ impl Parameter {
     pub fn external_label(&self) -> Option<String> {
         match &self.label {
             Some(ParamLabel::Named(name)) => Some(name.clone()),
-            Some(ParamLabel::Omitted) => None,
-            None => Some(self.name.name_str()),
+            Some(ParamLabel::Omitted) | None => None,
         }
+    }
+
+    /// Whether one token supplies both the external label and local binder,
+    /// as in `x:` or `x: T`.
+    pub fn uses_same_name_label_syntax(&self) -> bool {
+        matches!(
+            (&self.label, self.label_span),
+            (Some(ParamLabel::Named(label)), Some(span))
+                if *label == self.name.name_str() && span == self.name_span
+        )
     }
 }

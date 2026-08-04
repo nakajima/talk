@@ -3,8 +3,8 @@ effect 'ask(prompt) -> Int
 	'continue 21
 }
 func go() 'ask -> Int {
-	if 'ask(prompt: "q") > 10 {
-		'ask(prompt: "a") + 'ask(prompt: "b")
+	if 'ask("q") > 10 {
+		'ask("a") + 'ask("b")
 	} else {
 		0
 	}

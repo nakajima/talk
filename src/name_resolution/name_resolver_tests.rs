@@ -35,7 +35,7 @@ pub mod tests {
             func_signature::FuncSignature,
             generic_decl::GenericDecl,
             match_arm::MatchArm,
-            parameter::{ParamMode, Parameter},
+            parameter::{ParamLabel, ParamMode, Parameter},
             pattern::{Pattern, PatternKind},
             stmt::{Stmt, StmtKind},
             type_annotation::{TypeAnnotation, TypeAnnotationKind},
@@ -104,6 +104,45 @@ pub mod tests {
         ($id:expr, $name:expr, $ty:expr, mode: $mode:expr) => {
             Parameter {
                 label: None,
+                label_span: None,
+                mode: $mode,
+                mode_span: None,
+                id: NodeID::ANY,
+                name: Name::Resolved($id.into(), $name.into()),
+                name_span: Span::ANY,
+                type_annotation: Some($ty),
+                span: Span::ANY,
+            }
+        };
+        ($id:expr, $name:expr, $ty:expr, label: $label:expr) => {
+            Parameter {
+                label: Some(ParamLabel::Named($label.into())),
+                label_span: Some(Span::ANY),
+                mode: None,
+                mode_span: None,
+                id: NodeID::ANY,
+                name: Name::Resolved($id.into(), $name.into()),
+                name_span: Span::ANY,
+                type_annotation: Some($ty),
+                span: Span::ANY,
+            }
+        };
+        ($id:expr, $name:expr, $ty:expr, label: $label:expr, mode: $mode:expr) => {
+            Parameter {
+                label: Some(ParamLabel::Named($label.into())),
+                label_span: Some(Span::ANY),
+                mode: $mode,
+                mode_span: None,
+                id: NodeID::ANY,
+                name: Name::Resolved($id.into(), $name.into()),
+                name_span: Span::ANY,
+                type_annotation: Some($ty),
+                span: Span::ANY,
+            }
+        };
+        ($id:expr, $name:expr, $ty:expr, synthetic_label: $label:expr, mode: $mode:expr) => {
+            Parameter {
+                label: Some(ParamLabel::Named($label.into())),
                 label_span: None,
                 mode: $mode,
                 mode_span: None,
@@ -1030,6 +1069,7 @@ pub mod tests {
                             name_span: Span::ANY,
                             generics: vec![]
                         }),
+                        label: "t",
                         mode: Some(ParamMode::Borrow)
                     ),],
                     body: any_block!(vec![
@@ -1271,6 +1311,7 @@ pub mod tests {
                                     name_span: Span::ANY,
                                     generics: vec![],
                                 }),
+                                synthetic_label: "me",
                                 mode: Some(ParamMode::Consume)
                             )
                         ],
@@ -1391,6 +1432,7 @@ pub mod tests {
                                     name_span: Span::ANY,
                                     generics: vec![],
                                 }),
+                                synthetic_label: "me",
                                 mode: Some(ParamMode::Consume)
                             )
                         ],
@@ -2127,8 +2169,8 @@ pub mod tests {
         assert_eq!(
             *params,
             vec![any!(Parameter ,{
-                label: None,
-                label_span: None,
+                label: Some(ParamLabel::Named("x".into())),
+                label_span: Some(Span::ANY),
                 mode: Some(ParamMode::Consume),
                 mode_span: None,
                 name: Name::Resolved(ParamLocalId(1).into(), "x".into()),

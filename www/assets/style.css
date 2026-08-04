@@ -8,6 +8,14 @@
   font-display: swap;
 }
 
+@font-face {
+  font-family: "Bitstream Vera Sans Mono";
+  src: url("/fonts/VeraMoBd.woff") format("woff");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --page-bg: #060707;
   --color-tin-1: rgb(9.71% 9.82% 12.9%);
@@ -136,8 +144,13 @@ h1 {
   padding: 0 1ex;
 }
 
+h1,
+h1 code {
+  font-weight: 700;
+}
+
 header {
-  padding: 2ex 2ex 0 2ex;
+  padding: 2ex 0;
 }
 
 .intro {
@@ -156,7 +169,7 @@ header {
 }
 
 .intro-code {
-  background: black;
+	background: var(--color-tin-1);
 }
 
 .intro-code pre {
@@ -262,6 +275,10 @@ header {
   padding: 2ex 0 0;
   color: var(--color-tin-3);
   font-size: small;
+}
+
+.runnable .result {
+	margin-top: 2ex;
 }
 
 .runnable .actions {

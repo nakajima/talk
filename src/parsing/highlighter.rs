@@ -404,7 +404,9 @@ impl<'a> Higlighter<'a> {
             }
             Node::Parameter(parameter) => {
                 // ADR 0041: the external label highlights as a parameter too.
-                if let Some(label_span) = parameter.label_span {
+                if let Some(label_span) = parameter.label_span
+                    && label_span != parameter.name_span
+                {
                     result.push(self.make_span(Kind::PARAMETER, label_span));
                 }
                 result.push(self.make_span(Kind::PARAMETER, parameter.name_span));

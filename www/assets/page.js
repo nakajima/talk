@@ -1,3 +1,18 @@
+function initIntroExamples() {
+  const introText = document.querySelector(".intro-text, .intro-txt");
+  const introCode = document.querySelector(".intro-code pre");
+  if (!introText || !introCode) return;
+
+  introText.addEventListener("pointerover", (event) => {
+    if (!(event.target instanceof Element)) return;
+    const example = event.target.closest("span[data-highlighted]");
+    if (!example || !introText.contains(example)) return;
+    introCode.innerHTML = example.getAttribute("data-highlighted") || "";
+  });
+}
+
+initIntroExamples();
+
 const wasmCacheKey = new URL(import.meta.url).search;
 const {
   default: init,
@@ -388,6 +403,7 @@ export async function loadTalk() {
 }
 
 const talk = await loadTalk();
+const editorRenderers = new WeakMap();
 
 for (const el of document.querySelectorAll(".actions .run")) {
   initRunnable(el);
@@ -405,14 +421,85 @@ for (const el of document.querySelectorAll(".actions .format")) {
   initFormattable(el);
 }
 
+function getAccumulatedSource(editor) {
+  const currentContainer = editor.closest(".runnable");
+  const currentSource = editor.value || "";
+  const priorSources = [];
+
+  if (currentContainer?.dataset.accumulates === "true") {
+    const containers = Array.from(
+      document.querySelectorAll(".runnable, .no-run"),
+    );
+    let candidateIndex = containers.indexOf(currentContainer) - 1;
+    while (containers[candidateIndex]?.dataset.accumulates === "true") {
+      const candidate = containers[candidateIndex];
+      const candidateEditor = candidate.querySelector(".code-editable");
+      const candidateSource =
+        candidateEditor?.value ?? candidate.dataset.source ?? "";
+      if (candidateSource.trim().length > 0) {
+        priorSources.unshift(candidateSource);
+      }
+      candidateIndex -= 1;
+    }
+  }
+
+  const prefix = priorSources.join("\n\n");
+  const source = prefix ? `${prefix}\n\n${currentSource}` : currentSource;
+
+  return {
+    source,
+    currentSource,
+    lineOffset: prefix ? prefix.split("\n").length + 1 : 0,
+  };
+}
+
+function diagnosticsForCurrentExample(checkResult, lineOffset, currentSource) {
+  if (!checkResult || !Array.isArray(checkResult.diagnostics)) {
+    return checkResult;
+  }
+
+  const lastLine = lineOffset + currentSource.split("\n").length;
+  return {
+    ...checkResult,
+    diagnostics: checkResult.diagnostics
+      .filter(
+        (diagnostic) =>
+          diagnostic.line > lineOffset && diagnostic.line <= lastLine,
+      )
+      .map((diagnostic) => ({
+        ...diagnostic,
+        line: diagnostic.line - lineOffset,
+      })),
+  };
+}
+
+function renderFollowingAccumulatedExamples(editor) {
+  const currentContainer = editor.closest(".runnable");
+  if (currentContainer?.dataset.accumulates !== "true") return;
+
+  const containers = Array.from(
+    document.querySelectorAll(".runnable, .no-run"),
+  );
+  let candidateIndex = containers.indexOf(currentContainer) + 1;
+
+  while (containers[candidateIndex]?.dataset.accumulates === "true") {
+    const candidateEditor =
+      containers[candidateIndex].querySelector(".code-editable");
+    if (candidateEditor) {
+      editorRenderers.get(candidateEditor)?.();
+    }
+    candidateIndex += 1;
+  }
+}
+
 function initLowerable(el) {
   el.addEventListener("click", function (e) {
     let container = e.target.closest(".runnable");
     if (!container) return;
     let editor = container.querySelector(".code-editable");
     if (!editor) return;
-    let content = editor.value || "";
-    let output = talk.show_ir(content);
+    let { source } = getAccumulatedSource(editor);
+    let output = talk.show_ir(source);
     let result = container.querySelector(".result");
     result.innerHTML = `<pre class="output ir">${output.highlightedIr}</pre>`;
     result.classList.add("active");
@@ -444,8 +531,8 @@ function initRunnable(el) {
     if (!container) return;
     let editor = container.querySelector(".code-editable");
     if (!editor) return;
-    let content = editor.value || "";
-    let output = await talk.runProgram(content);
+    let { source } = getAccumulatedSource(editor);
+    let output = await talk.runProgram(source);
     console.log(output);
     let result = container.querySelector(".result");
     result.innerHTML = `
@@ -532,23 +619,30 @@ function initEditable(el) {
   };
 
   let renderHighlight = () => {
-    let source = el.value || "";
+    let { source, currentSource, lineOffset } = getAccumulatedSource(el);
     let checkResult = null;
     try {
-      checkResult = check(source);
+      checkResult = diagnosticsForCurrentExample(
+        check(source),
+        lineOffset,
+        currentSource,
+      );
     } catch (err) {
       console.error(err);
     }
-    highlight.innerHTML = talk.highlight(source);
+    highlight.innerHTML = talk.highlight(currentSource);
     hoverTooltips.hide();
     syncScroll();
     renderDiagnostics(container, highlight, diagnosticsLayer, checkResult);
   };
 
+  editorRenderers.set(el, renderHighlight);
+
   let handleInput = () => {
     resizeEditor();
     if (isComposing) return;
     renderHighlight();
+    renderFollowingAccumulatedExamples(el);
   };
 
   let syncScroll = () => {

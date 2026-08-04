@@ -137,8 +137,8 @@ pub enum ParamMode {
 	case consume_mut_param
 }
 
-// A parameter's external argument label (ADR 0041); none = the
-// one-token shorthand (binder doubles as label).
+// A parameter's external argument label (ADR 0041); none = a bare,
+// positional binder. A one-name colon form stores named(binder).
 pub enum ParamLabel {
 	case named(String)
 	case omitted
@@ -150,7 +150,8 @@ pub enum ParamLabel {
 // name's own span rides along for the for-loop block-arg replacement.
 pub struct Parameter {
 	pub let label: ParamLabel?
-	// The label token's span (the underscore for `_ name`); -1 = no label.
+	// The label token's span (the binder for `name:`, the underscore for
+	// `_ name`, or the external name for `foo name`); -1 = no label.
 	pub let label_start: Int
 	pub let label_end: Int
 	pub let name: String

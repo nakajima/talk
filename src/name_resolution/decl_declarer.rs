@@ -20,7 +20,7 @@ use crate::{
         func::{Func, FuncOrigin},
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
-        parameter::{ParamMode, Parameter},
+        parameter::{ParamLabel, ParamMode, Parameter},
         pattern::PatternKind,
         stmt::{Stmt, StmtKind},
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
@@ -1049,7 +1049,9 @@ impl<'a> DeclDeclarer<'a> {
                 Span::SYNTHESIZED,
             );
             params.push(Parameter {
-                label: None,
+                // Memberwise construction remains field-labeled even though
+                // this declaration is synthesized rather than parsed.
+                label: Some(ParamLabel::Named(name.name_str())),
                 label_span: None,
                 // Memberwise init params consume their arguments (ADR 0018),
                 // like every other init parameter.
