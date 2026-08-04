@@ -2,11 +2,8 @@
 //! optimization, register allocation, and frame shaping — everything up
 //! to the public finalized module (ADR 0047). Target adapters live in
 //! their own crates: `talk-bytecode` lowers the module to VM bytecode,
-//! `talk-llvm` emits LLVM IR, and the C emitter below moves to `talk-c`
-//! in a later stage.
+//! and the `talk-c` and `talk-llvm` emitters consume it directly.
 
-#[cfg(all(test, feature = "cli"))]
-mod c_emit_tests;
 mod optimize;
 
 /// The compiler-to-runtime symbol mapping, for the frontend result

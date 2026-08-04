@@ -1,4 +1,4 @@
-use package::net::{ _io_socket, _io_bind, _io_listen, _io_accept, AF_INET, SOCK_STREAM }
+use net::{ _io_socket, _io_bind, _io_listen, _io_accept, AF_INET, SOCK_STREAM }
 
 pub struct Request {
 	pub let raw: String

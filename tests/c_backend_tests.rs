@@ -1,10 +1,12 @@
-//! C backend spike: the emitted C must compute what the interpreter
-//! computes.
+//! C backend end to end: the emitted C must compute what the
+//! interpreter computes.
 //!
-//! The backend under test emits one self-contained translation unit from
-//! the same MIR `lower::lower` consumes, so these tests are differential:
-//! compile the program both ways and compare the answer. A spike proves
-//! nothing if it only agrees with itself.
+//! These tests drive the `talk` binary — the product seam — which is
+//! why they live in the root crate rather than in `talk-c`: the same
+//! finalized MIR feeds both adapters, so these tests are differential:
+//! compile the program both ways and compare the answer. The
+//! structure-level emission tests live at the emitter's own seam in
+//! `talk-c/tests/emission.rs`.
 //!
 //! The focused cases below pin individual constructs; the two corpus
 //! tests run every program the project already pins, which is what makes

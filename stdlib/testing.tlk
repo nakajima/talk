@@ -1,4 +1,4 @@
-use package::ansi
+use ansi
 
 pub effect 'fail(message: String) -> ()
 pub effect 'registerTest(testCase: TestCase) -> ()

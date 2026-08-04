@@ -9,10 +9,6 @@ version = "0.1.82"
 edition = "2024"
 default-run = "talk"
 
-[[bench]]
-name = "editor_latency"
-harness = false
-
 [build-dependencies]
 cc = "1"
 sha2 = "0.10.9"

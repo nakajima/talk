@@ -1399,4 +1399,32 @@ mod tests {
         let derived = local_layouts(&f, &table(), &[Some(0)]);
         assert_eq!(derived, vec![Some(0), Some(0)]);
     }
+
+    #[test]
+    fn dynamically_indexed_reads_keep_source_and_destination_uniform() {
+        use crate::compiling::mir::build::{BlockData, Term};
+        // A `GetElement` source has no static member in a native
+        // struct: both it and the read's destination stay uniform even
+        // though the construction alone would class the source.
+        let blocks = vec![BlockData {
+            params: Vec::new(),
+            insts: vec![
+                Inst::Aggregate {
+                    tag: 0,
+                    dest: 1,
+                    layout: 0,
+                    args: Vec::new(),
+                },
+                Inst::GetElement {
+                    dest: 3,
+                    src: Operand::Local(1),
+                    element: LayoutId::MAX,
+                    index: Operand::Local(2),
+                },
+            ],
+            term: Some(Term::Return(Operand::Local(3))),
+        }];
+        let derived = local_layouts(&function(4, blocks), &table(), &[]);
+        assert_eq!(derived, vec![None, None, None, None]);
+    }
 }

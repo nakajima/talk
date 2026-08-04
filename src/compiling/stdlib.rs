@@ -209,7 +209,8 @@ pub(crate) fn dependencies_of(name: &str) -> Vec<&'static str> {
     };
     text.lines()
         .filter_map(|line| {
-            let rest = line.trim().strip_prefix("use package::")?;
+            let rest = line.trim().strip_prefix("use ")?;
+            let rest = rest.strip_prefix("package::").unwrap_or(rest);
             let end = rest
                 .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
                 .unwrap_or(rest.len());
@@ -449,6 +450,15 @@ fn bundled_compilation_dir() -> PathBuf {
 fn compile_driver(name: &'static str, sources: Vec<Source>, module_id: ModuleId) -> Driver<Typed> {
     let mut modules = ModuleEnvironment::default();
     modules.import_core(super::core::compile());
+    for dependency in dependencies_of(name) {
+        let (dependency_id, dependency_module) = module_with_id(dependency)
+            .unwrap_or_else(|| panic!("stdlib dependency {dependency} is registered"));
+        modules
+            .import_compiled(dependency_module.as_ref().clone(), dependency_id)
+            .unwrap_or_else(|error| {
+                panic!("failed to import stdlib dependency {dependency}: {error}")
+            });
+    }
 
     let mut config = DriverConfig::new(name);
     config.module_id = module_id;
@@ -478,4 +488,15 @@ fn compile_driver(name: &'static str, sources: Vec<Source>, module_id: ModuleId)
     );
 
     typed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discovers_external_stdlib_dependencies() {
+        assert_eq!(dependencies_of("testing"), vec!["ansi"]);
+        assert_eq!(dependencies_of("http"), vec!["net"]);
+    }
 }

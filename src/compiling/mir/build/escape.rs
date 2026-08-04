@@ -237,3 +237,117 @@ fn escaping_locals(function: &Function, summaries: &[Vec<bool>]) -> FxHashSet<Lo
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compiling::mir::build::{BlockData, Constant, LocalInfo, MirSymbol};
+
+    fn function(arity: u16, n_locals: u16, insts: Vec<Inst>, term: Term) -> Function {
+        Function {
+            name: String::new(),
+            arity,
+            locals: LocalInfo::uniform(n_locals),
+            blocks: vec![BlockData {
+                params: Vec::new(),
+                insts,
+                term: Some(term),
+            }],
+            param_reprs: Vec::new(),
+            return_repr: None,
+            frame_sites: Default::default(),
+        }
+    }
+
+    fn program(functions: Vec<Function>) -> Program {
+        Program {
+            functions,
+            entry: 0,
+            global_slots: 0,
+            exports: Vec::new(),
+            layout_table: Vec::new(),
+            display: Default::default(),
+            string_symbol: MirSymbol::STRING,
+            storage_symbol: MirSymbol::STORAGE,
+        }
+    }
+
+    /// The caller builds a pair and hands it to a callee that only
+    /// reads its parameter: the argument provably stays in the
+    /// caller's frame, so the construction site is frame-local and
+    /// the local may reabstract into frame storage.
+    #[test]
+    fn a_non_escaping_callee_parameter_keeps_the_callers_value_frame_local() {
+        let mut program = program(vec![
+            function(
+                0,
+                3,
+                vec![
+                    Inst::Aggregate {
+                        tag: 0,
+                        dest: 1,
+                        layout: 0,
+                        args: Vec::new(),
+                    },
+                    Inst::Call {
+                        dest: 2,
+                        func: 1,
+                        args: vec![Operand::Local(1)],
+                        unwind: None,
+                    },
+                ],
+                Term::Return(Operand::Local(2)),
+            ),
+            function(
+                1,
+                2,
+                Vec::new(),
+                Term::Return(Operand::Const(Constant::Unit)),
+            ),
+        ]);
+        let summaries = parameter_summaries(&program);
+        assert_eq!(summaries[1], vec![false]);
+        shape_frames(&mut program, &summaries);
+        let caller = &program.functions[0];
+        assert!(caller.frame_sites.contains(&(0, 0)));
+        assert!(caller.locals[1].frame_local);
+        // A parameter arrives from outside every judged site, so it
+        // can never reabstract into frame storage.
+        assert!(!program.functions[1].locals[0].frame_local);
+    }
+
+    /// The callee returns its parameter: the argument outlives the
+    /// call, so the construction site needs the arena rather than a
+    /// reusable frame slot.
+    #[test]
+    fn an_escaping_callee_parameter_forces_the_arena() {
+        let mut program = program(vec![
+            function(
+                0,
+                3,
+                vec![
+                    Inst::Aggregate {
+                        tag: 0,
+                        dest: 1,
+                        layout: 0,
+                        args: Vec::new(),
+                    },
+                    Inst::Call {
+                        dest: 2,
+                        func: 1,
+                        args: vec![Operand::Local(1)],
+                        unwind: None,
+                    },
+                ],
+                Term::Return(Operand::Local(2)),
+            ),
+            function(1, 1, Vec::new(), Term::Return(Operand::Local(0))),
+        ]);
+        let summaries = parameter_summaries(&program);
+        assert_eq!(summaries[1], vec![true]);
+        shape_frames(&mut program, &summaries);
+        let caller = &program.functions[0];
+        assert!(!caller.frame_sites.contains(&(0, 0)));
+        assert!(!caller.locals[1].frame_local);
+    }
+}
