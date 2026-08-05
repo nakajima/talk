@@ -61,9 +61,6 @@ pub fn emit(module: &talk_mir::Module) -> Result<Artifact, Error> {
 /// Emit a library artifact for a finalized MIR module: one externally
 /// visible wrapper per `Module.exports` entry under `prefix`, namespaced
 /// lifecycle entry points, and contained traps (ADR 0048).
-pub fn emit_library(
-    module: &talk_mir::Module,
-    prefix: &str,
-) -> Result<LibraryArtifact, Error> {
+pub fn emit_library(module: &talk_mir::Module, prefix: &str) -> Result<LibraryArtifact, Error> {
     emit::emit_library(module, prefix)
 }

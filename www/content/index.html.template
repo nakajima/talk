@@ -9,7 +9,6 @@
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300..700&display=swap" rel="stylesheet">
     <link href="/reset.css" rel="stylesheet">
     <link href="/style.css" rel="stylesheet">
-    <link href="https://unpkg.com/tippy.js@6.3.7/dist/tippy.css" rel="stylesheet">
   </head>
   <body>
     <main>
@@ -33,8 +32,6 @@ class="number" data-example="ints">ints</span>, <span class="number" data-exampl
         </div>
       </header>
       {CONTENT_GOES_HERE}
-      <script src="https://unpkg.com/@popperjs/core@2"></script>
-      <script src="https://unpkg.com/tippy.js@6"></script>
       <script type="module" src="/page.js"></script>
     </main>
   </body>

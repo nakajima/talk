@@ -185,9 +185,7 @@ impl<'a, 'io> ResultValidator<'a, 'io> {
         }
         let bytes = match (self.run, value) {
             (FrontendRun::Vm(run), Value::Vm(value)) => run.string_bytes(value)?.to_vec(),
-            (FrontendRun::Native(run), Value::Native(value)) => {
-                run.string_bytes(*value)?.to_vec()
-            }
+            (FrontendRun::Native(run), Value::Native(value)) => run.string_bytes(*value)?.to_vec(),
             _ => return Err("frontend bridge value crossed execution paths".into()),
         };
         String::from_utf8(bytes).map_err(|err| format!("string is not UTF-8: {err}"))
@@ -240,9 +238,9 @@ impl<'a, 'io> ResultValidator<'a, 'io> {
                 AbiTy::Named(name) if name == "Bool" => {
                     Value::Vm(VmValue::Bool(self.slot_word(&base, index)? != 0))
                 }
-                AbiTy::Named(name) if name == "Float" => Value::Vm(VmValue::F64(f64::from_bits(
-                    self.slot_word(&base, index)?,
-                ))),
+                AbiTy::Named(name) if name == "Float" => {
+                    Value::Vm(VmValue::F64(f64::from_bits(self.slot_word(&base, index)?)))
+                }
                 _ => {
                     let word = self.slot_word(&base, index)?;
                     match (self.run, &base) {

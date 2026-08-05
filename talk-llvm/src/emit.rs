@@ -99,8 +99,7 @@ pub(crate) fn emit_library(program: &Module, prefix: &str) -> Result<LibraryArti
     let ir = ir
         .replace("talk_llvm_", &format!("{prefix}_llvm_"))
         .replace("@talk_fn", &format!("@{prefix}_fn"));
-    let runtime_c =
-        emitter.library_runtime_source(program, prefix, &exports);
+    let runtime_c = emitter.library_runtime_source(program, prefix, &exports);
     let exports: Vec<library::Export> = exports.into_iter().map(|(export, _)| export).collect();
     Ok(LibraryArtifact {
         ir,

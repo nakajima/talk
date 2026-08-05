@@ -51,7 +51,19 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn new(mut docs: Vec<DocumentInput>) -> Option<Self> {
+    pub fn new(docs: Vec<DocumentInput>) -> Option<Self> {
+        Self::new_with_package(docs, None)
+    }
+
+    /// Check the documents as a package's workspace: sources compile
+    /// against the locked dependency graph (dependency imports resolve,
+    /// and the backend sees the same inputs `talk run` and `talk test`
+    /// accept), with `package::` anchored at the package's source root.
+    /// `new` is the dependency-free session (editor).
+    pub fn new_with_package(
+        mut docs: Vec<DocumentInput>,
+        package: Option<crate::compiling::package::PackageCompileContext>,
+    ) -> Option<Self> {
         if docs.is_empty() {
             return None;
         }
@@ -61,10 +73,15 @@ impl Workspace {
         if compile_context == WorkspaceCompileContext::Core {
             docs = Self::core_documents_with_overrides(&docs);
         } else if Self::has_test_document(&docs) {
-            let harness_root = LocalModulePaths::infer_source_root(
-                docs.iter().map(|doc| PathBuf::from(&doc.path)),
-            )
-            .unwrap_or_default();
+            let harness_root = package
+                .as_ref()
+                .map(|package| package.source_root.clone())
+                .or_else(|| {
+                    LocalModulePaths::infer_source_root(
+                        docs.iter().map(|doc| PathBuf::from(&doc.path)),
+                    )
+                })
+                .unwrap_or_default();
             let [prelude, postlude] = crate::testing::Harness::human_sources(&harness_root);
             let prelude_path = prelude.path().into_owned();
             let postlude_path = postlude.path().into_owned();
@@ -115,9 +132,13 @@ impl Workspace {
             .map(|doc| Source::in_memory(PathBuf::from(&doc.path), doc.text.clone()))
             .collect();
 
-        let source_root =
-            LocalModulePaths::infer_source_root(docs.iter().map(|doc| PathBuf::from(&doc.path)))
-                .unwrap_or_default();
+        let source_root = package
+            .as_ref()
+            .map(|package| package.source_root.clone())
+            .or_else(|| {
+                LocalModulePaths::infer_source_root(docs.iter().map(|doc| PathBuf::from(&doc.path)))
+            })
+            .unwrap_or_default();
 
         let module_name = match compile_context {
             WorkspaceCompileContext::Core => "Core",
@@ -142,25 +163,39 @@ impl Workspace {
         }
 
         let local_module_id = config.module_id;
+        let package_env = compile_context == WorkspaceCompileContext::Normal && package.is_some();
         let driver = match compile_context {
             WorkspaceCompileContext::Core | WorkspaceCompileContext::Stdlib(_) => {
                 Driver::new_bare(sources, config)
             }
-            WorkspaceCompileContext::Normal => {
-                // The manifest DSL names Package without a `use`, so it
-                // registers like core. Every other stdlib module stays
-                // demand-driven: a document's own imports activate them
-                // during parse, and auto-import completions plus
-                // cross-module navigation read the export index instead
-                // of merging every stdlib type catalog into every
-                // editor build (CLEAN-04).
-                if let Some((id, module)) = crate::compiling::stdlib::module_with_id("Package") {
-                    Rc::make_mut(&mut config.modules)
-                        .import_shared(module.clone(), id)
-                        .expect("Package stdlib module registers once per session");
+            WorkspaceCompileContext::Normal => match package {
+                Some(package) => {
+                    // The package environment already holds core and the
+                    // locked dependencies (one shared module numbering
+                    // across the graph); stdlib modules still register
+                    // on demand as parsing discovers their imports.
+                    config.modules = Rc::new(package.modules);
+                    config.libraries = package.libraries;
+                    config.workspace_root = Some(package.workspace_root);
+                    Driver::new_bare(sources, config)
                 }
-                Driver::new(sources, config)
-            }
+                None => {
+                    // The manifest DSL names Package without a `use`, so it
+                    // registers like core. Every other stdlib module stays
+                    // demand-driven: a document's own imports activate them
+                    // during parse, and auto-import completions plus
+                    // cross-module navigation read the export index instead
+                    // of merging every stdlib type catalog into every
+                    // editor build (CLEAN-04).
+                    if let Some((id, module)) = crate::compiling::stdlib::module_with_id("Package")
+                    {
+                        Rc::make_mut(&mut config.modules)
+                            .import_shared(module.clone(), id)
+                            .expect("Package stdlib module registers once per session");
+                    }
+                    Driver::new(sources, config)
+                }
+            },
         };
         let stdlib_module_ids = match compile_context {
             WorkspaceCompileContext::Normal => crate::compiling::stdlib::stdlib_sources()
@@ -173,7 +208,30 @@ impl Workspace {
                 .collect(),
             _ => FxHashMap::default(),
         };
+        // In a package workspace, dependency modules' exports are
+        // auto-import candidates alongside the stdlib's; in the
+        // dependency-free editor session the lightweight stdlib export
+        // index serves them (CLEAN-04).
         let importable_modules = match compile_context {
+            WorkspaceCompileContext::Normal if package_env => driver
+                .config
+                .modules
+                .all_modules()
+                .filter(|module| module.name != "Core")
+                .map(|module| {
+                    (
+                        module.name.clone(),
+                        module
+                            .exports
+                            .iter()
+                            .flat_map(|(name, set)| {
+                                set.iter().map(move |&symbol| (name.clone(), symbol))
+                            })
+                            .filter(|(_, symbol)| module.symbol_names.contains_key(symbol))
+                            .collect(),
+                    )
+                })
+                .collect(),
             WorkspaceCompileContext::Normal => crate::compiling::stdlib::export_index().clone(),
             _ => FxHashMap::default(),
         };
@@ -249,7 +307,14 @@ impl Workspace {
             });
             let (doc_id, range) = match located {
                 Some(located) => located,
-                None => match file_id_to_document.first() {
+                // A span-less rejection anchors to the first real
+                // document: harness sources are synthetic and their
+                // paths do not exist on disk.
+                None => match file_id_to_document
+                    .iter()
+                    .find(|doc_id| !crate::testing::Harness::is_source_path(Path::new(doc_id)))
+                    .or_else(|| file_id_to_document.first())
+                {
                     Some(doc_id) => (doc_id.clone(), TextRange::new(0, 0)),
                     None => (String::new(), TextRange::new(0, 0)),
                 },

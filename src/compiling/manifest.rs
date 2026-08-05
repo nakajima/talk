@@ -214,7 +214,8 @@ mod tests {
 
     #[test]
     fn manifest_round_trips_through_text() {
-        let manifest = ArtifactManifest::compute(&sources(), b"image-bytes", Some("abi text"), None);
+        let manifest =
+            ArtifactManifest::compute(&sources(), b"image-bytes", Some("abi text"), None);
         let parsed = ArtifactManifest::parse(&manifest.to_text()).expect("parse");
         assert_eq!(parsed, manifest);
     }
@@ -239,7 +240,12 @@ mod tests {
             None,
             Some("int x;"),
         );
-        assert!(unexpected.err().expect("unexpected C").contains("C artifact"));
+        assert!(
+            unexpected
+                .err()
+                .expect("unexpected C")
+                .contains("C artifact")
+        );
         // The embedded path carries no C source: the compiled object is
         // validated at build time instead, so `verify_artifact` skips it
         // the way it skips sources.

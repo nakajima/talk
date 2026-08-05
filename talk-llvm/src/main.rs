@@ -128,7 +128,9 @@ impl Options {
                 }
                 Some("--keep") => options.keep = true,
                 Some("--export") => {
-                    options.exports.push(string_value("--export", arguments.next())?);
+                    options
+                        .exports
+                        .push(string_value("--export", arguments.next())?);
                 }
                 Some("--allow-effect") => {
                     options

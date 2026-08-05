@@ -49,7 +49,8 @@ async fn main() {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
-        /// Type-check the input
+        /// Type-check the input (or the enclosing package's workspace
+        /// when no filenames are given inside a package)
         Check {
             #[arg(value_hint = ValueHint::FilePath)]
             filenames: Vec<String>,
@@ -407,26 +408,79 @@ async fn main() {
                 cli::diagnostics::{ColorMode, render_json_entry, render_json_output, render_text},
             };
 
-            let sources = sources_for_filenames(filenames);
-            let mut docs = Vec::with_capacity(sources.len());
-            for source in sources {
-                let path = source.path().to_string();
-                let text = match source.read() {
-                    Ok(text) => text,
-                    Err(err) => {
-                        eprintln!("failed to read {path}: {err:?}");
+            // With no filenames inside a package, check the package's
+            // workspace (the manifest-scoped sources compiled against
+            // the locked dependency graph) instead of reading stdin.
+            let package_root = filenames
+                .is_empty()
+                .then(|| talk::compiling::package::PackageProject::enclosing_root("."))
+                .flatten();
+
+            let (docs, package) = match package_root {
+                Some(root) => {
+                    let project =
+                        match talk::compiling::package::PackageProject::open_at(&root, false) {
+                            Ok(project) => project,
+                            Err(err) => {
+                                eprintln!("error: {err}");
+                                std::process::exit(1);
+                            }
+                        };
+                    let context = match project.package_compile_context() {
+                        Ok(context) => context,
+                        Err(err) => {
+                            eprintln!("error: {err}");
+                            std::process::exit(1);
+                        }
+                    };
+                    let paths = talk::cli::package::workspace_source_files(&root);
+                    if paths.is_empty() {
+                        eprintln!("error: no package sources found under {}", root.display());
                         std::process::exit(1);
                     }
-                };
-                docs.push(DocumentInput {
-                    id: path.clone(),
-                    path,
-                    version: 0,
-                    text,
-                });
-            }
+                    let mut docs = Vec::with_capacity(paths.len());
+                    for path in paths {
+                        let text = match std::fs::read_to_string(&path) {
+                            Ok(text) => text,
+                            Err(err) => {
+                                eprintln!("failed to read {}: {err}", path.display());
+                                std::process::exit(1);
+                            }
+                        };
+                        let id = path.to_string_lossy().into_owned();
+                        docs.push(DocumentInput {
+                            id: id.clone(),
+                            path: id,
+                            version: 0,
+                            text: text.into(),
+                        });
+                    }
+                    (docs, Some(context))
+                }
+                None => {
+                    let sources = sources_for_filenames(filenames);
+                    let mut docs = Vec::with_capacity(sources.len());
+                    for source in sources {
+                        let path = source.path().to_string();
+                        let text = match source.read() {
+                            Ok(text) => text,
+                            Err(err) => {
+                                eprintln!("failed to read {path}: {err:?}");
+                                std::process::exit(1);
+                            }
+                        };
+                        docs.push(DocumentInput {
+                            id: path.clone(),
+                            path,
+                            version: 0,
+                            text: text.into(),
+                        });
+                    }
+                    (docs, None)
+                }
+            };
 
-            let Some(workspace) = Workspace::new(docs) else {
+            let Some(workspace) = Workspace::new_with_package(docs, package) else {
                 return;
             };
 
@@ -916,9 +970,7 @@ async fn main() {
             header,
             manifest,
         } => {
-            if exports.is_empty()
-                && (prefix.is_some() || header.is_some() || manifest.is_some())
-            {
+            if exports.is_empty() && (prefix.is_some() || header.is_some() || manifest.is_some()) {
                 eprintln!("error: --prefix, --header, and --manifest require --export");
                 std::process::exit(2);
             }
@@ -952,8 +1004,7 @@ async fn main() {
                         std::process::exit(1);
                     }
                 };
-                for (path, text) in [(&header, &artifact.header), (&manifest, &artifact.manifest)]
-                {
+                for (path, text) in [(&header, &artifact.header), (&manifest, &artifact.manifest)] {
                     if let Some(path) = path
                         && let Err(err) = std::fs::write(path, text)
                     {
@@ -1013,7 +1064,7 @@ Talk is a statically typed, Swift-flavored language with local type inference, g
     talk test [paths]               discover and run `.test.tlk` tests
     talk build files -o FILE        compile to a bytecode image
     talk run-image FILE             validate and execute a bytecode image
-    talk check [--json] files       typecheck, ownership-check, print diagnostics
+    talk check [--json] [files]     typecheck, ownership-check, print diagnostics (no files inside a package: check the package workspace)
     talk bytecode files             render compiled bytecode
     talk mir [--no-opt] files       render optimized or raw MIR
     talk new / install / update     package management

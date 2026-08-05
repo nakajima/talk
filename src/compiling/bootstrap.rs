@@ -157,7 +157,9 @@ pub fn bootstrap(
             candidate.as_ref(),
         )?
     };
-    if stage1.image != stage2.image || stage1.abi != stage2.abi || stage1.c_source != stage2.c_source
+    if stage1.image != stage2.image
+        || stage1.abi != stage2.abi
+        || stage1.c_source != stage2.c_source
     {
         return Err(
             "bootstrap did not reach a fixed point: stage-1 and stage-2 artifacts differ".into(),
@@ -226,8 +228,15 @@ mod tests {
             error.contains("parse"),
             "the failure should come from parsing: {error}"
         );
-        compile_stage(&sources, &["double".into()], &["alloc".into()], None, None, None)
-            .expect("the shared session parses the same sources");
+        compile_stage(
+            &sources,
+            &["double".into()],
+            &["alloc".into()],
+            None,
+            None,
+            None,
+        )
+        .expect("the shared session parses the same sources");
     }
 
     #[test]
@@ -306,7 +315,10 @@ mod tests {
             .manifest
             .verify(&sources, &outcome.image, None, Some("int x;"));
         assert!(
-            tampered.err().expect("tampered C must fail").contains("C artifact"),
+            tampered
+                .err()
+                .expect("tampered C must fail")
+                .contains("C artifact"),
             "C tampering must invalidate the manifest"
         );
     }

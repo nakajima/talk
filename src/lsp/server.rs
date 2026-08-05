@@ -26,7 +26,6 @@ use async_lsp::{
     server::LifecycleLayer,
     tracing::TracingLayer,
 };
-use ignore::WalkBuilder;
 use rustc_hash::FxHashMap;
 use std::any::Any;
 use std::fs::File;
@@ -867,48 +866,7 @@ fn tlk_files_under_root(root: &PathBuf) -> Vec<PathBuf> {
     // same set `talk test` and `talk run` use. Stray .tlk files elsewhere
     // under the folder (scratch, stale copies) are not part of the
     // program, and their diagnostics must not gate the real ones.
-    let source_roots: Option<Vec<PathBuf>> = crate::compiling::package::PackageManifest::read(root)
-        .ok()
-        .map(|manifest| {
-            manifest
-                .builds
-                .iter()
-                .map(|artifact| match artifact {
-                    crate::compiling::package::PackageArtifact::Library { from }
-                    | crate::compiling::package::PackageArtifact::Binary { from, .. } => {
-                        root.join(from).parent().map(std::path::Path::to_path_buf)
-                    }
-                })
-                .flatten()
-                .collect()
-        });
-    let in_scope = |path: &std::path::Path| match &source_roots {
-        Some(roots) => {
-            path.parent() == Some(root.as_path())
-                && path.file_name().and_then(|n| n.to_str()) == Some("package.tlk")
-                || roots.iter().any(|src| path.starts_with(src))
-        }
-        None => true,
-    };
-
-    let mut result = Vec::new();
-
-    for entry in WalkBuilder::new(root).build() {
-        let Ok(entry) = entry else {
-            continue;
-        };
-
-        if !entry.file_type().is_some_and(|t| t.is_file()) {
-            continue;
-        }
-
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) == Some("tlk") && in_scope(path) {
-            result.push(path.to_path_buf());
-        }
-    }
-
-    result
+    crate::cli::package::workspace_source_files(root)
 }
 
 fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<AnalysisWorkspace>> {

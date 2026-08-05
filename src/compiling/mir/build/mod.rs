@@ -1058,13 +1058,12 @@ pub(crate) fn build(
                     }
                     Some(crate::types::catalog::OwnerBinding::Protocol(owner)) => {
                         subst.push((*owner, Ty::Param(*owner)));
-                        if let Some(info) = builder.catalog.protocols.get(owner) {
-                            subst.extend(
-                                info.params
-                                    .iter()
-                                    .map(|param| (param.symbol, Ty::Param(param.symbol))),
-                            );
-                        }
+                        subst.extend(
+                            builder
+                                .protocol_member_params(*owner)
+                                .into_iter()
+                                .map(|param| (param, Ty::Param(param))),
+                        );
                     }
                     None => {}
                 }
@@ -1645,7 +1644,7 @@ impl<'a> ProgramBuilder<'a> {
         let evidence_params: rustc_hash::FxHashSet<Symbol> = subst
             .iter()
             .filter(|(param, _)| matches!(param, Symbol::Protocol(_)))
-            .flat_map(|(protocol, _)| self.protocol_params(*protocol).unwrap_or_default())
+            .flat_map(|(protocol, _)| self.protocol_member_params(*protocol))
             .collect();
         let mut subst: Vec<(Symbol, Ty)> = subst
             .into_iter()
@@ -2097,6 +2096,22 @@ impl<'a> ProgramBuilder<'a> {
             .protocols
             .get(&protocol)
             .map(|info| info.params.iter().map(|param| param.symbol).collect())
+    }
+
+    /// Every parameter a protocol member body ranges over besides Self:
+    /// the protocol's input parameters and its associated types. This is
+    /// the one spelling of that set — the check-all seeds and `demand`'s
+    /// evidence pruning both read it, so a seed cannot compile a default
+    /// body without the dictionary blocks its associated types need.
+    fn protocol_member_params(&self, protocol: Symbol) -> Vec<Symbol> {
+        let Some(info) = self.catalog.protocols.get(&protocol) else {
+            return Vec::new();
+        };
+        info.params
+            .iter()
+            .map(|param| param.symbol)
+            .chain(info.assoc.values().copied())
+            .collect()
     }
 
     fn drain_worklist(&mut self) -> Result<(), BackendError> {

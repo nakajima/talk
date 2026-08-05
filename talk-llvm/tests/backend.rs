@@ -307,11 +307,7 @@ fn compile_harness(dir: &Path, name: &str, sources: &[&Path]) -> PathBuf {
     for source in sources {
         command.arg(source);
     }
-    let output = command
-        .arg("-o")
-        .arg(&binary)
-        .output()
-        .expect("run clang");
+    let output = command.arg("-o").arg(&binary).output().expect("run clang");
     assert!(
         output.status.success(),
         "harness did not compile:\n{}",

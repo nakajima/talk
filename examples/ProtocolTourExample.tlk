@@ -1,0 +1,51 @@
+// Ok so we've got some different pet foods here
+struct CatFood {}
+struct DogFood {}
+
+// And we've got a protocol `Named` that just knows how
+// to get names of things.
+protocol Named {
+	func name() -> String
+}
+
+// Let's make the pet foods conform to Named
+extend CatFood: Named {
+	func name() { "tasty cat food" }
+}
+
+extend DogFood: Named {
+	func name() { "tasty dog food" }
+}
+
+// So far so good, right? Ok now let's add a Pet protocol.
+protocol Pet {
+	// Protocols can have associated types with their own constraints.
+	associated Food: Named
+
+	// This protocol has one required method. It just returns
+	// the associated type Food for this pet.
+	func favoriteFood() -> Food
+
+	// Protocols can specify default methods.
+	func handleDSTChange() {
+		print("what the heck where is my " + self.favoriteFood().name())
+	}
+}
+
+// Ok so now we've got a Cat, which conforms to Pet
+struct Cat {}
+
+// We use `extend` blocks to mark conformances.
+extend Cat: Pet {
+	func favoriteFood() { CatFood() }
+}
+
+// And a Dog which conforms to Pet
+struct Dog {}
+extend Dog: Pet {
+	func favoriteFood() { DogFood() }
+}
+
+// We can call the protocol's methods
+Cat().handleDSTChange()
+Dog().handleDSTChange()

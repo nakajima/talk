@@ -37,62 +37,40 @@ const {
   hover,
 } = await import(`/pkg/talk_wasm.js${wasmCacheKey}`);
 
-function createTooltip(el) {
-  const tippyApi = window.tippy;
-  if (typeof tippyApi !== "function") {
-    const tooltipEl = document.createElement("div");
-    tooltipEl.style.position = "fixed";
-    tooltipEl.style.zIndex = "9999";
-    tooltipEl.style.background = "rgb(30, 28, 36)";
-    tooltipEl.style.color = "white";
-    tooltipEl.style.padding = "4px 8px";
-    tooltipEl.style.borderRadius = "4px";
-    tooltipEl.style.fontSize = "12px";
-    tooltipEl.style.lineHeight = "1.4";
-    tooltipEl.style.pointerEvents = "none";
-    tooltipEl.style.whiteSpace = "pre";
-    tooltipEl.style.display = "none";
-    document.body.appendChild(tooltipEl);
-
-    return {
-      showAt: (rect, content) => {
-        tooltipEl.textContent = content;
-        tooltipEl.style.left = `${rect.left + rect.width / 2}px`;
-        tooltipEl.style.top = `${rect.top - 8}px`;
-        tooltipEl.style.transform = "translate(-50%, -100%)";
-        tooltipEl.style.display = "block";
-      },
-      hide: () => {
-        tooltipEl.style.display = "none";
-      },
-    };
-  }
-
-  let tooltip = tippyApi(el, {
-    trigger: "manual",
-    placement: "top",
-    offset: [0, 6],
-    animation: false,
-    duration: 0,
-  });
-  if (Array.isArray(tooltip)) {
-    tooltip = tooltip[0];
-  }
+function createTooltip() {
+  const tooltipEl = document.createElement("div");
+  tooltipEl.className = "code-hover-popover";
+  tooltipEl.hidden = true;
+  document.body.appendChild(tooltipEl);
 
   return {
     showAt: (rect, content) => {
-      tooltip.setProps({ getReferenceClientRect: () => rect });
-      tooltip.setContent(content);
-      tooltip.show();
+      tooltipEl.textContent = content;
+      tooltipEl.style.left = "0px";
+      tooltipEl.style.top = "0px";
+      tooltipEl.style.transform = "none";
+      tooltipEl.hidden = false;
+
+      const pop = tooltipEl.getBoundingClientRect();
+      const centerX = Math.min(
+        Math.max(rect.left + rect.width / 2, pop.width / 2 + 4),
+        window.innerWidth - pop.width / 2 - 4,
+      );
+      const above = rect.top - 8 - pop.height >= 0;
+      tooltipEl.style.left = `${centerX}px`;
+      tooltipEl.style.top = above ? `${rect.top - 8}px` : `${rect.bottom + 8}px`;
+      tooltipEl.style.transform = above
+        ? "translate(-50%, -100%)"
+        : "translate(-50%, 0)";
     },
     hide: () => {
-      tooltip.hide();
+      tooltipEl.hidden = true;
     },
   };
 }
 
 function initHoverTooltips(el, highlightEl) {
-  const tooltip = createTooltip(el);
+  const tooltip = createTooltip();
   const encoder = new TextEncoder();
 
   let pending = false;

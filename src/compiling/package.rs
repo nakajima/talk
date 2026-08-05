@@ -166,7 +166,7 @@ impl PackageManifest {
         // The manifest DSL names Package without a `use`.
         if let Some((id, module)) = super::stdlib::module_with_id("Package") {
             std::rc::Rc::make_mut(&mut config.modules)
-                .import_shared(module.clone(), id)
+                .import_compiled((*module).clone(), id)
                 .expect("Package stdlib module registers once per session");
         }
         let driver = Driver::new(vec![Source::in_memory(path.to_path_buf(), source)], config);
@@ -2073,7 +2073,7 @@ use std::rc::Rc;
 
 #[derive(Clone)]
 struct CompiledLibrary {
-    module: std::sync::Arc<Module>,
+    module: Module,
     typed: std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
     module_id: ModuleId,
 }
@@ -2084,6 +2084,24 @@ struct CompiledGraph {
     /// environment and the final binary/test environment clone it, so
     /// the whole build shares one module numbering.
     base: ModuleEnvironment,
+}
+
+/// Dependency libraries' typed bodies, by the module id they were
+/// compiled and imported under (mirrors `DriverConfig::libraries`).
+type DependencyLibraries = Vec<(
+    ModuleId,
+    std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
+)>;
+
+/// The locked dependency graph as the package's own sources compile
+/// against it: the module environment dependency imports resolve
+/// against, the dependencies' typed bodies the backend compiles from,
+/// and the roots that scope `package::` and local imports.
+pub struct PackageCompileContext {
+    pub modules: ModuleEnvironment,
+    pub libraries: DependencyLibraries,
+    pub workspace_root: PathBuf,
+    pub source_root: PathBuf,
 }
 
 impl PackageProject {
@@ -2124,34 +2142,39 @@ impl PackageProject {
             .map_err(PackageError::Compile)
     }
 
+    /// The compile context the package's own sources compile against:
+    /// the locked dependency graph plus the package's source roots.
+    /// `talk check` compiles every workspace source against this, so
+    /// its diagnostics match what `talk run` and `talk test` accept.
+    pub fn package_compile_context(&self) -> Result<PackageCompileContext, PackageError> {
+        let (modules, libraries) = self.dependency_compile_inputs()?;
+        let source_root =
+            self.root
+                .join("src")
+                .canonicalize()
+                .map_err(|source| PackageError::Io {
+                    context: format!(
+                        "failed to find package source directory under {}",
+                        self.root.display()
+                    ),
+                    source,
+                })?;
+        Ok(PackageCompileContext {
+            modules,
+            libraries,
+            workspace_root: self.root.clone(),
+            source_root,
+        })
+    }
+
     fn typecheck_binary(&self, requested: Option<&str>) -> Result<Driver<Typed>, PackageError> {
-        let graph = self.compile_graph()?;
         let binary = self.manifest.binary(requested)?;
         let PackageArtifact::Binary { from, .. } = binary else {
             return Err(PackageError::Compile(
                 "selected target is not a binary".into(),
             ));
         };
-        let environment = self.environment_for(
-            &graph.base,
-            &self.lock.root_dependencies,
-            &graph.dependencies,
-        )?;
-        let libraries: Vec<(
-            ModuleId,
-            std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
-        )> = graph
-            .dependencies
-            .values()
-            .map(|library| (library.module_id, library.typed.clone()))
-            .collect();
-        // The root package's own sources re-parse into the final compile
-        // (workspace imports), so they live in the same module-id space as
-        // the binary; injecting the root library's compiled program here
-        // would duplicate every declaration in a second id space and
-        // conflate symbols across the spaces. Only locked dependencies,
-        // whose sources are outside the source root and never re-parsed,
-        // ride along precompiled.
+        let (environment, libraries) = self.dependency_compile_inputs()?;
         let source = self.manifest.source_path(&self.root, from)?;
         let workspace_root =
             self.root
@@ -2258,27 +2281,7 @@ impl PackageProject {
             });
             (roots, source_root)
         };
-        let graph = self.compile_graph()?;
-        let environment = self.environment_for(
-            &graph.base,
-            &self.lock.root_dependencies,
-            &graph.dependencies,
-        )?;
-        let libraries: Vec<(
-            ModuleId,
-            std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
-        )> = graph
-            .dependencies
-            .values()
-            .map(|library| (library.module_id, library.typed.clone()))
-            .collect();
-        // The root package's own sources re-parse into the test compile
-        // (workspace imports), so they live in the same module-id space as
-        // the tests; injecting the root library's compiled program here
-        // would duplicate every declaration in a second id space and
-        // conflate symbols across the spaces. Only locked dependencies —
-        // whose sources are outside the source root and never re-parsed —
-        // ride along precompiled.
+        let (environment, libraries) = self.dependency_compile_inputs()?;
         let mut config = DriverConfig::new(format!("{} tests", self.manifest.name));
         config.modules = Rc::new(environment);
         config.workspace_root = Some(self.root.clone());
@@ -2287,6 +2290,31 @@ impl PackageProject {
         Ok(Some(
             crate::testing::Runner::with_config(roots, config).with_filter(filter),
         ))
+    }
+
+    /// The locked dependency graph as the root package's own compiles
+    /// consume it. The root package's own sources always re-parse into
+    /// the final compile (workspace imports), so they live in the same
+    /// module-id space as the binary or tests; injecting the root
+    /// library's compiled program here would duplicate every
+    /// declaration in a second id space and conflate symbols across the
+    /// spaces. Only locked dependencies, whose sources are outside the
+    /// source root and never re-parsed, ride along precompiled.
+    fn dependency_compile_inputs(
+        &self,
+    ) -> Result<(ModuleEnvironment, DependencyLibraries), PackageError> {
+        let graph = self.compile_graph()?;
+        let environment = self.environment_for(
+            &graph.base,
+            &self.lock.root_dependencies,
+            &graph.dependencies,
+        )?;
+        let libraries = graph
+            .dependencies
+            .values()
+            .map(|library| (library.module_id, library.typed.clone()))
+            .collect();
+        Ok((environment, libraries))
     }
 
     fn compile_graph(&self) -> Result<CompiledGraph, PackageError> {
@@ -2371,7 +2399,7 @@ impl PackageProject {
             ));
         }
         let program = std::sync::Arc::new(typed.phase.program.clone());
-        let module = std::sync::Arc::new(typed.module(manifest.import_name()));
+        let module = typed.module(manifest.import_name());
         Ok(CompiledLibrary {
             module,
             typed: program,
@@ -2387,7 +2415,7 @@ impl PackageProject {
         // modules register as each target's imports are discovered.
         if let Some((id, module)) = super::stdlib::module_with_id("Package") {
             environment
-                .import_shared(module.clone(), id)
+                .import_compiled((*module).clone(), id)
                 .expect("Package stdlib module registers once per session");
         }
         environment
@@ -2407,7 +2435,7 @@ impl PackageProject {
                 PackageError::Compile(format!("dependency {dependency_id} was not compiled first"))
             })?;
             environment
-                .import_shared(dependency.module.clone(), dependency.module_id)
+                .import_compiled(dependency.module.clone(), dependency.module_id)
                 .map_err(PackageError::Compile)?;
         }
         Ok(environment)

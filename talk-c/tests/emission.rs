@@ -66,7 +66,11 @@ fn stamp(function: &mut Function, locals: &[(Option<LayoutId>, bool)], sites: &[
     function.frame_sites = sites.iter().copied().collect();
 }
 
-fn module(functions: Vec<Function>, layout_table: Vec<Layout>, exports: Vec<(String, usize)>) -> Program {
+fn module(
+    functions: Vec<Function>,
+    layout_table: Vec<Layout>,
+    exports: Vec<(String, usize)>,
+) -> Program {
     Program {
         functions,
         entry: 0,
@@ -195,7 +199,12 @@ fn spliced_fields_copy_native_sources_and_unbox_uniform_ones() {
     );
     stamp(
         &mut from_uniform,
-        &[(None, true), (None, false), (Some(1), true), (Some(0), false)],
+        &[
+            (None, true),
+            (None, false),
+            (Some(1), true),
+            (Some(0), false),
+        ],
         &[(0, 1)],
     );
     let mut from_native = function(
@@ -585,7 +594,12 @@ fn blank_cells_box_native_and_zero() {
 /// function per name, all under the uniform convention, the shape
 /// `Entry::Exports` produces.
 fn library(exports: &[(&str, usize)]) -> Program {
-    let entry = function(0, 1, Vec::new(), Term::Return(Operand::Const(Constant::Unit)));
+    let entry = function(
+        0,
+        1,
+        Vec::new(),
+        Term::Return(Operand::Const(Constant::Unit)),
+    );
     let wrapped = function(1, 2, Vec::new(), Term::Return(Operand::Local(0)));
     module(
         vec![entry, wrapped],
@@ -599,10 +613,14 @@ fn library(exports: &[(&str, usize)]) -> Program {
 
 #[test]
 fn library_emission_omits_main_and_wraps_each_export() {
-    let artifact = talk_c::emit_library(&library(&[("double", 1)]), "mylib")
-        .expect("library emission");
+    let artifact =
+        talk_c::emit_library(&library(&[("double", 1)]), "mylib").expect("library emission");
     // No process entry, and the boundary section is compiled in.
-    assert!(!artifact.source.contains("int main("), "{}", artifact.source);
+    assert!(
+        !artifact.source.contains("int main("),
+        "{}",
+        artifact.source
+    );
     assert!(
         artifact.source.starts_with("#define TALK_LIBRARY 1"),
         "{}",
@@ -618,14 +636,20 @@ fn library_emission_omits_main_and_wraps_each_export() {
         artifact.source
     );
     assert!(artifact.source.contains("argc != 1"), "{}", artifact.source);
-    assert!(artifact.source.contains("int mylib_init(void)"), "{}", artifact.source);
+    assert!(
+        artifact.source.contains("int mylib_init(void)"),
+        "{}",
+        artifact.source
+    );
     assert!(
         artifact.source.contains("void mylib_teardown(void)"),
         "{}",
         artifact.source
     );
     assert!(
-        artifact.source.contains("const char *mylib_error_message(void)"),
+        artifact
+            .source
+            .contains("const char *mylib_error_message(void)"),
         "{}",
         artifact.source
     );
@@ -642,18 +666,19 @@ fn library_emission_omits_main_and_wraps_each_export() {
         "{}",
         artifact.header
     );
-    assert!(artifact.header.contains("MYLIB_ERR_TRAP"), "{}", artifact.header);
+    assert!(
+        artifact.header.contains("MYLIB_ERR_TRAP"),
+        "{}",
+        artifact.header
+    );
     // The manifest maps each export name to its external symbol.
     assert_eq!(artifact.manifest, "double\tmylib_double\n");
 }
 
 #[test]
 fn library_mangling_is_deterministic_and_collision_free() {
-    let artifact = talk_c::emit_library(
-        &library(&[("a_b", 1), ("café", 1), ("a?b", 1)]),
-        "lib",
-    )
-    .expect("library emission");
+    let artifact = talk_c::emit_library(&library(&[("a_b", 1), ("café", 1), ("a?b", 1)]), "lib")
+        .expect("library emission");
     // Underscores double and non-alphanumeric bytes escape to hex,
     // so distinct names cannot meet at one symbol.
     assert_eq!(
@@ -689,7 +714,10 @@ fn library_emission_reports_adapter_errors() {
         "an export naming a missing function must be rejected"
     );
     let no_exports = talk_c::emit_library(&library(&[]), "lib");
-    assert!(no_exports.is_err(), "a library with no exports must be rejected");
+    assert!(
+        no_exports.is_err(),
+        "a library with no exports must be rejected"
+    );
 }
 
 #[test]

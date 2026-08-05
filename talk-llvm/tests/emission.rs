@@ -70,7 +70,12 @@ fn emits_a_standalone_language_function_from_the_public_model() {
 /// A library fixture: an inert entry plus one exported function.
 fn library_module() -> Module {
     let mut program = module(vec![
-        function("entry", 0, vec![], Term::Return(Operand::Const(Constant::Unit))),
+        function(
+            "entry",
+            0,
+            vec![],
+            Term::Return(Operand::Const(Constant::Unit)),
+        ),
         function(
             "double",
             1,
@@ -92,7 +97,11 @@ fn library_emission_namespaces_symbols_and_omits_main() {
     let artifact = talk_llvm::emit_library(&library_module(), "mylib").expect("library emits");
     // Every cross-translation-unit symbol carries the prefix, so two
     // generated libraries link into one process (ADR 0048).
-    assert!(artifact.ir.contains("define void @mylib_fn1"), "{}", artifact.ir);
+    assert!(
+        artifact.ir.contains("define void @mylib_fn1"),
+        "{}",
+        artifact.ir
+    );
     assert!(
         artifact.ir.contains("define void @mylib_llvm_dispatch"),
         "{}",
@@ -102,7 +111,11 @@ fn library_emission_namespaces_symbols_and_omits_main() {
     assert!(!artifact.ir.contains("@talk_fn"), "{}", artifact.ir);
     // The process entry point disappears with `main`.
     assert!(!artifact.ir.contains("llvm_entry"), "{}", artifact.ir);
-    assert!(!artifact.runtime_c.contains("int main("), "{}", artifact.runtime_c);
+    assert!(
+        !artifact.runtime_c.contains("int main("),
+        "{}",
+        artifact.runtime_c
+    );
     assert!(
         artifact.runtime_c.starts_with("#define TALK_LIBRARY 1"),
         "{}",
@@ -117,12 +130,22 @@ fn library_emission_namespaces_symbols_and_omits_main() {
         artifact.runtime_c
     );
     assert!(
-        artifact.runtime_c.contains("mylib_llvm_dispatch(&result, 1, NULL, args);"),
+        artifact
+            .runtime_c
+            .contains("mylib_llvm_dispatch(&result, 1, NULL, args);"),
         "{}",
         artifact.runtime_c
     );
-    assert!(!artifact.runtime_c.contains("talk_llvm_"), "{}", artifact.runtime_c);
-    assert!(artifact.runtime_c.contains("int mylib_init(void)"), "{}", artifact.runtime_c);
+    assert!(
+        !artifact.runtime_c.contains("talk_llvm_"),
+        "{}",
+        artifact.runtime_c
+    );
+    assert!(
+        artifact.runtime_c.contains("int mylib_init(void)"),
+        "{}",
+        artifact.runtime_c
+    );
     // Header and manifest speak the shared convention.
     assert!(
         artifact

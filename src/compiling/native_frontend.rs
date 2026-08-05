@@ -85,8 +85,7 @@ unsafe extern "C" {
     fn talk_frontend_array_byte(base: NativeValue, index: u64, out: *mut u8) -> i32;
     fn talk_frontend_boxed_read(word: u64, out: *mut NativeValue) -> i32;
     fn talk_frontend_symbol_count() -> u32;
-    fn talk_frontend_symbol(display: u32, kind: *mut u8, module: *mut u32, local: *mut u32)
-    -> i32;
+    fn talk_frontend_symbol(display: u32, kind: *mut u8, module: *mut u32, local: *mut u32) -> i32;
     fn talk_frontend_lex(out: *mut NativeValue, args: *const NativeValue, argc: usize) -> i32;
     fn talk_frontend_trees(out: *mut NativeValue, args: *const NativeValue, argc: usize) -> i32;
     fn talk_frontend_parse(out: *mut NativeValue, args: *const NativeValue, argc: usize) -> i32;
@@ -168,9 +167,11 @@ pub fn run_export<R>(
     args: &[&[u8]],
     consume: impl FnOnce(&NativeRun) -> Result<R, String>,
 ) -> Result<R, String> {
-    let export = export_fn(name)
-        .ok_or_else(|| format!("the native frontend does not export `{name}`"))?;
-    let _guard = NATIVE.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let export =
+        export_fn(name).ok_or_else(|| format!("the native frontend does not export `{name}`"))?;
+    let _guard = NATIVE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     // Safety: the lock serializes every entry into the native library,
     // and the teardown guard restores the uninitialized state on every
     // path (teardown is a no-op after a contained trap already cleaned

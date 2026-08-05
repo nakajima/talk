@@ -2,8 +2,8 @@ use derive_visitor::{Drive, Visitor};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::occurrence::{
-    construction_callee_symbol, member_resolution_symbol, occurrence_at,
-    symbol_exported_by_import, symbol_for_any_assoc_binding, symbol_for_associated_type_member,
+    construction_callee_symbol, member_resolution_symbol, occurrence_at, symbol_exported_by_import,
+    symbol_for_any_assoc_binding, symbol_for_associated_type_member,
 };
 use crate::analysis::workspace::Workspace;
 use crate::analysis::{DocumentId, TextRange};
@@ -373,9 +373,8 @@ impl RenameCollector<'_> {
             PatternKind::Variant {
                 variant_name_span, ..
             } => {
-                if member_resolution_symbol(
-                    self.module.types.member_resolutions.get(&pattern.id),
-                ) == Some(self.target)
+                if member_resolution_symbol(self.module.types.member_resolutions.get(&pattern.id))
+                    == Some(self.target)
                 {
                     self.push_span(*variant_name_span);
                 }
@@ -692,13 +691,8 @@ mod tests {
         ];
         let workspace = Workspace::new(docs).expect("workspace");
         let offset = main.find("answer }").expect("import entry") as u32;
-        let edit = rename_at(
-            &workspace,
-            &"src/main.tlk".to_string(),
-            offset,
-            "meaning",
-        )
-        .expect("workspace edit");
+        let edit = rename_at(&workspace, &"src/main.tlk".to_string(), offset, "meaning")
+            .expect("workspace edit");
 
         let mut main_edits = Vec::new();
         let mut other_edits = Vec::new();

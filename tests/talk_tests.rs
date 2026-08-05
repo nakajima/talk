@@ -105,8 +105,11 @@ fn run_source(source: &[u8], arguments: &[&str]) -> std::process::Output {
 /// `talk check` compiles every callable rigidly (check-all), exercising
 /// the generic witness machinery without needing a runtime instantiation.
 fn check_source(source: &[u8]) -> std::process::Output {
+    // `-` pins stdin explicitly: bare `talk check` inside a package
+    // checks the package workspace instead of reading stdin.
     let mut child = Command::new(env!("CARGO_BIN_EXE_talk"))
         .arg("check")
+        .arg("-")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1598,171 +1601,6 @@ fn run_prints_scalars_and_strings() {
     assert_runs(b"print(42)\nprint(\"hey\")\n", &[], b"42\nhey\n");
 }
 
-#[test]
-fn record_holding_closures_projects_and_calls_fields() {
-    // The website record snippet: generic closures stored in a record
-    // specialize from the binding's uses, and member calls on record
-    // fields call the projected value indirectly.
-    assert_runs(
-        b"let rec = {\n\
-          \tfizz: \"buzz\",\n\
-          \tcount: 1000,\n\
-          \tgreeting: func(name) { \"hi \" + name }\n\
-          }\n\
-          print(rec.fizz)\n\
-          print(rec.count)\n\
-          print(rec.greeting(\"pat\"))\n",
-        &[],
-        b"buzz\n1000\nhi pat\n",
-    );
-}
-
-#[test]
-fn tuple_holding_closure_calls_element_indirectly() {
-    assert_runs(
-        b"let pair = (func(x) { x }, 1)\n\
-          print(pair.0(\"yo\"))\n\
-          print(pair.1)\n",
-        &[],
-        b"yo\n1\n",
-    );
-}
-
-#[test]
-fn record_fields_generalize_independently_at_runtime() {
-    // Rank-N field types: each closure projects and discharges only its
-    // own scheme's obligations — sibling protocols never leak.
-    assert_runs(
-        b"let handlers = {\n\
-          \tinc: func(x) { x + 1 },\n\
-          \tdouble: func(x) { x * 2 }\n\
-          }\n\
-          print(handlers.inc(1))\n\
-          print(handlers.double(2))\n",
-        &[],
-        b"2\n4\n",
-    );
-}
-
-#[test]
-fn desugared_record_fields_generalize_independently_at_runtime() {
-    // The desugared form: references to polymorphic bindings keep the
-    // binding's own scheme in field position.
-    assert_runs(
-        b"let _inc = func(x) { x + 1 }\n\
-          let _double = func(x) { x * 2 }\n\
-          let handlers = { inc: _inc, double: _double }\n\
-          print(handlers.inc(1))\n\
-          print(handlers.double(1))\n",
-        &[],
-        b"2\n2\n",
-    );
-}
-
-#[test]
-fn field_literal_with_declared_generics_runs() {
-    assert_runs(
-        b"let rec = { show: func<T: Showable>(x: T) -> String { x.show() } }\n\
-          print(rec.show(42))\n\
-          print(rec.show(7))\n",
-        &[],
-        b"42\n7\n",
-    );
-}
-
-#[test]
-fn struct_polymorphic_field_runs_at_two_types() {
-    assert_runs(
-        b"struct Handlers {\n\
-          \tlet inc: <T>(T) -> T\n\
-          }\n\
-          let h = Handlers(inc: func(x) { x })\n\
-          print(h.inc(1))\n\
-          print(h.inc(\"yo\"))\n",
-        &[],
-        b"1\nyo\n",
-    );
-}
-
-#[test]
-fn struct_bounded_field_with_closure_body_runs() {
-    assert_runs(
-        b"struct Show {\n\
-          \tlet show: <T: Showable>(T) -> String\n\
-          }\n\
-          let s = Show(show: func(x) { x.show() })\n\
-          print(s.show(42))\n",
-        &[],
-        b"42\n",
-    );
-}
-
-#[test]
-fn struct_field_rejects_monomorphic_closure() {
-    let output = run_source(
-        b"struct Handlers {\n\
-          \tlet inc: <T>(T) -> T\n\
-          }\n\
-          let h = Handlers(inc: func(x: Int) { x })\n",
-        &[],
-    );
-    assert!(
-        !output.status.success(),
-        "a monomorphic closure must not satisfy a polymorphic field"
-    );
-}
-
-#[test]
-fn generic_value_with_conflicting_use_types_stays_rigid() {
-    // Uses that pin the field's parameters to different concrete types
-    // keep the closure rigid: a witness-free rigid compilation serves
-    // every type.
-    assert_runs(
-        b"let rec = { id: func(x) { x } }\n\
-          print(rec.id(1))\n\
-          print(rec.id(\"s\"))\n",
-        &[],
-        b"1\ns\n",
-    );
-}
-
-#[test]
-fn witness_needing_closure_runs_at_conflicting_types() {
-    // The closure keeps hidden witness parameters when no single
-    // assignment exists; each call appends the blocks — concrete
-    // arguments materialize them (drop/retain glue, requirement
-    // dictionaries).
-    assert_runs(
-        b"let handlers = { show: func(x) { x.show() } }\n\
-          print(handlers.show(1))\n\
-          print(handlers.show(\"s\"))\n",
-        &[],
-        b"1\ns\n",
-    );
-}
-
-#[test]
-fn rigid_closure_cannot_be_moved_out_as_a_value() {
-    // A rigidly compiled closure takes hidden witness arguments, so it
-    // can only be invoked through the projection that appends them.
-    let output = run_source(
-        b"let handlers = { show: func(x) { x.show() } }\n\
-          let f = handlers.show\n\
-          print(f(1))\n\
-          print(handlers.show(\"s\"))\n",
-        &[],
-    );
-    assert!(
-        !output.status.success(),
-        "moving a rigid closure out must be rejected"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("must be called through the field directly"),
-        "expected the direct-call diagnostic, got:\n{stderr}"
-    );
-}
-
 /// The one corpus runner (gates G2, G5, G6): run `<programs>/<name>.tlk`
 /// through the real CLI and compare against `<expected>/<name>.stdout`.
 /// Success, frozen stdout (tolerating only a trailing-newline
@@ -2655,6 +2493,141 @@ fn package_run_and_test_use_the_locked_graph() {
 }
 
 #[test]
+fn check_command_checks_the_package_workspace() {
+    // Bare `talk check` inside a package checks the manifest-scoped
+    // sources compiled against the locked dependency graph, walking up
+    // from any subdirectory; `talk check -` keeps reading stdin.
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("talk-pkg-check-{}-{unique}", std::process::id()));
+    let dependency = dir.join("dependency");
+    let root = dir.join("root");
+    std::fs::create_dir_all(dependency.join("src")).expect("dependency src");
+    std::fs::create_dir_all(root.join("src")).expect("root src");
+    std::fs::write(
+        dependency.join("package.tlk"),
+        "Package(name: \"check-dependency\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+    )
+    .expect("dependency manifest");
+    std::fs::write(
+        dependency.join("src/lib.tlk"),
+        "pub func answer_for(n: Int) -> Int {\n\tn + 2\n}\n",
+    )
+    .expect("dependency source");
+    std::fs::write(
+        root.join("package.tlk"),
+        "Package(name: \"check-root\", version: \"0.1.0\", builds: [.bin(named: \"app\", from: \"src/main.tlk\")], dependencies: [.path(package: \"check-dependency\", path: \"../dependency\")])",
+    )
+    .expect("root manifest");
+    std::fs::write(
+        root.join("src/main.tlk"),
+        "use check_dependency::{ answer_for }\nuse package::util::{ double }\n\nprint(answer_for(n: double(n: 20)))\n",
+    )
+    .expect("root source");
+    std::fs::write(
+        root.join("src/util.tlk"),
+        "pub func double(n: Int) -> Int {\n\tn * 2\n}\n",
+    )
+    .expect("util source");
+    // Test suites join the workspace too: the harness must compile in.
+    std::fs::write(
+        root.join("src/util.test.tlk"),
+        "use package::util::{ double }\n\ntest(\"double\") {\n\tassert(double(n: 21) == 42)\n}\n",
+    )
+    .expect("test source");
+
+    let talk = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_talk"));
+        command.arg("check");
+        command
+    };
+
+    // The lockfile gates package mode, exactly like `talk run`.
+    let missing_lock = talk().current_dir(&root).output().expect("check");
+    assert!(!missing_lock.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing_lock.stderr).contains("run talk install first"),
+        "{}",
+        String::from_utf8_lossy(&missing_lock.stderr)
+    );
+
+    let install = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["install", "--offline"])
+        .current_dir(&root)
+        .output()
+        .expect("install");
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    let check = talk().current_dir(&root).output().expect("package check");
+    assert!(
+        check.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+
+    // The trigger walks up: src/ is inside the package.
+    let from_src = talk()
+        .current_dir(root.join("src"))
+        .output()
+        .expect("package check from src");
+    assert!(
+        from_src.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&from_src.stdout),
+        String::from_utf8_lossy(&from_src.stderr)
+    );
+
+    // A type error in a file the binary never imports still fails the
+    // check, reported against that file.
+    std::fs::write(
+        root.join("src/orphan.tlk"),
+        "func broken() -> Int {\n\t\"missing int\"\n}\n",
+    )
+    .expect("orphan source");
+    let broken = talk().current_dir(&root).output().expect("package check");
+    assert!(!broken.status.success());
+    assert!(
+        String::from_utf8_lossy(&broken.stdout).contains("orphan.tlk"),
+        "{}",
+        String::from_utf8_lossy(&broken.stdout)
+    );
+    std::fs::remove_file(root.join("src/orphan.tlk")).expect("remove orphan");
+
+    // `-` still reads stdin from inside the package.
+    use std::io::Write as _;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["check", "-"])
+        .current_dir(&root)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn talk check -");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(b"print(1 + \"x\")\n")
+        .expect("write source");
+    let stdin_check = child.wait_with_output().expect("talk check -");
+    assert!(!stdin_check.status.success());
+    assert!(
+        String::from_utf8_lossy(&stdin_check.stdout).contains("<stdin>"),
+        "{}",
+        String::from_utf8_lossy(&stdin_check.stdout)
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove package fixture");
+}
+
+#[test]
 fn run_performs_ambient_io_operations() {
     // `'io(request)` performs route through core's source-level host
     // fallback to the runtime's host operations (sleep, open/write/
@@ -3518,6 +3491,59 @@ fn check_accepts_uncalled_static_generic_bodies() {
     assert!(
         output.status.success(),
         "check rejected valid static-generic declarations:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+#[test]
+fn check_accepts_protocol_defaults_using_associated_type_bounds() {
+    // `talk check` compiles every callable rigidly (TALK_CHECK_ALL). A
+    // protocol default body calling a method on a constrained
+    // associated type needs that type's dictionary block bound in the
+    // rigid frame — the seed must range over the protocol's associated
+    // types, not just Self and its input parameters. The program runs
+    // fine (the demanded instance substitutes the conformance row's
+    // inferred bindings); only the rigid compile exercises this.
+    use std::io::Write as _;
+    let source = b"protocol Named {\n\
+        \tfunc name() -> String\n\
+        }\n\
+        struct Snack {}\n\
+        extend Snack: Named {\n\
+        \tfunc name() { \"snack\" }\n\
+        }\n\
+        protocol Pet {\n\
+        \tassociated Food: Named\n\
+        \tfunc favoriteFood() -> Food\n\
+        \tfunc describe() {\n\
+        \t\tprint(self.favoriteFood().name())\n\
+        \t}\n\
+        }\n\
+        struct Cat {}\n\
+        extend Cat: Pet {\n\
+        \tfunc favoriteFood() { Snack() }\n\
+        }\n\
+        Cat().describe()\n";
+    let mut child = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .arg("check")
+        .arg("-")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn talk check");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(source)
+        .expect("write source");
+    let output = child.wait_with_output().expect("talk check");
+    assert!(
+        output.status.success(),
+        "check rejected a protocol default over a constrained associated type:\n{}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );

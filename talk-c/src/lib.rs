@@ -269,7 +269,11 @@ pub fn emit_library(program: &Program, prefix: &str) -> Result<LibraryArtifact, 
             "a library artifact needs at least one export".to_string(),
         ));
     }
-    let names: Vec<&str> = program.exports.iter().map(|(name, _)| name.as_str()).collect();
+    let names: Vec<&str> = program
+        .exports
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect();
     let symbols = library::resolve_symbols(prefix, &names).map_err(Error::new)?;
     let mut exports: Vec<(library::Export, usize)> = Vec::with_capacity(symbols.len());
     for ((name, func), symbol) in program.exports.iter().zip(symbols) {
@@ -316,7 +320,10 @@ pub fn emit_library(program: &Program, prefix: &str) -> Result<LibraryArtifact, 
             Some(layout) => format!("talk_box_l{layout}({call})"),
             None => call,
         };
-        out.push_str(&library::wrapper(export, &format!("TalkValue result = {call};")));
+        out.push_str(&library::wrapper(
+            export,
+            &format!("TalkValue result = {call};"),
+        ));
     }
     let exports: Vec<library::Export> = exports.into_iter().map(|(export, _)| export).collect();
     Ok(LibraryArtifact {

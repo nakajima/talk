@@ -88,21 +88,18 @@ pub fn occurrence_at(
             crate::node::Node::Decl(decl) => occurrence_from_decl(module, &decl, byte_offset),
             crate::node::Node::Parameter(param) => {
                 if span_contains(param.name_span, byte_offset) {
-                    param
-                        .name
-                        .symbol()
-                        .ok()
-                        .map(|symbol| Occurrence::span(symbol, param.name_span, OccurrenceKind::Declaration))
+                    param.name.symbol().ok().map(|symbol| {
+                        Occurrence::span(symbol, param.name_span, OccurrenceKind::Declaration)
+                    })
                 } else {
                     None
                 }
             }
             crate::node::Node::Func(func) => {
                 if span_contains(func.name_span, byte_offset) {
-                    func.name
-                        .symbol()
-                        .ok()
-                        .map(|symbol| Occurrence::span(symbol, func.name_span, OccurrenceKind::Declaration))
+                    func.name.symbol().ok().map(|symbol| {
+                        Occurrence::span(symbol, func.name_span, OccurrenceKind::Declaration)
+                    })
                 } else {
                     effect_occurrence_at_offset(&func.effects, byte_offset)
                 }
@@ -114,21 +111,18 @@ pub fn occurrence_at(
                     .first()
                     .map(|token| (token.start, token.end))?;
                 if start <= byte_offset && byte_offset <= end {
-                    sig.name
-                        .symbol()
-                        .ok()
-                        .map(|symbol| Occurrence::new(symbol, start, end, OccurrenceKind::Declaration))
+                    sig.name.symbol().ok().map(|symbol| {
+                        Occurrence::new(symbol, start, end, OccurrenceKind::Declaration)
+                    })
                 } else {
                     effect_occurrence_at_offset(&sig.effects, byte_offset)
                 }
             }
             crate::node::Node::GenericDecl(generic) => {
                 if span_contains(generic.name_span, byte_offset) {
-                    generic
-                        .name
-                        .symbol()
-                        .ok()
-                        .map(|symbol| Occurrence::span(symbol, generic.name_span, OccurrenceKind::Declaration))
+                    generic.name.symbol().ok().map(|symbol| {
+                        Occurrence::span(symbol, generic.name_span, OccurrenceKind::Declaration)
+                    })
                 } else {
                     None
                 }
@@ -138,9 +132,9 @@ pub fn occurrence_at(
                     let meta = ast.meta.get(&pattern.id)?;
                     let (start, end) = identifier_span_at_offset(meta, byte_offset)?;
                     if start <= byte_offset && byte_offset <= end {
-                        name.symbol()
-                            .ok()
-                            .map(|symbol| Occurrence::new(symbol, start, end, OccurrenceKind::Declaration))
+                        name.symbol().ok().map(|symbol| {
+                            Occurrence::new(symbol, start, end, OccurrenceKind::Declaration)
+                        })
                     } else {
                         None
                     }
@@ -151,12 +145,10 @@ pub fn occurrence_at(
                     if !span_contains(*variant_name_span, byte_offset) {
                         None
                     } else {
-                        member_resolution_symbol(
-                            module.types.member_resolutions.get(&pattern.id),
-                        )
-                        .map(|symbol| {
-                            Occurrence::span(symbol, *variant_name_span, OccurrenceKind::Member)
-                        })
+                        member_resolution_symbol(module.types.member_resolutions.get(&pattern.id))
+                            .map(|symbol| {
+                                Occurrence::span(symbol, *variant_name_span, OccurrenceKind::Member)
+                            })
                     }
                 }
                 _ => None,
@@ -239,9 +231,7 @@ fn construction_arg_occurrence_at_offset(
     })
 }
 
-pub(crate) fn construction_callee_symbol(
-    callee: &crate::node_kinds::expr::Expr,
-) -> Option<Symbol> {
+pub(crate) fn construction_callee_symbol(callee: &crate::node_kinds::expr::Expr) -> Option<Symbol> {
     use crate::node_kinds::expr::ExprKind;
 
     match &callee.kind {
@@ -336,18 +326,11 @@ fn occurrence_from_type_annotation(
     use crate::node_kinds::type_annotation::TypeAnnotationKind;
 
     match &ty.kind {
-        TypeAnnotationKind::Borrow { inner, .. } | TypeAnnotationKind::Unique { inner } => {
+        TypeAnnotationKind::Borrow { inner, .. }
+        | TypeAnnotationKind::Unique { inner }
+        | TypeAnnotationKind::Quantified { inner, .. } => {
             occurrence_from_type_annotation(module, inner, byte_offset)
         }
-        TypeAnnotationKind::Quantified {
-            generics,
-            inner,
-            ..
-        } => generics
-            .iter()
-            .flat_map(|generic| generic.conformances.iter())
-            .find_map(|generic| occurrence_from_type_annotation(module, generic, byte_offset))
-            .or_else(|| occurrence_from_type_annotation(module, inner, byte_offset)),
         TypeAnnotationKind::Nominal {
             name,
             name_span,
@@ -717,8 +700,8 @@ mod tests {
     fn occurrence_reports_member_kind() {
         let code = "struct Point {\n\tlet x: Int\n}\nlet p = Point(x: 1)\np.x\n";
         let offset = code.rfind(".x").expect("member") as u32 + 1;
-        let found = occurrence_at(&workspace(code), &"main.tlk".to_string(), offset)
-            .expect("occurrence");
+        let found =
+            occurrence_at(&workspace(code), &"main.tlk".to_string(), offset).expect("occurrence");
         assert_eq!(found.kind, OccurrenceKind::Member);
     }
 
@@ -764,10 +747,11 @@ mod tests {
 
     #[test]
     fn occurrence_resolves_through_nested_generic_arguments() {
-        let code = "struct Box<T> {\n\tlet value: T\n}\nfunc f(b: Box<Box<Int>>) -> Int {\n\t1\n}\n";
+        let code =
+            "struct Box<T> {\n\tlet value: T\n}\nfunc f(b: Box<Box<Int>>) -> Int {\n\t1\n}\n";
         let inner = code.rfind("Box<Int").expect("inner Box") as u32;
-        let found = occurrence_at(&workspace(code), &"main.tlk".to_string(), inner)
-            .expect("occurrence");
+        let found =
+            occurrence_at(&workspace(code), &"main.tlk".to_string(), inner).expect("occurrence");
         assert_eq!(found.kind, OccurrenceKind::Reference);
     }
 

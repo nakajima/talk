@@ -249,15 +249,15 @@ mod tests {
 
     #[test]
     fn definition_on_a_nominal_type_annotation() {
-        let code =
-            "struct Box {\n\tlet value: Int\n}\nfunc f(b: Box) -> Int {\n\tb.value\n}\n";
+        let code = "struct Box {\n\tlet value: Int\n}\nfunc f(b: Box) -> Int {\n\tb.value\n}\n";
         let (_, text) = definition_text(code, "Box)").expect("definition");
         assert_eq!(text, "Box");
     }
 
     #[test]
     fn definition_through_nested_generic_arguments() {
-        let code = "struct Box<T> {\n\tlet value: T\n}\nfunc f(b: Box<Box<Int>>) -> Int {\n\t1\n}\n";
+        let code =
+            "struct Box<T> {\n\tlet value: T\n}\nfunc f(b: Box<Box<Int>>) -> Int {\n\t1\n}\n";
         // The inner `Box` resolves to the same declaration as the outer.
         let inner = code.rfind("Box<Int").expect("inner Box") as u32;
         let (_, text) = definition_text_at(code, inner).expect("definition");
@@ -269,8 +269,7 @@ mod tests {
 
     #[test]
     fn definition_through_tuple_type() {
-        let code =
-            "struct Box {\n\tlet value: Int\n}\nfunc f(b: (Int, Box)) -> Int {\n\t1\n}\n";
+        let code = "struct Box {\n\tlet value: Int\n}\nfunc f(b: (Int, Box)) -> Int {\n\t1\n}\n";
         let (_, text) = definition_text(code, "Box").expect("definition");
         assert_eq!(text, "Box");
     }

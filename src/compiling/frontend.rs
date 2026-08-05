@@ -669,7 +669,9 @@ mod tests {
             let bytecode = talk_vm::interp::run_export(
                 &session.module,
                 "parse",
-                &[talk_vm::interp::HostValue::String(input.as_bytes().to_vec())],
+                &[talk_vm::interp::HostValue::String(
+                    input.as_bytes().to_vec(),
+                )],
                 crate::compiling::mir::string_shape(),
                 talk_vm::interp::Budgets::default(),
                 &mut io,

@@ -306,10 +306,13 @@ impl<'a> Higlighter<'a> {
                     result.extend(self.tokens_from_expr(body, ast));
                 }
                 DeclKind::Property {
+                    name_span,
                     type_annotation,
                     default_value,
                     ..
                 } => {
+                    result.push(self.make_span(Kind::PROPERTY, *name_span));
+
                     if let Some(node) = type_annotation {
                         result.extend(self.tokens_from_expr(node, ast));
                     }
@@ -624,10 +627,11 @@ impl<'a> Higlighter<'a> {
                         result.extend(self.tokens_from_exprs(&block.body, ast));
                     }
                 }
-                ExprKind::Member(receiver, ..) => {
+                ExprKind::Member(receiver, _, member_span) => {
                     if let Some(box receiver) = receiver {
                         result.extend(self.tokens_from_expr(receiver, ast));
                     }
+                    result.push(self.make_span(Kind::PROPERTY, *member_span));
                 }
                 ExprKind::Func(func) => {
                     result.extend(self.tokens_from_expr(&func.body, ast));

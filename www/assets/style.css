@@ -341,13 +341,19 @@ code .function, pre .function {
   color: rgb(87, 84, 101);
 }
 
-.tippy-box {
-  font-family: "Bitstream Vera Sans Mono", monospace;
+.code-hover-popover {
+  position: fixed;
+  z-index: 9999;
+  background: rgb(30, 28, 36);
+  color: oklch(96.816% 0.00355 220.931);
+  border: 1px solid var(--color-tin-3);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
   font-size: 0.85rem;
-}
-
-.tippy-content {
+  line-height: 1.4;
   white-space: pre-wrap;
+  max-width: min(60ch, 90vw);
+  pointer-events: none;
 }
 
 @media (max-width: 700px) {

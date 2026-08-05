@@ -69,6 +69,11 @@ while fixing several type-checker and lexer correctness bugs.
 - **Package test discovery includes source tests.** Bare `talk test` discovers
   both `tests/**/*.test.tlk` and `src/**/*.test.tlk`. Explicit package test
   paths and directories retain package compilation context.
+- **`talk check` is package-aware.** With no filenames inside a package (found
+  by walking up from the current directory), `talk check` checks the
+  manifest-scoped workspace sources — including `src/**/*.test.tlk` — compiled
+  against the locked dependency graph, so its diagnostics match what `talk run`
+  and `talk test` accept. `talk check -` keeps reading stdin.
 - **Package-local imports work in tests.** Test files under either `tests/` or
   `src/` can resolve `package::module` imports against the package source root,
   while `self::` and `super::` remain relative to the importing test file.
