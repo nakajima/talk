@@ -34,51 +34,8 @@ const {
   version: wasmVersion,
   show_ir,
   check,
+  hover,
 } = await import(`/pkg/talk_wasm.js${wasmCacheKey}`);
-
-function getTooltipContent(tokenEl) {
-  return `Token: ${tokenEl.textContent || ""}`;
-}
-
-const DEFAULT_HUD_TEXT = "Token: (none)";
-let tokenHud = null;
-let tokenHudOwner = null;
-
-function getHudContent(tokenEl) {
-  const tokenText = (tokenEl.textContent || "").replace(/\s+/g, " ").trim();
-  const tokenType = tokenEl.className ? tokenEl.className.trim() : "token";
-  if (!tokenText) {
-    return `${tokenType}: (whitespace)`;
-  }
-  return `${tokenType}: ${tokenText}`;
-}
-
-function getTokenHud() {
-  if (tokenHud) return tokenHud;
-
-  const hudEl = document.createElement("div");
-  hudEl.className = "token-hud";
-  hudEl.setAttribute("aria-live", "polite");
-  hudEl.dataset.active = "false";
-  hudEl.textContent = DEFAULT_HUD_TEXT;
-  document.body.appendChild(hudEl);
-
-  tokenHud = {
-    setToken: (owner, tokenEl) => {
-      tokenHudOwner = owner;
-      hudEl.textContent = getHudContent(tokenEl);
-      hudEl.dataset.active = "true";
-    },
-    clear: (owner) => {
-      if (tokenHudOwner !== owner) return;
-      tokenHudOwner = null;
-      hudEl.textContent = DEFAULT_HUD_TEXT;
-      hudEl.dataset.active = "false";
-    },
-  };
-
-  return tokenHud;
-}
 
 function createTooltip(el) {
   const tippyApi = window.tippy;
@@ -136,15 +93,73 @@ function createTooltip(el) {
 
 function initHoverTooltips(el, highlightEl) {
   const tooltip = createTooltip(el);
-  const hud = getTokenHud();
-  const hudOwner = {};
+  const encoder = new TextEncoder();
 
   let pending = false;
   let lastPointer = null;
+  let currentToken = null;
+  let hoverTimer = null;
+
+  const cancelHoverTimer = () => {
+    if (hoverTimer === null) return;
+    clearTimeout(hoverTimer);
+    hoverTimer = null;
+  };
 
   const hideTooltip = () => {
+    cancelHoverTimer();
+    currentToken = null;
     tooltip.hide();
-    hud.clear(hudOwner);
+  };
+
+  const utf8Length = (text) => encoder.encode(text).length;
+
+  const charOffsetForToken = (tokenEl) => {
+    const walker = document.createTreeWalker(
+      highlightEl,
+      NodeFilter.SHOW_TEXT,
+    );
+    let offset = 0;
+    let node = walker.nextNode();
+    while (node) {
+      if (tokenEl.contains(node)) break;
+      offset += node.nodeValue.length;
+      node = walker.nextNode();
+    }
+    return offset;
+  };
+
+  const showHover = (tokenEl) => {
+    if (!tokenEl.isConnected) return;
+
+    const { source, currentSource } = getAccumulatedSource(el);
+    const tokenText = tokenEl.textContent || "";
+    const charOffset =
+      charOffsetForToken(tokenEl) + Math.floor(tokenText.length / 2);
+    const byteOffset =
+      utf8Length(source) -
+      utf8Length(currentSource) +
+      utf8Length(currentSource.slice(0, charOffset));
+
+    let result;
+    try {
+      result = hover(source, byteOffset);
+    } catch (err) {
+      console.error(err);
+      return;
+    }
+
+    const contents = result?.hover?.contents;
+    if (!contents || currentToken !== tokenEl) return;
+    tooltip.showAt(tokenEl.getBoundingClientRect(), contents);
+  };
+
+  const scheduleHover = (tokenEl) => {
+    cancelHoverTimer();
+    hoverTimer = setTimeout(() => {
+      hoverTimer = null;
+      showHover(tokenEl);
+    }, 200);
   };
 
   const tokenFromPoint = (x, y) => {
@@ -211,9 +226,10 @@ function initHoverTooltips(el, highlightEl) {
       hideTooltip();
       return;
     }
-    const rect = token.getBoundingClientRect();
-    tooltip.showAt(rect, getTooltipContent(token));
-    hud.setToken(hudOwner, token);
+    if (token === currentToken) return;
+    currentToken = token;
+    tooltip.hide();
+    scheduleHover(token);
   };
 
   const scheduleUpdate = (event) => {

@@ -1,4 +1,5 @@
-effect log<T: Showable>(t: T) {
-	print(t)
-	'continue
+effect 'log<T: Showable>(t: T) -> T
+#handle 'log { t in
+	print("t: " + t.show())
+	'continue t
 }

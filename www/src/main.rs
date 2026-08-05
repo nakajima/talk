@@ -132,7 +132,8 @@ fn highlight_intro_examples(template: &str) -> String {
         let path = format!("./content/intro-code/{name}.tlk");
         let source = std::fs::read_to_string(&path)
             .unwrap_or_else(|err| panic!("failed to read {path}: {err}"));
-        let highlighted = highlight(source.trim_end_matches(&['\n', '\r'][..]));
+        let source = format(source.trim_end_matches(&['\n', '\r'][..]));
+        let highlighted = highlight(&source);
         if default_highlighted.is_none() {
             default_highlighted = Some(highlighted.clone());
         }
@@ -165,12 +166,13 @@ fn highlight_intro_examples(template: &str) -> String {
     result
 }
 
-fn _format(code: &str) -> String {
+fn talk(command: &str, code: &str) -> std::process::Output {
     let mut child = std::process::Command::new("../target/debug/talk")
-        .arg("format")
+        .arg(command)
         .arg("-")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
 
@@ -180,13 +182,33 @@ fn _format(code: &str) -> String {
         .unwrap()
         .write_all(code.as_bytes())
         .unwrap();
-    let output = child.wait_with_output().unwrap();
+    child.wait_with_output().unwrap()
+}
+
+fn format(code: &str) -> String {
+    // `talk format` echoes the input back on parse errors instead of
+    // failing, so check parseability explicitly first.
+    let parse = talk("parse", code);
+    if !parse.status.success() {
+        panic!(
+            "failed to parse snippet:\n{code}\nerror: {}",
+            String::from_utf8_lossy(&parse.stderr)
+        );
+    }
+    let output = talk("format", code);
+    if !output.status.success() {
+        panic!(
+            "failed to format snippet:\n{code}\nerror: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
     let output = String::from_utf8_lossy(&output.stdout);
     output.trim_end_matches(&['\n', '\r'][..]).to_string()
 }
 
 fn runnable(code: &str, accumulates: bool) -> String {
-    let code = code.trim_end_matches(&['\n', '\r'][..]);
+    let code = format(code.trim_end_matches(&['\n', '\r'][..]));
+    let code = code.as_str();
     let highlighted = highlight(code);
     let raw = escape_html(code);
     let rows = line_count(code);
@@ -213,7 +235,8 @@ fn runnable(code: &str, accumulates: bool) -> String {
 }
 
 fn norun(code: &str, accumulates: bool) -> String {
-    let code = code.trim_end_matches(&['\n', '\r'][..]);
+    let code = format(code.trim_end_matches(&['\n', '\r'][..]));
+    let code = code.as_str();
     let highlighted = highlight(code);
     let accumulation = if accumulates {
         format!(

@@ -1,12 +1,15 @@
 {
   "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
-  "name": "Your Language",
+  "name": "TalkTalk",
   "patterns": [
     {
       "include": "#quoted-identifiers"
     },
     {
-      "include": "#keywords"
+      "include": "#comments"
+    },
+    {
+      "include": "#effect-names"
     },
     {
       "include": "#characters"
@@ -15,10 +18,25 @@
       "include": "#strings"
     },
     {
-      "include": "#comments"
+      "include": "#numbers"
     },
     {
-      "include": "#numbers"
+      "include": "#attributes"
+    },
+    {
+      "include": "#bound-vars"
+    },
+    {
+      "include": "#ir-registers"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#operators"
     }
   ],
   "repository": {
@@ -36,17 +54,18 @@
         }
       }
     },
-    "keywords": {
-      "patterns": [
-        {
-          "name": "keyword.control.talktalk",
-          "match": "\\b(func|let|if|else|true|false|loop|enum|case|match|return|struct|extend|break|init|protocol|import)\\b"
-        }
-      ]
+    "comments": {
+      "name": "comment.line.double-slash.talktalk",
+      "match": "//.*$"
+    },
+    "effect-names": {
+      "comment": "A tick-prefixed identifier run NOT closed by a second tick; a closed run is a character literal. Listed before #characters so foo('io, 'x') lexes like the reference lexer.",
+      "name": "constant.other.effect.talktalk",
+      "match": "'(?>[A-Za-z0-9_]+)(?!')"
     },
     "characters": {
       "name": "constant.character.talktalk",
-      "match": "'(?:[^'\\\\\\r\\n]|\\\\(?:[ntr\"'\\\\]|u\\{[0-9A-Fa-f]{1,6}\\}))'"
+      "match": "'(?:[^'\\\\\\r\\n]|\\\\(?:[ntr\"'\\\\]|u\\{[0-9A-Fa-f]{1,6}\\}))+'"
     },
     "strings": {
       "name": "string.quoted.double.talktalk",
@@ -55,26 +74,54 @@
       "patterns": [
         {
           "name": "constant.character.escape.talktalk",
-          "match": "\\\\."
-        }
-      ]
-    },
-    "comments": {
-      "patterns": [
-        {
-          "name": "comment.line.double-slash.talktalk",
-          "match": "//.*$"
+          "match": "\\\\(?:[ntr\"\\\\]|u\\{[0-9A-Fa-f]{1,6}\\})"
         },
         {
-          "name": "comment.block.talktalk",
-          "begin": "/\\*",
-          "end": "\\*/"
+          "comment": "A backslash at end of line is a line-continuation escape.",
+          "name": "constant.character.escape.talktalk",
+          "match": "\\\\$"
         }
       ]
     },
     "numbers": {
       "name": "constant.numeric.talktalk",
-      "match": "\\b\\d+(\\.\\d+)?\\b"
+      "match": "\\b\\d[\\d_]*(?:\\.\\d[\\d_]*)?"
+    },
+    "attributes": {
+      "name": "storage.modifier.attribute.talktalk",
+      "match": "@[A-Za-z0-9_]+"
+    },
+    "bound-vars": {
+      "name": "variable.other.bound.talktalk",
+      "match": "\\$[A-Za-z0-9_]+"
+    },
+    "ir-registers": {
+      "name": "variable.other.register.talktalk",
+      "match": "%[0-9?]+"
+    },
+    "constants": {
+      "name": "constant.language.talktalk",
+      "match": "\\b(?:true|false)\\b"
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.talktalk",
+          "match": "\\b(?:if|else|loop|for|in|match|return|break|continue|unreachable)\\b"
+        },
+        {
+          "name": "storage.type.talktalk",
+          "match": "\\b(?:func|let|init|struct|enum|case|protocol|extend|associated|typealias|effect|import|use|macro|static)\\b"
+        },
+        {
+          "name": "storage.modifier.talktalk",
+          "match": "\\b(?:pub|public|linear|mut|consuming|handling|as|any)\\b"
+        }
+      ]
+    },
+    "operators": {
+      "name": "keyword.operator.talktalk",
+      "match": "\\.\\.\\.|\\.\\.<|->|==|!=|<=|>=|\\+=|-=|\\*=|/=|~=|\\^=|&=|<<|>>|&&|\\|\\||::|\\.\\.|-|\\+|\\*|/|%|=|!|<|>|\\||&|\\^|~|\\?|:|\\.|@|\\$|#|'"
     }
   },
   "scopeName": "source.talktalk"

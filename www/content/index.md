@@ -145,7 +145,7 @@ dog.age
 
 Ok Chewbacca, maybe you're not one for all this ceremony. You can also just define records.
 
-```tlk accumulate
+```tlk 
 let rec = {
     fizz: "buzz",
     count: 1000,
@@ -168,7 +168,7 @@ enum Response {
 You can pattern match on `enum`s. Your `match` expression will be checked for exhaustivity.
 
 
-```tlk
+```tlk accumulate
 match Response.ok("success!") {
     .ok(string) -> string,
     .redirect(message) -> message,
@@ -178,7 +178,7 @@ match Response.ok("success!") {
 
 We can pattern match in conditionals too.
 
-```tlk accumulate
+```tlk 
 enum Maybe<T> {
 	case some(T)
 	case none
@@ -187,16 +187,16 @@ enum Maybe<T> {
 let value = Maybe.some(31)
 
 if let .some(x) = value, x == 31 {
-    print("it's 31, bestie")
+   "it's 31, bestie"
 } else {
-    print("who even knows")
+   "who even knows"
 }
 ```
 
 And `let else` is handy when you want to bail out early.
 
 ```tlk accumulate
-func unwrap_or_zero(_ value: Maybe<Int>) -> Int {
+func unwrap_or_zero(_ value: Optional<Int>) -> Int {
 	let .some(x) = value else { return 0 }
 	x
 }
@@ -215,64 +215,39 @@ match point {
 }
 ```
 
-Ok what about ~~traits~~ ~~type classes~~ ~~interfaces~~ protocols?
+Ok what about ~~traits~~ ~~type classes~~ ~~interfaces~~ protocols? For making ad-hoc polymorphism less ad-hoc? Yea we've got those.
 
-```tlk
-// Ok so we've got some different pet foods here
-struct CatFood {}
-struct DogFood {}
-
-// And we've got a protocol `Named` that just knows how
-// to get names of things.
-protocol Named {
-    func name() -> String
+```tlk accumulate norun
+protocol Addable {
+    func add(to other: Self) -> Self
 }
+```
 
-// Let's make the pet foods conform to Named
-extend CatFood: Named {
-    func name() { "tasty cat food" }
-}
+Ok so what if we want some types to conform to it? Ez, use an `extend` block.
 
-extend DogFood: Named {
-    func name() { "tasty dog food" }
-}
-
-// So far so good, right? Ok now let's add a Pet protocol.
-protocol Pet {
-    // Protocols can have associated types with their own constraints.
-    associated Food: Named
-
-	// This protocol has one required method. It just returns
-	// the associated type Food for this pet.
-    func favorite_food() -> Food
-
-    // Protocols can specify default methods.
-    func handle_DST_change() {
-        print("what the heck where is my " + self.favorite_food().name())
+```tlk accumulate
+// Make Int addable
+extend Int: Addable {
+    func add(to other: Int) -> Int {
+        self + other
     }
 }
 
-// Ok so now we've got a Cat, which conforms to Pet
-struct Cat {}
-
-// We use `extend` blocks to mark conformances.
-extend Cat: Pet {
-    func favorite_food() {
-        CatFood()
+// Make String addable
+extend String: Addable {
+    func add(to other: String) -> String {
+        other + self
     }
 }
 
-// And a Dog which conforms to Pet
-struct Dog {}
-extend Dog: Pet {
-    func favorite_food() {
-        DogFood()
-    }
-}
+print(1.add(to: 2))
+print("world".add(to: "hello "))
+```
 
-// We can call the protocol's methods 
-Cat().handle_DST_change()
-Dog().handle_DST_change()
+Conformances are verified.
+
+```tlk accumulate
+extend Float: Addable {}
 ```
 
 Check it out, we've got effects:
@@ -321,7 +296,7 @@ There are modules too. This one isn't runnable in the browser because it spans m
 
 ```tlk norun
 // Exports.tlk
-public let a = "we can export this string"
+pub let a = "we can export this string"
 
 // Main.tlk
 use package::Exports::{ a }

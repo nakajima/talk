@@ -4,15 +4,10 @@ endif
 
 syntax case match
 
-syntax keyword talktalkControl if else loop for in match return break continue
-syntax keyword talktalkDeclaration func let init struct enum case protocol extend associated typealias effect import use from where
-syntax keyword talktalkModifier pub linear static mut consuming any as handling
+syntax keyword talktalkControl if else loop for in match return break continue unreachable
+syntax keyword talktalkDeclaration func let init struct enum case protocol extend associated typealias effect import use macro where
+syntax keyword talktalkModifier pub public linear static mut consuming any as handling
 syntax keyword talktalkBoolean true false
-
-syntax match talktalkAttribute "@[A-Za-z0-9_][A-Za-z0-9_]*"
-syntax match talktalkEffect "'[A-Za-z0-9_][A-Za-z0-9_]*"
-syntax match talktalkBoundVar "\$[A-Za-z0-9_][A-Za-z0-9_]*"
-syntax match talktalkIRRegister "%[0-9?][0-9?]*"
 
 syntax match talktalkType "\<[A-Z][A-Za-z0-9_]*\>"
 syntax match talktalkFunction "\<[a-z_][A-Za-z0-9_]*\ze\s*("
@@ -39,8 +34,20 @@ syntax match talktalkOperator "\V..."
 syntax match talktalkOperator "\V.."
 syntax match talktalkOperator "[-+*/%=!<>~^|&?:.]"
 
-syntax match talktalkEscape "\\\(n\|t\|r\|\"\|'\|\\\|u{[0-9A-Fa-f]\{1,6}}\)" contained
-syntax match talktalkCharacter #\'\%([^\'\\\r\n]\|\\\%([ntr"\'\\]\|u{[0-9A-Fa-f]\{1,6}}\)\)\+\'# contains=talktalkEscape
+" Sigil forms come after the operators so they win the same-position tie
+" against single-character operator matches (e.g. `%` modulo vs `%1`).
+syntax match talktalkAttribute "@[A-Za-z0-9_][A-Za-z0-9_]*"
+syntax match talktalkBoundVar "\$[A-Za-z0-9_][A-Za-z0-9_]*"
+syntax match talktalkIRRegister "%[0-9?][0-9?]*"
+syntax match talktalkQuotedIdentifier '#"[^"\\]\+"'
+
+syntax match talktalkEscape "\\\(n\|t\|r\|\"\|\\\|u{[0-9A-Fa-f]\{1,6}}\)" contained
+syntax match talktalkCharEscape "\\\(n\|t\|r\|\"\|'\|\\\|u{[0-9A-Fa-f]\{1,6}}\)" contained
+syntax match talktalkCharacter #\'\%([^\'\\\r\n]\|\\\%([ntr"\'\\]\|u{[0-9A-Fa-f]\{1,6}}\)\)\+\'# contains=talktalkCharEscape
+" An effect name is a tick-prefixed identifier run NOT closed by a second
+" tick; a closed run is a character literal. Defined after talktalkCharacter
+" so it wins when both match at the same position (e.g. foo('io, 'x')).
+syntax match talktalkEffect "'[A-Za-z0-9_]\+\>'\@!"
 syntax region talktalkString start=+"+ skip=+\\\\\|\\"+ end=+"+ contains=talktalkEscape
 
 syntax match talktalkComment "//.*$" contains=@Spell
@@ -59,6 +66,8 @@ highlight default link talktalkEnumMember Constant
 highlight default link talktalkNumber Number
 highlight default link talktalkOperator Operator
 highlight default link talktalkEscape SpecialChar
+highlight default link talktalkCharEscape SpecialChar
+highlight default link talktalkQuotedIdentifier Identifier
 highlight default link talktalkCharacter Character
 highlight default link talktalkString String
 highlight default link talktalkComment Comment
