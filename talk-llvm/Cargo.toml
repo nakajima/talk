@@ -11,7 +11,6 @@ talk-native-runtime = { path = "../talk-native-runtime" }
 
 [dev-dependencies]
 talk-vm = { path = "../talk-vm" }
-talk-mir = { path = "../talk-mir" }
 
 [lints.clippy]
 approx_constant = "allow"

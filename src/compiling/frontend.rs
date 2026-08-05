@@ -6,6 +6,7 @@
 //! loads the checked-in artifact through it — so none of them can
 //! drift on what the frontend artifact is.
 
+#[cfg(feature = "native-c")]
 use crate::compiling::bootstrap::{BootstrapOutcome, bootstrap};
 use crate::compiling::manifest::ArtifactManifest;
 use std::path::{Path, PathBuf};
@@ -91,10 +92,12 @@ pub fn sources(root: &Path) -> Result<Vec<(String, String)>, String> {
     Ok(sources)
 }
 
+#[cfg(feature = "native-c")]
 fn export_strings() -> Vec<String> {
     EXPORTS.iter().map(|name| (*name).to_string()).collect()
 }
 
+#[cfg(feature = "native-c")]
 fn effect_strings() -> Vec<String> {
     ALLOWED_EFFECTS
         .iter()
@@ -105,6 +108,7 @@ fn effect_strings() -> Vec<String> {
 /// Rebuild the frontend artifacts from the on-disk sources, requiring
 /// the stage-1/stage-2 fixed point over the bytecode, the ABI, and the
 /// native C translation unit (ADR 0048).
+#[cfg(feature = "native-c")]
 pub fn regenerate(root: &Path) -> Result<BootstrapOutcome, String> {
     bootstrap(
         &sources(root)?,

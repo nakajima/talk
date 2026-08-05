@@ -1,4 +1,5 @@
 pub mod abi;
+#[cfg(feature = "native-c")]
 pub mod bootstrap;
 pub mod bridge;
 pub(crate) mod cache;

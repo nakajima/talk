@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "wasm", "www", "talk-vm", "talk-static", "talk-ffi", "talk-llvm", "talk-mir", "talk-native-runtime", "talk-bytecode"]
+members = [".", "wasm", "www", "talk-vm", "talk-static", "talk-ffi", "talk-llvm", "talk-mir", "talk-native-runtime", "talk-bytecode", "talk-c"]
 default-members = ["."]
 resolver = "2"
 
@@ -9,6 +9,11 @@ version = "0.1.82"
 edition = "2024"
 default-run = "talk"
 
+[[bin]]
+name = "talk"
+path = "src/bin/talk.rs"
+required-features = ["cli"]
+
 [build-dependencies]
 cc = "1"
 sha2 = "0.10.9"
@@ -17,6 +22,9 @@ sha2 = "0.10.9"
 ctor = "0.4.2"
 prettydiff = "0.8.0"
 color-eyre = "0.6"
+# The test harness initializes tracing without the cli feature.
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
+tracing-tree = "0.4.0"
 
 [dependencies]
 clap = { version = "4.5.39", features = ["derive"], optional = true }
@@ -26,7 +34,6 @@ async-lsp = { version = "0.2.2", optional = true, features = [
   "async-io",
   "tokio",
 ] }
-futures = { version = "0.3.31", optional = true }
 tower = { version = "0.5.2", optional = true }
 tokio = { version = "1.45.1", optional = true, features = [
   "macros",
@@ -37,13 +44,11 @@ tokio = { version = "1.45.1", optional = true, features = [
 itertools = "0.14.0"
 indexmap = { version = "2.2", features = ["serde"] }
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
-tracing-tree = "0.4.0"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"], optional = true }
+tracing-tree = { version = "0.4.0", optional = true }
 serde = { version = "1.0", features = ["derive", "rc"] }
-miette = { version = "7.6.0", features = ["fancy"] }
-anyhow = "1.0.99"
+anyhow = { version = "1.0.99", optional = true }
 rustc-hash = "2.1.1"
-generational-arena = "0.2.9"
 derive-visitor = "0.4.0"
 petgraph = "0.8.2"
 sha2 = "0.10.9"
@@ -53,9 +58,8 @@ tar = { version = "0.4.44", default-features = false }
 ignore = { version = "0.4", optional = true }
 talk-vm = { path = "talk-vm" }
 talk-mir = { path = "talk-mir" }
-talk-native-runtime = { path = "talk-native-runtime" }
 talk-bytecode = { path = "talk-bytecode" }
-talk-c = { path = "talk-c" }
+talk-c = { path = "talk-c", optional = true }
 num-bigint = { version = "0.5.1", features = ["serde"] }
 profiling = { version = "1.0.18", default-features = false }
 tracy-client = { version = "0.18.4", default-features = false, features = ["timer-fallback"], optional = true }
@@ -67,11 +71,18 @@ cli = [
   "dep:clap_complete",
   "dep:rustyline",
   "dep:async-lsp",
-  "dep:futures",
   "dep:tower",
   "dep:tokio",
   "dep:ignore",
+  "dep:anyhow",
+  "dep:tracing-subscriber",
+  "dep:tracing-tree",
+  "native-c",
 ]
+# C emission and the bootstrap pipeline (`talk bootstrap`,
+# `talk compile --emit c`): consumers that never emit C (WASM, FFI)
+# skip the talk-c crate entirely.
+native-c = ["dep:talk-c"]
 profile-tracy = [
   "dep:tracy-client",
   "profiling/profile-with-tracy",
