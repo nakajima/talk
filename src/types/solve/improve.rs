@@ -13,6 +13,38 @@ impl<'s> Solver<'s> {
         let mut improved = false;
         let mut remaining = vec![];
         for constraint in stuck.drain(..) {
+            if self.defaulting
+                && let Constraint::Eq(a, b, origin) = constraint
+            {
+                if self.commit_unique_projection(&a, origin, queue)
+                    || self.commit_unique_projection(&b, origin, queue)
+                {
+                    queue.push(Constraint::Eq(a, b, origin));
+                    improved = true;
+                } else {
+                    remaining.push(Constraint::Eq(a, b, origin));
+                }
+                continue;
+            }
+            // Unique-row improvement (the final solve's analog of
+            // unique-owner member improvement): a variable-headed
+            // conformance goal with variable-free protocol arguments
+            // and exactly one candidate row anywhere commits the
+            // receiver to that row's head — forced, not a guess.
+            if self.defaulting
+                && let Constraint::Conforms {
+                    ty,
+                    protocol,
+                    origin,
+                } = &constraint
+                && matches!(self.store.shallow(ty), Ty::Var(_))
+                && let Some(head) = self.catalog.unique_conformance_head(protocol)
+            {
+                queue.push(Constraint::Eq(ty.clone(), head, *origin));
+                queue.push(constraint);
+                improved = true;
+                continue;
+            }
             let Constraint::HasMember {
                 receiver,
                 label,
@@ -179,5 +211,93 @@ impl<'s> Solver<'s> {
         }
         *stuck = remaining;
         improved
+    }
+
+    /// Unique-candidate projection improvement: a stuck associated-type
+    /// projection whose base is a concrete nominal and whose protocol
+    /// arguments are still variables commits to the one conformance row
+    /// that can ever match — the same "uniqueness justifies commitment"
+    /// rule as unique-owner member improvement. Sound only at the final
+    /// solve (the `defaulting` gate in `improve`): earlier groups must
+    /// keep floating, because a later group may pin the variables to a
+    /// different row. Zero or several candidate rows stay stuck —
+    /// ambiguity is an error, never a guess.
+    fn commit_unique_projection(
+        &mut self,
+        ty: &Ty,
+        origin: CtOrigin,
+        queue: &mut Vec<Constraint>,
+    ) -> bool {
+        let Ty::Proj(base, protocol, _) = self.store.shallow(ty) else {
+            return false;
+        };
+        if !protocol.has_unification_vars() {
+            return false;
+        }
+        let base = self.store.shallow(&base);
+        let base = match &base {
+            Ty::Borrow(_, inner) => self.store.shallow(inner),
+            other => other.clone(),
+        };
+        let Ty::Nominal(symbol, args) = &base else {
+            return false;
+        };
+        let catalog = self.catalog;
+        let matches = catalog.matching_conformances(*symbol, args, &protocol);
+        let [matched] = matches.as_slice() else {
+            return false;
+        };
+        // The matching row may reach the target through a superprotocol;
+        // commit against the candidate whose arguments actually matched
+        // (the same candidate `match_conformance_row` selected).
+        let committed_args = catalog
+            .protocol_and_supers(matched.protocol)
+            .into_iter()
+            .filter(|candidate| {
+                candidate.protocol == protocol.protocol
+                    && candidate.args.len() == protocol.args.len()
+            })
+            .map(|candidate| {
+                candidate
+                    .args
+                    .iter()
+                    .map(|arg| {
+                        arg.substitute(
+                            &matched.substitution,
+                            &Default::default(),
+                            &Default::default(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .find(|committed| {
+                committed.iter().zip(&protocol.args).all(|(pattern, actual)| {
+                    crate::types::ty::match_key_pattern(
+                        pattern,
+                        actual,
+                        &mut FxHashMap::default(),
+                    )
+                })
+            });
+        let Some(committed_args) = committed_args else {
+            return false;
+        };
+        // The commitment must pin the variables concretely: a generic row
+        // whose parameters the match left unbound (a variable actual is a
+        // wildcard) proves nothing and would only re-stick.
+        if committed_args.iter().any(Ty::has_unification_vars) {
+            return false;
+        }
+        for (actual, committed) in protocol.args.iter().zip(committed_args) {
+            queue.push(Constraint::Eq(actual.clone(), committed, origin));
+        }
+        // Re-check the conformance through the normal path so the row's
+        // context (premises) is applied, not just its arguments.
+        queue.push(Constraint::Conforms {
+            ty: base.clone(),
+            protocol: protocol.clone(),
+            origin,
+        });
+        true
     }
 }

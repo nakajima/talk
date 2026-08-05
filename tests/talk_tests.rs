@@ -1598,6 +1598,171 @@ fn run_prints_scalars_and_strings() {
     assert_runs(b"print(42)\nprint(\"hey\")\n", &[], b"42\nhey\n");
 }
 
+#[test]
+fn record_holding_closures_projects_and_calls_fields() {
+    // The website record snippet: generic closures stored in a record
+    // specialize from the binding's uses, and member calls on record
+    // fields call the projected value indirectly.
+    assert_runs(
+        b"let rec = {\n\
+          \tfizz: \"buzz\",\n\
+          \tcount: 1000,\n\
+          \tgreeting: func(name) { \"hi \" + name }\n\
+          }\n\
+          print(rec.fizz)\n\
+          print(rec.count)\n\
+          print(rec.greeting(\"pat\"))\n",
+        &[],
+        b"buzz\n1000\nhi pat\n",
+    );
+}
+
+#[test]
+fn tuple_holding_closure_calls_element_indirectly() {
+    assert_runs(
+        b"let pair = (func(x) { x }, 1)\n\
+          print(pair.0(\"yo\"))\n\
+          print(pair.1)\n",
+        &[],
+        b"yo\n1\n",
+    );
+}
+
+#[test]
+fn record_fields_generalize_independently_at_runtime() {
+    // Rank-N field types: each closure projects and discharges only its
+    // own scheme's obligations — sibling protocols never leak.
+    assert_runs(
+        b"let handlers = {\n\
+          \tinc: func(x) { x + 1 },\n\
+          \tdouble: func(x) { x * 2 }\n\
+          }\n\
+          print(handlers.inc(1))\n\
+          print(handlers.double(2))\n",
+        &[],
+        b"2\n4\n",
+    );
+}
+
+#[test]
+fn desugared_record_fields_generalize_independently_at_runtime() {
+    // The desugared form: references to polymorphic bindings keep the
+    // binding's own scheme in field position.
+    assert_runs(
+        b"let _inc = func(x) { x + 1 }\n\
+          let _double = func(x) { x * 2 }\n\
+          let handlers = { inc: _inc, double: _double }\n\
+          print(handlers.inc(1))\n\
+          print(handlers.double(1))\n",
+        &[],
+        b"2\n2\n",
+    );
+}
+
+#[test]
+fn field_literal_with_declared_generics_runs() {
+    assert_runs(
+        b"let rec = { show: func<T: Showable>(x: T) -> String { x.show() } }\n\
+          print(rec.show(42))\n\
+          print(rec.show(7))\n",
+        &[],
+        b"42\n7\n",
+    );
+}
+
+#[test]
+fn struct_polymorphic_field_runs_at_two_types() {
+    assert_runs(
+        b"struct Handlers {\n\
+          \tlet inc: <T>(T) -> T\n\
+          }\n\
+          let h = Handlers(inc: func(x) { x })\n\
+          print(h.inc(1))\n\
+          print(h.inc(\"yo\"))\n",
+        &[],
+        b"1\nyo\n",
+    );
+}
+
+#[test]
+fn struct_bounded_field_with_closure_body_runs() {
+    assert_runs(
+        b"struct Show {\n\
+          \tlet show: <T: Showable>(T) -> String\n\
+          }\n\
+          let s = Show(show: func(x) { x.show() })\n\
+          print(s.show(42))\n",
+        &[],
+        b"42\n",
+    );
+}
+
+#[test]
+fn struct_field_rejects_monomorphic_closure() {
+    let output = run_source(
+        b"struct Handlers {\n\
+          \tlet inc: <T>(T) -> T\n\
+          }\n\
+          let h = Handlers(inc: func(x: Int) { x })\n",
+        &[],
+    );
+    assert!(
+        !output.status.success(),
+        "a monomorphic closure must not satisfy a polymorphic field"
+    );
+}
+
+#[test]
+fn generic_value_with_conflicting_use_types_stays_rigid() {
+    // Uses that pin the field's parameters to different concrete types
+    // keep the closure rigid: a witness-free rigid compilation serves
+    // every type.
+    assert_runs(
+        b"let rec = { id: func(x) { x } }\n\
+          print(rec.id(1))\n\
+          print(rec.id(\"s\"))\n",
+        &[],
+        b"1\ns\n",
+    );
+}
+
+#[test]
+fn witness_needing_closure_runs_at_conflicting_types() {
+    // The closure keeps hidden witness parameters when no single
+    // assignment exists; each call appends the blocks — concrete
+    // arguments materialize them (drop/retain glue, requirement
+    // dictionaries).
+    assert_runs(
+        b"let handlers = { show: func(x) { x.show() } }\n\
+          print(handlers.show(1))\n\
+          print(handlers.show(\"s\"))\n",
+        &[],
+        b"1\ns\n",
+    );
+}
+
+#[test]
+fn rigid_closure_cannot_be_moved_out_as_a_value() {
+    // A rigidly compiled closure takes hidden witness arguments, so it
+    // can only be invoked through the projection that appends them.
+    let output = run_source(
+        b"let handlers = { show: func(x) { x.show() } }\n\
+          let f = handlers.show\n\
+          print(f(1))\n\
+          print(handlers.show(\"s\"))\n",
+        &[],
+    );
+    assert!(
+        !output.status.success(),
+        "moving a rigid closure out must be rejected"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("must be called through the field directly"),
+        "expected the direct-call diagnostic, got:\n{stderr}"
+    );
+}
+
 /// The one corpus runner (gates G2, G5, G6): run `<programs>/<name>.tlk`
 /// through the real CLI and compare against `<expected>/<name>.stdout`.
 /// Success, frozen stdout (tolerating only a trailing-newline

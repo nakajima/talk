@@ -51,20 +51,38 @@ pub(super) fn copy_grade_head(catalog: &TypeCatalog, ty: &Ty) -> bool {
         if catalog.grade_of_application(*symbol, args) == crate::types::catalog::Grade::Copy)
 }
 
-pub(super) struct Elaborator<'e> {
-    store: &'e mut VarStore,
-    catalog: &'e TypeCatalog,
-    schemes: &'e FxHashMap<Symbol, Scheme>,
-    diagnostics: &'e mut DiagnosticSink,
-    type_aliases: &'e FxHashMap<Symbol, TypeAliasDef>,
-    alias_stack: &'e mut Vec<Symbol>,
-    self_types: &'e [Ty],
-    resolved: &'e ResolvedNames,
-    level: Level,
+pub(super) struct Elaborator<'e, 'c> {
+    pub(super) store: &'e mut VarStore,
+    pub(super) catalog: &'c mut TypeCatalog,
+    pub(super) schemes: &'e FxHashMap<Symbol, Scheme>,
+    pub(super) diagnostics: &'e mut DiagnosticSink,
+    pub(super) type_aliases: &'e FxHashMap<Symbol, TypeAliasDef>,
+    pub(super) alias_stack: &'e mut Vec<Symbol>,
+    pub(super) self_types: &'e [Ty],
+    pub(super) resolved: &'e ResolvedNames,
+    pub(super) level: Level,
     pub(super) obligations: Vec<Constraint>,
 }
 
-impl<'e> Elaborator<'e> {
+impl<'e, 'c> Elaborator<'e, 'c> {
+
+    /// A nested elaboration context (static where-clause operands
+    /// lower through their own), reborrowing every field.
+    pub(super) fn elaborator(&mut self) -> Elaborator<'_, '_> {
+        Elaborator {
+            store: &mut *self.store,
+            catalog: &mut *self.catalog,
+            schemes: &*self.schemes,
+            diagnostics: &mut *self.diagnostics,
+            type_aliases: &*self.type_aliases,
+            alias_stack: &mut *self.alias_stack,
+            self_types: self.self_types,
+            resolved: self.resolved,
+            level: self.level,
+            obligations: vec![],
+        }
+    }
+
     fn lower_type_alias(
         &mut self,
         symbol: Symbol,
@@ -441,7 +459,7 @@ impl<'e> Elaborator<'e> {
         None
     }
 
-    fn lower_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
+    pub(super) fn lower_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
         match &annotation.kind {
             TypeAnnotationKind::Borrow { mutable, inner } => {
                 let inner = self.lower_annotation(inner);
@@ -501,6 +519,29 @@ impl<'e> Elaborator<'e> {
                     Ty::Error
                 }
             },
+            TypeAnnotationKind::Quantified {
+                generics,
+                where_clause,
+                inner,
+            } => {
+                // A quantified function type: the declared generics,
+                // their conformance bounds, and the where clause become
+                // a first-class scheme over the inner function type
+                // (rank-N field types) — the same declaration
+                // discipline as a func declaration's generics.
+                self.register_generic_bounds(generics);
+                let params = self.declared_params(generics);
+                let predicates = self.declared_predicates(generics, where_clause.as_ref());
+                let ty = self.lower_annotation(inner);
+                Ty::Forall(Box::new(crate::types::ty::Scheme {
+                    params,
+                    eff_params: vec![],
+                    row_params: vec![],
+                    perm_params: vec![],
+                    predicates,
+                    ty,
+                }))
+            }
             TypeAnnotationKind::NominalPath {
                 base,
                 member,
@@ -1031,8 +1072,19 @@ impl<'e> Elaborator<'e> {
         ));
     }
 
-    fn unsupported(&mut self, node: NodeID, what: &str) {
+    pub(super) fn unsupported(&mut self, node: NodeID, what: &str) {
         self.diagnostics.unsupported(node, what);
+    }
+
+    /// Obligations from nested static lowering join this elaboration's:
+    /// only static-formation obligations cross the seam (the same
+    /// discipline as `CatalogBuilder::absorb_obligations`).
+    pub(super) fn absorb_obligations(&mut self, obligations: Vec<Constraint>) {
+        self.obligations.extend(
+            obligations
+                .into_iter()
+                .filter(|obligation| matches!(obligation, Constraint::StaticCmp { .. })),
+        );
     }
 }
 
@@ -1045,10 +1097,10 @@ pub(super) struct DeclContext {
 }
 
 impl<'s, 'a> CatalogBuilder<'s, 'a> {
-    pub(super) fn elaborator(&mut self) -> Elaborator<'_> {
+    pub(super) fn elaborator(&mut self) -> Elaborator<'_, '_> {
         Elaborator {
             store: &mut *self.store,
-            catalog: &*self.catalog,
+            catalog: &mut *self.catalog,
             schemes: &*self.schemes,
             diagnostics: &mut *self.diagnostics,
             type_aliases: &*self.type_aliases,
@@ -1186,10 +1238,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
 macro_rules! impl_checking_elaboration_for {
     ($target:ident<$session:lifetime, $source:lifetime>) => {
         impl<$session, $source> $target<$session, $source> {
-            pub(super) fn elaborator(&mut self) -> Elaborator<'_> {
+            pub(super) fn elaborator(&mut self) -> Elaborator<'_, '_> {
                 Elaborator {
                     store: &mut *self.store,
-                    catalog: &*self.catalog,
+                    catalog: &mut *self.catalog,
                     schemes: &*self.schemes,
                     diagnostics: &mut *self.diagnostics,
                     type_aliases: &*self.type_aliases,

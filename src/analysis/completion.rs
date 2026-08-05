@@ -228,6 +228,7 @@ fn add_member_items_for_ty(
     match member_lookup_ty(receiver_ty) {
         // Stripped by member_lookup_ty; unreachable here.
         Ty::Unique(_) => {}
+        Ty::Forall(scheme) => add_member_items_for_ty(types, &scheme.ty, viewer, items),
         Ty::Nominal(symbol, args) => {
             add_nominal_member_items(types, *symbol, args, receiver_ty, viewer, items);
         }

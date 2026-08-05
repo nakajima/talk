@@ -1,0 +1,5 @@
+let rec = { fizz: "buzz", count: 1000, greeting: func(name) { "hi " + name } }
+
+print(rec.fizz)
+print(rec.count)
+print(rec.greeting("pat"))

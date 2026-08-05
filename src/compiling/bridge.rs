@@ -1827,6 +1827,11 @@ impl ResultAdapter<'_, '_> {
                 effects: self.effect_set(&p[1])?,
                 returns: Box::new(self.one_type(&p[2])?),
             },
+            "quantified_type" => TypeAnnotationKind::Quantified {
+                generics: self.generic_decls(&p[0])?,
+                where_clause: self.where_clause(&p[1])?,
+                inner: Box::new(self.one_type(&p[2])?),
+            },
             "nominal_path" => TypeAnnotationKind::NominalPath {
                 base: Box::new(self.one_type(&p[0])?),
                 member: crate::label::Label::Named(self.string(&p[1])?),

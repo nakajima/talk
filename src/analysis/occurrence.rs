@@ -339,6 +339,15 @@ fn occurrence_from_type_annotation(
         TypeAnnotationKind::Borrow { inner, .. } | TypeAnnotationKind::Unique { inner } => {
             occurrence_from_type_annotation(module, inner, byte_offset)
         }
+        TypeAnnotationKind::Quantified {
+            generics,
+            inner,
+            ..
+        } => generics
+            .iter()
+            .flat_map(|generic| generic.conformances.iter())
+            .find_map(|generic| occurrence_from_type_annotation(module, generic, byte_offset))
+            .or_else(|| occurrence_from_type_annotation(module, inner, byte_offset)),
         TypeAnnotationKind::Nominal {
             name,
             name_span,

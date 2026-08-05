@@ -323,6 +323,7 @@ impl VarStore {
                 }
             }
             Ty::Proj(base, ..) => self.query_resolved(base, f)?,
+            Ty::Forall(scheme) => self.query_resolved(&scheme.ty.clone(), f)?,
             Ty::Eff(eff) => {
                 for entry in &eff.effects {
                     for arg in &entry.args {

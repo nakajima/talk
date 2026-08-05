@@ -228,6 +228,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             schemes: &*self.schemes,
             mono: &*self.mono,
             instantiations: &mut self.artifacts.instantiations,
+            projection_instantiations: &mut self.artifacts.projection_instantiations,
             member_resolutions: &mut self.artifacts.member_resolutions,
             member_call_slots: &self.artifacts.member_call_slots,
             coerce_clones: &mut self.artifacts.coerce_clones,
@@ -251,6 +252,41 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
     /// this, a variable-headed predicate really is unsolvable: improvement
     /// applies one last time (the solver owns every level now), then errors.
     pub(super) fn solve_deferred(&mut self) {
+        // A stored rank-N closure no projection ever used still compiles
+        // once: instantiate its scheme here so the final solve's
+        // improvement commits what uniqueness forces (a sole candidate
+        // row pins the parameter, exactly like a use would). Genuinely
+        // ambiguous parameters stay rigid, and the backend reports any
+        // witness need honestly.
+        let mut unused_field_wanteds = vec![];
+        let forall_nodes: Vec<(NodeID, crate::types::ty::Scheme)> = self
+            .artifacts
+            .node_types
+            .iter()
+            .filter_map(|(node, ty)| match ty {
+                Ty::Forall(scheme) if !scheme.params.is_empty() => {
+                    Some((*node, scheme.as_ref().clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        for (node, scheme) in forall_nodes {
+            let identity: Vec<Symbol> =
+                scheme.params.iter().map(|param| param.symbol).collect();
+            let projected = self
+                .artifacts
+                .projection_instantiations
+                .iter()
+                .any(|(used, ..)| *used == identity);
+            let instantiated = self.artifacts.instantiations.contains_key(&node);
+            if projected || instantiated {
+                continue;
+            }
+            let ty = self.body().instantiate(&scheme, node);
+            let _ = ty;
+            unused_field_wanteds.extend(self.wanteds.split_off(0));
+        }
+        self.deferred.extend(unused_field_wanteds);
         let deferred = std::mem::take(self.deferred);
         if deferred.is_empty() && self.pending_force_unwraps.is_empty() {
             return;

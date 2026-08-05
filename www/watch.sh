@@ -17,4 +17,4 @@ tailscale funnel 8000 &
 sleep 1
 
 echo "watching"
-watchexec --exts css,template,md,rs,js "(cargo run > ./assets/index.html)"
+watchexec --exts css,template,md,rs,js,tlk "(cargo run > ./assets/index.html)"

@@ -176,7 +176,7 @@ impl<'s> Solver<'s> {
             // rewrites E to E.RHS and diverges.
             Ty::Proj(..) => 0,
             Ty::Var(_) | Ty::Param(_) => 1,
-            Ty::Func(..) | Ty::Record(_) | Ty::Tuple(_) => 2,
+            Ty::Func(..) | Ty::Forall(..) | Ty::Record(_) | Ty::Tuple(_) => 2,
             Ty::Borrow(..)
             | Ty::Unique(_)
             | Ty::Nominal(..)

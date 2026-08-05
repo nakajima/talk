@@ -1,4 +1,5 @@
 use super::*;
+use super::elaborate::Elaborator;
 
 macro_rules! impl_bounds_for {
     ($target:ident<$session:lifetime, $source:lifetime>) => {
@@ -643,3 +644,4 @@ macro_rules! impl_bounds_for {
 impl_bounds_for!(CatalogBuilder<'s, 'a>);
 impl_bounds_for!(BodyChecker<'s, 'a>);
 impl_bounds_for!(BindingGroupChecker<'s, 'a>);
+impl_bounds_for!(Elaborator<'e, 'c>);

@@ -15,18 +15,30 @@ func add(x, y) {
 Let's call the function with `Int`s:
 
 ```tlk accumulate
-add(x: 1, y: 2) // => 3
+add(1, 2) // => 3
 ```
 
 Now let's call it with `String`s:
 
 ```tlk accumulate
-add(x: "hello ", y: "world") // => "hello world"
+add("hello ", "world") // => "hello world"
 ```
 
 Wow functions are polymorphic. What a world!
 
-"ok" you say, but do you have *variables*? we do! let me show you, you smug piece of
+We can also define functions with labeled params.
+
+```tlk
+func add_one(x:) {
+	x + 1
+}
+
+add_one(x: 1) // => 2 Wow. Imagine that
+```
+
+"Ok Alonzo Church" you say, "but do you have like, normal *variables*?"
+
+We do! I'm getting to it...
 
 ```tlk
 let a = 1
@@ -35,25 +47,20 @@ let c = a + b
 c // => 3
 ```
 
-Here’s how functions look to define and call.
+Ok Philip Wadler, maybe you like types? You can specify them if you want.
 
-```tlk
-func add(x) {
-	x + 1
-}
-
-add(1) // => 2 Wow. Imagine that
-```
-
-Maybe you like types? You can specify them if you want.
-
-```tlk
+```tlk accumulate norun
 let a: Int = 1
 let b: Float = 2.0
+```
+
+They’ll be checked. 
+
+```tlk accumulate
 let c = a + b // Uh oh, type error!
 ```
 
-They’ll be checked. But you can also not specify them and types will still be checked:
+But you can also not specify them and types will still be checked:
 
 ```tlk
 let a = 1
@@ -61,25 +68,17 @@ let b = 2.0
 let c = a + b
 ```
 
-We've got polymorphic functions.
-
-```tlk
-func identity(x) { x }
-identity(1.23) // => 1.23 (Float)
-identity(true) // => true (Bool)
-```
-
-You could write the function above explicitly too.
+Functions can have type annotations as well.
 
 ```tlk norun
 // it's good to be explicit sometimes
-func identity<T>(x: T) { x }
+func identity<T>(x: T) -> T { x }
 ```
 
-Closures are values too, and they can capture state.
+Functions are values too, and they can capture state.
 
 ```tlk
-func makeCounter() {
+func make_counter() {
 	let i = 0
 
 	return func() {
@@ -88,7 +87,7 @@ func makeCounter() {
 	}
 }
 
-let counter = makeCounter()
+let counter = make_counter()
 counter()
 counter()
 counter()
@@ -107,24 +106,26 @@ twice {
 }
 ```
 
-Maybe you like product types.
+Ok Alan Kay, maybe you like objects. You know, big bags of state and behavior that are the only correct way to program.
 
 ```tlk
 
 struct Person {
-	let firstName: String
-	let lastName: String
+	let first_name: String
+	let last_name: String
 
 	func greet() {
 		// Strings can be concat'd
-		print("hi i'm " + self.firstName + " " + self.lastName)
+		print("hi i'm " + self.first_name+ " " + self.last_name)
 	}
 }
 
-Person(firstName: "Pat", lastName: "N").greet()
+let person = Person(first_name: "Pat", last_name: "N")
+person.greet()
+person
 ```
 
-You can also define custom initializers.
+By default, structs get constructors generated automatically. But if your struct is special then you can define a custom constructor with `init`.
 
 ```tlk
 struct Dog {
@@ -142,19 +143,32 @@ let dog = Dog(age: 3)
 dog.age
 ```
 
-We've got sum types too:
+Ok Chewbacca, maybe you're not one for all this ceremony. You can also just define records.
 
-  
+```tlk accumulate
+let rec = {
+    fizz: "buzz",
+    count: 1000,
+    greeting: func(name) { "hi " + name }
+}
+
+print(rec.fizz)
+print(rec.count)
+print(rec.greeting("pat"))
+```
+
+What about enumerations? You ever enumerate stuff? It's the best!
+
+```tlk accumulate
+enum Response {
+    case ok(String), redirect(String), other(Int)
+}
+```
+
+You can pattern match on `enum`s. Your `match` expression will be checked for exhaustivity.
+
 
 ```tlk
-enum Response {
-    case ok(String), redirect(String), other(Int)
-}
-
-enum Response {
-    case ok(String), redirect(String), other(Int)
-}
-
 match Response.ok("success!") {
     .ok(string) -> string,
     .redirect(message) -> message,
@@ -162,40 +176,35 @@ match Response.ok("success!") {
 }
 ```
 
-Pattern matching is good for more than one big `match`, too.
+We can pattern match in conditionals too.
 
-```tlk
+```tlk accumulate
 enum Maybe<T> {
 	case some(T)
 	case none
 }
 
-let value = Maybe.some(42)
+let value = Maybe.some(31)
 
-if let .some(x) = value {
-	x
+if let .some(x) = value, x == 31 {
+    print("it's 31, bestie")
 } else {
-	0
+    print("who even knows")
 }
 ```
 
 And `let else` is handy when you want to bail out early.
 
-```tlk
-enum Maybe<T> {
-	case some(T)
-	case none
-}
-
-func unwrapOrZero(value: Maybe<Int>) -> Int {
+```tlk accumulate
+func unwrap_or_zero(_ value: Maybe<Int>) -> Int {
 	let .some(x) = value else { return 0 }
 	x
 }
 
-unwrapOrZero(Maybe.some(42))
+unwrap_or_zero(.some(42))
 ```
 
-Records can be matched structurally too.
+Records can be pattern matched too.
 
 ```tlk
 let point = { x: 10, y: 20 }
@@ -206,7 +215,7 @@ match point {
 }
 ```
 
-Ok what about protocols?
+Ok what about ~~traits~~ ~~type classes~~ ~~interfaces~~ protocols?
 
 ```tlk
 // Ok so we've got some different pet foods here
@@ -235,11 +244,11 @@ protocol Pet {
 
 	// This protocol has one required method. It just returns
 	// the associated type Food for this pet.
-    func favoriteFood() -> Food
+    func favorite_food() -> Food
 
     // Protocols can specify default methods.
-    func handleDSTChange() {
-        print("what the heck where is my " + self.favoriteFood().name())
+    func handle_DST_change() {
+        print("what the heck where is my " + self.favorite_food().name())
     }
 }
 
@@ -248,7 +257,7 @@ struct Cat {}
 
 // We use `extend` blocks to mark conformances.
 extend Cat: Pet {
-    func favoriteFood() {
+    func favorite_food() {
         CatFood()
     }
 }
@@ -256,14 +265,14 @@ extend Cat: Pet {
 // And a Dog which conforms to Pet
 struct Dog {}
 extend Dog: Pet {
-    func favoriteFood() {
+    func favorite_food() {
         DogFood()
     }
 }
 
 // We can call the protocol's methods 
-Cat().handleDSTChange()
-Dog().handleDSTChange()
+Cat().handle_DST_change()
+Dog().handle_DST_change()
 ```
 
 Check it out, we've got effects:
@@ -275,13 +284,13 @@ effect 'fizz(x: Int) -> Int
 // Handles 'fizz for as long as handler is in scope
 #handle 'fizz { x in
 	// This effect doesn't do much, it just returns what it was passed
-	continue x
+	'continue x
 }
 
 // Define a function with effects. The effect list is in `'[]`. Effects
 // can also be defined as `'_` and they'll be inferred.
 func fizzes(x) '[fizz] {
-	'fizz(x)
+	'fizz(x: x)
 }
 
 print(fizzes(123))

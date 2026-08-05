@@ -1737,6 +1737,17 @@ impl<'a> Formatter<'a> {
                 ],
                 text("."),
             ),
+            TypeAnnotationKind::Quantified {
+                generics,
+                where_clause,
+                inner,
+            } => {
+                let mut result = self.format_generic_decl_list(generics);
+                if let Some(where_clause) = where_clause {
+                    result = concat_space(result, self.format_where_clause(where_clause));
+                }
+                concat_space(result, self.format_type_annotation(inner))
+            }
             TypeAnnotationKind::Func {
                 params,
                 effects,

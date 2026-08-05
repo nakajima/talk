@@ -82,6 +82,17 @@ pub struct Expr {
     /// where the node is not a resolved member.
     #[drive(skip)]
     pub member_resolution: Option<crate::types::output::MemberResolution>,
+    /// The one concrete assignment a stored rank-N closure compiles at
+    /// (the checker's `field_specializations`), when this node stores a
+    /// polymorphic closure — a func literal field or a generic
+    /// reference. Lowering extends its frame substitution with these.
+    #[drive(skip)]
+    pub specialization: Option<Vec<(Symbol, crate::types::ty::Ty)>>,
+    /// When this projection reads a rigidly compiled closure: the
+    /// hidden witness-block layout the call must append, as
+    /// (rigid parameter, this use's argument) pairs in scheme order.
+    #[drive(skip)]
+    pub witness_layout: Option<Vec<(Symbol, crate::types::ty::Ty)>>,
     /// This call/constructor's per-call-site type instantiation (the checker's
     /// `instantiations`), baked on by the typed-program builder; read for θ at
     /// the call site.
@@ -505,6 +516,10 @@ pub struct Func {
     /// carry their solved latent row.
     #[drive(skip)]
     pub scheme: crate::types::ty::Scheme,
+    /// The one concrete assignment this closure compiles at, when it is
+    /// a stored rank-N field literal (see `Expr::specialization`).
+    #[drive(skip)]
+    pub specialization: Option<Vec<(Symbol, crate::types::ty::Ty)>>,
     /// The declared receiver mode (ADR 0038): `mut func` receivers write
     /// back through the private tuple-return convention. `None` off
     /// methods.

@@ -295,6 +295,15 @@ impl TypeAnnotation {
             TypeAnnotationKind::Unique { inner } => {
                 format!("*{}", inner.simple_display())
             }
+            TypeAnnotationKind::Quantified {
+                generics, inner, ..
+            } => {
+                let names: Vec<String> = generics
+                    .iter()
+                    .map(|generic| generic.name.name_str())
+                    .collect();
+                format!("<{}>{}", names.join(", "), inner.simple_display())
+            }
             TypeAnnotationKind::Nominal { name, generics, .. } => {
                 if generics.is_empty() {
                     name.name_str()

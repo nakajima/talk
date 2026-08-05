@@ -4,6 +4,13 @@ use super::*;
 pub(super) struct TypeArtifacts {
     pub(super) node_types: FxHashMap<NodeID, Ty>,
     pub(super) instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
+    /// Rank-N field projections as recorded at the Eq boundary (the
+    /// field scheme's parameter symbols — a unique identity per
+    /// generalization — the projection node, and the substitution
+    /// chosen there). Finalize groups these into the one concrete
+    /// assignment a stored closure compiles at — the specialization
+    /// fact lowering reads baked on the tree, never re-derived.
+    pub(super) projection_instantiations: Vec<(Vec<Symbol>, NodeID, Vec<(Symbol, Ty)>)>,
     pub(super) member_resolutions: FxHashMap<NodeID, MemberResolution>,
     /// The selected callable symbol per statically resolved call node
     /// (ADR 0041): direct calls, methods, statics, initializers,

@@ -418,6 +418,41 @@ impl<'a> Higlighter<'a> {
                 TypeAnnotationKind::Borrow { inner, .. } | TypeAnnotationKind::Unique { inner } => {
                     result.extend(self.tokens_from_expr(inner.as_ref(), ast));
                 }
+                TypeAnnotationKind::Quantified {
+                    generics,
+                    where_clause,
+                    inner,
+                } => {
+                    result.extend(self.tokens_from_exprs(generics, ast));
+                    if let Some(where_clause) = where_clause {
+                        for predicate in &where_clause.predicates {
+                            match &predicate.kind {
+                                crate::node_kinds::where_clause::WherePredicateKind::TypeEq {
+                                    lhs,
+                                    rhs,
+                                } => {
+                                    for arg in [lhs, rhs] {
+                                        if let crate::node_kinds::generic_arg::GenericArg::Type(
+                                            annotation,
+                                        ) = arg
+                                        {
+                                            result.extend(self.tokens_from_expr(annotation, ast));
+                                        }
+                                    }
+                                }
+                                crate::node_kinds::where_clause::WherePredicateKind::Conforms {
+                                    ty,
+                                    protocols,
+                                } => {
+                                    result.extend(self.tokens_from_expr(ty, ast));
+                                    result.extend(self.tokens_from_exprs(protocols, ast));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    result.extend(self.tokens_from_expr(inner.as_ref(), ast));
+                }
                 TypeAnnotationKind::Nominal {
                     name_span,
                     generics,

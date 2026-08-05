@@ -110,6 +110,10 @@ pub enum TypeAnnotationKind {
 	// Parameters (borrow-by-default already applied), effects, and the
 	// return type as a one-element array.
 	case func_type([TypeAnnotation], EffectSet, [TypeAnnotation])
+	// A quantified function type `<T, U: Bound>(params) -> Ret` (rank-N
+	// field types): declared generics, the optional where clause, and
+	// the inner function type as a one-element array.
+	case quantified_type([GenericDecl], WhereClause?, [TypeAnnotation])
 	// The base as a one-element array, then the member name, its token
 	// span, and its explicit generic arguments.
 	case nominal_path([TypeAnnotation], String, Int, Int, [GenericArg])

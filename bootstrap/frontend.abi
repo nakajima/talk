@@ -474,6 +474,7 @@ enum TypeAnnotationKind @ enum:65535.11
 	borrow(Bool, [TypeAnnotation])
 	unique([TypeAnnotation])
 	func_type([TypeAnnotation], EffectSet, [TypeAnnotation])
+	quantified_type([GenericDecl], WhereClause?, [TypeAnnotation])
 	nominal_path([TypeAnnotation], String, Int, Int, [GenericArg])
 	nominal(String, Int, Int, [GenericArg])
 	tuple([TypeAnnotation])

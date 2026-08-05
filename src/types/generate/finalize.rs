@@ -264,6 +264,121 @@ impl<'a> TypecheckSession<'a> {
             }
             instantiations.insert(node, finalized);
         }
+        // Rank-N field specializations: group every stored closure's
+        // recorded projections by its scheme and compute the one
+        // concrete assignment it compiles at — agreement pins, a rigid
+        // argument or a concrete disagreement keeps the scheme rigid
+        // (a rigid compilation serves every type; the witness
+        // machinery still rejects a rigid compilation that needs
+        // witnesses it cannot carry), and unsolved dead variables are
+        // uninformative. Baked per field-value node so lowering reads
+        // the fact off the tree instead of re-deriving it.
+        let mut assignments: FxHashMap<Vec<Symbol>, Vec<(Symbol, Ty)>> = FxHashMap::default();
+        let mut witness_layouts = FxHashMap::default();
+        {
+            let mut grouped: FxHashMap<Vec<Symbol>, Vec<(NodeID, Vec<(Symbol, Ty)>)>> =
+                FxHashMap::default();
+            for (identity, node, subst) in
+                std::mem::take(&mut self.artifacts.projection_instantiations)
+            {
+                let finalized: Vec<(Symbol, Ty)> = subst
+                    .into_iter()
+                    .map(|(sym, ty)| (sym, self.final_ty(&ty)))
+                    .collect();
+                grouped.entry(identity).or_default().push((node, finalized));
+            }
+            // A stored closure nothing projected got its scheme
+            // instantiated at the final solve (so improvement could
+            // commit what uniqueness forces); that instantiation is
+            // its only use.
+            for (node, ty) in &node_types {
+                let Ty::Forall(scheme) = ty else {
+                    continue;
+                };
+                let identity: Vec<Symbol> =
+                    scheme.params.iter().map(|param| param.symbol).collect();
+                if grouped.contains_key(&identity) {
+                    continue;
+                }
+                if let Some(subst) = instantiations.get(node) {
+                    grouped
+                        .entry(identity)
+                        .or_default()
+                        .push((*node, subst.clone()));
+                }
+            }
+            for (identity, uses) in grouped {
+                let params: Vec<Symbol> = uses
+                    .first()
+                    .map(|(_, subst)| subst.iter().map(|(sym, _)| *sym).collect())
+                    .unwrap_or_default();
+                let mut assignment = vec![];
+                'params: for param in params {
+                    let mut pinned: Option<Ty> = None;
+                    for (_, subst) in &uses {
+                        let Some((_, arg)) = subst.iter().find(|(sym, _)| *sym == param) else {
+                            continue;
+                        };
+                        if arg.has_unification_vars() {
+                            continue;
+                        }
+                        let mut rigid = false;
+                        let _ = arg.try_visit(&mut |ty| {
+                            if matches!(ty, Ty::Param(_)) {
+                                rigid = true;
+                                return std::ops::ControlFlow::Break(());
+                            }
+                            std::ops::ControlFlow::Continue(())
+                        });
+                        if rigid {
+                            continue 'params;
+                        }
+                        match &pinned {
+                            None => pinned = Some(arg.clone()),
+                            Some(previous) if *previous == *arg => {}
+                            // A concrete disagreement: no single
+                            // assignment exists, so this parameter
+                            // keeps its rigid compilation.
+                            Some(_) => continue 'params,
+                        }
+                    }
+                    if let Some(arg) = pinned {
+                        assignment.push((param, arg));
+                    }
+                }
+                if !assignment.is_empty() {
+                    assignments.insert(identity.clone(), assignment);
+                }
+                // The call-side contract for rigidly compiled closures:
+                // a projection's hidden witness-block layout is the
+                // scheme's unpinned parameters paired with this use's
+                // arguments.
+                let pinned: rustc_hash::FxHashSet<Symbol> = assignments
+                    .get(&identity)
+                    .map(|assignment| assignment.iter().map(|(sym, _)| *sym).collect())
+                    .unwrap_or_default();
+                for (node, subst) in &uses {
+                    let layout: Vec<(Symbol, Ty)> = subst
+                        .iter()
+                        .filter(|(sym, _)| !pinned.contains(sym))
+                        .cloned()
+                        .collect();
+                    if !layout.is_empty() {
+                        witness_layouts.insert(*node, layout);
+                    }
+                }
+            }
+        }
+        let mut field_specializations = FxHashMap::default();
+        for (node, ty) in &node_types {
+            let Ty::Forall(scheme) = ty else {
+                continue;
+            };
+            let identity: Vec<Symbol> = scheme.params.iter().map(|param| param.symbol).collect();
+            if let Some(assignment) = assignments.get(&identity) {
+                field_specializations.insert(*node, assignment.clone());
+            }
+        }
         let mut member_resolutions = FxHashMap::default();
         for (node, resolution) in std::mem::take(&mut self.artifacts.member_resolutions) {
             let resolution = match resolution {
@@ -567,6 +682,8 @@ impl<'a> TypecheckSession<'a> {
                 struct_pattern_slots,
                 record_pattern_slots,
                 display_names: self.artifacts.display_names,
+                field_specializations,
+                witness_layouts,
             },
             diagnostics,
         )

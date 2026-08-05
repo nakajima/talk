@@ -392,6 +392,7 @@ func type_label(kind: &TypeAnnotationKind) -> String {
 		.borrow(_, _) -> "TypeAnnotation::Borrow",
 		.unique(_) -> "TypeAnnotation::Unique",
 		.func_type(_, _, _) -> "TypeAnnotation::Func",
+		.quantified_type(_, _, _) -> "TypeAnnotation::Quantified",
 		.nominal_path(_, _, _, _, _) -> "TypeAnnotation::NominalPath",
 		.nominal(_, _, _, _) -> "TypeAnnotation::Nominal",
 		.tuple(_) -> "TypeAnnotation::Tuple",
@@ -418,6 +419,17 @@ func render_type(mut buf: [Byte], view: UTF8View, annotation: &TypeAnnotation, d
 		}
 		for target in returns {
 			render_type(buf: buf, view: view, annotation: target, depth: depth + 1)
+		}
+	}
+	if let .quantified_type(generics, where_clause, inners) = annotation.kind {
+		for generic in generics {
+			render_generic_decl(buf: buf, view: view, generic: generic, depth: depth + 1)
+		}
+		if let .some(wc) = where_clause {
+			render_where_clause(buf: buf, view: view, wc: wc, depth: depth + 1)
+		}
+		for inner in inners {
+			render_type(buf: buf, view: view, annotation: inner, depth: depth + 1)
 		}
 	}
 	if let .nominal_path(base, _, _, _, member_generics) = annotation.kind {

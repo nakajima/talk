@@ -1,0 +1,4 @@
+enum Unit {
+	case yard(Int)
+	case meter(Int)
+}

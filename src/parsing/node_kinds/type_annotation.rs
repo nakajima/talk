@@ -42,6 +42,14 @@ pub enum TypeAnnotationKind {
         effects: EffectSet,
         returns: Box<TypeAnnotation>,
     },
+    /// A quantified function type `<T, U: Bound>(params) -> Ret`
+    /// (rank-N field types): the declared generics and optional where
+    /// clause scope over the inner function type.
+    Quantified {
+        generics: Vec<crate::node_kinds::generic_decl::GenericDecl>,
+        where_clause: Option<crate::node_kinds::where_clause::WhereClause>,
+        inner: Box<TypeAnnotation>,
+    },
     NominalPath {
         base: Box<TypeAnnotation>,
         #[drive(skip)]

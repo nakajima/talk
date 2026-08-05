@@ -102,15 +102,6 @@ fn highlight(code: &str) -> String {
 }
 
 fn highlight_intro_examples(template: &str) -> String {
-    let decode_attribute = |value: &str| {
-        value
-            .replace("&quot;", "\"")
-            .replace("&#39;", "'")
-            .replace("&lt;", "<")
-            .replace("&gt;", ">")
-            .replace("&amp;", "&")
-    };
-
     let Some(intro_start) = template
         .find("<code class=\"intro-text\">")
         .or_else(|| template.find("<code class=\"intro-txt\">"))
@@ -122,29 +113,43 @@ fn highlight_intro_examples(template: &str) -> String {
     };
     let intro_end = intro_start + intro_end_offset;
     let intro = &template[intro_start..intro_end];
-    let mut rendered_intro = String::with_capacity(intro.len());
+    let mut names = Vec::new();
     let mut cursor = 0;
 
-    while let Some(title_offset) = intro[cursor..].find("title=\"") {
-        let value_start = cursor + title_offset + "title=\"".len();
+    while let Some(attr_offset) = intro[cursor..].find("data-example=\"") {
+        let value_start = cursor + attr_offset + "data-example=\"".len();
         let Some(value_end_offset) = intro[value_start..].find('"') else {
             break;
         };
         let value_end = value_start + value_end_offset;
-        rendered_intro.push_str(&intro[cursor..=value_end]);
-
-        let source = decode_attribute(&intro[value_start..value_end]);
-        let highlighted = escape_html(&highlight(&source));
-        rendered_intro.push_str(" data-highlighted=\"");
-        rendered_intro.push_str(&highlighted);
-        rendered_intro.push('"');
+        names.push(&intro[value_start..value_end]);
         cursor = value_end + 1;
     }
-    rendered_intro.push_str(&intro[cursor..]);
+
+    let mut examples = String::new();
+    let mut default_highlighted: Option<String> = None;
+    for name in names {
+        let path = format!("./content/intro-code/{name}.tlk");
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {path}: {err}"));
+        let highlighted = highlight(source.trim_end_matches(&['\n', '\r'][..]));
+        if default_highlighted.is_none() {
+            default_highlighted = Some(highlighted.clone());
+        }
+        examples.push_str("\n            <template data-example=\"");
+        examples.push_str(name);
+        examples.push_str("\">");
+        examples.push_str(&highlighted);
+        examples.push_str("</template>");
+    }
+    examples.push('\n');
 
     let mut result = template.to_string();
-    result.replace_range(intro_start..intro_end, &rendered_intro);
+    result.insert_str(intro_end + "</code>".len(), &examples);
 
+    let Some(default_highlighted) = default_highlighted else {
+        return result;
+    };
     let Some(code_container_start) = result.find("<div class=\"intro-code\">") else {
         return result;
     };
@@ -156,8 +161,7 @@ fn highlight_intro_examples(template: &str) -> String {
         return result;
     };
     let source_end = source_start + source_end_offset;
-    let source = decode_attribute(&result[source_start..source_end]);
-    result.replace_range(source_start..source_end, &highlight(&source));
+    result.replace_range(source_start..source_end, &default_highlighted);
     result
 }
 

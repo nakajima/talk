@@ -3,6 +3,205 @@ use super::*;
 impl<'s, 'a> BodyChecker<'s, 'a> {
     // ----- Functions ------------------------------------------------------
 
+    /// Per-field generalization (rank-N field types): a func literal in a
+    /// record field is solved and generalized as its own little binding
+    /// group, so its quantified variables and predicates live on the
+    /// field's own scheme — sibling fields' predicates never fuse into
+    /// the enclosing record's type, and each projection of the field
+    /// instantiates only this scheme (see `eliminate_forall`). The
+    /// enclosing group treats the resulting `Forall` opaquely.
+    pub(super) fn generalize_field_func(&mut self, func: &Func, expr: &Expr, ctx: &Ctx) -> Ty {
+        // The closure's own variables live one level deeper than the
+        // enclosing group, so local generalization quantifies exactly
+        // them; captures' and siblings' variables (group level) stay
+        // free, mirroring `check_group`'s discipline for one binder.
+        let outer_level = self.level;
+        self.level = outer_level.next();
+        let wanted_start = self.wanteds.len();
+        let ty = self.infer_func(func, ctx);
+        let wanteds = self.wanteds.split_off(wanted_start);
+
+        // Solve locally with the group's variables untouchable.
+        let residuals = {
+            let mut solver = Solver {
+                store: &mut *self.store,
+                errors: &mut self.diagnostics.errors,
+                catalog: &*self.catalog,
+                module_id: self.module_id,
+                schemes: &*self.schemes,
+                mono: &*self.mono,
+                instantiations: &mut self.artifacts.instantiations,
+            projection_instantiations: &mut self.artifacts.projection_instantiations,
+                member_resolutions: &mut self.artifacts.member_resolutions,
+                member_call_slots: &self.artifacts.member_call_slots,
+                coerce_clones: &mut self.artifacts.coerce_clones,
+                level: self.level,
+                defaulting: false,
+                givens: vec![],
+                touchable_level: Some(self.level),
+                local_params: vec![],
+                conformance_edges: Default::default(),
+            };
+            solver.solve(wanteds)
+        };
+        self.level = outer_level;
+
+        // Triage residuals like `check_group`: variable-headed
+        // obligations on closure-owned variables qualify the field's
+        // scheme; anything touching an outer variable floats back to
+        // the enclosing group's wanteds.
+        let mut var_predicates: FxHashMap<u32, Vec<Predicate>> = FxHashMap::default();
+        let mut residual_roots: Vec<(u32, Constraint)> = vec![];
+        for residual in residuals {
+            match &residual {
+                Constraint::Conforms { ty, protocol, .. } => {
+                    let Ty::Var(v) = self.store.shallow(ty) else {
+                        self.wanteds.push(residual);
+                        continue;
+                    };
+                    let root = self.store.find(v.0);
+                    if self.store.level(root) > outer_level {
+                        let predicates = var_predicates.entry(root).or_default();
+                        let predicate = Predicate::Conforms {
+                            ty: self.store.zonk_ty(ty),
+                            protocol: protocol.clone(),
+                        };
+                        if !predicates.contains(&predicate) {
+                            predicates.push(predicate);
+                        }
+                        residual_roots.push((root, residual));
+                    } else {
+                        self.wanteds.push(residual);
+                    }
+                }
+                Constraint::Eq(a, b, ..) => {
+                    let mut roots = vec![];
+                    self.deeper_roots(a, outer_level, &mut roots);
+                    self.deeper_roots(b, outer_level, &mut roots);
+                    roots.sort_unstable();
+                    roots.dedup();
+                    if let Some(root) = roots.first().copied() {
+                        let predicate = Predicate::TypeEq(
+                            self.store.zonk_ty(a),
+                            self.store.zonk_ty(b),
+                        );
+                        let predicates = var_predicates.entry(root).or_default();
+                        if !predicates.contains(&predicate) {
+                            predicates.push(predicate);
+                        }
+                        residual_roots.push((root, residual));
+                    } else {
+                        self.wanteds.push(residual);
+                    }
+                }
+                Constraint::HasMember {
+                    receiver,
+                    label,
+                    member,
+                    ..
+                } => {
+                    let mut roots = vec![];
+                    self.deeper_roots(receiver, outer_level, &mut roots);
+                    self.deeper_roots(member, outer_level, &mut roots);
+                    roots.sort_unstable();
+                    roots.dedup();
+                    if let Some(root) = roots.first().copied() {
+                        let predicate = Predicate::HasMember {
+                            receiver: self.store.zonk_ty(receiver),
+                            label: label.clone(),
+                            member: self.store.zonk_ty(member),
+                        };
+                        let predicates = var_predicates.entry(root).or_default();
+                        if !predicates.contains(&predicate) {
+                            predicates.push(predicate);
+                        }
+                        residual_roots.push((root, residual));
+                    } else {
+                        self.wanteds.push(residual);
+                    }
+                }
+                _ => self.wanteds.push(residual),
+            }
+        }
+
+        // Declared generics and where-clause bounds seed the scheme
+        // exactly as they would for a let-bound function: the declared
+        // rigid parameters are this group's own mints, and the declared
+        // predicates lead the qualified context.
+        let declared = {
+            let mut context = DeclaredSchemeContext::default();
+            context.params = self.declared_params(&func.generics);
+            for generic in &func.generics {
+                if let Ok(symbol) = generic.name.symbol() {
+                    context.param_nodes.push((symbol, generic.id));
+                }
+            }
+            context.predicates =
+                self.declared_predicates(&func.generics, func.where_clause.as_ref());
+            context
+        };
+        let mut generalizer = Generalizer::new(
+            &mut *self.store,
+            &mut *self.symbols,
+            self.module_id,
+            outer_level,
+            var_predicates,
+        );
+        let mut scheme = generalizer.generalize(&ty, &declared.params);
+        let mut predicates = declared.predicates.clone();
+        predicates.extend(scheme.predicates);
+        scheme.predicates = predicates;
+        // Publish inferred parameter bounds where declared ones live,
+        // so a rigid compilation of the closure threads dictionaries
+        // the same way a let-bound generic's does.
+        for predicate in &scheme.predicates {
+            if let Predicate::Conforms {
+                ty: Ty::Param(param),
+                protocol,
+            } = predicate
+                && scheme.params.iter().any(|p| p.symbol == *param)
+            {
+                let bounds = self.catalog.param_bounds.entry(*param).or_default();
+                if !bounds.contains(protocol) {
+                    bounds.push(protocol.clone());
+                }
+            }
+        }
+        self.diagnostics.errors.extend(
+            BindingGroupChecker::ambiguous_declared_predicate_errors(&scheme, &declared),
+        );
+        // Obligations whose root never quantified ride no scheme — they
+        // mention something the field shares with the group, so they
+        // float back to the enclosing wanteds.
+        let leftover = generalizer.into_leftover_predicates();
+        for (root, residual) in residual_roots {
+            if leftover.contains(&root) {
+                self.wanteds.push(residual);
+            }
+        }
+        let ty = Ty::Forall(Box::new(scheme));
+        self.artifacts.node_types.insert(expr.id, ty.clone());
+        if func.id != expr.id {
+            self.artifacts.node_types.insert(func.id, ty.clone());
+        }
+        ty
+    }
+
+    /// Variable roots in `ty` owned strictly below `level` (the local
+    /// analogue of `group_owned_roots`, which is keyed to OUTER_LEVEL).
+    fn deeper_roots(&mut self, ty: &Ty, level: Level, roots: &mut Vec<u32>) {
+        let _ = self.store.query_resolved(ty, &mut |store, node| {
+            if let TyNode::Ty(Ty::Var(v)) = node {
+                let root = store.find(v.0);
+                if store.level(root) > level {
+                    roots.push(root);
+                }
+            }
+            std::ops::ControlFlow::<()>::Continue(())
+        });
+    }
+
+
     /// Bind a parameter's type: into the mono environment for the body, and
     /// onto the parameter's node so downstream stages (typed-tree baking, the flow
     /// checker) see it without consulting the function's scheme.

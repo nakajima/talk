@@ -55,7 +55,45 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     /// Checking mode: push the expected type inward where syntax allows
     /// (Pierce & Turner; DK 2021's mode recipe), otherwise infer and emit an
     /// equality oriented expected-then-found for blame.
+    /// Checking a value against a first-class scheme (rank-N field
+    /// subsumption): the value must satisfy the scheme's body for every
+    /// choice of its parameters. The parameters are already rigid —
+    /// skolems by construction — so wrapping the check in an
+    /// implication with them as local parameters rejects (via the
+    /// escape check) a value that commits one to a concrete type, and
+    /// the scheme's predicates act as givens: a reference whose own
+    /// bounds the declared bounds imply discharges, a weaker one
+    /// escapes. The field's scheme is baked as the value's node type so
+    /// lowering compiles it against the projections' agreed assignment.
+    fn check_against_forall(&mut self, expr: &Expr, scheme: &Scheme, reason: CtReason, ctx: &Ctx) {
+        let wanted_start = self.wanteds.len();
+        self.check_expr(expr, &scheme.ty, reason, ctx);
+        let wanteds = self.wanteds.split_off(wanted_start);
+        self.wanteds.push(Constraint::Implic(Box::new(Implication {
+            level: self.level,
+            givens: scheme.predicates.clone(),
+            wanteds,
+            local_params: scheme.params.iter().map(|param| param.symbol).collect(),
+            touchable_level: None,
+        })));
+        let ty = Ty::Forall(Box::new(scheme.clone()));
+        self.artifacts.node_types.insert(expr.id, ty.clone());
+        if let ExprKind::Func(func) = &expr.kind
+            && func.id != expr.id
+        {
+            self.artifacts.node_types.insert(func.id, ty);
+        }
+    }
+
     pub(super) fn check_expr(&mut self, expr: &Expr, expected: &Ty, reason: CtReason, ctx: &Ctx) {
+        // A first-class scheme in expected position (a declared rank-N
+        // field): the value must satisfy the type for EVERY choice of
+        // the quantified parameters, so it checks against the body
+        // under the scheme's own rigids and predicates — an
+        // implication whose skolems the value may not pin.
+        if let Ty::Forall(scheme) = self.store.shallow(expected) {
+            return self.check_against_forall(expr, &scheme, reason, ctx);
+        }
         if let Ty::Borrow(expected_kind, inner) = self.store.shallow(expected) {
             // The auto-borrow peel is position-dependent. It stays for:
             //   - `Apply`: the argument is borrowed for the call's extent;
@@ -1161,7 +1199,52 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 let fields = fields
                     .iter()
                     .map(|field| {
-                        let ty = self.infer_expr(&field.value, ctx);
+                        // A func literal field gets its own scheme
+                        // (rank-N field types): solved and generalized
+                        // locally — declared generics and where
+                        // clauses included — so sibling fields'
+                        // predicates never fuse into this record's
+                        // type. A bare reference to a polymorphic
+                        // binding keeps the binding's scheme as the
+                        // field's own — the desugared form of a
+                        // func-literal field: no instantiation at the
+                        // reference, each projection instantiates.
+                        let ty = match &field.value.kind {
+                            ExprKind::Func(func) => {
+                                self.generalize_field_func(func, &field.value, ctx)
+                            }
+                            ExprKind::Variable(Name::Resolved(symbol, _))
+                                if self.schemes.get(symbol).is_some_and(|scheme| {
+                                    !scheme.params.is_empty()
+                                        || !scheme.eff_params.is_empty()
+                                        || !scheme.row_params.is_empty()
+                                        || !scheme.perm_params.is_empty()
+                                        || !scheme.predicates.is_empty()
+                                }) =>
+                            {
+                                // The reference materializes the stored
+                                // closure: its instantiation is
+                                // recorded for lowering, and its
+                                // obligations float straight to the
+                                // final solve (the field's own scheme
+                                // discharges the real uses; the
+                                // materialization's are improvement's
+                                // business). The field's type — and
+                                // the reference node's baked type,
+                                // lowering's marker for a rank-N
+                                // materialization — is the binding's
+                                // own scheme, so each projection
+                                // instantiates per use (the desugared
+                                // form of a func-literal field).
+                                let materialization_start = self.wanteds.len();
+                                self.infer_expr(&field.value, ctx);
+                                self.deferred.extend(self.wanteds.split_off(materialization_start));
+                                let ty = Ty::Forall(Box::new(self.schemes[symbol].clone()));
+                                self.artifacts.node_types.insert(field.value.id, ty.clone());
+                                ty
+                            }
+                            _ => self.infer_expr(&field.value, ctx),
+                        };
                         (Label::Named(field.label.name_str()), ty)
                     })
                     .collect();

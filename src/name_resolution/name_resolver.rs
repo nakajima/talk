@@ -295,7 +295,7 @@ impl ResolvedNames {
     MatchArm(enter, exit),
     Decl(enter, exit),
     Expr(enter, exit),
-    TypeAnnotation(enter),
+    TypeAnnotation(enter, exit),
     Pattern(enter),
     Block(enter, exit)
 )]
@@ -313,6 +313,10 @@ pub struct NameResolver {
 
     // Scope stuff
     pub(super) scopes: FxHashMap<NodeID, Scope>,
+    // Declared quantified-annotation generics by node id: cloned
+    // quantified annotations (the synthesized memberwise init copies
+    // struct field annotations) reuse the first declaration's symbol.
+    quantified_generic_symbols: FxHashMap<NodeID, Symbol>,
     pub(super) current_scope_id: Option<NodeID>,
     // A local `let`'s binders become visible *after* its initializer:
     // they are staged here on decl entry and inserted into the enclosing
@@ -357,6 +361,7 @@ impl NameResolver {
             phase: ResolvedNames::default(),
             current_module_id,
             scopes: Default::default(),
+            quantified_generic_symbols: Default::default(),
             current_scope_id: None,
             pending_locals: Default::default(),
             overload_selected: Default::default(),
@@ -1966,7 +1971,41 @@ impl NameResolver {
     ///////////////////////////////////////////////////////////////////////////
     // Type lookups
     ///////////////////////////////////////////////////////////////////////////
+    fn exit_type_annotation(&mut self, ty: &mut TypeAnnotation) {
+        if matches!(ty.kind, TypeAnnotationKind::Quantified { .. }) {
+            self.exit_scope(ty.id);
+        }
+    }
+
     fn enter_type_annotation(&mut self, ty: &mut TypeAnnotation) {
+        // A quantified function type scopes its declared generics over
+        // the conformances, the where clause, and the inner type — the
+        // same discipline as a func declaration's generics.
+        if let TypeAnnotationKind::Quantified { generics, .. } = &mut ty.kind {
+            self.push_scope(ty.id);
+            for generic in generics.iter_mut() {
+                // A cloned quantified annotation (the synthesized
+                // memberwise init copies struct field annotations)
+                // reuses the first declaration's symbol, so every copy
+                // of the field names one scheme.
+                if let Some(symbol) = self.quantified_generic_symbols.get(&generic.id).copied()
+                {
+                    let name_str = generic.name.name_str();
+                    generic.name = Name::Resolved(symbol, name_str.clone());
+                    self.bind_value(&name_str, symbol);
+                } else {
+                    generic.name = self.declare(
+                        &generic.name,
+                        SymbolKind::TypeParameter,
+                        generic.id,
+                        generic.name_span,
+                    );
+                    if let Ok(symbol) = generic.name.symbol() {
+                        self.quantified_generic_symbols.insert(generic.id, symbol);
+                    }
+                }
+            }
+        }
         if let TypeAnnotationKind::Nominal { name, .. } = &mut ty.kind {
             if let Some(resolved_name) = self.lookup(name) {
                 *name = resolved_name

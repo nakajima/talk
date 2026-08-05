@@ -207,6 +207,9 @@ impl<'a> Layouts<'a> {
             }
             // A borrow is a reference regardless of its pointee's shape.
             Ty::Borrow(_, _) => Layout::Slot,
+            // A first-class scheme erases to its body's representation
+            // (a closure slot, like any function type).
+            Ty::Forall(scheme) => self.of(&scheme.ty),
             Ty::Func(_, _, _) | Ty::Any { .. } => Layout::Slot,
             // A projection that survives reduction is check-only, like a
             // rigid parameter (`of` reduces ground ones first).

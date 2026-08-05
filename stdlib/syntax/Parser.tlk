@@ -730,6 +730,7 @@ func mode_keyword(mode: &TypeParamMode) -> String {
 
 func is_borrow_annotation(annotation: &TypeAnnotation) -> Bool {
 	match annotation.kind {
+		.quantified_type(_, _, _) -> false,
 		.borrow(_, _) -> true,
 		.unique(_) -> false,
 		.func_type(_, _, _) -> false,
@@ -2700,10 +2701,36 @@ struct Parser {
 		if self.did_match(kind: .left_paren) {
 			let no_modes: [TypeParamMode] = []
 			let no_types: [TypeAnnotation] = []
-			return self.finish_paren_type(start: start_tok.span.lower, modes: no_modes, types: no_types, closed: false)
+			return self.finish_paren_type(start: start_tok.span.lower, modes: no_modes, types: no_types, closed: false, borrow_by_default: true)
 		}
 		if self.did_match(kind: .keyword_any) {
 			return self.any_type_annotation(start: start_tok.span.lower)
+		}
+		if self.peek_is(kind: .less) {
+			// A quantified function type `<T, U: Bound>(params) -> Ret
+			// where ...` (rank-N field types): the declared generics and
+			// optional where clause scope over the function type.
+			let generics = self.generics_list()
+			if self.is_failed() { return dummy_type() }
+			if generics.count == 0 {
+				self.fail(code: "parser.empty-quantified-type", message: "A quantified type needs at least one generic parameter inside `<>`")
+				return dummy_type()
+			}
+			self.consume(kind: .left_paren)
+			if self.is_failed() { return dummy_type() }
+			let no_modes: [TypeParamMode] = []
+			let no_types: [TypeAnnotation] = []
+			let inner = self.finish_paren_type(start: start_tok.span.lower, modes: no_modes, types: no_types, closed: false, borrow_by_default: false)
+			if self.is_failed() { return dummy_type() }
+			if let .func_type(_, _, _) = inner.kind { } else {
+				self.fail(code: "parser.quantified-non-function-type", message: "A quantified type `<...>` must wrap a function type like `(x: T) -> T`")
+				return dummy_type()
+			}
+			let wc = self.where_clause()
+			if self.is_failed() { return dummy_type() }
+			let inners: [TypeAnnotation] = []
+			inners.push(inner)
+			return TypeAnnotation(kind: .quantified_type(generics, wc, inners), start: start_tok.span.lower, end: self.span_end())
 		}
 		if self.did_match(kind: .left_bracket) {
 			let element = self.type_annotation()
@@ -2803,7 +2830,7 @@ struct Parser {
 	// The tail of a parenthesized type — a func type or tuple — with the
 	// opening `(` already consumed and `initial` elements already parsed.
 	// `closed` marks the `)` as consumed too.
-	mut func finish_paren_type(start: Int, consume modes: [TypeParamMode], consume types: [TypeAnnotation], closed: Bool) -> TypeAnnotation {
+	mut func finish_paren_type(start: Int, consume modes: [TypeParamMode], consume types: [TypeAnnotation], closed: Bool, borrow_by_default: Bool) -> TypeAnnotation {
 		let saw_mode = false
 		if closed == false {
 			loop self.did_match(kind: .right_paren) == false {
@@ -2825,7 +2852,11 @@ struct Parser {
 			let params: [TypeAnnotation] = []
 			let i = 0
 			for annotation in consume types {
-				params.push(self.apply_type_param_mode(mode_index: i, modes: modes, annotation: annotation))
+				if borrow_by_default {
+					params.push(self.apply_type_param_mode(mode_index: i, modes: modes, annotation: annotation))
+				} else {
+					params.push(annotation)
+				}
 				i = i + 1
 			}
 			return TypeAnnotation(kind: .func_type(params, effects, [ret]), start: start, end: self.span_end())
@@ -3073,7 +3104,7 @@ struct Parser {
 		if self.peek_is(kind: .right_paren) || self.peek_is(kind: .keyword_mut) || mode_led {
 			let no_modes: [TypeParamMode] = []
 			let no_types: [TypeAnnotation] = []
-			let annotation = self.finish_paren_type(start: start_tok.span.lower, modes: no_modes, types: no_types, closed: false)
+			let annotation = self.finish_paren_type(start: start_tok.span.lower, modes: no_modes, types: no_types, closed: false, borrow_by_default: true)
 			return .type_arg(self.optional_sugar(base: annotation))
 		}
 		let inner = self.generic_argument()
@@ -3091,7 +3122,7 @@ struct Parser {
 		if self.did_match(kind: .comma) {
 			let modes: [TypeParamMode] = [.unadorned]
 			let types: [TypeAnnotation] = [annotation]
-			let full = self.finish_paren_type(start: start_tok.span.lower, modes: modes, types: types, closed: false)
+			let full = self.finish_paren_type(start: start_tok.span.lower, modes: modes, types: types, closed: false, borrow_by_default: true)
 			return .type_arg(self.optional_sugar(base: full))
 		}
 		self.consume(kind: .right_paren)
@@ -3106,7 +3137,7 @@ struct Parser {
 		// types; a bare `(A)` is the 1-tuple spelling.
 		let modes: [TypeParamMode] = [.unadorned]
 		let types: [TypeAnnotation] = [annotation]
-		let full = self.finish_paren_type(start: start_tok.span.lower, modes: modes, types: types, closed: true)
+		let full = self.finish_paren_type(start: start_tok.span.lower, modes: modes, types: types, closed: true, borrow_by_default: true)
 		return .type_arg(self.optional_sugar(base: full))
 	}
 
@@ -4972,6 +5003,15 @@ func meta_type(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: 
 		},
 		.unique(inner) -> {
 			for t in inner {
+				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: t)
+			}
+		},
+		.quantified_type(generics, where_clause, inners) -> {
+			for generic in generics {
+				meta_generic_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, generic: generic)
+			}
+			meta_optional_where(ctx: ctx, metas: metas, claimed: claimed, live: live, wc: where_clause)
+			for t in inners {
 				meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: t)
 			}
 		},

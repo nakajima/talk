@@ -873,7 +873,7 @@ impl TypeCatalog {
             // marker (Copy/CheapClone judge values, not rows). A static
             // argument is likewise phase-only (ADR 0035: evidence erases).
             Ty::Eff(_) | Ty::Static(_) => true,
-            Ty::Borrow(..) | Ty::Func(..) | Ty::Any { .. } | Ty::Proj(..) => false,
+            Ty::Borrow(..) | Ty::Func(..) | Ty::Forall(..) | Ty::Any { .. } | Ty::Proj(..) => false,
         }
     }
 
@@ -1935,6 +1935,62 @@ impl TypeCatalog {
             conformance,
             substitution,
         })
+    }
+
+    /// The one conformance row that can ever satisfy `protocol` (whose
+    /// arguments are variable-free), as a concrete head type: every row
+    /// whose declared or inherited protocol matches with unifiable
+    /// arguments, deduplicated by head. Used by the final solve's
+    /// unique-row improvement — committing a variable receiver to the
+    /// sole candidate is forced, not a guess.
+    pub fn unique_conformance_head(&self, protocol: &ProtocolRef) -> Option<Ty> {
+        if protocol.has_unification_vars() {
+            return None;
+        }
+        let mut head: Option<Ty> = None;
+        for row in self.conformances.values() {
+            let matches = self
+                .protocol_and_supers(&row.protocol)
+                .into_iter()
+                .filter(|candidate| {
+                    candidate.protocol == protocol.protocol
+                        && candidate.args.len() == protocol.args.len()
+                })
+                .any(|candidate| {
+                    let mut bindings = FxHashMap::default();
+                    candidate
+                        .args
+                        .iter()
+                        .zip(&protocol.args)
+                        .all(|(pattern, actual)| {
+                            match_key_pattern(pattern, actual, &mut bindings)
+                        })
+                });
+            if !matches {
+                continue;
+            }
+            // The committed head must be concrete: a row whose self
+            // pattern still mentions its own parameters cannot pin the
+            // receiver to one type.
+            let self_ty = Ty::Nominal(row.head, row.self_args.clone());
+            let mut has_param = false;
+            let _ = self_ty.try_visit(&mut |ty| {
+                if matches!(ty, Ty::Param(_)) {
+                    has_param = true;
+                    return std::ops::ControlFlow::Break(());
+                }
+                std::ops::ControlFlow::Continue(())
+            });
+            if self_ty.has_unification_vars() || has_param {
+                continue;
+            }
+            match &head {
+                None => head = Some(self_ty),
+                Some(existing) if *existing == self_ty => {}
+                Some(_) => return None,
+            }
+        }
+        head
     }
 
     /// All associated types reachable from a protocol (through supers), in a

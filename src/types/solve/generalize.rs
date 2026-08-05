@@ -327,3 +327,12 @@ impl TyFold for Generalizer<'_> {
         Row { fields, tail }
     }
 }
+
+impl Generalizer<'_> {
+    /// Roots of held predicates that no quantification consumed: their
+    /// obligations mention variables the scheme does not own, so the
+    /// caller floats them back out instead of attaching them.
+    pub fn into_leftover_predicates(self) -> Vec<u32> {
+        self.var_predicates.into_keys().collect()
+    }
+}

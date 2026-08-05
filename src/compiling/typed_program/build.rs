@@ -335,6 +335,8 @@ impl TypedTreeBuilder<'_> {
                 .map(|ty| ty.erase_eff_args())
                 .unwrap_or(crate::types::ty::Ty::Error),
             member_resolution: self.types.member_resolutions.get(&e.id).cloned(),
+            specialization: self.types.field_specializations.get(&e.id).cloned(),
+            witness_layout: self.types.witness_layouts.get(&e.id).cloned(),
             instantiation: self.types.instantiations.get(&e.id).cloned(),
             existential_pack: self.types.existential_packs.get(&e.id).cloned(),
         }
@@ -981,6 +983,8 @@ impl TypedTreeBuilder<'_> {
             ownership: Default::default(),
             ty: plan.body_ty.erase_eff_args(),
             member_resolution: None,
+            specialization: None,
+            witness_layout: None,
             instantiation: None,
             existential_pack: None,
         };
@@ -1016,6 +1020,8 @@ impl TypedTreeBuilder<'_> {
             ownership: Default::default(),
             ty: crate::types::ty::Ty::unit(),
             member_resolution: None,
+            specialization: None,
+            witness_layout: None,
             instantiation: None,
             existential_pack: None,
         })
@@ -1043,6 +1049,8 @@ impl TypedTreeBuilder<'_> {
             ownership: Default::default(),
             ty,
             member_resolution: None,
+            specialization: None,
+            witness_layout: None,
             instantiation: None,
             existential_pack: None,
         }
@@ -1077,6 +1085,8 @@ impl TypedTreeBuilder<'_> {
             ownership: Default::default(),
             ty: baked_ty(&callee_id),
             member_resolution: self.types.member_resolutions.get(&callee_id).cloned(),
+            specialization: None,
+            witness_layout: None,
             instantiation: self.types.instantiations.get(&callee_id).cloned(),
             existential_pack: None,
         };
@@ -1091,6 +1101,8 @@ impl TypedTreeBuilder<'_> {
             ownership: Default::default(),
             ty: baked_ty(&call_id),
             member_resolution: self.types.member_resolutions.get(&call_id).cloned(),
+            specialization: None,
+            witness_layout: None,
             instantiation: self.types.instantiations.get(&call_id).cloned(),
             existential_pack: None,
         }
@@ -1155,12 +1167,20 @@ impl TypedTreeBuilder<'_> {
                     .node_types
                     .get(&f.id)
                     .cloned()
-                    .map(crate::types::ty::Scheme::mono)
+                    .map(|ty| match ty {
+                        // A rank-N field literal: the field's own scheme
+                        // is baked as the function's scheme, so lowering
+                        // compiles it per projection instantiation like
+                        // any other polymorphic callable.
+                        crate::types::ty::Ty::Forall(scheme) => *scheme,
+                        other => crate::types::ty::Scheme::mono(other),
+                    })
             })
             .unwrap_or_else(|| crate::types::ty::Scheme::mono(crate::types::ty::Ty::Error));
         let params = self.params(&f.params);
         let body = self.frame_block(&f.body, &params);
         typed_ast::Func {
+            specialization: self.types.field_specializations.get(&f.id).cloned(),
             id: f.id,
             name: f.name.clone(),
             effects: f.effects.clone(),

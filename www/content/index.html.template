@@ -18,33 +18,16 @@
 
         <div class="intro">
           <code class="intro-txt">
-            We’ve got <span class="type" title="struct Person {
-  let name: String
-  let age: Int
-}">structs</span>, <span class="string" title="&quot;hello there&quot;">strings</span>, <span
-class="number" title="1000">ints</span>, <span class="number" title="1.23">floats</span>, <span class="type" title="enum Unit {
-	case yard(Int)
-	case meter(Int)
-}">enums</span>,
-						<span class="function" title="effect log<T: Showable>(t: T) {
-	print(t)	
-	'continue
-}">effects</span>, <span class="keyword" title="true
-false">bools</span>, <span
-              class="parameter" title="(123, true, &quot;hello&quot;)">tuples</span>,
-            <span class="type" title="[1, 2, 3]">arrays</span>, <span class="string" title="'a'
-'\n'">chars</span>,
-						<span class="type" title="{ a: 123, b: &quot;sup&quot; }">records</span>, and
-						<span class="function" title="func fizz() {
-	print(&quot;BUZZ&quot;)
-}
-fizz()">functions</span>.
+            We’ve got <span class="type" data-example="structs">structs</span>, <span class="string" data-example="strings">strings</span>, <span
+class="number" data-example="ints">ints</span>, <span class="number" data-example="floats">floats</span>, <span class="type" data-example="enums">enums</span>,
+						<span class="function" data-example="effects">effects</span>, <span class="keyword" data-example="bools">bools</span>, <span
+              class="parameter" data-example="tuples">tuples</span>,
+            <span class="type" data-example="arrays">arrays</span>, <span class="string" data-example="chars">chars</span>,
+						<span class="type" data-example="records">records</span>, and
+						<span class="function" data-example="functions">functions</span>.
           </code>
           <div class="intro-code">
-            <pre>struct Person {
-  let name: String
-  let age: Int
-}</pre>
+            <pre></pre>
           </div>
 
         </div>

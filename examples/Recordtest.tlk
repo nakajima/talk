@@ -1,0 +1,7 @@
+struct Person {
+	func getAge<T: Showable>(t: T) {
+		t.show()
+	}
+}
+
+Person().getAge(t: 123)

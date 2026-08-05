@@ -134,6 +134,12 @@ impl<'a> ProgramBuilder<'a> {
                     continue;
                 }
                 let ty = rhs.ty.clone();
+                // The stored type specializes like the initializer
+                // compile below: the binding's own generalized
+                // parameters pin to the one concrete argument every
+                // use agrees on. Best-effort here — a genuine
+                // disagreement is reported by the initializer compile.
+                let ty = self.specialized_global_ty(*symbol, &ty);
                 // The global twin of the borrowed-global rule: a linear
                 // value's exactly-once consumption cannot be proven
                 // across program-lifetime storage (OWN-03).
@@ -181,13 +187,20 @@ impl<'a> ProgramBuilder<'a> {
                         value = Operand::Const(Constant::Unit);
                         continue;
                     }
-                    let initializer = fx.compile_expr(rhs)?;
+                    let specialization = fx.value_specialization(*symbol, &rhs.ty, rhs.span)?;
+                    let (initializer, initializer_ty) = fx.compile_with_specialization(
+                        &specialization,
+                        |fx| {
+                            let initializer = fx.compile_expr(rhs)?;
+                            let initializer_ty = fx.resolved(&rhs.ty);
+                            Ok::<_, BackendError>((initializer, initializer_ty))
+                        },
+                    )?;
                     // A view rooted in a temporary cannot be stored: the
                     // owner dies with this statement (a view of another
                     // global is fine — the global outlives everything).
                     let initializer_is_view = {
-                        let ty = fx.resolved(&rhs.ty);
-                        contains_borrow_classified(fx.program_builder, &ty)
+                        contains_borrow_classified(fx.program_builder, &initializer_ty)
                     };
                     if initializer_is_view
                         && let Operand::Local(view) = initializer
@@ -203,7 +216,6 @@ impl<'a> ProgramBuilder<'a> {
                     }
                     // The slot is an owned sink: a place read the frame
                     // does not own (another global) donates a reference.
-                    let initializer_ty = fx.resolved(&rhs.ty);
                     fx.consume_binding(initializer, &initializer_ty, rhs.span)?;
                     let slot = fx.program_builder.global_slots[symbol];
                     fx.push(Inst::GlobalStore {

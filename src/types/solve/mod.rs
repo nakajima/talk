@@ -75,6 +75,7 @@ pub struct Solver<'s> {
     pub schemes: &'s FxHashMap<Symbol, Scheme>,
     pub mono: &'s FxHashMap<Symbol, Ty>,
     pub instantiations: &'s mut FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
+    pub projection_instantiations: &'s mut Vec<(Vec<Symbol>, NodeID, Vec<(Symbol, Ty)>)>,
     pub member_resolutions: &'s mut FxHashMap<NodeID, MemberResolution>,
     /// Written argument slots per member-call callee node (ADR 0041),
     /// for selecting among label-overloaded methods. Bare member
@@ -156,6 +157,23 @@ impl<'s> Solver<'s> {
                         preferred_equalities.push((a, b, origin));
                     }
                     Constraint::Eq(a, b, origin) => {
+                        // Forall elimination: a first-class scheme is
+                        // instantiated at the constraint boundary
+                        // (predicative rank-N — projection and value
+                        // crossings are the instantiation sites). Two
+                        // schemes meet by alpha-equality.
+                        let a_shallow = self.store.shallow(&a);
+                        let b_shallow = self.store.shallow(&b);
+                        if let (Ty::Forall(sa), Ty::Forall(sb)) = (&a_shallow, &b_shallow) {
+                            // The rendered form is the canonical
+                            // alpha-name (positional T0, T1, …).
+                            if sa.render() != sb.render() {
+                                self.report_mismatch(&a_shallow, &b_shallow, origin);
+                            }
+                            continue;
+                        }
+                        let a = self.instantiate_forall(a_shallow, origin, &mut queue);
+                        let b = self.instantiate_forall(b_shallow, origin, &mut queue);
                         let original_a = normalize_ty(self.store, self.catalog, &a);
                         let original_b = normalize_ty(self.store, self.catalog, &b);
                         let (a, a_local_param) =
@@ -775,6 +793,86 @@ impl<'s> Solver<'s> {
     ) -> Option<Constraint> {
         self.given_mentions_local_params(a, b)
             .map(|_| Constraint::Eq(a.clone(), b.clone(), origin))
+    }
+
+    /// Instantiate a first-class scheme reaching a constraint boundary:
+    /// fresh variables replace the quantified parameters, the qualified
+    /// context is re-emitted as wanteds, and the substitution is
+    /// recorded for lowering — the same semantics as instantiating a
+    /// let-binding's scheme at a reference (`generate::instantiate`),
+    /// at a new position: a field projection or value crossing.
+    /// Non-`Forall` types pass through unchanged.
+    fn instantiate_forall(&mut self, ty: Ty, origin: CtOrigin, queue: &mut Vec<Constraint>) -> Ty {
+        let Ty::Forall(scheme) = ty else {
+            return ty;
+        };
+        if scheme.params.is_empty()
+            && scheme.eff_params.is_empty()
+            && scheme.row_params.is_empty()
+            && scheme.perm_params.is_empty()
+        {
+            for predicate in &scheme.predicates {
+                queue.push(predicate.clone().into_constraint(origin));
+            }
+            return scheme.ty.clone();
+        }
+        let mut tys = FxHashMap::default();
+        let mut recorded = vec![];
+        for param in &scheme.params {
+            let var = Ty::Var(self.store.fresh_ty(self.level, origin.node));
+            recorded.push((param.symbol, var.clone()));
+            tys.insert(param.symbol, var);
+        }
+        let mut effs = FxHashMap::default();
+        for param in &scheme.eff_params {
+            effs.insert(
+                *param,
+                crate::types::ty::EffTail::Var(self.store.fresh_eff(self.level, origin.node)),
+            );
+        }
+        let mut rows = FxHashMap::default();
+        for param in &scheme.row_params {
+            let var = self.store.fresh_row(self.level, origin.node);
+            recorded.push((
+                *param,
+                Ty::Record(crate::types::ty::Row {
+                    fields: vec![],
+                    tail: Some(crate::types::ty::RowTail::Var(var)),
+                }),
+            ));
+            rows.insert(*param, crate::types::ty::RowTail::Var(var));
+        }
+        let mut perms = FxHashMap::default();
+        for param in &scheme.perm_params {
+            perms.insert(
+                *param,
+                crate::types::ty::Perm::Var(self.store.fresh_perm(self.level, origin.node)),
+            );
+        }
+        for predicate in &scheme.predicates {
+            queue.push(
+                predicate
+                    .substitute(&tys, &effs, &rows)
+                    .substitute_perms(&perms)
+                    .into_constraint(origin),
+            );
+        }
+        self.instantiations
+            .entry(origin.node)
+            .or_default()
+            .extend(recorded.iter().cloned());
+        // Rank-N field projection: also record the chosen substitution
+        // against the scheme's identity (its parameter symbols are
+        // unique per generalization), so finalize can compute the one
+        // concrete assignment the stored closure compiles at (baked on
+        // the tree for lowering — never re-derived there).
+        let identity = scheme.params.iter().map(|param| param.symbol).collect();
+        self.projection_instantiations
+            .push((identity, origin.node, recorded));
+        scheme
+            .ty
+            .substitute(&tys, &effs, &rows)
+            .substitute_perms(&perms)
     }
 
     fn constraint_summary(&mut self, constraint: &Constraint) -> String {

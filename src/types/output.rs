@@ -278,6 +278,17 @@ pub struct TypeOutput {
     /// Per-use-site instantiation of a scheme's parameters, preserved as a
     /// checked semantic fact on TypedProgram.
     pub instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
+    /// The one concrete assignment a stored rank-N closure compiles at,
+    /// computed at finalize from its projections — baked onto the
+    /// field-value node (a func literal or a generic reference) for
+    /// lowering. Absent when the closure stays rigid.
+    pub field_specializations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
+    /// A projection whose stored closure compiled rigidly: the rigid
+    /// parameters and this use's arguments, in scheme order — the
+    /// hidden witness-block layout the call appends (a concrete
+    /// argument's witnesses are materialized; a rigid one forwards the
+    /// caller's own).
+    pub witness_layouts: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     pub member_resolutions: FxHashMap<NodeID, MemberResolution>,
     /// The selected callable symbol per statically resolved call node
     /// (ADR 0041).

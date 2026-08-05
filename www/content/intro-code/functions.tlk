@@ -1,0 +1,4 @@
+func fizz() {
+	print("BUZZ")
+}
+fizz()

@@ -697,6 +697,9 @@ impl<'s> Solver<'s> {
                 .iter()
                 .any(|(_, ty)| self.occurs_and_adjust_ty(root, level, ty)),
             Ty::Proj(base, _, _) => self.occurs_and_adjust_ty(root, level, &base),
+            // Occurrence within the scheme body (bound params shadow; an
+            // outer variable inside is a genuine occurrence).
+            Ty::Forall(scheme) => self.occurs_and_adjust_ty(root, level, &scheme.ty),
             Ty::Eff(eff) => {
                 eff.effects.iter().any(|entry| {
                     entry

@@ -1,0 +1,4 @@
+effect log<T: Showable>(t: T) {
+	print(t)
+	'continue
+}

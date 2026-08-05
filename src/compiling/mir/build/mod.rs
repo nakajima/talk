@@ -759,6 +759,48 @@ struct PlaceLink {
     parent: Ty,
 }
 
+/// The distinct rigid type parameters a type mentions, in
+/// first-appearance order. Shared by witness-layout computation (one
+/// hidden block per entry) and value specialization (one pinned
+/// argument per entry).
+fn collect_type_params(ty: &Ty, out: &mut Vec<Symbol>) {
+    match ty {
+        Ty::Param(symbol) => {
+            if !out.contains(symbol) {
+                out.push(*symbol);
+            }
+        }
+        Ty::Borrow(_, inner) => collect_type_params(inner, out),
+        Ty::Tuple(items) => {
+            for item in items {
+                collect_type_params(item, out);
+            }
+        }
+        Ty::Record(row) => {
+            for (_, item) in &row.fields {
+                collect_type_params(item, out);
+            }
+        }
+        Ty::Nominal(_, args) => {
+            for arg in args {
+                collect_type_params(arg, out);
+            }
+        }
+        Ty::Func(params, ret, _) => {
+            for param in params {
+                collect_type_params(param, out);
+            }
+            collect_type_params(ret, out);
+        }
+        Ty::Any { protocol, .. } => {
+            for arg in &protocol.args {
+                collect_type_params(arg, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// The distinct rigid effect-generic parameters a substitution's types
 /// mention, in first-appearance order. A callee instance whose types
 /// mention rigid params receives one hidden `[drop, retain]` witness pair
@@ -768,50 +810,64 @@ struct PlaceLink {
 /// The symbols of a parameter list's TYPE-kind entries — the generics
 /// that carry runtime values and therefore witness blocks.
 fn witness_params(subst: &[(Symbol, Ty)]) -> Vec<Symbol> {
-    fn walk(ty: &Ty, out: &mut Vec<Symbol>) {
-        match ty {
-            Ty::Param(symbol) => {
-                if !out.contains(symbol) {
-                    out.push(*symbol);
-                }
-            }
-            Ty::Borrow(_, inner) => walk(inner, out),
-            Ty::Tuple(items) => {
-                for item in items {
-                    walk(item, out);
-                }
-            }
-            Ty::Record(row) => {
-                for (_, item) in &row.fields {
-                    walk(item, out);
-                }
-            }
-            Ty::Nominal(_, args) => {
-                for arg in args {
-                    walk(arg, out);
-                }
-            }
-            Ty::Func(params, ret, _) => {
-                for param in params {
-                    walk(param, out);
-                }
-                walk(ret, out);
-            }
-            Ty::Any { protocol, .. } => {
-                for arg in &protocol.args {
-                    walk(arg, out);
-                }
-            }
-            _ => {}
-        }
-    }
     let mut out = Vec::new();
     for (_, ty) in subst {
-        walk(ty, &mut out);
+        collect_type_params(ty, &mut out);
     }
     out
 }
 
+/// The agree/conflict/rigid triage shared by value specialization
+/// (generic lets) and field specialization (rank-N field literals): for
+/// each parameter, every recorded use's argument — resolved through the
+/// frame's substitution — must agree on one concrete type for the
+/// parameter to pin. An argument still mentioning rigid parameters
+/// keeps the parameter rigid (a generic caller's instances share the
+/// one compilation); unsolved dead variables are uninformative; a
+/// genuine concrete disagreement rejects, since a value compiles once.
+fn unique_specialization(
+    params: &[Symbol],
+    uses: &[Vec<(Symbol, Ty)>],
+    resolve: &dyn Fn(&Ty) -> Ty,
+    span: Span,
+) -> Result<Vec<(Symbol, Ty)>, BackendError> {
+    let mut specialization = Vec::new();
+    for param in params {
+        let mut pinned: Option<Ty> = None;
+        let mut keep_rigid = false;
+        for instantiation in uses {
+            let Some((_, arg)) = instantiation.iter().find(|(key, _)| key == param) else {
+                continue;
+            };
+            let arg = resolve(arg);
+            if arg.has_unification_vars() {
+                continue;
+            }
+            let mut rigid = Vec::new();
+            collect_type_params(&arg, &mut rigid);
+            if !rigid.is_empty() {
+                keep_rigid = true;
+                break;
+            }
+            match &pinned {
+                None => pinned = Some(arg),
+                Some(previous) if *previous == arg => {}
+                Some(_) => {
+                    return Err(BackendError::unsupported(
+                        "a generic value whose uses pin different types cannot specialize (not supported yet)".into(),
+                        span,
+                    ));
+                }
+            }
+        }
+        if !keep_rigid
+            && let Some(arg) = pinned
+        {
+            specialization.push((*param, arg));
+        }
+    }
+    Ok(specialization)
+}
 /// The rigid effect-generics one type mentions, in the deterministic
 /// order glue chunks and their MakeClosure sites share.
 fn glue_witness_params(ty: &Ty) -> Vec<Symbol> {
@@ -849,6 +905,7 @@ fn ty_depth(ty: &Ty) -> usize {
         Ty::Record(row) => row.fields.iter().map(|(_, item)| ty_depth(item)).max(),
         Ty::Any { assoc, .. } => assoc.iter().map(|(_, item)| ty_depth(item)).max(),
         Ty::Proj(base, _, _) => Some(ty_depth(base)),
+        Ty::Forall(scheme) => Some(ty_depth(&scheme.ty)),
         Ty::Param(_) | Ty::Var(_) | Ty::Eff(_) | Ty::Static(_) | Ty::Error => None,
     };
     1 + children.unwrap_or(0)
@@ -1127,6 +1184,12 @@ struct ProgramBuilder<'a> {
     /// Top-level `let` initializer expressions, by binding symbol. Literal
     /// initializers of dependency programs inline at read sites.
     globals: FxHashMap<Symbol, (&'a Expr, usize)>,
+    /// Every variable reference's baked use-instantiation, by symbol.
+    /// Generic let-bound values compile once (a closure stored in a
+    /// record is one function, not one instance per call), so their
+    /// initializers specialize against these; functions ignore the
+    /// index and specialize per call as always.
+    value_instantiations: FxHashMap<Symbol, Vec<Vec<(Symbol, Ty)>>>,
     /// The root program's top-level bindings get real static slots,
     /// initialized in order by the script entry (LINK-02): symbol → slot.
     global_slots: FxHashMap<Symbol, u32>,
@@ -1234,6 +1297,7 @@ impl<'a> ProgramBuilder<'a> {
             contains_object_cache: std::cell::RefCell::new(FxHashMap::default()),
             callables: FxHashMap::default(),
             globals: FxHashMap::default(),
+            value_instantiations: FxHashMap::default(),
             global_slots: FxHashMap::default(),
             result_slot: None,
             exports: Vec::new(),
@@ -1255,6 +1319,41 @@ impl<'a> ProgramBuilder<'a> {
     /// body by its symbol. Named `func` declarations in a script
     /// surface as expression nodes; they are declarations here too.
     fn index_callables(&mut self) {
+        // Generic let-bound values compile once, so their initializers
+        // specialize against the binding's recorded use-instantiations.
+        // Index every variable reference's baked instantiation by
+        // symbol up front (function references land here too; their
+        // per-call specialization never consults the index).
+        {
+            use derive_visitor::{Drive, Visitor};
+            #[derive(Visitor)]
+            #[visitor(Expr(enter))]
+            struct UseScan<'m> {
+                map: &'m mut FxHashMap<Symbol, Vec<Vec<(Symbol, Ty)>>>,
+            }
+            impl<'m> UseScan<'m> {
+                fn enter_expr(&mut self, expr: &Expr) {
+                    if let ExprKind::Variable(Name::Resolved(symbol, _)) = &expr.kind
+                        && let Some(instantiation) = &expr.instantiation
+                        && !instantiation.is_empty()
+                    {
+                        self.map
+                            .entry(*symbol)
+                            .or_default()
+                            .push(instantiation.clone());
+                    }
+                }
+            }
+            for input in self.programs.iter() {
+                for file in input.program.files().values() {
+                    for node in &file.roots {
+                        node.drive(&mut UseScan {
+                            map: &mut self.value_instantiations,
+                        });
+                    }
+                }
+            }
+        }
         for (program_ix, input) in self.programs.iter().enumerate() {
             for file in input.program.files().values() {
                 for node in &file.roots {
@@ -1336,6 +1435,37 @@ impl<'a> ProgramBuilder<'a> {
             }
             _ => {}
         }
+    }
+
+    /// Best-effort stored type for a global slot: the binding's own
+    /// generalized parameters pin to the one concrete argument every
+    /// recorded use agrees on (the mirror of the initializer compile's
+    /// `value_specialization`, which is the authoritative check). Any
+    /// disagreement leaves the type untouched; the initializer compile
+    /// reports the conflict.
+    fn specialized_global_ty(&self, symbol: Symbol, rhs_ty: &Ty) -> Ty {
+        let mut params = Vec::new();
+        collect_type_params(rhs_ty, &mut params);
+        if params.is_empty() {
+            return rhs_ty.clone();
+        }
+        let uses = self
+            .value_instantiations
+            .get(&symbol)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        // Best-effort mirror of the initializer compile (the
+        // authoritative check): the same triage, except a concrete
+        // disagreement leaves the type raw — the compile reports it.
+        let specialization = unique_specialization(
+            &params,
+            uses,
+            &|ty| ty.clone(),
+            Span::SYNTHESIZED,
+        )
+        .unwrap_or_default();
+        let subst: FxHashMap<Symbol, Ty> = specialization.into_iter().collect();
+        rhs_ty.substitute(&subst, &FxHashMap::default(), &FxHashMap::default())
     }
 
     /// Bind a function body to its published identities: the function's
@@ -2236,6 +2366,10 @@ struct FunctionBuilder<'p, 'a> {
     /// Suppress old-value drops for `self.field =` inside an initializer:
     /// the fresh record's placeholders are not values.
     in_init: bool,
+    /// Projecting the callee of a call: a rigidly compiled closure's
+    /// hidden witness blocks are appended by the call, so the
+    /// value-read guard (`witness_layout`) does not fire there.
+    callee_position: bool,
     /// The blank init receiver's assigned-so-far fields, as shadow
     /// ownership entries: one shared local per field (allocated once, so
     /// join states stay equal), re-defined at each assignment. An abort
@@ -2383,6 +2517,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             moved: rustc_hash::FxHashSet::default(),
             stmt_temps: Vec::new(),
             in_init: false,
+            callee_position: false,
             init_field_shadows: FxHashMap::default(),
             writeback_params: Vec::new(),
             published_return: None,
@@ -4881,6 +5016,52 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         Ok(())
     }
 
+    /// Append one hidden witness block for `param` as used at `arg`:
+    /// forward this frame's own witnesses when the argument is still
+    /// rigid (the caller is a generic instance over the same
+    /// parameter), and materialize them from the concrete type
+    /// otherwise — the existential-pack recipe. One mechanism for
+    /// direct calls (through `append_witness_args`) and for indirect
+    /// calls to rigidly compiled closures, whose callers are usually
+    /// monomorphic and have nothing to forward.
+    fn push_witness_block_for(
+        &mut self,
+        param: Symbol,
+        arg: &Ty,
+        operands: &mut Vec<Operand>,
+        span: Span,
+    ) -> Result<(), BackendError> {
+        let arg = self.resolved(arg);
+        let mut head = &arg;
+        while let Ty::Borrow(_, inner) = head {
+            head = inner;
+        }
+        if let Ty::Param(rigid) = head {
+            let rigid = *rigid;
+            return self.push_witness_block(rigid, operands, span);
+        }
+        let arg = head.clone();
+        operands.push(self.glue_closure(&arg, Glue::Drop, span)?);
+        operands.push(self.glue_closure(&arg, Glue::Retain, span)?);
+        for protocol in self.program_builder.rigid_constraints(param) {
+            let (entries, subst) = self
+                .program_builder
+                .conformance_dictionary(&arg, &protocol)
+                .ok_or_else(|| {
+                    BackendError::new(
+                        "conformance without a catalog entry".into(),
+                        span,
+                    )
+                })?;
+            for entry in &entries {
+                let closure =
+                    self.requirement_closure(&arg, &protocol, entry, &subst, span)?;
+                operands.push(closure);
+            }
+        }
+        Ok(())
+    }
+
     /// This frame's witnesses in symbol order — the deterministic layout
     /// closures use when inheriting them through their environments.
     fn sorted_witnesses(&self) -> Vec<(Symbol, (LocalId, LocalId))> {
@@ -4925,6 +5106,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             Ty::Var(_) => Ok(()),
             // Function values copy freely; their captures are borrows.
             Ty::Func(_, _, _) => Ok(()),
+            // A first-class scheme copies as its body's shape (a
+            // closure, so freely).
+            Ty::Forall(scheme) => self.check_copy(&scheme.ty, span),
             // A rigid effect-generic payload passes through registers
             // opaquely (a generic clause handles every instantiation); v1
             // restricts such payloads to Copy shapes. An irreducible
@@ -5032,6 +5216,52 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             );
         }
         ty
+    }
+
+    /// A let-bound value compiles once, so an initializer whose type
+    /// still mentions the binding's own generalized parameters must
+    /// specialize: every recorded use of the binding is consulted (see
+    /// `unique_specialization` for the triage). Parameters no use pins
+    /// concretely stay rigid, preserving the previous behavior for
+    /// initializers that never need witnesses.
+    fn value_specialization(
+        &self,
+        symbol: Symbol,
+        rhs_ty: &Ty,
+        span: Span,
+    ) -> Result<Vec<(Symbol, Ty)>, BackendError> {
+        let resolved = self.resolved(rhs_ty);
+        let mut params = Vec::new();
+        collect_type_params(&resolved, &mut params);
+        if params.is_empty() {
+            return Ok(Vec::new());
+        }
+        let uses = self
+            .program_builder
+            .value_instantiations
+            .get(&symbol)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        unique_specialization(&params, uses, &|ty| self.resolved(ty), span)
+    }
+
+    /// Run `f` with the frame substitution extended by a value
+    /// specialization, restoring it afterward. The keys are the
+    /// binding's own generalized parameters, disjoint from the frame's
+    /// instance substitution.
+    fn compile_with_specialization<T>(
+        &mut self,
+        specialization: &[(Symbol, Ty)],
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        if specialization.is_empty() {
+            return f(self);
+        }
+        let saved = self.subst.clone();
+        self.subst.extend(specialization.iter().cloned());
+        let result = f(self);
+        self.subst = saved;
+        result
     }
 
     /// The concrete type behind an inline-IR type annotation: resolved
@@ -5531,10 +5761,18 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         return Ok(Operand::Const(Constant::Unit));
                     }
                 }
-                let value = self.compile_expr(rhs)?;
-                let ty = self.resolved(&rhs.ty);
-                self.bind_owned_pattern(lhs, value, &ty)?;
-                Ok(Operand::Const(Constant::Unit))
+                let specialization = match &lhs.kind {
+                    PatternKind::Bind(Name::Resolved(symbol, _)) => {
+                        self.value_specialization(*symbol, &rhs.ty, rhs.span)?
+                    }
+                    _ => Vec::new(),
+                };
+                self.compile_with_specialization(&specialization, |fx| {
+                    let value = fx.compile_expr(rhs)?;
+                    let ty = fx.resolved(&rhs.ty);
+                    fx.bind_owned_pattern(lhs, value, &ty)?;
+                    Ok(Operand::Const(Constant::Unit))
+                })
             }
             // Named functions desugar to func-valued lets before
             // resolution; a bare Func decl only remains for callables
@@ -6262,6 +6500,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 };
                 let struct_symbol = *struct_symbol;
                 let field = *field;
+                if expr.witness_layout.is_some() && !self.callee_position {
+                    return Err(BackendError::new(
+                        "this closure is polymorphic over its callers' types and must be called through the field directly; it cannot be moved out as a value".into(),
+                        expr.span,
+                    ));
+                }
                 let Some(index) = self.program_builder.field_index(struct_symbol, field) else {
                     return Err(BackendError::new(
                         "stored field without a declaration index".into(),
@@ -6299,6 +6543,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             ExprKind::Member(Some(receiver), crate::label::Label::Named(name))
                 if matches!(strip_borrows(self.resolved(&receiver.ty)), Ty::Record(_)) =>
             {
+                // A rigidly compiled closure has hidden witness
+                // parameters: reading it as a value would detach it
+                // from the call that appends them. Callee position is
+                // exempt: the call appends the blocks.
+                if expr.witness_layout.is_some() && !self.callee_position {
+                    return Err(BackendError::new(
+                        "this closure is polymorphic over its callers' types and must be called through the field directly; it cannot be moved out as a value".into(),
+                        expr.span,
+                    ));
+                }
                 let Ty::Record(row) = strip_borrows(self.resolved(&receiver.ty)) else {
                     unreachable!()
                 };
@@ -6477,8 +6731,21 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     // recorded instantiation (the value's type pinned any
                     // generic and static arguments the frontend solved).
                     let target = *symbol;
-                    let mut subst: Vec<(Symbol, Ty)> = Vec::new();
-                    if let Some(instantiation) = &expr.instantiation {
+                    // A stored rank-N closure reference (the baked
+                    // specialization on the node): the checker computed
+                    // the one concrete assignment the field's
+                    // projections agree on. A plain function value reads
+                    // its own use-site instantiation as always.
+                    let mut subst: Vec<(Symbol, Ty)> = match &expr.specialization {
+                        Some(specialization) => specialization
+                            .iter()
+                            .map(|(symbol, ty)| (*symbol, self.resolved(ty)))
+                            .collect(),
+                        None => Vec::new(),
+                    };
+                    if subst.is_empty()
+                        && let Some(instantiation) = &expr.instantiation
+                    {
                         for (param, ty) in instantiation {
                             subst.push((*param, self.resolved(ty)));
                         }
@@ -8163,6 +8430,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let mut operands = Vec::new();
         let mut mut_arg_places: Vec<(usize, PlaceChain)> = Vec::new();
         self.compile_call_args(args, &mut operands, &mut mut_arg_places)?;
+        // A rigidly compiled closure takes hidden witness blocks after
+        // its declared arguments; the projection's baked layout pairs
+        // each rigid parameter with this use's argument (one mechanism:
+        // `push_witness_block_for` forwards rigid arguments and
+        // materializes concrete ones).
+        if let Some(layout) = callee.witness_layout.clone() {
+            for (param, arg) in layout {
+                self.push_witness_block_for(param, &arg, &mut operands, expr.span)?;
+            }
+        }
         let callee_ty = self.resolved(&callee.ty);
         if let Ty::Func(params, _, _) = &callee_ty {
             for (operand, param) in operands.iter().zip(params) {
@@ -8257,10 +8534,18 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             ExprKind::Variable(Name::Resolved(symbol, _)) => *symbol,
             ExprKind::Member(receiver, label) => {
                 let Some(resolution) = &callee.member_resolution else {
-                    return Err(BackendError::new(
-                        "member call without a frontend resolution".into(),
-                        callee.span,
-                    ));
+                    // A structural projection (a record field, a tuple
+                    // element) carries the function value in the field
+                    // itself — there is no nominal or protocol
+                    // resolution to dispatch through. Project it and
+                    // call indirectly, like a function value in a
+                    // local. Callee position: a rigid closure's witness
+                    // blocks are appended by the call below, so the
+                    // value-read guard does not apply here.
+                    self.callee_position = true;
+                    let callee_value = self.compile_expr(callee);
+                    self.callee_position = false;
+                    return self.compile_indirect_call(callee_value?, expr, callee, args);
                 };
                 // A `Constructor` receiver is a type-level reference
                 // (operator desugaring dispatches `Add.add(a, b)` through
@@ -8705,8 +8990,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             _ => {
                 // Any other callee is a function VALUE (a field read, a
-                // block value): compile it and call indirectly.
-                let callee_value = self.compile_expr(callee)?;
+                // block value): compile it and call indirectly. Callee
+                // position: a rigid closure's witness blocks are
+                // appended by the call, so the value-read guard does
+                // not apply here.
+                self.callee_position = true;
+                let callee_value = self.compile_expr(callee);
+                self.callee_position = false;
+                let callee_value = callee_value?;
                 return self.compile_indirect_call(callee_value, expr, callee, args);
             }
         };
@@ -9273,9 +9564,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let effects = self.closure_effects(ty);
         let (env, inherited) = self.capture_env(&captured, &overrides, &effects)?;
 
+        // A stored rank-N closure: the checker computed the one
+        // concrete assignment its projections agree on and baked it on
+        // the func node. Rigid closures carry no fact and compile
+        // rigidly (witness needs still reject honestly there).
+        let field_specialization = func.specialization.clone().unwrap_or_default();
         let id = self.program_builder.reserve(&func.name.name_str());
         let mut fx = FunctionBuilder::new(self.program_builder, 0, self.program);
         fx.subst = self.subst.clone();
+        fx.subst.extend(field_specialization.iter().cloned());
         let facts = func
             .body
             .frame
@@ -9284,8 +9581,28 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         fx.celled = facts.celled.clone();
         fx.nested_refs = facts.nested_refs.clone();
         fx.use_counts = frame_uses(&body_nodes);
-        let arity = u16::try_from(func.params.len())
+        let declared_arity = u16::try_from(func.params.len())
             .map_err(|_| BackendError::new("too many parameters".into(), func.body.span))?;
+        // A stored rank-N closure that stayed rigid (no unique concrete
+        // assignment) takes hidden witness parameters for its unpinned
+        // scheme parameters — one [drop, retain] pair plus each
+        // constraint's requirement closures, in scheme order; callers
+        // append the same layout from the projection's baked witness
+        // facts (the same value-witness-table discipline as rigid
+        // generic function instances).
+        let pinned: Vec<Symbol> = field_specialization.iter().map(|(sym, _)| *sym).collect();
+        let hidden: Vec<Symbol> = func
+            .scheme
+            .params
+            .iter()
+            .map(|param| param.symbol)
+            .filter(|symbol| !pinned.contains(symbol))
+            .collect();
+        let arity = if hidden.is_empty() {
+            declared_arity
+        } else {
+            fx.bind_witness_params(&hidden, declared_arity)
+        };
         fx.frame.resize(usize::from(arity), BuildLocal::default());
         for (ix, param) in func.params.iter().enumerate() {
             let local = u16::try_from(ix).unwrap_or_default();

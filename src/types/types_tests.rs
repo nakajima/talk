@@ -1613,6 +1613,16 @@ pub mod tests {
                 true,
                 false,
             ),
+            (
+                // Instantiating the record's scheme re-emits greeting's
+                // projection equality with dead variables; the one
+                // candidate row for `S: P` commits by uniqueness (the
+                // final-solve analog of unique-owner improvement).
+                "types::unique_candidate_projection_commits_at_final_solve",
+                "\n        struct S {}\n        struct A {}\n        protocol P<RHS> {\n            associated Ret\n            func p(rhs: RHS) -> Ret\n        }\n        extend S: P<A> {\n            func p(rhs: A) -> A { rhs }\n        }\n        func greet(s: S, x) { s.p(rhs: x) }\n        let rec = { fizz: A(), greeting: greet }\n        rec.fizz\n        ",
+                true,
+                false,
+            ),
         ];
         let mut failures = String::new();
         for (name, source, expect_clean, with_core) in cases {
@@ -4664,6 +4674,7 @@ pub mod tests {
                             .any(|entry| entry.args.iter().any(ty_has_vars))
                 }
                 Ty::Proj(base, ..) => ty_has_vars(base),
+                Ty::Forall(scheme) => ty_has_vars(&scheme.ty),
                 Ty::Static(crate::types::ty::StaticValue::Int(int)) => int
                     .terms
                     .iter()
@@ -5562,6 +5573,7 @@ mod with_core {
         "Loop.tlk",
         "MatchBind.tlk",
         "Protocols.tlk",
+        "Record.tlk",
         "Show.tlk",
         "Sleep.tlk",
         "Strings.tlk",
@@ -8858,5 +8870,152 @@ mod nested_types {
             !contracts.keys().any(|name| name.contains("self")),
             "implicit receivers must stay out of callable names: {contracts:?}"
         );
+    }
+}
+
+
+
+
+#[cfg(test)]
+mod rank_n_field_tests {
+    use super::tests::{check, ty_of, type_errors};
+
+    /// Rank-N field types: each func literal in a record generalizes
+    /// into its own scheme, so a projection discharges only that
+    /// field's predicates — sibling fields' protocols never fuse into
+    /// the record's type.
+    #[test]
+    fn record_fields_generalize_independently_and_project_decoupled() {
+        let driver = check(
+            "// no-core\nstruct Int {}\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nprotocol Multiply<RHS> {\n\tassociated Ret\n\tfunc multiply(rhs: RHS) -> Ret\n}\nextend Int: Add<Int> {\n\tfunc add(rhs: Int) -> Int { rhs }\n}\nextend Int: Multiply<Int> {\n\tfunc multiply(rhs: Int) -> Int { rhs }\n}\nlet handlers = { inc: func(x) { x.add(rhs: Int()) }, double: func(x) { x.multiply(rhs: Int()) } }\nlet a = handlers.inc(rhs: Int())\nlet b = handlers.double(rhs: Int())\n",
+        );
+        assert_eq!(type_errors(&driver), Vec::<String>::new());
+        assert_eq!(
+            ty_of(&driver, "handlers"),
+            "{ double: <T0: Multiply<Int>, T1>(&T0) -> T1 where T0.Ret == T1, inc: <T0: Add<Int>, T1>(&T0) -> T1 where T0.Ret == T1 }"
+        );
+        assert_eq!(ty_of(&driver, "a"), "Int");
+        assert_eq!(ty_of(&driver, "b"), "Int");
+    }
+
+    /// A bare reference to a polymorphic binding keeps the binding's
+    /// scheme as the field's own: the desugared form of a func-literal
+    /// field, with the same per-field decoupling.
+    #[test]
+    fn reference_fields_adopt_the_bindings_scheme() {
+        let driver = check(
+            "// no-core\nstruct Int {}\nprotocol Add<RHS> {\n\tassociated Ret\n\tfunc add(rhs: RHS) -> Ret\n}\nprotocol Multiply<RHS> {\n\tassociated Ret\n\tfunc multiply(rhs: RHS) -> Ret\n}\nextend Int: Add<Int> {\n\tfunc add(rhs: Int) -> Int { rhs }\n}\nextend Int: Multiply<Int> {\n\tfunc multiply(rhs: Int) -> Int { rhs }\n}\nlet _inc = func(x) { x.add(rhs: Int()) }\nlet _double = func(x) { x.multiply(rhs: Int()) }\nlet handlers = { inc: _inc, double: _double }\nlet a = handlers.inc(rhs: Int())\nlet b = handlers.double(rhs: Int())\n",
+        );
+        assert_eq!(type_errors(&driver), Vec::<String>::new());
+        assert_eq!(ty_of(&driver, "a"), "Int");
+        assert_eq!(ty_of(&driver, "b"), "Int");
+    }
+
+    /// Declared generics and where clauses on a field literal seed the
+    /// field's scheme exactly as they would for a let-bound function.
+    #[test]
+    fn field_literal_with_declared_generics_generalizes() {
+        let driver = check(
+            "// no-core\nstruct Int {}\nstruct Text {}\nprotocol Showable {\n\tfunc show() -> Int\n}\nextend Int: Showable {\n\tfunc show() -> Int { self }\n}\nlet rec = { show: func<T: Showable>(x: T) -> Int { x.show() } }\nlet a = rec.show(x: Int())\n",
+        );
+        assert_eq!(type_errors(&driver), Vec::<String>::new());
+        assert_eq!(ty_of(&driver, "a"), "Int");
+    }
+
+    /// The declared-parameter discipline still applies: a constrained
+    /// parameter nothing determines is rejected at the literal.
+    #[test]
+    fn field_literal_with_undetermined_declared_param_errors() {
+        let driver = check(
+            "// no-core\nstruct Int {}\nprotocol Showable {\n\tfunc show() -> Int\n}\nlet rec = { bad: func<T: Showable>(x: Int) -> Int { x } }\n",
+        );
+        let errors = type_errors(&driver);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("constrained but not determined")),
+            "expected the undetermined-parameter diagnostic, got {errors:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod declared_struct_field_tests {
+    use super::tests::{check, compile_library, type_errors};
+    use crate::compiling::driver::{Driver, DriverConfig, Source};
+    use crate::compiling::module::{ModuleEnvironment, ModuleId};
+    use std::rc::Rc;
+
+    /// Declared polymorphic struct fields: the field's quantified type
+    /// is a first-class scheme in the catalog; construction checks the
+    /// closure against it (skolem subsumption), and each projection
+    /// instantiates only that field's scheme.
+    #[test]
+    fn declared_polymorphic_field_projects_per_use() {
+        let driver = check(
+            "// no-core\nstruct Int {}\nstruct Text {}\nstruct Handlers {\n\tlet id: <T>(T) -> T\n}\nlet h = Handlers(id: func(x) { x })\nlet a = h.id(Int())\nlet b = h.id(Int())\n",
+        );
+        assert_eq!(type_errors(&driver), Vec::<String>::new());
+    }
+
+    /// Projecting one field at two different concrete types keeps the
+    /// closure rigid rather than specializing: a rigid compilation
+    /// serves every type (witness-needing rigid compilations still
+    /// reject at their boundary).
+    #[test]
+    fn declared_polymorphic_field_conflicting_uses_stay_rigid() {
+        let driver = check(
+            "// no-core\nstruct Int {}\nstruct Text {}\nstruct Handlers {\n\tlet id: <T>(T) -> T\n}\nlet h = Handlers(id: func(x) { x })\nlet a = h.id(Int())\nlet b = h.id(Text())\n",
+        );
+        assert_eq!(type_errors(&driver), Vec::<String>::new());
+    }
+
+    /// A monomorphic closure does not satisfy a polymorphic field: the
+    /// skolem the value pins cannot escape the check.
+    #[test]
+    fn declared_polymorphic_field_rejects_mono_closure() {
+        let driver = check(
+            "// no-core\nstruct Int {}\nstruct Handlers {\n\tlet id: <T>(T) -> T\n}\nlet h = Handlers(id: func(x: Int) { x })\n",
+        );
+        assert!(
+            !type_errors(&driver).is_empty(),
+            "a monomorphic closure must not satisfy a polymorphic field"
+        );
+    }
+
+    /// The field's scheme crosses the module boundary: an importer
+    /// constructs and projects the imported struct's polymorphic field.
+    #[test]
+    fn declared_polymorphic_field_crosses_the_module_boundary() {
+        let id_a = ModuleId::External(0);
+        let module_a = compile_library(
+            "A",
+            id_a,
+            "pub struct Handlers {\n\tpub let id: <T>(T) -> T\n}",
+            ModuleEnvironment::default(),
+        );
+
+        let mut modules = ModuleEnvironment::default();
+        modules.import_compiled(module_a, id_a).unwrap();
+        let config = DriverConfig {
+            module_id: ModuleId::Main,
+            modules: Rc::new(modules),
+            mode: crate::compiling::driver::CompilationMode::Library,
+            module_name: "B".to_string(),
+            parse_mode: crate::compiling::driver::ParseMode::Strict,
+            preserve_comments: false,
+            workspace_root: None,
+            source_root: None,
+            libraries: Vec::new(),
+            parser: None,
+        };
+        let driver_b = Driver::new(
+            vec![Source::from(
+                "use A::{ Handlers }\nlet h = Handlers(id: func(x) { x })\nlet a = h.id(1)\nlet b = h.id(2)\n",
+            )],
+            config,
+        );
+        let typed = driver_b.parse().unwrap().resolve_names().unwrap().type_check();
+        assert_eq!(type_errors(&typed), Vec::<String>::new());
     }
 }

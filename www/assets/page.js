@@ -3,18 +3,23 @@ function initIntroExamples() {
   const introCode = document.querySelector(".intro-code pre");
   if (!introText || !introCode) return;
 
-  let currentExample = introText.querySelector("span[data-highlighted]");
+  let currentExample = introText.querySelector("span[data-example]");
   currentExample?.setAttribute("data-displayed", "true");
 
   introText.addEventListener("pointerover", (event) => {
     if (!(event.target instanceof Element)) return;
-    const example = event.target.closest("span[data-highlighted]");
+    const example = event.target.closest("span[data-example]");
     if (!example || !introText.contains(example)) return;
+
+    const template = document.querySelector(
+      `template[data-example="${example.dataset.example}"]`,
+    );
+    if (!(template instanceof HTMLTemplateElement)) return;
 
     currentExample?.removeAttribute("data-displayed");
     example.setAttribute("data-displayed", "true");
     currentExample = example;
-    introCode.innerHTML = example.getAttribute("data-highlighted") || "";
+    introCode.replaceChildren(template.content.cloneNode(true));
   });
 }
 

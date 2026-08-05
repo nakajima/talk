@@ -247,6 +247,14 @@ pub enum Ty {
     Func(Vec<Ty>, Box<Ty>, EffectRow),
     Tuple(Vec<Ty>),
     Record(Row),
+    /// A first-class polymorphic type: the one quantification construct
+    /// (`Scheme`) appearing in a new *position* — inside a type, as a
+    /// record or struct field. Not a new mechanism alongside lets,
+    /// callables, and effects: the same scheme, the same instantiation.
+    /// A `Forall` never passes through general unification — it is born
+    /// by per-field generalization and eliminated by instantiation at
+    /// projections and value boundaries (predicative discipline).
+    Forall(Box<Scheme>),
     /// A first-class protocol existential `any P<Assoc = T>`. This is an
     /// existential package in the Mitchell/Plotkin sense: hidden payload type,
     /// protocol evidence, and associated-type equality evidence. The vector is
@@ -473,6 +481,42 @@ pub enum Predicate {
     StaticCmp { op: StaticCmpOp, lhs: Ty, rhs: Ty },
 }
 
+impl Predicate {
+    /// Preorder traversal over the types a predicate mentions (see
+    /// [`Ty::try_visit`]).
+    pub(crate) fn try_visit_ty<B>(
+        &self,
+        visitor: &mut impl FnMut(&Ty) -> std::ops::ControlFlow<B>,
+    ) -> std::ops::ControlFlow<B> {
+        match self {
+            Predicate::TypeEq(a, b) => {
+                a.try_visit(visitor)?;
+                b.try_visit(visitor)
+            }
+            Predicate::EffectEq(..) | Predicate::RowEq(..) => {
+                std::ops::ControlFlow::Continue(())
+            }
+            Predicate::Conforms { ty, protocol } => {
+                ty.try_visit(visitor)?;
+                for arg in &protocol.args {
+                    arg.try_visit(visitor)?;
+                }
+                std::ops::ControlFlow::Continue(())
+            }
+            Predicate::HasMember {
+                receiver, member, ..
+            } => {
+                receiver.try_visit(visitor)?;
+                member.try_visit(visitor)
+            }
+            Predicate::StaticCmp { lhs, rhs, .. } => {
+                lhs.try_visit(visitor)?;
+                rhs.try_visit(visitor)
+            }
+        }
+    }
+}
+
 /// The relations of the static integer theory (ADR 0035 §4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum StaticCmpOp {
@@ -585,6 +629,14 @@ impl Ty {
                 }
             }
             Ty::Static(StaticValue::Bool(_) | StaticValue::Case(..)) => {}
+            // Bound params are the scheme's own; outer variables may
+            // still appear inside, so descend.
+            Ty::Forall(scheme) => {
+                scheme.ty.try_visit(visitor)?;
+                for predicate in &scheme.predicates {
+                    predicate.try_visit_ty(visitor)?;
+                }
+            }
             Ty::Var(_) | Ty::Param(_) | Ty::Error => {}
         }
         ControlFlow::Continue(())
@@ -780,7 +832,59 @@ pub(crate) trait TyFold {
             ),
             Ty::Eff(eff) => Ty::Eff(self.fold_eff(eff)),
             Ty::Static(value) => self.fold_static(value),
+            Ty::Forall(scheme) => Ty::Forall(Box::new(self.fold_scheme(scheme))),
             Ty::Error => Ty::Error,
+        }
+    }
+
+    /// Fold a first-class scheme: its own quantified parameters are bound
+    /// inside, so the fold applies to the body and predicate types as
+    /// ordinary children (folders that rewrite parameters shadow them —
+    /// see `Substituter`, which strips the bound symbols first).
+    fn fold_scheme(&mut self, scheme: &Scheme) -> Scheme {
+        let ty = self.fold_ty(&scheme.ty);
+        let predicates = scheme
+            .predicates
+            .iter()
+            .map(|predicate| self.fold_predicate(predicate))
+            .collect();
+        Scheme {
+            params: scheme.params.clone(),
+            eff_params: scheme.eff_params.clone(),
+            row_params: scheme.row_params.clone(),
+            perm_params: scheme.perm_params.clone(),
+            predicates,
+            ty,
+        }
+    }
+
+    /// Fold a predicate's mentioned types (rows and effect rows fold
+    /// through `fold_row`/`fold_eff`).
+    fn fold_predicate(&mut self, predicate: &Predicate) -> Predicate {
+        match predicate {
+            Predicate::TypeEq(a, b) => Predicate::TypeEq(self.fold_ty(a), self.fold_ty(b)),
+            Predicate::EffectEq(a, b) => {
+                Predicate::EffectEq(self.fold_eff(a), self.fold_eff(b))
+            }
+            Predicate::RowEq(a, b) => Predicate::RowEq(self.fold_row(a), self.fold_row(b)),
+            Predicate::Conforms { ty, protocol } => Predicate::Conforms {
+                ty: self.fold_ty(ty),
+                protocol: self.fold_protocol_ref(protocol),
+            },
+            Predicate::HasMember {
+                receiver,
+                label,
+                member,
+            } => Predicate::HasMember {
+                receiver: self.fold_ty(receiver),
+                label: label.clone(),
+                member: self.fold_ty(member),
+            },
+            Predicate::StaticCmp { op, lhs, rhs } => Predicate::StaticCmp {
+                op: *op,
+                lhs: self.fold_ty(lhs),
+                rhs: self.fold_ty(rhs),
+            },
         }
     }
 
@@ -1089,6 +1193,13 @@ impl Ty {
                 .terms
                 .iter()
                 .any(|(atom, _)| matches!(atom, StaticAtom::Var(_))),
+            Ty::Forall(scheme) => {
+                scheme.ty.has_unification_vars()
+                    || scheme
+                        .predicates
+                        .iter()
+                        .any(Predicate::has_unification_vars)
+            }
             Ty::Static(StaticValue::Bool(_) | StaticValue::Case(..)) => false,
         }
     }
@@ -1486,6 +1597,7 @@ fn pattern_occurs(param: Symbol, ty: &Ty, bindings: &FxHashMap<Symbol, Ty>) -> b
             .fields
             .iter()
             .any(|(_, ty)| pattern_occurs(param, ty, bindings)),
+        Ty::Forall(scheme) => pattern_occurs(param, &scheme.ty, bindings),
         Ty::Any { protocol, assoc } => {
             protocol
                 .args
@@ -1662,6 +1774,7 @@ impl Ty {
 pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> String {
     match ty {
         Ty::Var(_) => "_".to_string(),
+        Ty::Forall(scheme) => scheme.render(),
         Ty::Param(sym) => param_names
             .get(sym)
             .cloned()
