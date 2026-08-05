@@ -2097,6 +2097,7 @@ type DependencyLibraries = Vec<(
 /// against it: the module environment dependency imports resolve
 /// against, the dependencies' typed bodies the backend compiles from,
 /// and the roots that scope `package::` and local imports.
+#[derive(Clone)]
 pub struct PackageCompileContext {
     pub modules: ModuleEnvironment,
     pub libraries: DependencyLibraries,

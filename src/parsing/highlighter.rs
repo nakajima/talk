@@ -104,7 +104,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::SingleQuote => (),
                 TokenKind::In => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::EffectName => self.make(tok, Kind::EFFECT, &mut tokens),
-                TokenKind::Handling => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Handling => self.make(tok, Kind::MODIFIER, &mut tokens),
                 TokenKind::Effect => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Dollar | TokenKind::Hash => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::BoundVar => self.make(tok, Kind::VARIABLE, &mut tokens),
@@ -125,8 +125,8 @@ impl<'a> Higlighter<'a> {
                 {
                     self.make(tok, Kind::KEYWORD, &mut tokens)
                 }
-                TokenKind::Any => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::As => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Any => self.make(tok, Kind::MODIFIER, &mut tokens),
+                TokenKind::As => self.make(tok, Kind::MODIFIER, &mut tokens),
                 TokenKind::At => self.make(tok, Kind::DECORATOR, &mut tokens),
                 TokenKind::LineComment => self.make(tok, Kind::COMMENT, &mut tokens),
                 TokenKind::Extend => self.make(tok, Kind::KEYWORD, &mut tokens),
@@ -136,13 +136,13 @@ impl<'a> Higlighter<'a> {
                 TokenKind::For => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Return => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Unreachable => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::True => self.make(tok, Kind::NUMBER, &mut tokens),
-                TokenKind::False => self.make(tok, Kind::NUMBER, &mut tokens),
+                TokenKind::True => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::False => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Enum => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Case => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Match => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Import | TokenKind::Use => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::Pub | TokenKind::Public => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Pub | TokenKind::Public => self.make(tok, Kind::MODIFIER, &mut tokens),
                 TokenKind::Linear | TokenKind::Macro => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::StringLiteral | TokenKind::CharacterLiteral => {
                     self.make_string(tok, Kind::STRING, &mut tokens)
@@ -150,7 +150,7 @@ impl<'a> Higlighter<'a> {
                 TokenKind::Underscore => (),
                 TokenKind::QuestionMark => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::Semicolon => (),
-                TokenKind::Arrow => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Arrow => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::Colon => (),
                 TokenKind::DoubleColon => self.make(tok, Kind::OPERATOR, &mut tokens),
                 TokenKind::Newline => (),
@@ -199,15 +199,15 @@ impl<'a> Higlighter<'a> {
                 TokenKind::EOF => break,
                 TokenKind::Generated => (),
                 TokenKind::Init => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::Mut => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::Consuming => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Mut => self.make(tok, Kind::MODIFIER, &mut tokens),
+                TokenKind::Consuming => self.make(tok, Kind::MODIFIER, &mut tokens),
                 TokenKind::Protocol => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::DotDot | TokenKind::DotDotDot | TokenKind::DotDotLess => {
                     self.make(tok, Kind::OPERATOR, &mut tokens)
                 }
                 TokenKind::Associated => self.make(tok, Kind::KEYWORD, &mut tokens),
                 TokenKind::Typealias => self.make(tok, Kind::KEYWORD, &mut tokens),
-                TokenKind::Static => self.make(tok, Kind::KEYWORD, &mut tokens),
+                TokenKind::Static => self.make(tok, Kind::MODIFIER, &mut tokens),
             }
         }
 

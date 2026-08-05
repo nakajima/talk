@@ -55,7 +55,7 @@ syntax match talktalkComment "//.*$" contains=@Spell
 highlight default link talktalkControl Keyword
 highlight default link talktalkDeclaration Keyword
 highlight default link talktalkModifier StorageClass
-highlight default link talktalkBoolean Boolean
+highlight default link talktalkBoolean Keyword
 highlight default link talktalkAttribute PreProc
 highlight default link talktalkEffect Special
 highlight default link talktalkBoundVar Identifier
@@ -71,6 +71,10 @@ highlight default link talktalkQuotedIdentifier Identifier
 highlight default link talktalkCharacter Character
 highlight default link talktalkString String
 highlight default link talktalkComment Comment
+
+" Keep LSP semantic token colors consistent with the syntax file above.
+highlight default link @lsp.type.modifier.talktalk StorageClass
+highlight default link @lsp.type.event.talktalk Special
 
 syntax sync minlines=50
 

@@ -103,12 +103,30 @@ struct RootState {
     /// `documents`, not the walk.
     inventory: Option<Vec<(Url, i32)>>,
     workspace: Option<CachedWorkspace>,
+    /// The package compile context workspaces build against, cached by
+    /// manifest/lock stamps so the locked dependency graph is not
+    /// recompiled per edit. `None` means not loaded yet.
+    package: Option<CachedPackageContext>,
     backoff: Option<WorkspaceAnalysisBackoff>,
 }
 
 struct CachedWorkspace {
     workspace: Arc<AnalysisWorkspace>,
     generation: u64,
+    /// The manifest/lock stamps the workspace was built with: a lock
+    /// change alone does not alter any document version, so the retag
+    /// fast path must compare it explicitly.
+    package_stamp: (i32, i32),
+}
+
+struct CachedPackageContext {
+    /// Stamps of `package.tlk` and `package.lock` when the context was
+    /// built.
+    stamp: (i32, i32),
+    /// `None` when the root has no usable manifest/lock (or the locked
+    /// graph failed to load): the session falls back to the inferred,
+    /// dependency-free source root.
+    context: Option<crate::compiling::package::PackageCompileContext>,
 }
 
 #[derive(Clone, Copy)]
@@ -794,7 +812,6 @@ fn file_stamp_version(path: &PathBuf) -> i32 {
     let Ok(meta) = meta else {
         return 0;
     };
-
     let modified_nanos: u128 = meta
         .modified()
         .ok()
@@ -860,6 +877,40 @@ fn analysis_root_for_uri(state: &ServerState, uri: &Url) -> Option<PathBuf> {
         .or_else(|| std::env::current_dir().ok())
 }
 
+/// Stamps of the files the package compile context is built from, so
+/// the cached context reloads exactly when one of them changes.
+fn package_context_stamp(root: &PathBuf) -> (i32, i32) {
+    (
+        file_stamp_version(&root.join("package.tlk")),
+        file_stamp_version(&root.join("package.lock")),
+    )
+}
+
+/// The package's compile context for editor sessions: the same inputs
+/// `talk check` compiles against, so `package::` anchors at the
+/// manifest's source root and dependency imports resolve. Offline: a
+/// dependency that is not installed yet degrades to the
+/// dependency-free session rather than fetching mid-keystroke.
+fn load_package_context(
+    root: &PathBuf,
+) -> Option<crate::compiling::package::PackageCompileContext> {
+    if !crate::compiling::package::PackageProject::exists_at(root) {
+        return None;
+    }
+    match crate::compiling::package::PackageProject::open_at(root, true)
+        .and_then(|project| project.package_compile_context())
+    {
+        Ok(context) => Some(context),
+        Err(err) => {
+            tracing::warn!(
+                "package context unavailable for {}: {err}; using dependency-free session",
+                root.display()
+            );
+            None
+        }
+    }
+}
+
 fn tlk_files_under_root(root: &PathBuf) -> Vec<PathBuf> {
     // A package manifest scopes the program: only the manifest and files
     // under its build targets' source directories compile together, the
@@ -881,6 +932,17 @@ fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<An
         let workspace = cached.workspace.clone();
         state.roots.insert(root, root_state);
         return Some(workspace);
+    }
+
+    // The package context anchors `package::` at the manifest's source
+    // root and resolves dependency imports, matching what `talk check`
+    // accepts. It reloads only when the manifest or lock changes.
+    let package_stamp = package_context_stamp(&root);
+    if root_state.package.as_ref().map(|cached| cached.stamp) != Some(package_stamp) {
+        root_state.package = Some(CachedPackageContext {
+            stamp: package_stamp,
+            context: load_package_context(&root),
+        });
     }
 
     // The file inventory refreshes only after inventory-affecting
@@ -926,6 +988,7 @@ fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<An
     // relevant): retag the cached analysis instead of rebuilding.
     if let Some(cached) = &mut root_state.workspace
         && cached.workspace.versions == versions
+        && cached.package_stamp == package_stamp
     {
         cached.generation = root_state.generation;
         let workspace = cached.workspace.clone();
@@ -979,8 +1042,12 @@ fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<An
         return None;
     }
 
+    let package = root_state
+        .package
+        .as_ref()
+        .and_then(|cached| cached.context.clone());
     let analysis = match recover_lsp_result(state, Some(focus_uri), "analyzing workspace", || {
-        AnalysisWorkspace::new(docs)
+        AnalysisWorkspace::new_with_package(docs, package)
     }) {
         Ok(Some(analysis)) => analysis,
         Ok(None) => {
@@ -1002,6 +1069,7 @@ fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<An
     root_state.workspace = Some(CachedWorkspace {
         workspace: analysis.clone(),
         generation: root_state.generation,
+        package_stamp,
     });
     state.roots.insert(root, root_state);
     Some(analysis)
@@ -3261,6 +3329,45 @@ func foo() 'fizz -> Int {
         ));
         std::fs::create_dir_all(&root).expect("create temp root");
         root
+    }
+
+    #[test]
+    fn package_workspace_anchors_imports_at_manifest_source_root() {
+        let root = temp_root("package_anchor");
+        std::fs::create_dir_all(root.join("src/documentables")).expect("create source dirs");
+        std::fs::write(
+            root.join("package.tlk"),
+            "Package(\n    name: \"demo\",\n    version: \"0.1.0\",\n    builds: [.bin(named: \"main\", from: \"src/main.tlk\")],\n    dependencies: []\n)\n",
+        )
+        .expect("write manifest");
+        std::fs::write(
+            root.join("package.lock"),
+            "Lock(\n    format: 1,\n    fingerprint: \"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\",\n    root_dependencies: [],\n    packages: [\n    ]\n)\n",
+        )
+        .expect("write lock");
+        std::fs::write(root.join("src/main.tlk"), "let x = 1\n").expect("write main");
+        std::fs::write(
+            root.join("src/documentables/property.tlk"),
+            "pub struct Property {}\n",
+        )
+        .expect("write property");
+        let uri = Url::from_file_path(root.join("src/main.tlk")).expect("main uri");
+        let mut state = state_with_roots(vec![root.clone()]);
+
+        let workspace = super::workspace_analysis(&mut state, &uri).expect("workspace");
+        assert_eq!(
+            workspace.source_root,
+            root.join("src").canonicalize().expect("canonical src"),
+            "package:: anchors at the manifest's source root"
+        );
+        let doc_id = super::document_id_for_uri(&uri);
+        let candidates = workspace.import_candidates(&doc_id);
+        assert!(
+            candidates.iter().any(|candidate| candidate.name == "Property"
+                && candidate.module_path == "package::documentables::property"),
+            "auto-import path must match what talk check accepts: {candidates:?}"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

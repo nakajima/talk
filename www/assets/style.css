@@ -112,7 +112,8 @@ pre,
   tab-size: 2;
 }
 
-code .keyword, pre .keyword {
+code .keyword, pre .keyword,
+code .modifier, pre .modifier {
   color: oklch(77% 0.156 12.4);
   /*color: oklch(54.3% 0.217 11);*/
 }
