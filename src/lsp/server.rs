@@ -85,10 +85,31 @@ struct ServerState {
     documents: FxHashMap<Url, Document>,
     next_work_generation: u64,
     pending_document_work: FxHashMap<Url, PendingDocumentWork>,
-    workspaces: FxHashMap<PathBuf, Arc<AnalysisWorkspace>>,
-    workspace_analysis_backoffs: FxHashMap<PathBuf, WorkspaceAnalysisBackoff>,
+    roots: FxHashMap<PathBuf, RootState>,
     core: Option<Arc<AnalysisWorkspace>>,
     workspace_roots: Vec<PathBuf>,
+}
+
+/// Per-root analysis state (CLEAN-01). The generation is the only
+/// invalidation signal: it bumps on every event that can affect the
+/// root's analysis, and a cached workspace whose generation matches is
+/// returned without any filesystem traversal.
+#[derive(Default)]
+struct RootState {
+    generation: u64,
+    /// The walked file inventory (path uri, disk stamp). `None` means
+    /// an inventory-affecting event (open, close, watched files)
+    /// invalidated it and the next use re-walks once. Content edits to
+    /// open documents do not invalidate it: their versions come from
+    /// `documents`, not the walk.
+    inventory: Option<Vec<(Url, i32)>>,
+    workspace: Option<CachedWorkspace>,
+    backoff: Option<WorkspaceAnalysisBackoff>,
+}
+
+struct CachedWorkspace {
+    workspace: Arc<AnalysisWorkspace>,
+    generation: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -132,6 +153,22 @@ impl ServerState {
             self.pending_document_work.remove(uri);
         }
         is_ready
+    }
+
+    /// Bump the generation of the root containing `uri` (CLEAN-01):
+    /// only that root's cached analysis is affected. `inventory_changed`
+    /// additionally forces a one-time re-walk of the root's file list on
+    /// next use (opens, closes, and watched-file events; plain edits to
+    /// open documents do not change the file list).
+    fn invalidate_root(&mut self, uri: &Url, inventory_changed: bool) {
+        let Some(root) = analysis_root_for_uri(self, uri) else {
+            return;
+        };
+        let root_state = self.roots.entry(root).or_default();
+        root_state.generation = root_state.generation.wrapping_add(1);
+        if inventory_changed {
+            root_state.inventory = None;
+        }
     }
 }
 
@@ -254,8 +291,7 @@ pub async fn start() {
             documents: Default::default(),
             next_work_generation: 0,
             pending_document_work: Default::default(),
-            workspaces: Default::default(),
-            workspace_analysis_backoffs: Default::default(),
+            roots: Default::default(),
             core: None,
             workspace_roots: Default::default(),
         });
@@ -269,8 +305,7 @@ pub async fn start() {
                     tracing::info!("workspace roots: {roots:?}");
                 }
                 st.workspace_roots = roots;
-                st.workspaces.clear();
-                st.workspace_analysis_backoffs.clear();
+                st.roots.clear();
 
                 async move {
                     Ok(InitializeResult {
@@ -331,8 +366,8 @@ pub async fn start() {
                     document_url.clone(),
                     Document::new(version, text),
                 );
-                state.schedule_document_work(document_url);
-                state.workspaces.clear();
+                state.schedule_document_work(document_url.clone());
+                state.invalidate_root(&document_url, true);
                 std::ops::ControlFlow::Continue(())
             })
             .notification::<notification::DidChangeTextDocument>(|state, params| {
@@ -350,7 +385,7 @@ pub async fn start() {
                     }
                     document.version = version;
                     state.schedule_document_work(uri.clone());
-                    state.workspaces.clear();
+                    state.invalidate_root(&uri, false);
                 }
                 if let Some(payload) = panic_payload {
                     report_lsp_internal_error(
@@ -369,7 +404,7 @@ pub async fn start() {
 
                 state.documents.remove(&document_url);
                 state.pending_document_work.remove(&document_url);
-                state.workspaces.clear();
+                state.invalidate_root(&document_url, true);
 
                 if is_tlk_uri(&document_url) {
                     if let Some(workspace) = workspace_analysis(state, &document_url) {
@@ -592,17 +627,17 @@ pub async fn start() {
                         continue;
                     }
 
-                    if state.documents.contains_key(&uri) {
-                        state.schedule_document_work(uri);
-                        continue;
-                    }
-
                     if let Some(root) = analysis_root_for_uri(state, &uri) {
-                        diagnostics_workspaces.entry(root).or_insert(uri);
+                        diagnostics_workspaces.entry(root).or_insert_with(|| uri.clone());
                     }
+                    if state.documents.contains_key(&uri) {
+                        state.schedule_document_work(uri.clone());
+                    }
+                    // The file list or a disk stamp may have changed:
+                    // invalidate only the containing root (CLEAN-01).
+                    state.invalidate_root(&uri, true);
                 }
 
-                state.workspaces.clear();
                 for focus_uri in diagnostics_workspaces.values() {
                     if let Some(workspace) = workspace_analysis(state, focus_uri) {
                         publish_workspace_diagnostics(state, &workspace);
@@ -878,14 +913,36 @@ fn tlk_files_under_root(root: &PathBuf) -> Vec<PathBuf> {
 
 fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<AnalysisWorkspace>> {
     let root = analysis_root_for_uri(state, focus_uri)?;
-    let mut docs_by_uri: FxHashMap<Url, i32> = FxHashMap::default();
+    let mut root_state = state.roots.remove(&root).unwrap_or_default();
 
-    for path in tlk_files_under_root(&root) {
-        let Ok(uri) = Url::from_file_path(&path) else {
-            continue;
-        };
-        docs_by_uri.insert(uri, file_stamp_version(&path));
+    // Fast path: nothing the server knows about changed since this
+    // analysis was built. No filesystem traversal at all (CLEAN-01).
+    if let Some(cached) = &root_state.workspace
+        && cached.generation == root_state.generation
+    {
+        let workspace = cached.workspace.clone();
+        state.roots.insert(root, root_state);
+        return Some(workspace);
     }
+
+    // The file inventory refreshes only after inventory-affecting
+    // events; a burst of edits reuses the last walk.
+    let inventory = match root_state.inventory {
+        Some(ref inventory) => inventory.clone(),
+        None => {
+            let walked: Vec<(Url, i32)> = tlk_files_under_root(&root)
+                .into_iter()
+                .filter_map(|path| {
+                    let stamp = file_stamp_version(&path);
+                    Url::from_file_path(&path).ok().map(|uri| (uri, stamp))
+                })
+                .collect();
+            root_state.inventory = Some(walked.clone());
+            walked
+        }
+    };
+
+    let mut docs_by_uri: FxHashMap<Url, i32> = inventory.into_iter().collect();
 
     for (uri, doc) in state.documents.iter() {
         if !is_tlk_uri(uri) {
@@ -897,6 +954,7 @@ fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<An
     }
 
     if docs_by_uri.is_empty() {
+        state.roots.insert(root, root_state);
         return None;
     }
 
@@ -904,16 +962,25 @@ fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<An
         .iter()
         .map(|(uri, version)| (document_id_for_uri(uri), *version))
         .collect();
-    if let Some(existing) = state.workspaces.get(&root)
-        && existing.versions == versions
+
+    // The generation bumped but the content may not have changed (an
+    // open/close round trip, a watched-file event that touched nothing
+    // relevant): retag the cached analysis instead of rebuilding.
+    if let Some(cached) = &mut root_state.workspace
+        && cached.workspace.versions == versions
     {
-        return Some(existing.clone());
+        cached.generation = root_state.generation;
+        let workspace = cached.workspace.clone();
+        state.roots.insert(root, root_state);
+        return Some(workspace);
     }
-    if state
-        .workspace_analysis_backoffs
-        .get(&root)
+
+    if root_state
+        .backoff
+        .as_ref()
         .is_some_and(|backoff| backoff.blocks(&versions, Instant::now()))
     {
+        state.roots.insert(root, root_state);
         return None;
     }
 
@@ -950,6 +1017,7 @@ fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<An
     }
 
     if docs.is_empty() {
+        state.roots.insert(root, root_state);
         return None;
     }
 
@@ -957,20 +1025,27 @@ fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<An
         AnalysisWorkspace::new(docs)
     }) {
         Ok(Some(analysis)) => analysis,
-        Ok(None) => return None,
+        Ok(None) => {
+            state.roots.insert(root, root_state);
+            return None;
+        }
         Err(()) => {
-            let backoff = WorkspaceAnalysisBackoff::after_failure(
+            root_state.backoff = Some(WorkspaceAnalysisBackoff::after_failure(
                 versions,
-                state.workspace_analysis_backoffs.get(&root),
+                root_state.backoff.as_ref(),
                 Instant::now(),
-            );
-            state.workspace_analysis_backoffs.insert(root, backoff);
+            ));
+            state.roots.insert(root, root_state);
             return None;
         }
     };
     let analysis = Arc::new(analysis);
-    state.workspace_analysis_backoffs.remove(&root);
-    state.workspaces.insert(root, analysis.clone());
+    root_state.backoff = None;
+    root_state.workspace = Some(CachedWorkspace {
+        workspace: analysis.clone(),
+        generation: root_state.generation,
+    });
+    state.roots.insert(root, root_state);
     Some(analysis)
 }
 
@@ -2205,8 +2280,7 @@ mod tests {
             documents: Default::default(),
             next_work_generation: 0,
             pending_document_work: Default::default(),
-            workspaces: Default::default(),
-            workspace_analysis_backoffs: Default::default(),
+            roots: Default::default(),
             core: None,
             workspace_roots: Default::default(),
         };
@@ -2591,8 +2665,7 @@ mod tests {
             documents: Default::default(),
             next_work_generation: 0,
             pending_document_work: Default::default(),
-            workspaces: Default::default(),
-            workspace_analysis_backoffs: Default::default(),
+            roots: Default::default(),
             core: None,
             workspace_roots: vec![root],
         };
@@ -3204,5 +3277,144 @@ func foo() 'fizz -> Int {
             target.is_some(),
             "should find effect definition when clicking on tick mark"
         );
+    }
+
+    fn state_with_roots(roots: Vec<std::path::PathBuf>) -> super::ServerState {
+        super::ServerState {
+            client: ClientSocket::new_closed(),
+            documents: Default::default(),
+            next_work_generation: 0,
+            pending_document_work: Default::default(),
+            roots: Default::default(),
+            core: None,
+            workspace_roots: roots,
+        }
+    }
+
+    fn temp_root(name: &str) -> std::path::PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "talk_lsp_generations_{name}_{}_{}",
+            std::process::id(),
+            nonce
+        ));
+        std::fs::create_dir_all(&root).expect("create temp root");
+        root
+    }
+
+    #[test]
+    fn cached_workspace_skips_the_filesystem_entirely() {
+        let root = temp_root("cache");
+        let path_a = root.join("a.tlk");
+        std::fs::write(&path_a, "let x = 1\n").expect("write a");
+        let uri_a = Url::from_file_path(&path_a).expect("uri a");
+        let mut state = state_with_roots(vec![root]);
+
+        let first = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
+
+        // The disk changes underneath, but no event reaches the server:
+        // the cached analysis comes back without any traversal.
+        std::fs::write(&path_a, "let x = 2\n").expect("rewrite a");
+        let second = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &second),
+            "an unchanged generation returns the cached workspace"
+        );
+
+        // The watched-file event invalidates the root; the next request
+        // re-walks and picks the change up.
+        state.invalidate_root(&uri_a, true);
+        let third = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
+        assert!(
+            !std::sync::Arc::ptr_eq(&first, &third),
+            "an invalidated root rebuilds"
+        );
+        assert!(
+            third.texts.iter().any(|text| text.text().contains("let x = 2")),
+            "the rebuilt workspace reads the new disk content"
+        );
+        std::fs::remove_dir_all(state.workspace_roots.first().expect("root")).ok();
+    }
+
+    #[test]
+    fn invalidation_is_scoped_to_the_containing_root() {
+        let root_a = temp_root("scope_a");
+        let root_b = temp_root("scope_b");
+        std::fs::write(root_a.join("main.tlk"), "let a = 1\n").expect("write a");
+        std::fs::write(root_b.join("main.tlk"), "let b = 1\n").expect("write b");
+        let uri_a = Url::from_file_path(root_a.join("main.tlk")).expect("uri a");
+        let uri_b = Url::from_file_path(root_b.join("main.tlk")).expect("uri b");
+        let mut state = state_with_roots(vec![root_a.clone(), root_b]);
+
+        let workspace_a = super::workspace_analysis(&mut state, &uri_a).expect("workspace a");
+        let workspace_b = super::workspace_analysis(&mut state, &uri_b).expect("workspace b");
+
+        // A disk change in root A followed by its watched-file event:
+        // root A rebuilds, root B is untouched.
+        std::fs::write(root_a.join("main.tlk"), "let a = 2\n").expect("rewrite a");
+        state.invalidate_root(&uri_a, true);
+
+        let workspace_b_after =
+            super::workspace_analysis(&mut state, &uri_b).expect("workspace b");
+        assert!(
+            std::sync::Arc::ptr_eq(&workspace_b, &workspace_b_after),
+            "an unrelated root keeps its analysis"
+        );
+        let workspace_a_after =
+            super::workspace_analysis(&mut state, &uri_a).expect("workspace a");
+        assert!(
+            !std::sync::Arc::ptr_eq(&workspace_a, &workspace_a_after),
+            "the changed root rebuilds"
+        );
+        for root in &state.workspace_roots {
+            std::fs::remove_dir_all(root).ok();
+        }
+    }
+
+    #[test]
+    fn content_edits_do_not_rewalk_the_inventory() {
+        let root = temp_root("inventory");
+        let path_a = root.join("a.tlk");
+        std::fs::write(&path_a, "let x = 1\n").expect("write a");
+        let uri_a = Url::from_file_path(&path_a).expect("uri a");
+        let mut state = state_with_roots(vec![root.clone()]);
+        state
+            .documents
+            .insert(uri_a.clone(), super::Document::new(0, "let x = 1\n".to_string()));
+
+        let first = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
+
+        // A new file appears on disk with no watched-file event, then a
+        // content edit bumps the root generation: the rebuild reuses
+        // the walked inventory, so the new file is not discovered yet.
+        let path_b = root.join("b.tlk");
+        std::fs::write(&path_b, "let y = 2\n").expect("write b");
+        if let Some(document) = state.documents.get_mut(&uri_a) {
+            document.text = "let x = 2\n".to_string();
+            document.version = 1;
+        }
+        state.invalidate_root(&uri_a, false);
+        let second = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
+        assert!(
+            !std::sync::Arc::ptr_eq(&first, &second),
+            "a content change rebuilds"
+        );
+        let doc_b = super::document_id_for_uri(&Url::from_file_path(&path_b).expect("uri b"));
+        assert!(
+            !second.versions.contains_key(&doc_b),
+            "an edit-triggered rebuild keeps the previous inventory"
+        );
+
+        // Only the inventory-affecting event re-walks.
+        state.invalidate_root(&uri_a, true);
+        let third = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
+        assert!(
+            third.versions.contains_key(&doc_b),
+            "a watched-file event refreshes the inventory"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 }
