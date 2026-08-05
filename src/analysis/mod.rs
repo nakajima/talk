@@ -18,7 +18,10 @@ pub struct DocumentInput {
     pub id: DocumentId,
     pub path: String,
     pub version: i32,
-    pub text: String,
+    /// The document's text, shared with the workspace snapshot and the
+    /// compiler's source input (CLEAN-04): building a workspace copies
+    /// no text.
+    pub text: std::sync::Arc<str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

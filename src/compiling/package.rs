@@ -166,7 +166,7 @@ impl PackageManifest {
         // The manifest DSL names Package without a `use`.
         if let Some((id, module)) = super::stdlib::module_with_id("Package") {
             std::rc::Rc::make_mut(&mut config.modules)
-                .import_compiled((*module).clone(), id)
+                .import_shared(module.clone(), id)
                 .expect("Package stdlib module registers once per session");
         }
         let driver = Driver::new(vec![Source::in_memory(path.to_path_buf(), source)], config);
@@ -2073,7 +2073,7 @@ use std::rc::Rc;
 
 #[derive(Clone)]
 struct CompiledLibrary {
-    module: Module,
+    module: std::sync::Arc<Module>,
     typed: std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
     module_id: ModuleId,
 }
@@ -2371,7 +2371,7 @@ impl PackageProject {
             ));
         }
         let program = std::sync::Arc::new(typed.phase.program.clone());
-        let module = typed.module(manifest.import_name());
+        let module = std::sync::Arc::new(typed.module(manifest.import_name()));
         Ok(CompiledLibrary {
             module,
             typed: program,
@@ -2387,7 +2387,7 @@ impl PackageProject {
         // modules register as each target's imports are discovered.
         if let Some((id, module)) = super::stdlib::module_with_id("Package") {
             environment
-                .import_compiled((*module).clone(), id)
+                .import_shared(module.clone(), id)
                 .expect("Package stdlib module registers once per session");
         }
         environment
@@ -2407,7 +2407,7 @@ impl PackageProject {
                 PackageError::Compile(format!("dependency {dependency_id} was not compiled first"))
             })?;
             environment
-                .import_compiled(dependency.module.clone(), dependency.module_id)
+                .import_shared(dependency.module.clone(), dependency.module_id)
                 .map_err(PackageError::Compile)?;
         }
         Ok(environment)

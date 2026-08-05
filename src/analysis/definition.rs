@@ -197,7 +197,7 @@ mod tests {
                 id: path.to_string(),
                 path: path.to_string(),
                 version: 0,
-                text: text.to_string(),
+                text: (*text).into(),
             })
             .collect();
         Workspace::new(inputs).expect("workspace")
@@ -216,7 +216,7 @@ mod tests {
         let text = ws.texts.get(file_id.0 as usize)?;
         Some((
             location.document_id.clone(),
-            text[location.range.start as usize..location.range.end as usize].to_string(),
+            text.text()[location.range.start as usize..location.range.end as usize].to_string(),
         ))
     }
 

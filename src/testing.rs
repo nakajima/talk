@@ -622,7 +622,8 @@ impl Runner {
             .max()
             .unwrap_or(0);
         let mut file_id_to_document = vec![String::new(); file_count];
-        let mut texts = vec![String::new(); file_count];
+        let mut texts: Vec<crate::common::source_snapshot::SourceSnapshot> =
+            vec![crate::common::source_snapshot::SourceSnapshot::new("") ; file_count];
         let mut asts = vec![None; file_count];
 
         for (source, ast) in asts_by_source {
@@ -631,7 +632,8 @@ impl Runner {
                 continue;
             }
             file_id_to_document[index] = source.path().into_owned();
-            texts[index] = source.read().unwrap_or_default();
+            texts[index] =
+                crate::common::source_snapshot::SourceSnapshot::new(source.read().unwrap_or_default());
             asts[index] = Some(ast.clone());
         }
 
@@ -647,7 +649,10 @@ impl Runner {
                 )
                 .map(|(document_id, diagnostic)| CompileDiagnostic {
                     document_id,
-                    text: texts.get(file_index).cloned().unwrap_or_default(),
+                    text: texts
+                        .get(file_index)
+                        .map(|text| text.text().to_string())
+                        .unwrap_or_default(),
                     diagnostic,
                 })
             })

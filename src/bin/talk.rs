@@ -293,7 +293,7 @@ async fn main() {
                 id: doc_id.clone(),
                 path: module_name,
                 version: 0,
-                text: text.clone(),
+                text: text.as_str().into(),
             };
             let Some(workspace) = Workspace::new(vec![doc]) else {
                 eprintln!("error: failed to build workspace");

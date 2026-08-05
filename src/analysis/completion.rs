@@ -79,8 +79,8 @@ pub fn complete_in_workspace(
         types: &workspace.types,
     };
 
-    let mut items = complete(text, &completion, byte_offset);
-    if member_completion_dot(text, byte_offset).is_none() {
+    let mut items = complete(text.text(), &completion, byte_offset);
+    if member_completion_dot(text.text(), byte_offset).is_none() {
         let visible_labels: FxHashSet<_> = items.iter().map(|item| item.label.clone()).collect();
         for candidate in workspace.import_candidates(document_id) {
             if visible_labels.contains(candidate.name.as_str()) {

@@ -704,7 +704,7 @@ impl TalkWorkspace {
             id: id.clone(),
             path,
             version,
-            text,
+            text: text.into(),
         };
         if let Some(existing) = self.docs.iter_mut().find(|doc| doc.id == id) {
             *existing = input;
@@ -1391,7 +1391,7 @@ pub extern "C" fn talk_check_utf8(
                 id: path.clone(),
                 path,
                 version: 0,
-                text: source,
+                text: source.into(),
             };
             let workspace = Workspace::new(vec![doc])
                 .ok_or_else(|| ApiError::failed("failed to analyze document"))?;

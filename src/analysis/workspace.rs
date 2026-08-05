@@ -37,7 +37,9 @@ pub struct Workspace {
     pub versions: FxHashMap<DocumentId, i32>,
     pub file_id_to_document: Vec<DocumentId>,
     pub document_to_file_id: FxHashMap<DocumentId, FileID>,
-    pub texts: Vec<String>,
+    /// Shared immutable snapshots (text plus cached line index): the
+    /// same allocation the compiler parsed from (CLEAN-04/07).
+    pub texts: Vec<crate::common::source_snapshot::SourceSnapshot>,
     pub asts: Vec<Option<AST<NameResolved>>>,
     pub resolved_names: crate::name_resolution::name_resolver::ResolvedNames,
     /// The checker's output tables (node types, schemes) - hover reads
@@ -101,8 +103,13 @@ impl Workspace {
             .map(|doc| (doc.id.clone(), doc.version))
             .collect();
 
-        let mut texts: Vec<String> = docs.iter().map(|doc| doc.text.clone()).collect();
+        let mut texts: Vec<crate::common::source_snapshot::SourceSnapshot> = docs
+            .iter()
+            .map(|doc| crate::common::source_snapshot::SourceSnapshot::new(doc.text.clone()))
+            .collect();
 
+        // The compiler's source inputs share the documents' text
+        // allocation: no copy between the workspace and the driver.
         let sources: Vec<Source> = docs
             .iter()
             .map(|doc| Source::in_memory(PathBuf::from(&doc.path), doc.text.clone()))
@@ -140,48 +147,36 @@ impl Workspace {
                 Driver::new_bare(sources, config)
             }
             WorkspaceCompileContext::Normal => {
-                // The editor registers every stdlib module up front:
-                // auto-import completions and cross-module navigation
-                // need every export available, not just the ones a
-                // document already names.
-                let modules = Rc::make_mut(&mut config.modules);
-                for (id, module) in crate::compiling::stdlib::modules_with_ids() {
-                    modules
-                        .import_compiled((*module).clone(), id)
-                        .expect("stdlib modules register once per session");
+                // The manifest DSL names Package without a `use`, so it
+                // registers like core. Every other stdlib module stays
+                // demand-driven: a document's own imports activate them
+                // during parse, and auto-import completions plus
+                // cross-module navigation read the export index instead
+                // of merging every stdlib type catalog into every
+                // editor build (CLEAN-04).
+                if let Some((id, module)) = crate::compiling::stdlib::module_with_id("Package") {
+                    Rc::make_mut(&mut config.modules)
+                        .import_shared(module.clone(), id)
+                        .expect("Package stdlib module registers once per session");
                 }
                 Driver::new(sources, config)
             }
         };
-        let stdlib_module_ids = crate::compiling::stdlib::stdlib_sources()
-            .into_iter()
-            .filter_map(|(name, _)| {
-                driver
-                    .config
-                    .modules
-                    .get_module_id_by_name(name)
-                    .map(|module_id| (module_id, name.to_string()))
-            })
-            .collect();
-        let importable_modules = driver
-            .config
-            .modules
-            .all_modules()
-            .filter(|module| module.name != "Core")
-            .map(|module| {
-                (
-                    module.name.clone(),
-                    module
-                        .exports
-                        .iter()
-                        .flat_map(|(name, set)| {
-                            set.iter().map(move |&symbol| (name.clone(), symbol))
-                        })
-                        .filter(|(_, symbol)| module.symbol_names.contains_key(symbol))
-                        .collect(),
-                )
-            })
-            .collect();
+        let stdlib_module_ids = match compile_context {
+            WorkspaceCompileContext::Normal => crate::compiling::stdlib::stdlib_sources()
+                .into_iter()
+                .filter(|(name, _)| crate::compiling::stdlib::editor_visible(name))
+                .filter_map(|(name, _)| {
+                    crate::compiling::stdlib::module_id_for_name(name)
+                        .map(|module_id| (module_id, name.to_string()))
+                })
+                .collect(),
+            _ => FxHashMap::default(),
+        };
+        let importable_modules = match compile_context {
+            WorkspaceCompileContext::Normal => crate::compiling::stdlib::export_index().clone(),
+            _ => FxHashMap::default(),
+        };
         let parsed = driver.parse().ok()?;
         let resolved = parsed.resolve_names().ok()?;
         // The editor keeps the source-faithful surface AST (type annotations,
@@ -203,7 +198,9 @@ impl Workspace {
             let doc_id = source.path().into_owned();
             document_to_file_id.insert(doc_id.clone(), file_id);
             file_id_to_document.push(doc_id);
-            texts.push(source.read().unwrap_or_default());
+            texts.push(crate::common::source_snapshot::SourceSnapshot::new(
+                source.read().unwrap_or_default(),
+            ));
         }
         let typed = resolved.type_check();
         // The MIR-analysis half of `talk check` (ownership, exclusivity,
@@ -222,11 +219,14 @@ impl Workspace {
         let diagnostics_any = phase.diagnostics;
 
         let _symbol_guard = set_symbol_names(resolved_names.symbol_names.clone());
+        // One clone of the resolved ASTs is unavoidable today (the
+        // driver consumes them in type_check); move each out of the
+        // cloned map rather than cloning again into the vector.
         let mut asts: Vec<Option<AST<NameResolved>>> = vec![None; file_id_to_document.len()];
-        for ast in asts_by_source.values() {
+        for ast in asts_by_source.into_values() {
             let idx = ast.file_id.0 as usize;
             if idx < asts.len() {
-                asts[idx] = Some(ast.clone());
+                asts[idx] = Some(ast);
             }
         }
 
@@ -423,7 +423,7 @@ impl Workspace {
                     id: path.clone(),
                     path,
                     version: 0,
-                    text,
+                    text: text.into(),
                 }
             })
             .collect()
@@ -464,10 +464,16 @@ impl Workspace {
             .map(|(i, id)| (id.clone(), FileID(i as u32)))
             .collect();
 
-        let texts: Vec<String> = core_files.iter().map(|(_, text)| text.clone()).collect();
+        // One allocation per file, shared between the snapshot and the
+        // compiler's source input.
+        let texts: Vec<crate::common::source_snapshot::SourceSnapshot> = core_files
+            .iter()
+            .map(|(_, text)| crate::common::source_snapshot::SourceSnapshot::new(text.as_str()))
+            .collect();
         let sources: Vec<Source> = core_files
             .iter()
-            .map(|(path, text)| Source::in_memory(path.clone(), text.clone()))
+            .zip(texts.iter())
+            .map(|((path, _), text)| Source::in_memory(path.clone(), text.text_arc()))
             .collect();
 
         let source_root =
@@ -528,7 +534,10 @@ impl Workspace {
 
     /// The text of an embedded stdlib document a definition lookup can
     /// land in — those live outside the workspace's own documents.
-    pub fn stdlib_document_text(&self, document_id: &DocumentId) -> Option<String> {
+    pub fn stdlib_document_text(
+        &self,
+        document_id: &DocumentId,
+    ) -> Option<crate::common::source_snapshot::SourceSnapshot> {
         self.stdlib_module_ids.iter().find_map(|(module_id, name)| {
             let stdlib = Self::stdlib_module(name, *module_id)?;
             let file_id = *stdlib.document_to_file_id.get(document_id)?;
@@ -549,10 +558,14 @@ impl Workspace {
             .enumerate()
             .map(|(index, document)| (document.clone(), FileID(index as u32)))
             .collect();
-        let texts: Vec<String> = documents.iter().map(|(_, text)| text.clone()).collect();
+        let texts: Vec<crate::common::source_snapshot::SourceSnapshot> = documents
+            .iter()
+            .map(|(_, text)| crate::common::source_snapshot::SourceSnapshot::new(text.as_str()))
+            .collect();
         let sources: Vec<Source> = documents
             .into_iter()
-            .map(|(path, text)| Source::in_memory(path, text))
+            .zip(texts.iter())
+            .map(|((path, _), text)| Source::in_memory(path, text.text_arc()))
             .collect();
 
         let mut modules = ModuleEnvironment::default();
@@ -680,7 +693,7 @@ impl Workspace {
 
     pub fn text_for(&self, id: &DocumentId) -> Option<&str> {
         let idx = self.document_index(id)?;
-        self.texts.get(idx).map(|text| text.as_str())
+        self.texts.get(idx).map(|text| text.text())
     }
 
     pub fn ast_for(&self, id: &DocumentId) -> Option<&AST<NameResolved>> {
@@ -716,7 +729,7 @@ fn parser_error_range(err: &ParserError) -> TextRange {
 
 pub(crate) fn diagnostic_for_any(
     file_id_to_document: &[DocumentId],
-    texts: &[String],
+    texts: &[crate::common::source_snapshot::SourceSnapshot],
     asts: &[Option<AST<NameResolved>>],
     diagnostic: &AnyDiagnostic,
 ) -> Option<(DocumentId, Diagnostic)> {
@@ -835,7 +848,7 @@ mod tests {
                     id: path.clone(),
                     path,
                     version: 0,
-                    text: text.to_string(),
+                    text: text.into(),
                 }
             })
             .collect();
@@ -863,7 +876,7 @@ mod tests {
             id: path.clone(),
             path,
             version: 0,
-            text: text.to_string(),
+            text: text.into(),
         }];
 
         let workspace = Workspace::new(docs).expect("workspace");
@@ -884,7 +897,7 @@ mod tests {
             id: "test.tlk".to_string(),
             path: "test.tlk".to_string(),
             version: 0,
-            text: text.to_string(),
+            text: text.into(),
         }];
         let workspace = Workspace::new(docs).expect("workspace");
         let diagnostics = workspace
@@ -916,7 +929,7 @@ mod tests {
             id: format!("file://{}", path.display()),
             path: path.display().to_string(),
             version: 0,
-            text: text.to_string(),
+            text: text.into(),
         };
         let docs = vec![doc(&first, "let ok = 1\n"), doc(&offender, text)];
         let workspace = Workspace::new(docs).expect("workspace");
@@ -969,7 +982,7 @@ mod tests {
             id: "decls.tlk".to_string(),
             path: "decls.tlk".to_string(),
             version: 0,
-            text: text.to_string(),
+            text: text.into(),
         }];
         let workspace = Workspace::new(docs).expect("workspace");
         let diagnostics = workspace
@@ -994,7 +1007,7 @@ mod tests {
             id: "test.tlk".to_string(),
             path: "test.tlk".to_string(),
             version: 0,
-            text: text.to_string(),
+            text: text.into(),
         }];
         let workspace = Workspace::new(docs).expect("workspace");
         let diagnostics = workspace
@@ -1028,7 +1041,7 @@ mod tests {
             id: "static.tlk".to_string(),
             path: "static.tlk".to_string(),
             version: 0,
-            text: text.to_string(),
+            text: text.into(),
         }];
         let workspace = Workspace::new(docs).expect("workspace");
         let diagnostics = workspace
@@ -1051,7 +1064,7 @@ mod tests {
             id: path.clone(),
             path,
             version: 0,
-            text: "test(\"example\") {\n\tassert(1 + 1 == 2)\n}\n".to_string(),
+            text: "test(\"example\") {\n\tassert(1 + 1 == 2)\n}\n".into(),
         }])
         .expect("workspace");
         let diagnostics = workspace
@@ -1074,7 +1087,7 @@ mod tests {
             id: path.clone(),
             path: path.clone(),
             version: 0,
-            text: text.to_string(),
+            text: text.into(),
         }])
         .expect("workspace");
         let diagnostics = workspace
@@ -1117,7 +1130,7 @@ mod tests {
             id: main_id.clone(),
             path: main_id.clone(),
             version: 0,
-            text: main_text.to_string(),
+            text: main_text.into(),
         }];
         let workspace = Workspace::new(docs).expect("workspace");
         let lib_diagnostics: Vec<_> = workspace

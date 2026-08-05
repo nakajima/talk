@@ -531,7 +531,7 @@ mod tests {
             id: "rename_test.tlk".to_string(),
             path: "rename_test.tlk".to_string(),
             version: 0,
-            text: code.to_string(),
+            text: code.into(),
         };
         let workspace = Workspace::new(vec![doc]).expect("workspace");
         let edit = rename_at(
@@ -563,7 +563,7 @@ mod tests {
             id: "rename_collision.tlk".to_string(),
             path: "rename_collision.tlk".to_string(),
             version: 0,
-            text: code.to_string(),
+            text: code.into(),
         };
         let workspace = Workspace::new(vec![doc]).expect("workspace");
         let offset = code.rfind("first").expect("target") as u32;
@@ -681,13 +681,13 @@ mod tests {
                 id: "src/main.tlk".to_string(),
                 path: "src/main.tlk".to_string(),
                 version: 0,
-                text: main.to_string(),
+                text: main.into(),
             },
             DocumentInput {
                 id: "src/other.tlk".to_string(),
                 path: "src/other.tlk".to_string(),
                 version: 0,
-                text: other.to_string(),
+                text: other.into(),
             },
         ];
         let workspace = Workspace::new(docs).expect("workspace");

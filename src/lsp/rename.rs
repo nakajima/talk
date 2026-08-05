@@ -30,7 +30,7 @@ pub fn rename_at(
             .edits
             .into_iter()
             .filter_map(|edit| {
-                let range = byte_span_to_range_utf16(text, edit.range.start, edit.range.end)?;
+                let range = byte_span_to_range_utf16(text.text(), edit.range.start, edit.range.end)?;
                 Some(TextEdit::new(range, edit.replacement))
             })
             .collect();

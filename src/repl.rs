@@ -248,7 +248,7 @@ impl ReplSession {
             id: doc_id.clone(),
             path: self.source_path.to_string_lossy().into_owned(),
             version: 0,
-            text: source,
+            text: source.into(),
         };
 
         let Some(workspace) = Workspace::new(vec![doc]) else {
@@ -338,7 +338,7 @@ impl ReplSession {
             id: REPL_DOCUMENT_ID.to_string(),
             path: path.to_string_lossy().into_owned(),
             version: 0,
-            text: source.to_string(),
+            text: source.into(),
         };
         let workspace = Workspace::new(vec![doc])?;
         let diagnostics = workspace.diagnostics.get(REPL_DOCUMENT_ID)?.clone();

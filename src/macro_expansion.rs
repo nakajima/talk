@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Macro-expansion failures (ADR 0026). These were historically
 /// `ParserError` variants; the expander is a post-parse pass, so the
@@ -159,14 +160,14 @@ pub fn expand_macros(asts: &mut [AST<Parsed>]) -> Vec<AnyDiagnostic> {
 /// built-ins such as `@assert`.
 pub fn expand_macros_with_sources(
     asts: &mut [AST<Parsed>],
-    sources: &HashMap<FileID, String>,
+    sources: &HashMap<FileID, Arc<str>>,
 ) -> Vec<AnyDiagnostic> {
     expand_macros_with_sources_and_service(asts, sources, None)
 }
 
 pub fn expand_macros_with_sources_and_service(
     asts: &mut [AST<Parsed>],
-    sources: &HashMap<FileID, String>,
+    sources: &HashMap<FileID, Arc<str>>,
     procedural: Option<&crate::procedural_macros::ProceduralMacroEnvironment>,
 ) -> Vec<AnyDiagnostic> {
     let mut definitions = HashMap::new();
@@ -262,7 +263,7 @@ pub fn expand_macros_with_sources_and_service(
             node_ids,
             expansions: 0,
             changed: false,
-            source: sources.get(&ast.file_id).map(String::as_str),
+            source: sources.get(&ast.file_id).map(AsRef::as_ref),
             procedural: &procedural_bindings,
             generated_sources: HashMap::new(),
             emitted_metadata: Vec::new(),
@@ -919,7 +920,7 @@ mod tests {
         let source = "@assert(left == \"right\")";
         let mut ast = parse(source);
         let invocation_id = ast.roots[0].as_stmt().clone().as_expr().id;
-        let sources = HashMap::from([(ast.file_id, source.to_string())]);
+        let sources = HashMap::from([(ast.file_id, std::sync::Arc::from(source))]);
         let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
 

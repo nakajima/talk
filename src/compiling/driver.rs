@@ -23,6 +23,7 @@ use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::borrow::Cow;
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::{hash::Hash, hash::Hasher};
 use std::{
     io,
@@ -44,7 +45,7 @@ impl DriverPhase for Initial {}
 impl DriverPhase for Parsed {}
 pub struct Parsed {
     pub asts: IndexMap<Source, AST<ast::Parsed>>,
-    pub source_texts: std::collections::HashMap<FileID, String>,
+    pub source_texts: std::collections::HashMap<FileID, Arc<str>>,
     pub diagnostics: Vec<AnyDiagnostic>,
     pub procedural_macros: crate::procedural_macros::ProceduralMacroEnvironment,
     /// Canonical local import edges (importer, imported) recorded
@@ -191,9 +192,9 @@ impl DriverConfig {
 pub enum SourceKind {
     File(PathBuf),
     // Just a string
-    String(String),
+    String(Arc<str>),
     // Used for core, since they're not necessarily going to be on the fs
-    InMemory { path: PathBuf, text: String },
+    InMemory { path: PathBuf, text: Arc<str> },
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -248,13 +249,13 @@ impl From<PathBuf> for Source {
 impl From<&str> for Source {
     fn from(value: &str) -> Self {
         Source {
-            kind: SourceKind::String(value.to_string()),
+            kind: SourceKind::String(Arc::from(value)),
         }
     }
 }
 
 impl Source {
-    pub fn in_memory(path: PathBuf, text: impl Into<String>) -> Self {
+    pub fn in_memory(path: PathBuf, text: impl Into<Arc<str>>) -> Self {
         Self {
             kind: SourceKind::InMemory {
                 path,
@@ -278,15 +279,17 @@ impl Source {
         }
     }
 
-    pub fn read(&self) -> Result<String, CompileError> {
+    pub fn read(&self) -> Result<Arc<str>, CompileError> {
         match &self.kind {
-            SourceKind::File(path) => std::fs::read_to_string(path).map_err(|e| {
-                CompileError::IO(std::io::Error::new(
-                    e.kind(),
-                    format!("{}: {e}", path.display()),
-                ))
-            }),
-            SourceKind::String(string) => Ok(string.to_string()),
+            SourceKind::File(path) => std::fs::read_to_string(path)
+                .map(Arc::from)
+                .map_err(|e| {
+                    CompileError::IO(std::io::Error::new(
+                        e.kind(),
+                        format!("{}: {e}", path.display()),
+                    ))
+                }),
+            SourceKind::String(string) => Ok(string.clone()),
             SourceKind::InMemory { text, .. } => Ok(text.clone()),
         }
     }
@@ -524,7 +527,7 @@ impl Driver {
                                 && let Some((id, module)) = super::stdlib::module_with_id(package)
                             {
                                 Rc::make_mut(&mut self.config.modules)
-                                    .import_compiled((*module).clone(), id)
+                                    .import_shared(module.clone(), id)
                                     .expect("stdlib module registers once per session");
                             }
                             continue;

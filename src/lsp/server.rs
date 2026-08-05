@@ -542,7 +542,7 @@ pub async fn start() {
                             else {
                                 return Some(CompletionResponse::Array(vec![]));
                             };
-                            let items = completion::to_lsp_items(items, text, roots);
+                            let items = completion::to_lsp_items(items, text.text(), roots);
                             Some(CompletionResponse::Array(items))
                         },
                     ),
@@ -945,7 +945,7 @@ fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<An
             id: document_id_for_uri(&uri),
             path: document_path_for_uri(&uri),
             version: *version,
-            text,
+            text: text.into(),
         });
     }
 
@@ -985,15 +985,18 @@ fn publish_workspace_diagnostics(state: &mut ServerState, workspace: &AnalysisWo
         {
             continue;
         }
-        let text = workspace.texts.get(idx).map(|t| t.as_str()).unwrap_or("");
-        let line_index = crate::common::line_index::LineIndex::new(text);
+        let Some(snapshot) = workspace.texts.get(idx) else {
+            continue;
+        };
         let diagnostics = workspace
             .diagnostics
             .get(doc_id)
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|diagnostic| lsp_diagnostic_for_analysis(&line_index, text, &diagnostic))
+            .filter_map(|diagnostic| {
+                lsp_diagnostic_for_analysis(snapshot.line_index(), snapshot.text(), &diagnostic)
+            })
             .collect();
         let version = state.documents.get(&uri).map(|d| d.version);
 
@@ -1206,7 +1209,7 @@ mod tests {
                 id: super::document_id_for_uri(&uri),
                 path: super::document_path_for_uri(&uri),
                 version: 0,
-                text: text.to_string(),
+                text: text.into(),
             })
             .collect();
         AnalysisWorkspace::new(inputs).expect("workspace")
@@ -1229,7 +1232,7 @@ mod tests {
         let ast = AST::<NameResolved>::from(ast);
         let document_id = super::document_id_for_uri(uri);
         let file_id_to_document = vec![document_id.clone()];
-        let texts = vec![text.to_string()];
+        let texts = vec![crate::common::source_snapshot::SourceSnapshot::new(text)];
         let asts = vec![Some(ast)];
         let analysis_diagnostics = diagnostics
             .iter()
@@ -1286,7 +1289,7 @@ mod tests {
         let document_to_file_id = [(document_id.clone(), crate::node_id::FileID(0))]
             .into_iter()
             .collect();
-        let texts = vec![text.to_string()];
+        let texts = vec![crate::common::source_snapshot::SourceSnapshot::new(text)];
         let mut asts = vec![None];
         for ast in asts_by_source.values() {
             asts[ast.file_id.0 as usize] = Some(ast.clone());

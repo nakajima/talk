@@ -84,7 +84,7 @@ pub fn check(source: &str) -> Result<JsValue, JsValue> {
         id: doc_id.clone(),
         path: doc_id.clone(),
         version: 0,
-        text: source.to_string(),
+        text: source.into(),
     }];
 
     let workspace =
@@ -112,7 +112,7 @@ pub fn hover(
         id: doc_id.clone(),
         path: doc_id.clone(),
         version: 0,
-        text: source.to_string(),
+        text: source.into(),
     }];
     let workspace =
         Workspace::new(docs).ok_or_else(|| JsValue::from_str("failed to build workspace"))?;

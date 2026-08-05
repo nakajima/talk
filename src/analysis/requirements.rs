@@ -191,7 +191,7 @@ mod tests {
             id: "main.tlk".to_string(),
             path: "main.tlk".to_string(),
             version: 0,
-            text: code.to_string(),
+            text: code.into(),
         };
         Workspace::new(vec![doc]).expect("workspace")
     }

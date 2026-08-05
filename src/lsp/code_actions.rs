@@ -137,14 +137,14 @@ pub(super) fn compute_code_actions(
     let mut fix_all_edits: Vec<TextEdit> = Vec::new();
     for diagnostic in diagnostics {
         let Some(diag_range) =
-            byte_span_to_range_utf16(text, diagnostic.range.start, diagnostic.range.end)
+            byte_span_to_range_utf16(text.text(), diagnostic.range.start, diagnostic.range.end)
         else {
             continue;
         };
         let diagnostic_actions = actions_for_diagnostic(
             workspace,
             document_id,
-            text,
+            text.text(),
             uri,
             file_id,
             &public_exports,

@@ -2,10 +2,13 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 
+use rustc_hash::FxHashMap;
+
 use crate::compiling::{
     driver::{CompilationMode, Driver, DriverConfig, Source, Typed},
     module::{Module, ModuleEnvironment, ModuleId},
 };
+use crate::name_resolution::symbol::Symbol;
 
 const TALK_STDLIB_PATH_ENV: &str = "TALK_STDLIB_PATH";
 
@@ -213,14 +216,54 @@ pub fn modules_with_ids() -> Vec<(ModuleId, Arc<Module>)> {
     STDLIB_MODULES
         .iter()
         .enumerate()
-        .filter(|(_, (name, _, _))| {
-            *name != "syntax" && !(cfg!(target_family = "wasm") && *name == "testing")
-        })
+        .filter(|(_, (name, _, _))| editor_visible(name))
         .map(|(index, _)| {
             let (_, module, _) = compiled_at(index);
             (module_id_for_index(index), module.clone())
         })
         .collect()
+}
+
+/// The modules the editor offers for auto-import and cross-module
+/// navigation: the syntax runtime stays lazy for ordinary source
+/// imports, and the wasm test harness has no filesystem testing module.
+pub(crate) fn editor_visible(name: &str) -> bool {
+    name != "syntax" && !(cfg!(target_family = "wasm") && name == "testing")
+}
+
+/// The fixed id a stdlib module registers under, by public import name.
+pub(crate) fn module_id_for_name(name: &str) -> Option<ModuleId> {
+    STDLIB_MODULES
+        .iter()
+        .position(|(candidate, _, _)| *candidate == name)
+        .map(module_id_for_index)
+}
+
+/// Auto-import and navigation facts for every editor-visible stdlib
+/// module (CLEAN-04): the editor reads this lightweight export index
+/// instead of importing every module's full type catalog into its
+/// environment; modules merge only when a document's own imports
+/// activate them during parse.
+pub(crate) fn export_index() -> &'static FxHashMap<String, Vec<(String, Symbol)>> {
+    static INDEX: OnceLock<FxHashMap<String, Vec<(String, Symbol)>>> = OnceLock::new();
+    INDEX.get_or_init(|| {
+        modules_with_ids()
+            .into_iter()
+            .map(|(_, module)| {
+                (
+                    module.name.clone(),
+                    module
+                        .exports
+                        .iter()
+                        .flat_map(|(name, set)| {
+                            set.iter().map(move |&symbol| (name.clone(), symbol))
+                        })
+                        .filter(|(_, symbol)| module.symbol_names.contains_key(symbol))
+                        .collect(),
+                )
+            })
+            .collect()
+    })
 }
 
 /// Load one stdlib module by its public import name, compiling only that

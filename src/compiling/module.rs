@@ -237,7 +237,20 @@ impl ModuleEnvironment {
     /// Package compilation reserves one id per package in the session's
     /// registry, so its typed body and exported interface keep the same
     /// cross-module ids everywhere in the session.
+    ///
+    /// This is the owned convenience path for freshly compiled modules;
+    /// modules that are already shared (stdlib, package dependencies)
+    /// go through `import_shared` instead of deep-cloning.
     pub fn import_compiled(&mut self, module: Module, module_id: ModuleId) -> Result<(), String> {
+        self.import_shared(Arc::new(module), module_id)
+    }
+
+    /// Register an already-shared compiled module.
+    pub fn import_shared(
+        &mut self,
+        module: std::sync::Arc<Module>,
+        module_id: ModuleId,
+    ) -> Result<(), String> {
         if self.modules_by_local.contains_key(&module_id) {
             return Err(format!("module id {module_id} is already registered"));
         }
@@ -247,7 +260,7 @@ impl ModuleEnvironment {
         self.registry.borrow_mut().bind(module.id, module_id)?;
         self.modules_by_local.insert(module_id, module.id);
         self.modules_by_name.insert(module.name.clone(), module_id);
-        self.modules.insert(module.id, Arc::new(module));
+        self.modules.insert(module.id, module);
         Ok(())
     }
 
