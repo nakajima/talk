@@ -150,9 +150,12 @@ fn _compile() -> CoreArtifacts {
 // kept stale caches across lowerer changes. A `TALK_CORE_PATH`
 // override hashes the on-disk sources instead of the embedded ones.
 
-/// This binary's identity (modification stamp and length): any rebuild
-/// of the compiler invalidates compile caches keyed with it.
-pub(crate) fn exe_fingerprint() -> Option<(u128, u64)> {
+/// This compiler's content identity for cache keys (CLEAN-05): a hash
+/// of the frontend-relevant compiler sources and the bootstrap
+/// frontend artifact, generated at build time. Unlike the executable's
+/// mtime and length, relinking after an unrelated change (editor, CLI,
+/// MIR, VM) does not invalidate compile caches.
+pub(crate) fn compiler_stamp() -> Option<&'static str> {
     #[cfg(target_family = "wasm")]
     {
         None
@@ -160,19 +163,22 @@ pub(crate) fn exe_fingerprint() -> Option<(u128, u64)> {
 
     #[cfg(not(target_family = "wasm"))]
     {
-        let exe = std::env::current_exe().ok()?;
-        let meta = std::fs::metadata(&exe).ok()?;
-        let stamp = meta
-            .modified()
-            .ok()?
-            .duration_since(std::time::UNIX_EPOCH)
-            .ok()?
-            .as_nanos();
-        Some((stamp, meta.len()))
+        Some(include_str!(concat!(env!("OUT_DIR"), "/compiler_stamp.txt")))
     }
 }
 
 fn cache_key() -> Option<[u8; 32]> {
+    // The bundled source set is fixed for the process: hash it once.
+    // An override directory can change between runs, so its key stays
+    // dynamic.
+    static BUNDLED_KEY: OnceLock<Option<[u8; 32]>> = OnceLock::new();
+    if path_override().is_none() {
+        return *BUNDLED_KEY.get_or_init(cache_key_dynamic);
+    }
+    cache_key_dynamic()
+}
+
+fn cache_key_dynamic() -> Option<[u8; 32]> {
     let sources: Vec<(String, String)> = if let Some(core_dir) = path_override() {
         CORE_SOURCE_NAMES
             .iter()
@@ -192,12 +198,16 @@ fn cache_key() -> Option<[u8; 32]> {
         .iter()
         .map(|(name, content)| (name.as_str(), content.as_str()))
         .collect();
-    super::cache::key(&refs, exe_fingerprint())
+    super::cache::key("core", &refs, compiler_stamp())
 }
 
 fn load_cached() -> Option<CoreArtifacts> {
+    load_cached_in(&super::cache::cache_root()?)
+}
+
+fn load_cached_in(root: &std::path::Path) -> Option<CoreArtifacts> {
     let key = cache_key()?;
-    let payload = super::cache::load("core", &key)?;
+    let payload = super::cache::load_in(root, "core", &key)?;
     let (module, typed): (Module, crate::compiling::typed_program::TypedProgram) =
         bincode::deserialize(&payload).ok()?;
     Some(CoreArtifacts {
@@ -207,6 +217,17 @@ fn load_cached() -> Option<CoreArtifacts> {
 }
 
 fn store_cached(module: &Module, typed: &crate::compiling::typed_program::TypedProgram) {
+    let Some(root) = super::cache::cache_root() else {
+        return;
+    };
+    store_cached_in(&root, module, typed);
+}
+
+fn store_cached_in(
+    root: &std::path::Path,
+    module: &Module,
+    typed: &crate::compiling::typed_program::TypedProgram,
+) {
     let Some(key) = cache_key() else { return };
     let payload = match bincode::serialize(&(module, typed)) {
         Ok(payload) => payload,
@@ -215,7 +236,7 @@ fn store_cached(module: &Module, typed: &crate::compiling::typed_program::TypedP
             return;
         }
     };
-    super::cache::store("core", &key, &payload);
+    super::cache::store_in(root, "core", &key, &payload);
 }
 
 #[cfg(test)]
@@ -224,12 +245,18 @@ mod tests {
     use crate::name_resolution::symbol::Symbol;
 
     /// The disk cache round trip: a stored core deserializes into the
-    /// same interface and typed products the compile produced.
+    /// same interface and typed products the compile produced. Runs
+    /// against an injected temporary root (CLEAN-05) — never the user
+    /// cache.
     #[test]
     fn core_cache_round_trips() {
         let artifacts = CORE.get_or_init(_compile);
-        store_cached(&artifacts.module, &artifacts.typed);
-        let cached = load_cached().expect("cache loads under the same key");
+        let root =
+            std::env::temp_dir().join(format!("talk-core-cache-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        store_cached_in(&root, &artifacts.module, &artifacts.typed);
+        let cached = load_cached_in(&root).expect("cache loads under the same key");
+        std::fs::remove_dir_all(&root).ok();
         assert_eq!(cached.module.name, artifacts.module.name);
         assert_eq!(cached.module.exports.len(), artifacts.module.exports.len());
         assert_eq!(

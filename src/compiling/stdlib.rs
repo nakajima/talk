@@ -321,36 +321,105 @@ type CompiledStdlib = (
 // ===== The compiled-stdlib disk cache =====
 //
 // One file per module under the shared cache root (src/compiling/cache.rs):
-// products are a pure function of (sources, compiler), keyed on the full
-// stdlib source set plus this binary's identity.
+// products are a pure function of (sources, compiler), keyed on the
+// module's own sources plus the keys of the stdlib modules those sources
+// `use` (CLEAN-05) — a change to one module no longer invalidates every
+// module.
 
-fn cache_key() -> Option<[u8; 32]> {
-    let sources: Vec<(String, String)> = if let Some(stdlib_dir) = path_override() {
-        // The html module's macro service compiles against the syntax source
-        // set, so those sources are inputs to every stdlib module's key too.
-        STDLIB_FILES
-            .iter()
-            .map(|(path, _)| {
-                std::fs::read_to_string(stdlib_dir.join(path))
-                    .ok()
-                    .map(|content| (path.to_string(), content))
+/// One module's cache key. The bundled source set is fixed for the
+/// process, so each module's key computes once; an override directory
+/// can change between runs and stays dynamic.
+fn cache_key_for(name: &'static str) -> Option<[u8; 32]> {
+    static BUNDLED_KEYS: OnceLock<FxHashMap<&'static str, Option<[u8; 32]>>> = OnceLock::new();
+    if path_override().is_none() {
+        return BUNDLED_KEYS
+            .get_or_init(|| {
+                STDLIB_MODULES
+                    .iter()
+                    .map(|(name, _, _)| (*name, cache_key_dynamic(name, &mut Vec::new())))
+                    .collect()
             })
-            .collect::<Option<Vec<_>>>()?
-    } else {
-        STDLIB_FILES
-            .iter()
-            .map(|(path, content)| (path.to_string(), content.to_string()))
-            .collect()
-    };
-    let refs: Vec<(&str, &str)> = sources
+            .get(name)
+            .copied()
+            .flatten();
+    }
+    cache_key_dynamic(name, &mut Vec::new())
+}
+
+fn cache_key_dynamic(name: &'static str, visiting: &mut Vec<&'static str>) -> Option<[u8; 32]> {
+    if visiting.contains(&name) {
+        // Stdlib has no import cycles; if one ever appears, no key is
+        // better than an unbounded recursion.
+        return None;
+    }
+    visiting.push(name);
+
+    let sources = module_sources(name);
+    let mut inputs: Vec<(String, String)> = Vec::with_capacity(sources.len());
+    let mut texts: Vec<String> = Vec::with_capacity(sources.len());
+    for source in &sources {
+        let text = source.read().ok()?.to_string();
+        inputs.push((source.path().into_owned(), text.clone()));
+        texts.push(text);
+    }
+
+    // The transitive inputs: the stdlib modules these sources name in
+    // `use` lines, discovered from the same texts being keyed (an
+    // override directory's imports count, not the bundle's). Their
+    // keys already close over their own dependencies.
+    let mut dependencies = stdlib_dependencies_in(&texts);
+    if name == "html" {
+        // The html module's macro service compiles against the syntax
+        // source set, which no import line names.
+        dependencies.push("syntax");
+    }
+    dependencies.sort_unstable();
+    dependencies.dedup();
+    for dependency in dependencies {
+        if dependency == name {
+            continue;
+        }
+        let dependency_key = cache_key_dynamic(dependency, visiting)?;
+        inputs.push((
+            format!("$dependency:{dependency}"),
+            dependency_key.iter().map(|byte| format!("{byte:02x}")).collect(),
+        ));
+    }
+    visiting.pop();
+
+    let refs: Vec<(&str, &str)> = inputs
         .iter()
         .map(|(path, content)| (path.as_str(), content.as_str()))
         .collect();
-    super::cache::key(&refs, super::core::exe_fingerprint())
+    super::cache::key(&format!("stdlib/{name}"), &refs, super::core::compiler_stamp())
+}
+
+/// The stdlib modules a source set imports, by scanning `use` lines.
+/// Used only to close cache keys over transitive inputs; compilation
+/// itself discovers imports through the parser (CLEAN-03).
+fn stdlib_dependencies_in(texts: &[String]) -> Vec<&'static str> {
+    let mut dependencies = Vec::new();
+    for line in texts.iter().flat_map(|text| text.lines()) {
+        let Some(rest) = line.trim().strip_prefix("use ") else {
+            continue;
+        };
+        let rest = rest.strip_prefix("package::").unwrap_or(rest);
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        let dependency = &rest[..end];
+        if let Some((dependency, _, _)) = STDLIB_MODULES
+            .iter()
+            .find(|(candidate, _, _)| *candidate == dependency)
+        {
+            dependencies.push(*dependency);
+        }
+    }
+    dependencies
 }
 
 fn load_cached(name: &'static str) -> Option<CompiledStdlib> {
-    let key = cache_key()?;
+    let key = cache_key_for(name)?;
     let payload = super::cache::load(&format!("stdlib/{name}"), &key)?;
     let (module, program): (Module, crate::compiling::typed_program::TypedProgram) =
         bincode::deserialize(&payload).ok()?;
@@ -358,7 +427,7 @@ fn load_cached(name: &'static str) -> Option<CompiledStdlib> {
 }
 
 fn store_cached(name: &'static str, compiled: &CompiledStdlib) {
-    let Some(key) = cache_key() else { return };
+    let Some(key) = cache_key_for(name) else { return };
     let Ok(payload) = bincode::serialize(&(compiled.1.as_ref(), compiled.2.as_ref())) else {
         return;
     };
@@ -528,5 +597,27 @@ mod tests {
         };
         assert_eq!(dependencies_of("testing"), vec!["ansi"]);
         assert_eq!(dependencies_of("http"), vec!["net"]);
+    }
+
+    #[test]
+    fn cache_keys_close_over_each_modules_own_inputs() {
+        // CLEAN-05: key inputs are per-module, not the full stdlib set.
+        let texts = |name: &str| {
+            STDLIB_FILES
+                .iter()
+                .filter(|(path, _)| *path == format!("{name}.tlk"))
+                .map(|(_, content)| content.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(stdlib_dependencies_in(&texts("testing")), vec!["ansi"]);
+        assert_eq!(stdlib_dependencies_in(&texts("http")), vec!["net"]);
+        assert!(stdlib_dependencies_in(&texts("fs")).is_empty());
+        // And the closure lands in the keys: fs's key is unaffected by
+        // ansi's sources, testing's is not.
+        let fs_key = cache_key_for("fs").expect("fs key");
+        let ansi_key = cache_key_for("ansi").expect("ansi key");
+        let testing_key = cache_key_for("testing").expect("testing key");
+        assert_ne!(fs_key, ansi_key);
+        assert_ne!(testing_key, ansi_key);
     }
 }

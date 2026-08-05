@@ -24,7 +24,82 @@ fn main() {
         println!("cargo:rustc-env=TALK_BUILD_SHA={sha}");
     }
 
+    emit_compiler_content_stamp();
     compile_native_frontend();
+}
+
+/// The compiler content identity (CLEAN-05): a hash of every source
+/// file whose change can alter the cached parse/resolve/type products
+/// (core and stdlib `TypedProgram` + `Module` payloads) or their
+/// serialized layout. Cache keys use it instead of the executable's
+/// mtime and length, so relinking after an unrelated change (editor,
+/// CLI, MIR, VM) no longer invalidates frontend artifacts.
+fn emit_compiler_content_stamp() {
+    use sha2::Digest as _;
+
+    const STAMP_DIRS: &[&str] = &[
+        "src/common",
+        "src/parsing",
+        "src/types",
+        "src/name_resolution",
+        "src/typed_ast",
+        "src/desugar",
+        "src/procedural_macros",
+        "src/compiling",
+    ];
+    const STAMP_FILES: &[&str] = &[
+        "src/macro_expansion.rs",
+        "bootstrap/frontend.tbc",
+        "bootstrap/frontend.abi",
+    ];
+    // The MIR crates feed on TypedProgram; they never change what the
+    // frontend cache stores, so mir/ stays out of the stamp.
+    const SKIP_DIRS: &[&str] = &["src/compiling/mir"];
+
+    fn collect(dir: &std::path::Path, skip: &[&str], out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect(&path, skip, out);
+            } else if path.extension().is_some_and(|ext| ext == "rs")
+                && !skip.iter().any(|skip| path.starts_with(skip))
+            {
+                out.push(path);
+            }
+        }
+    }
+
+    let mut paths: Vec<std::path::PathBuf> = STAMP_FILES
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect();
+    for dir in STAMP_DIRS {
+        collect(std::path::Path::new(dir), SKIP_DIRS, &mut paths);
+    }
+    paths.sort();
+
+    let mut hasher = sha2::Sha256::new();
+    for path in &paths {
+        println!("cargo:rerun-if-changed={}", path.display());
+        let Ok(content) = std::fs::read(path) else {
+            continue;
+        };
+        let path = path.to_string_lossy().replace('\\', "/");
+        hasher.update((path.len() as u64).to_le_bytes());
+        hasher.update(path.as_bytes());
+        hasher.update((content.len() as u64).to_le_bytes());
+        hasher.update(content);
+    }
+    let stamp = format!("{:x}", hasher.finalize());
+    let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
+    std::fs::write(
+        std::path::Path::new(&out_dir).join("compiler_stamp.txt"),
+        stamp,
+    )
+    .expect("write compiler stamp");
 }
 
 /// Compile the checked-in native frontend translation unit for the
