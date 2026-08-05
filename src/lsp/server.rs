@@ -329,11 +329,7 @@ pub async fn start() {
 
                 state.documents.insert(
                     document_url.clone(),
-                    Document {
-                        version,
-                        text,
-                        semantic_tokens: None,
-                    },
+                    Document::new(version, text),
                 );
                 state.schedule_document_work(document_url);
                 state.workspaces.clear();
@@ -990,13 +986,14 @@ fn publish_workspace_diagnostics(state: &mut ServerState, workspace: &AnalysisWo
             continue;
         }
         let text = workspace.texts.get(idx).map(|t| t.as_str()).unwrap_or("");
+        let line_index = crate::common::line_index::LineIndex::new(text);
         let diagnostics = workspace
             .diagnostics
             .get(doc_id)
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|diagnostic| lsp_diagnostic_for_analysis(text, &diagnostic))
+            .filter_map(|diagnostic| lsp_diagnostic_for_analysis(&line_index, text, &diagnostic))
             .collect();
         let version = state.documents.get(&uri).map(|d| d.version);
 
@@ -1035,10 +1032,9 @@ pub(crate) fn hover_at_lsp(
     let document_id = document_id_for_uri(uri);
     let hover = crate::analysis::hover_at(workspace, &document_id, byte_offset)?;
     let range = workspace.text_for(&document_id).map(|text| {
-        let (start_line, start_col, _, _) =
-            crate::common::text::line_info_for_offset_utf16(text, hover.range.start);
-        let (end_line, end_col, _, _) =
-            crate::common::text::line_info_for_offset_utf16(text, hover.range.end);
+        let index = crate::common::line_index::LineIndex::new(text);
+        let (start_line, start_col, _, _) = index.line_info_utf16(text, hover.range.start);
+        let (end_line, end_col, _, _) = index.line_info_utf16(text, hover.range.end);
         LspRange {
             start: Position {
                 line: start_line - 1,
@@ -1076,8 +1072,12 @@ pub(crate) fn url_from_document_id(id: &DocumentId) -> Option<Url> {
     Url::parse(id).ok().or_else(|| Url::from_file_path(id).ok())
 }
 
-fn lsp_diagnostic_for_analysis(text: &str, diagnostic: &AnalysisDiagnostic) -> Option<Diagnostic> {
-    let range = byte_span_to_range_utf16(text, diagnostic.range.start, diagnostic.range.end)?;
+fn lsp_diagnostic_for_analysis(
+    index: &crate::common::line_index::LineIndex,
+    text: &str,
+    diagnostic: &AnalysisDiagnostic,
+) -> Option<Diagnostic> {
+    let range = byte_span_to_range_utf16_in(index, text, diagnostic.range.start, diagnostic.range.end)?;
     let severity = match diagnostic.severity {
         AnalysisSeverity::Error => DiagnosticSeverity::ERROR,
         AnalysisSeverity::Warning => DiagnosticSeverity::WARNING,
@@ -1098,23 +1098,34 @@ fn lsp_diagnostic_for_analysis(text: &str, diagnostic: &AnalysisDiagnostic) -> O
 }
 
 pub(crate) fn byte_span_to_range_utf16(text: &str, start: u32, end: u32) -> Option<Range> {
-    let start = byte_offset_to_utf16_position(text, start)?;
-    let end = byte_offset_to_utf16_position(text, end)?;
+    byte_span_to_range_utf16_in(
+        &crate::common::line_index::LineIndex::new(text),
+        text,
+        start,
+        end,
+    )
+}
+
+/// The cached-index form: flows converting several spans into one text
+/// (diagnostics publish, hover) build the index once.
+pub(crate) fn byte_span_to_range_utf16_in(
+    index: &crate::common::line_index::LineIndex,
+    text: &str,
+    start: u32,
+    end: u32,
+) -> Option<Range> {
+    let start = byte_offset_to_utf16_position_in(index, text, start)?;
+    let end = byte_offset_to_utf16_position_in(index, text, end)?;
     Some(Range::new(start, end))
 }
 
-fn byte_offset_to_utf16_position(text: &str, byte_offset: u32) -> Option<Position> {
-    let byte_offset = byte_offset as usize;
-    if byte_offset > text.len() {
-        return None;
-    }
-
-    let before = text.get(..byte_offset)?;
-    let line = before.matches('\n').count() as u32;
-    let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
-    let col_slice = text.get(line_start..byte_offset)?;
-    let col = col_slice.encode_utf16().count() as u32;
-    Some(Position::new(line, col))
+fn byte_offset_to_utf16_position_in(
+    index: &crate::common::line_index::LineIndex,
+    text: &str,
+    byte_offset: u32,
+) -> Option<Position> {
+    let (line, character) = index.utf16_position_of_byte_offset(text, byte_offset as usize)?;
+    Some(Position::new(line, character))
 }
 
 #[cfg(test)]
@@ -1779,8 +1790,12 @@ mod tests {
             "type.unreachable-match-arm".to_string(),
         ));
         assert_eq!(lsp.code, expected_code);
-        let published =
-            super::lsp_diagnostic_for_analysis("x", &diagnostic).expect("published diagnostic");
+        let published = super::lsp_diagnostic_for_analysis(
+            &crate::common::line_index::LineIndex::new("x"),
+            "x",
+            &diagnostic,
+        )
+        .expect("published diagnostic");
         assert_eq!(published.code, expected_code);
         assert_eq!(
             published.severity,
@@ -2580,11 +2595,7 @@ mod tests {
         };
         state.documents.insert(
             uri_a.clone(),
-            Document {
-                version: 0,
-                text: code_a.to_string(),
-                semantic_tokens: None,
-            },
+            Document::new(0, code_a.to_string()),
         );
 
         let workspace = super::workspace_analysis(&mut state, &uri_a).expect("workspace");

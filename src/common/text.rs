@@ -8,71 +8,18 @@ pub fn clamp_to_char_boundary(text: &str, mut idx: usize) -> usize {
     idx
 }
 
+/// One-shot line/column lookup: builds a line index for this call.
+/// Callers converting several offsets into the same text should build
+/// the `LineIndex` once and use it directly.
 pub fn line_info_for_offset(text: &str, byte_offset: u32) -> (u32, u32, usize, usize) {
-    let offset = clamp_to_char_boundary(text, byte_offset as usize);
-    let mut line: u32 = 1;
-    let mut last_line_start = 0usize;
-
-    for (idx, ch) in text.char_indices() {
-        if idx >= offset {
-            break;
-        }
-        if ch == '\n' {
-            line += 1;
-            last_line_start = idx + ch.len_utf8();
-        }
-    }
-
-    let line_end = text[offset..]
-        .find('\n')
-        .map(|idx| offset + idx)
-        .unwrap_or(text.len());
-    let col = text[last_line_start..offset].chars().count() as u32 + 1;
-    (line, col, last_line_start, line_end)
+    crate::common::line_index::LineIndex::new(text).line_info_utf8(text, byte_offset)
 }
 
 pub fn line_info_for_offset_utf16(text: &str, byte_offset: u32) -> (u32, u32, usize, usize) {
-    let (line, _col, line_start, line_end) = line_info_for_offset(text, byte_offset);
-    let offset = clamp_to_char_boundary(text, byte_offset as usize);
-    let col = text[line_start..offset].encode_utf16().count() as u32 + 1;
-    (line, col, line_start, line_end)
+    crate::common::line_index::LineIndex::new(text).line_info_utf16(text, byte_offset)
 }
 
 pub fn byte_offset_for_line_column_utf8(text: &str, line: u32, column: u32) -> Option<u32> {
-    if line == 0 || column == 0 {
-        return None;
-    }
-
-    let mut current_line = 1u32;
-    let mut line_start = 0usize;
-    for (idx, ch) in text.char_indices() {
-        if current_line == line {
-            break;
-        }
-        if ch == '\n' {
-            current_line += 1;
-            line_start = idx + ch.len_utf8();
-        }
-    }
-
-    if current_line != line {
-        return None;
-    }
-
-    let line_end = text[line_start..]
-        .find('\n')
-        .map(|idx| line_start + idx)
-        .unwrap_or(text.len());
-
-    let mut col = 1u32;
-    let mut offset = line_start;
-    for ch in text[line_start..line_end].chars() {
-        if col == column {
-            return Some(offset as u32);
-        }
-        offset += ch.len_utf8();
-        col += 1;
-    }
-
-    Some(offset as u32)
+    crate::common::line_index::LineIndex::new(text)
+        .byte_offset_for_line_column_utf8(text, line, column)
 }

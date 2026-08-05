@@ -59,6 +59,7 @@ impl highlighter::Kind {
 struct SemanticTokenCollector<'a> {
     tokens: Vec<HighlightToken>,
     source: &'a str,
+    line_index: crate::common::line_index::LineIndex,
 }
 
 pub fn collect(source: String) -> Vec<SemanticToken> {
@@ -77,21 +78,19 @@ fn collect_highlight_tokens(source: &str) -> Vec<HighlightToken> {
 
 impl<'a> SemanticTokenCollector<'a> {
     fn new(source: &'a str, tokens: Vec<HighlightToken>) -> Self {
-        Self { tokens, source }
+        let line_index = crate::common::line_index::LineIndex::new(source);
+        Self {
+            tokens,
+            source,
+            line_index,
+        }
     }
 
     fn line_col_for(&self, position: u32) -> Option<Position> {
-        let position = position as usize;
-        let before = self.source.get(..position)?;
-        let line = before.matches('\n').count();
-        let line_start = before.rfind('\n').map(|i| i + 1).unwrap_or(0);
-        let column = self
-            .source
-            .get(line_start..position)?
-            .encode_utf16()
-            .count();
-
-        Some(Position::new(line as u32, column as u32))
+        let (line, character) = self
+            .line_index
+            .utf16_position_of_byte_offset(self.source, position as usize)?;
+        Some(Position::new(line, character))
     }
 
     fn get_range_for(&self, start: u32, end: u32) -> Option<(Range, u32)> {
