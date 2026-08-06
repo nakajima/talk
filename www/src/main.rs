@@ -206,19 +206,36 @@ fn format(code: &str) -> String {
     output.trim_end_matches(&['\n', '\r'][..]).to_string()
 }
 
-fn runnable(code: &str, accumulates: bool) -> String {
+fn accumulate_group(info: &str) -> Option<String> {
+    let start = info.find("accumulate")? + "accumulate".len();
+    let rest = info[start..].trim_start();
+    if let Some(inner) = rest.strip_prefix('(') {
+        let end = inner.find(')')?;
+        Some(inner[..end].trim().to_string())
+    } else {
+        Some(String::new())
+    }
+}
+
+fn accumulation_attrs(group: Option<&str>) -> String {
+    match group {
+        Some(group) => format!(
+            " data-accumulates='true' data-accumulate-group='{}'",
+            escape_html(group)
+        ),
+        None => String::new(),
+    }
+}
+
+fn runnable(code: &str, accumulate_group: Option<&str>) -> String {
     let code = format(code.trim_end_matches(&['\n', '\r'][..]));
     let code = code.as_str();
     let highlighted = highlight(code);
     let raw = escape_html(code);
     let rows = line_count(code);
-    let accumulates = if accumulates {
-        " data-accumulates='true'"
-    } else {
-        ""
-    };
+    let accumulation = accumulation_attrs(accumulate_group);
     format!(
-        "<div class='runnable'{accumulates}>
+        "<div class='runnable'{accumulation}>
             <div class='code-block'>
                 <pre class='code-highlight' aria-hidden='true'>{highlighted}</pre>
                 <div class='code-diagnostics' aria-hidden='true'></div>
@@ -234,17 +251,17 @@ fn runnable(code: &str, accumulates: bool) -> String {
     )
 }
 
-fn norun(code: &str, accumulates: bool) -> String {
+fn norun(code: &str, accumulate_group: Option<&str>) -> String {
     let code = format(code.trim_end_matches(&['\n', '\r'][..]));
     let code = code.as_str();
     let highlighted = highlight(code);
-    let accumulation = if accumulates {
-        format!(
-            " data-accumulates='true' data-source='{}'",
+    let accumulation = match accumulate_group {
+        Some(group) => format!(
+            "{} data-source='{}'",
+            accumulation_attrs(Some(group)),
             escape_html(code)
-        )
-    } else {
-        String::new()
+        ),
+        None => String::new(),
     };
     format!(
         "<div class='code-block no-run'{accumulation}>
@@ -264,9 +281,9 @@ fn replace_code_blocks<'a>(node: &'a AstNode<'a>) {
         data.value = NodeValue::HtmlBlock(NodeHtmlBlock {
             block_type: 1,
             literal: if block.info.contains("norun") {
-                norun(&block.literal, block.info.contains("accumulate"))
+                norun(&block.literal, accumulate_group(&block.info).as_deref())
             } else {
-                runnable(&block.literal, block.info.contains("accumulate"))
+                runnable(&block.literal, accumulate_group(&block.info).as_deref())
             },
         })
     };

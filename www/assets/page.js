@@ -427,23 +427,30 @@ for (const el of document.querySelectorAll(".actions .format")) {
   initFormattable(el);
 }
 
+function accumulateGroup(container) {
+  return container?.dataset.accumulateGroup ?? "";
+}
+
 function getAccumulatedSource(editor) {
   const currentContainer = editor.closest(".runnable");
   const currentSource = editor.value || "";
   const priorSources = [];
 
   if (currentContainer?.dataset.accumulates === "true") {
+    const group = accumulateGroup(currentContainer);
     const containers = Array.from(
       document.querySelectorAll(".runnable, .no-run"),
     );
     let candidateIndex = containers.indexOf(currentContainer) - 1;
     while (containers[candidateIndex]?.dataset.accumulates === "true") {
       const candidate = containers[candidateIndex];
-      const candidateEditor = candidate.querySelector(".code-editable");
-      const candidateSource =
-        candidateEditor?.value ?? candidate.dataset.source ?? "";
-      if (candidateSource.trim().length > 0) {
-        priorSources.unshift(candidateSource);
+      if (accumulateGroup(candidate) === group) {
+        const candidateEditor = candidate.querySelector(".code-editable");
+        const candidateSource =
+          candidateEditor?.value ?? candidate.dataset.source ?? "";
+        if (candidateSource.trim().length > 0) {
+          priorSources.unshift(candidateSource);
+        }
       }
       candidateIndex -= 1;
     }
@@ -483,16 +490,19 @@ function renderFollowingAccumulatedExamples(editor) {
   const currentContainer = editor.closest(".runnable");
   if (currentContainer?.dataset.accumulates !== "true") return;
 
+  const group = accumulateGroup(currentContainer);
   const containers = Array.from(
     document.querySelectorAll(".runnable, .no-run"),
   );
   let candidateIndex = containers.indexOf(currentContainer) + 1;
 
   while (containers[candidateIndex]?.dataset.accumulates === "true") {
-    const candidateEditor =
-      containers[candidateIndex].querySelector(".code-editable");
-    if (candidateEditor) {
-      editorRenderers.get(candidateEditor)?.();
+    const candidate = containers[candidateIndex];
+    if (accumulateGroup(candidate) === group) {
+      const candidateEditor = candidate.querySelector(".code-editable");
+      if (candidateEditor) {
+        editorRenderers.get(candidateEditor)?.();
+      }
     }
     candidateIndex += 1;
   }

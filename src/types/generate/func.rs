@@ -33,6 +33,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 instantiations: &mut self.artifacts.instantiations,
             projection_instantiations: &mut self.artifacts.projection_instantiations,
                 member_resolutions: &mut self.artifacts.member_resolutions,
+                resolved_member_types: &mut self.artifacts.resolved_member_types,
                 member_call_slots: &self.artifacts.member_call_slots,
                 coerce_clones: &mut self.artifacts.coerce_clones,
                 level: self.level,

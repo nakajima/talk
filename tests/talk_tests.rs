@@ -201,6 +201,21 @@ fn syntax_stdlib_exposes_the_self_hosted_parser() {
 }
 
 #[test]
+fn in_struct_method_call_sites_record_borrowed_param_modes() {
+    // A member call's recorded callee type must be the method's own
+    // signature (borrow-by-default params), not the argument-shaped type
+    // the call also unifies the callee variable with: Apply unification
+    // strips borrow wrappers, so the binding order decided it, and an
+    // owned-looking record made lowering move the argument while the
+    // callee retained it — leaking one allocation per heap argument.
+    assert_runs(
+        b"struct Fail {\n\tlet code: String\n\tlet message: String\n}\nstruct P {\n\tlet failed: Fail?\n\tmut func fail(code: String, message: String) -> Void {\n\t\tself.failed = .some(Fail(code: code, message: message))\n\t}\n\tmut func run() -> Void {\n\t\tself.fail(code: \"c\", message: \"a\" + \"b\")\n\t}\n}\nlet p = P(failed: .none)\np.run()\nprint(\"ok\")\n",
+        &[],
+        b"ok\n",
+    );
+}
+
+#[test]
 fn borrowed_iteration_over_copy_inline_elements() {
     // The checker erases `&T` to `T` for Copy-grade types ("the same type
     // up to representation"), so `Optional<&Scope>` — what borrowed array

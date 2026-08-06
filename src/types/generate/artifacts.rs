@@ -12,6 +12,14 @@ pub(super) struct TypeArtifacts {
     /// fact lowering reads baked on the tree, never re-derived.
     pub(super) projection_instantiations: Vec<(Vec<Symbol>, NodeID, Vec<(Symbol, Ty)>)>,
     pub(super) member_resolutions: FxHashMap<NodeID, MemberResolution>,
+    /// The resolved signature type per member-call callee node, recorded
+    /// at dispatch. The callee node's inference-time type is a fresh var
+    /// that ALSO unifies with the argument-shaped function type (owned
+    /// argument types), and Apply unification strips borrow wrappers —
+    /// whichever equation binds the var first would otherwise win, while
+    /// ownership lowering must see the callee's own parameter modes
+    /// (borrow-by-default, ADR 0018) to decide which arguments transfer.
+    pub(super) resolved_member_types: FxHashMap<NodeID, Ty>,
     /// The selected callable symbol per statically resolved call node
     /// (ADR 0041): direct calls, methods, statics, initializers,
     /// requirements, witnesses, and effects. Editor tooling and lowering

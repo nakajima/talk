@@ -77,6 +77,9 @@ pub struct Solver<'s> {
     pub instantiations: &'s mut FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     pub projection_instantiations: &'s mut Vec<(Vec<Symbol>, NodeID, Vec<(Symbol, Ty)>)>,
     pub member_resolutions: &'s mut FxHashMap<NodeID, MemberResolution>,
+    /// The resolved signature type per member-call callee node (see
+    /// `TypeArtifacts::resolved_member_types`).
+    pub resolved_member_types: &'s mut FxHashMap<NodeID, Ty>,
     /// Written argument slots per member-call callee node (ADR 0041),
     /// for selecting among label-overloaded methods. Bare member
     /// references have no entry and cannot disambiguate a set.

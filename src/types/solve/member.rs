@@ -823,10 +823,14 @@ impl<'s> Solver<'s> {
                             origin,
                         );
                         queue.push(Constraint::Eq(
-                            Ty::Func(params[1..].to_vec(), ret, eff),
+                            Ty::Func(params[1..].to_vec(), ret.clone(), eff.clone()),
                             member,
                             origin,
                         ));
+                        self.resolved_member_types.insert(
+                            origin.node,
+                            Ty::Func(params[1..].to_vec(), ret, eff),
+                        );
                         // Publish the instance-head bindings (the extend's
                         // rigid params at the receiver's application).
                         self.instantiations
@@ -1231,11 +1235,10 @@ impl<'s> Solver<'s> {
         match self.store.shallow(&signature) {
             Ty::Func(params, ret, eff) if !params.is_empty() => {
                 self.push_immediate_argument_eq(queue, params[0].clone(), receiver, origin);
-                queue.push(Constraint::Eq(
-                    Ty::Func(params[1..].to_vec(), ret, eff),
-                    member,
-                    origin,
-                ));
+                let member_ty = Ty::Func(params[1..].to_vec(), ret, eff);
+                self.resolved_member_types
+                    .insert(origin.node, member_ty.clone());
+                queue.push(Constraint::Eq(member_ty, member, origin));
                 // Publish the owner-param bindings (struct/enum generics
                 // at the receiver's application) alongside the scheme
                 // instantiation `symbol_ty` recorded — the node carries
@@ -1372,10 +1375,14 @@ impl<'s> Solver<'s> {
                 origin,
             );
             local_wanteds.push(Constraint::Eq(
-                Ty::Func(params[1..].to_vec(), ret, eff),
+                Ty::Func(params[1..].to_vec(), ret.clone(), eff.clone()),
                 member.clone(),
                 origin,
             ));
+            self.resolved_member_types.insert(
+                origin.node,
+                Ty::Func(params[1..].to_vec(), ret.clone(), eff.clone()),
+            );
         }
         let givens: Vec<Predicate> = scheme
             .predicates

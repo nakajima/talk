@@ -32,6 +32,87 @@ class="number" data-example="ints">ints</span>, <span class="number" data-exampl
         </div>
       </header>
       {CONTENT_GOES_HERE}
+      <script>
+        (() => {
+          const main = document.querySelector("main");
+          const heads = [...main.querySelectorAll(":scope > h2")];
+          if (!heads.length) return;
+
+          const slug = (text, i) =>
+            text.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") ||
+            `section-${i}`;
+          heads.forEach((h, i) => { h.id = slug(h.textContent, i); });
+          const titles = heads.map((h) => h.textContent);
+
+          // group each h2 with the content that follows it into a section,
+          // so its sticky band only covers its own section. essay content
+          // (from the first h4 on) stays unwrapped so the last band scrolls away.
+          let current = null;
+          for (const el of [...main.children]) {
+            if (el.matches("header") || el.tagName === "SCRIPT") continue;
+            if (el.matches("h2")) {
+              current = document.createElement("section");
+              main.insertBefore(current, el);
+              current.appendChild(el);
+            } else if (current) {
+              if (el.matches("h1, h4")) { current = null; continue; }
+              current.appendChild(el);
+            }
+          }
+
+          // center a band's strip on its active section
+          const centerNav = (nav, behavior) => {
+            if (nav.scrollWidth <= nav.clientWidth) return;
+            const cur = nav.querySelector('[aria-current="true"]');
+            const left =
+              cur.getBoundingClientRect().left - nav.getBoundingClientRect().left +
+              nav.scrollLeft - (nav.clientWidth - cur.clientWidth) / 2;
+            nav.scrollTo({ left, behavior });
+          };
+
+          // each band lists every section, highlighting its own
+          for (const h of heads) {
+            const nav = document.createElement("nav");
+            nav.className = "band-nav";
+            nav.setAttribute("aria-label", "Sections");
+            heads.forEach((other, j) => {
+              const a = document.createElement("a");
+              a.href = `#${other.id}`;
+              a.textContent = titles[j];
+              if (other === h) a.setAttribute("aria-current", "true");
+              nav.appendChild(a);
+            });
+            h.textContent = "";
+            h.appendChild(nav);
+            centerNav(nav, "instant");
+            document.fonts?.ready.then(() => centerNav(nav, "instant"));
+          }
+
+          // when a different band sticks to the top, scroll its strip
+          // so the active section is in view
+          let activeBand = null;
+          const updateActive = () => {
+            let current = null;
+            for (const h of heads) {
+              if (h.getBoundingClientRect().top <= 1) current = h;
+              else break;
+            }
+            if (current === activeBand) return;
+            activeBand = current;
+            if (current) centerNav(current.querySelector(".band-nav"), "smooth");
+          };
+
+          let ticking = false;
+          addEventListener("scroll", () => {
+            if (ticking) return;
+            ticking = true;
+            requestAnimationFrame(() => {
+              ticking = false;
+              updateActive();
+            });
+          }, { passive: true });
+        })();
+      </script>
       <script type="module" src="/page.js"></script>
     </main>
   </body>

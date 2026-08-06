@@ -22,6 +22,7 @@ struct Harness {
     instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
     projection_instantiations: Vec<(Vec<Symbol>, NodeID, Vec<(Symbol, Ty)>)>,
     member_resolutions: FxHashMap<NodeID, MemberResolution>,
+    resolved_member_types: FxHashMap<NodeID, Ty>,
     coerce_clones: rustc_hash::FxHashSet<NodeID>,
 }
 
@@ -35,6 +36,7 @@ impl Harness {
             mono: FxHashMap::default(),
             instantiations: FxHashMap::default(),
             member_resolutions: FxHashMap::default(),
+            resolved_member_types: FxHashMap::default(),
             coerce_clones: rustc_hash::FxHashSet::default(),
             projection_instantiations: vec![],
         }
@@ -51,6 +53,7 @@ impl Harness {
             instantiations: &mut self.instantiations,
             projection_instantiations: &mut self.projection_instantiations,
             member_resolutions: &mut self.member_resolutions,
+            resolved_member_types: &mut self.resolved_member_types,
             member_call_slots: &Default::default(),
             coerce_clones: &mut self.coerce_clones,
             level: Level(1),
@@ -659,6 +662,7 @@ fn instantiation_substitutes_perms_into_predicates() {
         instantiations: &mut h.instantiations,
         projection_instantiations: &mut h.projection_instantiations,
         member_resolutions: &mut h.member_resolutions,
+        resolved_member_types: &mut h.resolved_member_types,
         member_call_slots: &Default::default(),
         coerce_clones: &mut h.coerce_clones,
         level: Level(1),

@@ -254,6 +254,15 @@ impl<'a> TypecheckSession<'a> {
         }
         let mut node_types = FxHashMap::default();
         for (node, ty) in std::mem::take(&mut self.artifacts.node_types) {
+            // A resolved member call's recorded type is its signature,
+            // not the argument-shaped type inference first equated the
+            // callee variable with (see resolved_member_types).
+            let ty = self
+                .artifacts
+                .resolved_member_types
+                .get(&node)
+                .cloned()
+                .unwrap_or(ty);
             node_types.insert(node, self.final_ty(&ty));
         }
         let mut instantiations = FxHashMap::default();
