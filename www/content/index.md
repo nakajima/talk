@@ -1,3 +1,5 @@
+## syntax
+
 Here, have some math.
 
 ```tlk
@@ -46,6 +48,8 @@ let b = 2
 let c = a + b
 c // => 3
 ```
+
+## types
 
 Ok Philip Wadler, maybe you like types? You can specify them if you want.
 
@@ -106,6 +110,8 @@ twice {
 }
 ```
 
+## objects
+
 Ok Alan Kay, maybe you like objects. You know, big bags of state and behavior that are the only correct way to program.
 
 ```tlk
@@ -156,6 +162,8 @@ print(rec.fizz)
 print(rec.count)
 print(rec.greeting("pat"))
 ```
+
+## enums / pattern matching
 
 What about enumerations? You ever enumerate stuff? It's the best!
 
@@ -215,6 +223,8 @@ match point {
 }
 ```
 
+## protocols
+
 Ok what about ~~traits~~ ~~type classes~~ ~~interfaces~~ protocols? For making ad-hoc polymorphism less ad-hoc? Yea we've got those.
 
 ```tlk accumulate norun
@@ -249,6 +259,8 @@ Conformances are verified.
 ```tlk accumulate
 extend Float: Addable {}
 ```
+
+## effects
 
 Check it out, we've got effects:
 
@@ -291,6 +303,7 @@ func boom(x) {
 
 boom(0)
 ```
+
 
 There are modules too. This one isn't runnable in the browser because it spans multiple files, but it works from the CLI.
 

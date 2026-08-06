@@ -1,0 +1,745 @@
+<html>
+  <meta charset="utf-8">
+  <meta content="text/html" charset="UTF-8" http-equiv="Content-Type">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@300..700&display=swap" rel="stylesheet">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style-3.css?t=1785995065" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="variant-switcher" aria-label="Design variants"><a href="/">live</a><a href="/index-1.html">1</a><a href="/index-2.html">2</a><a href="/index-3.html" aria-current="page">3</a><a href="/index-4.html">4</a><a href="/index-5.html">5</a></nav>
+    <main>
+      <header>
+        <h1><code>print(<span class="string">"hi, it’s talktalk"</span>)</code></h1>
+
+        <div class="intro">
+          <code class="intro-txt">
+            We’ve got <span class="type" data-example="structs">structs</span>, <span class="string" data-example="strings">strings</span>, <span
+class="number" data-example="ints">ints</span>, <span class="number" data-example="floats">floats</span>, <span class="type" data-example="enums">enums</span>,
+						<span class="function" data-example="effects">effects</span>, <span class="keyword" data-example="bools">bools</span>, <span
+              class="parameter" data-example="tuples">tuples</span>,
+            <span class="type" data-example="arrays">arrays</span>, <span class="string" data-example="chars">chars</span>,
+						<span class="type" data-example="records">records</span>, and
+						<span class="function" data-example="functions">functions</span>.
+          </code>
+            <template data-example="structs"><span class="keyword">struct</span> <span class="type">Person</span> {
+	<span class="keyword">let</span> <span class="property">name</span>: <span class="type">String</span>
+	<span class="keyword">let</span> <span class="property">age</span>: <span class="type">Int</span>
+}</template>
+            <template data-example="strings"><span class="string">"hello there"</span></template>
+            <template data-example="ints"><span class="number">1000</span></template>
+            <template data-example="floats"><span class="number">1.23</span></template>
+            <template data-example="enums"><span class="keyword">enum</span> <span class="type">Unit</span> {
+	<span class="keyword">case</span> <span class="enum_member">yard</span>(<span class="type">Int</span>)
+	<span class="keyword">case</span> <span class="enum_member">meter</span>(<span class="type">Int</span>)
+}</template>
+            <template data-example="effects"><span class="keyword">effect</span> <span class="effect">'log</span><span class="operator">&lt;</span><span class="type_parameter">T</span>: <span class="type">Showable</span><span class="operator">&gt;</span>(<span class="parameter">t</span>: <span class="type">T</span>) <span class="operator">-&gt;</span> <span class="type">T</span>
+<span class="operator">#</span><span class="keyword">handle</span> <span class="effect">'log</span> { t <span class="keyword">in</span>
+	<span class="variable">print</span>(<span class="string">"t: "</span> <span class="operator">+</span> <span class="variable">t</span>.<span class="property">show</span>())
+	<span class="effect">'continue</span> <span class="variable">t</span>
+}</template>
+            <template data-example="bools"><span class="keyword">true</span>
+<span class="keyword">false</span></template>
+            <template data-example="tuples">(<span class="number">123</span>, <span class="keyword">true</span>, <span class="string">"hello"</span>)</template>
+            <template data-example="arrays">[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]</template>
+            <template data-example="chars"><span class="string">'a'</span>
+<span class="string">'\n'</span>
+<span class="string">'🦉'</span></template>
+            <template data-example="records">{ <span class="parameter">a</span>: <span class="number">123</span>, <span class="parameter">b</span>: <span class="string">"sup"</span> }</template>
+            <template data-example="functions"><span class="keyword">func</span> <span class="function">fizz</span>() { <span class="variable">print</span>(<span class="string">"BUZZ"</span>) }
+<span class="variable">fizz</span>()</template>
+
+          <div class="intro-code">
+            <pre><span class="keyword">struct</span> <span class="type">Person</span> {
+	<span class="keyword">let</span> <span class="property">name</span>: <span class="type">String</span>
+	<span class="keyword">let</span> <span class="property">age</span>: <span class="type">Int</span>
+}</pre>
+          </div>
+
+        </div>
+      </header>
+      <h2>syntax</h2>
+<p>Here, have some math.</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="number">2</span> <span class="operator">*</span> <span class="number">3</span> <span class="operator">/</span> <span class="number">4</span> <span class="operator">+</span> <span class="number">10</span> <span class="comment">// I can’t do this in my head</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='1' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>2 * 3 / 4 + 10 // I can’t do this in my head</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>ok ok, that was exciting, let’s write a function now</p>
+<div class='code-block no-run' data-accumulates='true' data-source='func add(x, y) { x + y }'>
+            <pre class='code-highlight'><span class="keyword">func</span> <span class="function">add</span>(<span class="parameter">x</span>, <span class="parameter">y</span>) { <span class="variable">x</span> <span class="operator">+</span> <span class="variable">y</span> }</pre>
+        </div>
+        
+<p>Let's call the function with <code>Int</code>s:</p>
+<div class='runnable' data-accumulates='true'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="variable">add</span>(<span class="number">1</span>, <span class="number">2</span>) <span class="comment">// =&gt; 3</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='1' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>add(1, 2) // =&gt; 3</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Now let's call it with <code>String</code>s:</p>
+<div class='runnable' data-accumulates='true'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="variable">add</span>(<span class="string">"hello "</span>, <span class="string">"world"</span>) <span class="comment">// =&gt; "hello world"</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='1' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>add(&quot;hello &quot;, &quot;world&quot;) // =&gt; &quot;hello world&quot;</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Wow functions are polymorphic. What a world!</p>
+<p>We can also define functions with labeled params.</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">add_one</span>(<span class="parameter">x</span>:) { <span class="variable">x</span> <span class="operator">+</span> <span class="number">1</span> }
+
+<span class="variable">add_one</span>(<span class="parameter">x</span>: <span class="number">1</span>) <span class="comment">// =&gt; 2 Wow. Imagine that</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func add_one(x:) { x + 1 }
+
+add_one(x: 1) // =&gt; 2 Wow. Imagine that</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>&quot;Ok Alonzo Church&quot; you say, &quot;but do you have like, normal <em>variables</em>?&quot;</p>
+<p>We do! I'm getting to it...</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> a <span class="operator">=</span> <span class="number">1</span>
+<span class="keyword">let</span> b <span class="operator">=</span> <span class="number">2</span>
+<span class="keyword">let</span> c <span class="operator">=</span> <span class="variable">a</span> <span class="operator">+</span> <span class="variable">b</span>
+<span class="variable">c</span> <span class="comment">// =&gt; 3</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='4' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let a = 1
+let b = 2
+let c = a + b
+c // =&gt; 3</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<h2>types</h2>
+<p>Ok Philip Wadler, maybe you like types? You can specify them if you want.</p>
+<div class='code-block no-run' data-accumulates='true' data-source='let a: Int = 1
+let b: Float = 2.0'>
+            <pre class='code-highlight'><span class="keyword">let</span> a: <span class="type">Int</span> <span class="operator">=</span> <span class="number">1</span>
+<span class="keyword">let</span> b: <span class="type">Float</span> <span class="operator">=</span> <span class="number">2.0</span></pre>
+        </div>
+        
+<p>They’ll be checked.</p>
+<div class='runnable' data-accumulates='true'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> c <span class="operator">=</span> <span class="variable">a</span> <span class="operator">+</span> <span class="variable">b</span> <span class="comment">// Uh oh, type error!</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='1' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let c = a + b // Uh oh, type error!</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>But you can also not specify them and types will still be checked:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> a <span class="operator">=</span> <span class="number">1</span>
+<span class="keyword">let</span> b <span class="operator">=</span> <span class="number">2.0</span>
+<span class="keyword">let</span> c <span class="operator">=</span> <span class="variable">a</span> <span class="operator">+</span> <span class="variable">b</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let a = 1
+let b = 2.0
+let c = a + b</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Functions can have type annotations as well.</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="comment">// it's good to be explicit sometimes</span>
+<span class="keyword">func</span> <span class="function">identity</span><span class="operator">&lt;</span>T<span class="operator">&gt;</span>(<span class="parameter">x</span>: <span class="type">T</span>) <span class="operator">-&gt;</span> <span class="type">T</span> { <span class="variable">x</span> }</pre>
+        </div>
+        
+<p>Functions are values too, and they can capture state.</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">make_counter</span>() {
+	<span class="keyword">let</span> i <span class="operator">=</span> <span class="number">0</span>
+
+	<span class="keyword">return</span> <span class="keyword">func</span>() {
+		<span class="variable">i</span> <span class="operator">=</span> <span class="variable">i</span> <span class="operator">+</span> <span class="number">1</span>
+		<span class="variable">i</span>
+	}
+}
+
+<span class="keyword">let</span> counter <span class="operator">=</span> <span class="variable">make_counter</span>()
+<span class="variable">counter</span>()
+<span class="variable">counter</span>()
+<span class="variable">counter</span>()</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='13' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func make_counter() {
+	let i = 0
+
+	return func() {
+		i = i + 1
+		i
+	}
+}
+
+let counter = make_counter()
+counter()
+counter()
+counter()</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>You can also use trailing blocks for callback-y stuff.</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">twice</span>(<span class="parameter">callback</span>) {
+	<span class="variable">callback</span>()
+	<span class="variable">callback</span>()
+}
+
+<span class="variable">twice</span> { <span class="variable">print</span>(<span class="string">"oh hi"</span>) }</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='6' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func twice(callback) {
+	callback()
+	callback()
+}
+
+twice { print(&quot;oh hi&quot;) }</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<h2>objects</h2>
+<p>Ok Alan Kay, maybe you like objects. You know, big bags of state and behavior that are the only correct way to program.</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">struct</span> <span class="type">Person</span> {
+	<span class="keyword">let</span> <span class="property">first_name</span>: <span class="type">String</span>
+	<span class="keyword">let</span> <span class="property">last_name</span>: <span class="type">String</span>
+
+	<span class="keyword">func</span> <span class="function">greet</span>() {
+		<span class="comment">// Strings can be concat'd</span>
+		<span class="variable">print</span>(<span class="string">"hi i'm "</span> <span class="operator">+</span> <span class="type">self</span>.<span class="property">first_name</span> <span class="operator">+</span> <span class="string">" "</span> <span class="operator">+</span> <span class="type">self</span>.<span class="property">last_name</span>)
+	}
+}
+
+<span class="keyword">let</span> person <span class="operator">=</span> <span class="type">Person</span>(<span class="parameter">first_name</span>: <span class="string">"Pat"</span>, <span class="parameter">last_name</span>: <span class="string">"N"</span>)
+<span class="variable">person</span>.<span class="property">greet</span>()
+<span class="variable">person</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='13' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>struct Person {
+	let first_name: String
+	let last_name: String
+
+	func greet() {
+		// Strings can be concat&#39;d
+		print(&quot;hi i&#39;m &quot; + self.first_name + &quot; &quot; + self.last_name)
+	}
+}
+
+let person = Person(first_name: &quot;Pat&quot;, last_name: &quot;N&quot;)
+person.greet()
+person</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>By default, structs get constructors generated automatically. But if your struct is special then you can define a custom constructor with <code>init</code>.</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">struct</span> <span class="type">Dog</span> {
+	<span class="keyword">let</span> <span class="property">age</span>: <span class="type">Int</span>
+	<span class="keyword">let</span> <span class="property">count</span>: <span class="type">Int</span>
+
+	<span class="keyword">init</span>(<span class="parameter">age</span>: <span class="type">Int</span>) {
+		<span class="type">self</span>.<span class="property">age</span> <span class="operator">=</span> <span class="variable">age</span>
+		<span class="type">self</span>.<span class="property">count</span> <span class="operator">=</span> <span class="number">0</span>
+		<span class="type">self</span>
+	}
+}
+
+<span class="keyword">let</span> dog <span class="operator">=</span> <span class="type">Dog</span>(<span class="parameter">age</span>: <span class="number">3</span>)
+<span class="variable">dog</span>.<span class="property">age</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='13' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>struct Dog {
+	let age: Int
+	let count: Int
+
+	init(age: Int) {
+		self.age = age
+		self.count = 0
+		self
+	}
+}
+
+let dog = Dog(age: 3)
+dog.age</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Ok Chewbacca, maybe you're not one for all this ceremony. You can also just define records.</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> rec <span class="operator">=</span> { <span class="parameter">fizz</span>: <span class="string">"buzz"</span>, <span class="parameter">count</span>: <span class="number">1000</span>, <span class="parameter">greeting</span>: <span class="keyword">func</span>(<span class="parameter">name</span>) { <span class="string">"hi "</span> <span class="operator">+</span> <span class="variable">name</span> } }
+
+<span class="variable">print</span>(<span class="variable">rec</span>.<span class="property">fizz</span>)
+<span class="variable">print</span>(<span class="variable">rec</span>.<span class="property">count</span>)
+<span class="variable">print</span>(<span class="variable">rec</span>.<span class="property">greeting</span>(<span class="string">"pat"</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let rec = { fizz: &quot;buzz&quot;, count: 1000, greeting: func(name) { &quot;hi &quot; + name } }
+
+print(rec.fizz)
+print(rec.count)
+print(rec.greeting(&quot;pat&quot;))</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<h2>enums / pattern matching</h2>
+<p>What about enumerations? You ever enumerate stuff? It's the best!</p>
+<div class='runnable' data-accumulates='true'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">enum</span> <span class="type">Response</span> {
+	<span class="keyword">case</span> <span class="enum_member">ok</span>(<span class="type">String</span>)
+	<span class="keyword">case</span> <span class="enum_member">redirect</span>(<span class="type">String</span>)
+	<span class="keyword">case</span> <span class="enum_member">other</span>(<span class="type">Int</span>)
+}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>enum Response {
+	case ok(String)
+	case redirect(String)
+	case other(Int)
+}</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>You can pattern match on <code>enum</code>s. Your <code>match</code> expression will be checked for exhaustivity.</p>
+<div class='runnable' data-accumulates='true'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">match</span> <span class="type">Response</span>.<span class="property">ok</span>(<span class="string">"success!"</span>) {
+	.<span class="enum_member">ok</span>(string) <span class="operator">-&gt;</span> <span class="variable">string</span>,
+	.<span class="enum_member">redirect</span>(message) <span class="operator">-&gt;</span> <span class="variable">message</span>,
+	.<span class="enum_member">other</span>(code) <span class="operator">-&gt;</span> <span class="string">"uh oh"</span>
+}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>match Response.ok(&quot;success!&quot;) {
+	.ok(string) -&gt; string,
+	.redirect(message) -&gt; message,
+	.other(code) -&gt; &quot;uh oh&quot;
+}</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>We can pattern match in conditionals too.</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">enum</span> <span class="type">Maybe</span><span class="operator">&lt;</span><span class="type_parameter">T</span><span class="operator">&gt;</span> {
+	<span class="keyword">case</span> <span class="enum_member">some</span>(<span class="type">T</span>)
+	<span class="keyword">case</span> <span class="enum_member">none</span>
+}
+
+<span class="keyword">let</span> value <span class="operator">=</span> <span class="type">Maybe</span>.<span class="property">some</span>(<span class="number">31</span>)
+
+<span class="keyword">if</span> <span class="keyword">let</span> .some(x) <span class="operator">=</span> <span class="variable">value</span>, x <span class="operator">==</span> <span class="number">31</span> {
+	<span class="string">"it's 31, bestie"</span>
+} <span class="keyword">else</span> {
+	<span class="string">"who even knows"</span>
+}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='12' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>enum Maybe&lt;T&gt; {
+	case some(T)
+	case none
+}
+
+let value = Maybe.some(31)
+
+if let .some(x) = value, x == 31 {
+	&quot;it&#39;s 31, bestie&quot;
+} else {
+	&quot;who even knows&quot;
+}</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>And <code>let else</code> is handy when you want to bail out early.</p>
+<div class='runnable' data-accumulates='true'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">unwrap_or_zero</span>(<span class="parameter">_</span> <span class="parameter">value</span>: <span class="type">Int?</span>) <span class="operator">-&gt;</span> <span class="type">Int</span> {
+	<span class="keyword">let</span> .some(x) <span class="operator">=</span> value <span class="keyword">else</span> { <span class="keyword">return</span> <span class="number">0</span> }
+	<span class="variable">x</span>
+}
+
+<span class="variable">unwrap_or_zero</span>(.<span class="property">some</span>(<span class="number">42</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='6' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func unwrap_or_zero(_ value: Int?) -&gt; Int {
+	let .some(x) = value else { return 0 }
+	x
+}
+
+unwrap_or_zero(.some(42))</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Records can be pattern matched too.</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> point <span class="operator">=</span> { <span class="parameter">x</span>: <span class="number">10</span>, <span class="parameter">y</span>: <span class="number">20</span> }
+
+<span class="keyword">match</span> <span class="variable">point</span> {
+	{ <span class="parameter">x</span>, <span class="parameter">y</span>: <span class="number">20</span> } <span class="operator">-&gt;</span> <span class="variable">x</span>,
+	{ <span class="parameter">x</span>, <span class="parameter">y</span> } <span class="operator">-&gt;</span> <span class="variable">y</span>
+}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='6' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let point = { x: 10, y: 20 }
+
+match point {
+	{ x, y: 20 } -&gt; x,
+	{ x, y } -&gt; y
+}</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<h2>protocols</h2>
+<p>Ok what about <del>traits</del> <del>type classes</del> <del>interfaces</del> protocols? For making ad-hoc polymorphism less ad-hoc? Yea we've got those.</p>
+<div class='code-block no-run' data-accumulates='true' data-source='protocol Addable {
+	func add(to other: Self) -&gt; Self
+}'>
+            <pre class='code-highlight'><span class="keyword">protocol</span> <span class="interface">Addable</span> {
+	<span class="keyword">func</span> add(<span class="parameter">to</span> <span class="parameter">other</span>: <span class="type">Self</span>) <span class="operator">-&gt;</span> <span class="type">Self</span>
+}</pre>
+        </div>
+        
+<p>Ok so what if we want some types to conform to it? Ez, use an <code>extend</code> block.</p>
+<div class='runnable' data-accumulates='true'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="comment">// Make Int addable</span>
+<span class="keyword">extend</span> <span class="type">Int</span>: <span class="type">Addable</span> {
+	<span class="keyword">func</span> <span class="function">add</span>(<span class="parameter">to</span> <span class="parameter">other</span>: <span class="type">Int</span>) <span class="operator">-&gt;</span> <span class="type">Int</span> {
+		<span class="type">self</span> <span class="operator">+</span> <span class="variable">other</span>
+	}
+}
+
+<span class="comment">// Make String addable</span>
+<span class="keyword">extend</span> <span class="type">String</span>: <span class="type">Addable</span> {
+	<span class="keyword">func</span> <span class="function">add</span>(<span class="parameter">to</span> <span class="parameter">other</span>: <span class="type">String</span>) <span class="operator">-&gt;</span> <span class="type">String</span> {
+		<span class="variable">other</span> <span class="operator">+</span> <span class="type">self</span>
+	}
+}
+
+<span class="variable">print</span>(<span class="number">1</span>.<span class="property">add</span>(<span class="parameter">to</span>: <span class="number">2</span>))
+<span class="variable">print</span>(<span class="string">"world"</span>.<span class="property">add</span>(<span class="parameter">to</span>: <span class="string">"hello "</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='16' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>// Make Int addable
+extend Int: Addable {
+	func add(to other: Int) -&gt; Int {
+		self + other
+	}
+}
+
+// Make String addable
+extend String: Addable {
+	func add(to other: String) -&gt; String {
+		other + self
+	}
+}
+
+print(1.add(to: 2))
+print(&quot;world&quot;.add(to: &quot;hello &quot;))</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Conformances are verified.</p>
+<div class='runnable' data-accumulates='true'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">extend</span> <span class="type">Float</span>: <span class="type">Addable</span> {}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='1' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>extend Float: Addable {}</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<h2>effects</h2>
+<p>Check it out, we've got effects:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="comment">// Define an effect. Effect names have the prefix `'`</span>
+<span class="keyword">effect</span> <span class="effect">'fizz</span>(<span class="parameter">x</span>: <span class="type">Int</span>) <span class="operator">-&gt;</span> <span class="type">Int</span>
+
+<span class="comment">// Handles 'fizz for as long as handler is in scope</span>
+<span class="operator">#</span><span class="keyword">handle</span> <span class="effect">'fizz</span> { x <span class="keyword">in</span>
+	<span class="comment">// This effect doesn't do much, it just returns what it was passed</span>
+	<span class="effect">'continue</span> <span class="variable">x</span>
+}
+
+<span class="comment">// Define a function with effects. The effect list is in `'[]`. Effects</span>
+<span class="comment">// can also be defined as `'_` and they'll be inferred.</span>
+<span class="keyword">func</span> <span class="function">fizzes</span>(<span class="parameter">x</span>) <span class="effect">'fizz</span> { <span class="effect">'fizz</span>(<span class="parameter">x</span>: <span class="variable">x</span>) }
+
+<span class="variable">print</span>(<span class="variable">fizzes</span>(<span class="number">123</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='14' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>// Define an effect. Effect names have the prefix `&#39;`
+effect &#39;fizz(x: Int) -&gt; Int
+
+// Handles &#39;fizz for as long as handler is in scope
+#handle &#39;fizz { x in
+	// This effect doesn&#39;t do much, it just returns what it was passed
+	&#39;continue x
+}
+
+// Define a function with effects. The effect list is in `&#39;[]`. Effects
+// can also be defined as `&#39;_` and they&#39;ll be inferred.
+func fizzes(x) &#39;fizz { &#39;fizz(x: x) }
+
+print(fizzes(123))</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Ok so are effects just weird functions? I mean kind of? But you can also use them as exceptions:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">effect</span> <span class="effect">'throw</span>(<span class="parameter">msg</span>: <span class="type">String</span>) <span class="operator">-&gt;</span> <span class="type">Never</span>
+
+<span class="keyword">func</span> <span class="function">boom</span>(<span class="parameter">x</span>) {
+	<span class="operator">#</span><span class="keyword">handle</span> <span class="effect">'throw</span> { msg <span class="keyword">in</span>
+		<span class="variable">print</span>(<span class="string">"caught: "</span> <span class="operator">+</span> <span class="variable">msg</span>)
+		<span class="keyword">return</span> <span class="keyword">true</span>
+	}
+
+	<span class="keyword">if</span> <span class="variable">x</span> <span class="operator">==</span> <span class="number">0</span> { <span class="effect">'throw</span>(<span class="string">"boom"</span>) }
+
+	<span class="keyword">false</span> <span class="comment">// should not run</span>
+}
+
+<span class="variable">boom</span>(<span class="number">0</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='14' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>effect &#39;throw(msg: String) -&gt; Never
+
+func boom(x) {
+	#handle &#39;throw { msg in
+		print(&quot;caught: &quot; + msg)
+		return true
+	}
+
+	if x == 0 { &#39;throw(&quot;boom&quot;) }
+
+	false // should not run
+}
+
+boom(0)</textarea>
+            </div>
+            <div class='actions'>
+                <button type='button' class='run'>Run</button>
+                <button type='button' class='lower'>Lower</button>
+                <button type='button' class='format'>Format</button>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>There are modules too. This one isn't runnable in the browser because it spans multiple files, but it works from the CLI.</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="comment">// Exports.tlk</span>
+<span class="modifier">pub</span> <span class="keyword">let</span> a <span class="operator">=</span> <span class="string">"we can export this string"</span>
+
+<span class="comment">// Main.tlk</span>
+<span class="keyword">use</span> package<span class="operator">::</span>Exports<span class="operator">::</span>{ a }
+
+<span class="variable">print</span>(<span class="variable">a</span>)</pre>
+        </div>
+        
+<p>And yes, there is already some rough little HTTP stuff.</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">let</span> http <span class="operator">=</span> <span class="type">HTTP</span>.<span class="property">Server</span>()
+
+<span class="variable">http</span>.<span class="property">get</span>(<span class="string">"/"</span>, <span class="keyword">func</span>() { <span class="string">"hello from talk"</span> })
+
+<span class="variable">http</span>.<span class="property">get</span>(<span class="string">"/health"</span>, <span class="keyword">func</span>() { <span class="string">"ok"</span> })
+
+<span class="variable">print</span>(<span class="string">"Listening on http://localhost:3000"</span>)
+<span class="variable">http</span>.<span class="property">run</span>(<span class="number">3000</span>)</pre>
+        </div>
+        
+<p><span style="color: white;">talktalk</span> is a programming language. It kind of looks like Swift or Rust or Go if you squint. I want it to feel familiar and cozy but still have a lot of modern power. Like an F1 car with those seats that massage your back (todo: fix this lousy metaphor).</p>
+<p><strong>Here are some goals:</strong></p>
+<h4>Learning stuff</h4>
+<p>This is by far the biggest goal. I didn’t super understand all the ins and outs of compilers. I still don’t but at least I have a way to learn now. You shouldn't use talktalk. But you might enjoy perusing talktalk.</p>
+<h4>Fully typed everything</h4>
+<p>Types are cool.</p>
+<h4>As much type inference as possible</h4>
+<p>I don’t know if it's a good idea. It’s probably not. I just think it’s neat.</p>
+<h4>Familiar-ish syntax</h4>
+<p>Haskell/ML-y syntax is beautiful. I hate it.</p>
+<h4>Figure out nice syntax highlighting color schemes</h4>
+<p>I feel like making full programming language is the only way to do this, right? Right? Don't answer that.</p>
+<p><strong>Here are some <em>non-goals</em>:</strong></p>
+<h4>Blazingly fast performance?</h4>
+<p>I mean I’m probably not gonna litter the codebase with <code>sleep</code>s but I’m allowed to if I want.</p>
+<h4>Trying to make everything perfectly sound and decidable?</h4>
+<p>Is this even possible? I feel like I saw a YouTube video that said it’s not.</p>
+<h4>Trying to get others to use it?</h4>
+<p>Why? PHP exists, you should probably use that.</p>
+<p>--</p>
+<h4>How it works<sup class="footnote-ref"><a href="#fn-1" id="fnref-1" data-footnote-ref>1</a></sup></h4>
+<p>First we lex the code into tokens. Then we parse the tokens into an AST. Then we resolve the names in the AST. Then we type check the AST and produce a TypedAST. Then we lower the TypedAST into our own lil IR. Then our lil IR is interpreted by a lil interpreter. There’s no trick to it, it’s just a simple trick!</p>
+<p>At this point you’re cracking your knuckles saying &quot;nice try, wise guy, but you’ll have to do better than that if you want me to adopt this at my fortune 500 company where I do a very good job and that is why they pay me the BIG bucks.&quot; Ok ok, call off your goons. Here’s some more detail<sup class="footnote-ref"><a href="#fn-2" id="fnref-2" data-footnote-ref>2</a></sup>.</p>
+<h5>Lexing</h5>
+<p>It's a pretty standard lexer as far as lexers go. It takes a string and turns it into tokens. Tokens have start/end positions and types like <code>StringLiteral</code>, <code>Comma</code> and more.</p>
+<h5>Parsing</h5>
+<p>talktalk takes the tokens from lexing and uses a handwritten recursive descent parser (I think? I'm not good at genres) with some chris pratt precedence for expressions. Nothing too exciting here. At the end of this we have an AST.</p>
+<h5>Name Resolving</h5>
+<p>At this point we have an AST with things that have names. Like functions, variables, nominals (structs/enums), methods, etc. Those names are all strings. Since different names can be different things at different types, we give every named thing a unique number so we can tell the difference. Those numbers are called Symbols. I don't know if that's the right term but ¯\_(ツ)_/¯. Concretely this means replacing all of the <code>Name::Raw(string)</code> names in the AST with <code>Name::Resolved(symbol, string)</code>.</p>
+<p>Side note: I looked into using De Brujin indices for this but I wasn't sure how to pronounce it so I didn't.</p>
+<p>The name resolution pass also builds a strongly-connected-components graph that helps the type checker check things in an order that deals with mutual recursion.</p>
+<h5>Type inference/checking</h5>
+<p>This is where I've spent like 90% of my time. Turns out there's a <em>lot</em> of history there. Who knew? Anyways I read a lot of papers and the /r/ProgrammmingLanguages subreddit and every post on [thunderseethe]'s blog like fifty times. Here's what's going on in the type checker.</p>
+<ul>
+<li>We take the <abbr title="Strongly connected component">SCC</abbr> graph built during name resolution and iterate through different each group of binders[^3]. At the top level, we have
+<ul>
+<li>Nominal declarations (<code>struct T {..}</code>/<code>enum T {..}</code>) get defined in the <strong>type catalog</strong>, which is basically just a big ol' dictionary of dictionaries of dictionaries. It stores information like:
+<ul>
+<li>What nominals are defined?</li>
+<li>What methods do nominals those have?</li>
+<li>What conformances do they have? What are their associated types?</li>
+<li>What type parameters (generics) do they have?</li>
+<li>What properties do structs have?</li>
+<li>What variants do enums have?</li>
+<li>What effects exist?</li>
+</ul>
+</li>
+<li>Top level functions.</li>
+</ul>
+</li>
+</ul>
+<h1>to be continued</h1>
+<p>--</p>
+<p>At this point you’re rubbing your hands together thinking “mamma mia! I’m about to make a million smackaroos using talktalk!” Well you probably are. But before you start firing up your local AI coding buddy you should know what’s <em>still not there yet</em>.</p>
+<h4>IO</h4>
+<p>You can <code>print</code> to stdout! But that is literally it. This seems like something that would be nice to have! But we don't have it yet.</p>
+<h4>A &quot;Standard&quot; library</h4>
+<p>I mean there isn't an unstandard library either so I'm not sure why I put that in quotes. Anyway, don't expect to see familiar things like hashmaps, fancy algorithms (sorry al gore), serialization tools, etc. Or maybe I <em>have</em> added some of those things and not updated this website yet!</p>
+<h4>Explicit mutation</h4>
+<p>Right now everything is mutable. It's chaos. The sky is crumbling and all I have is a looney tunes umbrella.</p>
+<h4>Mutable Arrays</h4>
+<p>I haven't implemented <code>push</code> on array yet. You're probably a functional programmer with a cool leather jacket and ripped jeans and a backwards baseball cap who thinks mutability is for cats and dogs but I just thought I'd mention it.</p>
+<h4>Concurrency</h4>
+<p>But concurrency isn't parallelism! So does this mean there's parallelism? No, it does not.</p>
+<h4>Visibility modifiers</h4>
+<p>Everything public, all the time baby.</p>
+<h4>Documentation</h4>
+<p>None.</p>
+<p>So anyway, maybe you can see what I meant by &quot;don't use this, peruse this.&quot;</p>
+<section class="footnotes" data-footnotes>
+<ol>
+<li id="fn-1">
+<p>The word &quot;works&quot; <del>might be writing checks my constraint engine can't cache</del> might be overly generous here. <a href="#fnref-1" class="footnote-backref" data-footnote-backref data-footnote-backref-idx="1" aria-label="Back to reference 1">↩</a></p>
+</li>
+<li id="fn-2">
+<p>You should not use talktalk at any fortune 500 company. If your company isn’t in the fortune 500, knock yourself out. <a href="#fnref-2" class="footnote-backref" data-footnote-backref data-footnote-backref-idx="2" aria-label="Back to reference 2">↩</a></p>
+</li>
+</ol>
+</section>
+
+      <script type="module" src="/page.js?t=1785990668"></script>
+    </main>
+  </body>
+</html>
+

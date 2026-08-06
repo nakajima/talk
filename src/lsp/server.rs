@@ -1954,7 +1954,9 @@ mod tests {
     fn completion_acceptance_adds_import_from_defining_module() {
         let main_code = "let value = Fo\n";
         let lib_code = "pub struct Foo {}\n";
-        let consumer_code = "use package::completion_auto_import_lib::{ Foo }\nlet used = Foo()\n";
+        // Stdlib modules serve auto-import candidates once any document
+        // in the session imports them; nothing is indexed eagerly.
+        let consumer_code = "use package::completion_auto_import_lib::{ Foo }\nuse fs::{ Directory }\nlet used = Foo()\n";
         let uri_main =
             Url::from_file_path(std::env::temp_dir().join("completion_auto_import_main.tlk"))
                 .expect("main uri");

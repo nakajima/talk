@@ -163,7 +163,6 @@ impl Workspace {
         }
 
         let local_module_id = config.module_id;
-        let package_env = compile_context == WorkspaceCompileContext::Normal && package.is_some();
         let driver = match compile_context {
             WorkspaceCompileContext::Core | WorkspaceCompileContext::Stdlib(_) => {
                 Driver::new_bare(sources, config)
@@ -183,10 +182,8 @@ impl Workspace {
                     // The manifest DSL names Package without a `use`, so it
                     // registers like core. Every other stdlib module stays
                     // demand-driven: a document's own imports activate them
-                    // during parse, and auto-import completions plus
-                    // cross-module navigation read the export index instead
-                    // of merging every stdlib type catalog into every
-                    // editor build (CLEAN-04).
+                    // during parse, and only modules loaded that way serve
+                    // auto-import completions and cross-module navigation.
                     if let Some((id, module)) = crate::compiling::stdlib::module_with_id("Package")
                     {
                         Rc::make_mut(&mut config.modules)
@@ -197,10 +194,13 @@ impl Workspace {
                 }
             },
         };
+        // Name+id registration only: nothing compiles here. Definition
+        // lookups resolve a symbol's module through this map and compile
+        // the target stdlib module on demand (definition.rs), so every
+        // stdlib module is reachable no matter what the session imported.
         let stdlib_module_ids = match compile_context {
             WorkspaceCompileContext::Normal => crate::compiling::stdlib::stdlib_sources()
                 .into_iter()
-                .filter(|(name, _)| crate::compiling::stdlib::editor_visible(name))
                 .filter_map(|(name, _)| {
                     crate::compiling::stdlib::module_id_for_name(name)
                         .map(|module_id| (module_id, name.to_string()))
@@ -208,12 +208,14 @@ impl Workspace {
                 .collect(),
             _ => FxHashMap::default(),
         };
-        // In a package workspace, dependency modules' exports are
-        // auto-import candidates alongside the stdlib's; in the
-        // dependency-free editor session the lightweight stdlib export
-        // index serves them (CLEAN-04).
+        let parsed = driver.parse().ok()?;
+        // Auto-import candidates come from the modules this session
+        // actually loaded: locked package dependencies plus the stdlib
+        // modules parse discovery activated from the documents' own
+        // imports. Stdlib modules nobody imported stay unloaded and
+        // unindexed.
         let importable_modules = match compile_context {
-            WorkspaceCompileContext::Normal if package_env => driver
+            WorkspaceCompileContext::Normal => parsed
                 .config
                 .modules
                 .all_modules()
@@ -232,10 +234,8 @@ impl Workspace {
                     )
                 })
                 .collect(),
-            WorkspaceCompileContext::Normal => crate::compiling::stdlib::export_index().clone(),
             _ => FxHashMap::default(),
         };
-        let parsed = driver.parse().ok()?;
         let resolved = parsed.resolve_names().ok()?;
         // The editor keeps the source-faithful surface AST (type annotations,
         // imports, identifier spans the typed compiler tree strips). Capture it
