@@ -40,13 +40,20 @@ impl Document {
                     {
                         self.text.replace_range(start..end, new_text);
                     } else {
-                        // Fallback: if mapping fails, replace whole text
-                        self.text = new_text.clone();
+                        // Skip the change. Replacing the whole document
+                        // with the fragment would destroy the buffer.
+                        tracing::error!(
+                            "lsp: skipping unmappable document change: range {range:?}"
+                        );
+                        continue;
                     }
                 }
             }
+            // Each change's range is relative to the text after the
+            // previous change, so the index must be rebuilt per change,
+            // not once per batch.
+            self.line_index = LineIndex::new(&self.text);
         }
-        self.line_index = LineIndex::new(&self.text);
     }
 
     pub fn line_index(&self) -> &LineIndex {
@@ -69,5 +76,40 @@ impl Document {
         let start = self.position_of_byte_offset(start as usize)?;
         let end = self.position_of_byte_offset(end as usize)?;
         Some(Range::new(start, end))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn change(range: Range, text: &str) -> TextDocumentContentChangeEvent {
+        TextDocumentContentChangeEvent {
+            range: Some(range),
+            range_length: None,
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn batched_changes_apply_sequentially() {
+        // Each change's range is relative to the text after the
+        // previous change in the same batch.
+        let mut doc = Document::new(1, "abc\ndef\n".to_string());
+        doc.apply_changes(&[
+            change(Range::new(Position::new(0, 0), Position::new(0, 1)), "xy"),
+            change(Range::new(Position::new(1, 0), Position::new(1, 1)), "D"),
+        ]);
+        assert_eq!(doc.text, "xybc\nDef\n");
+    }
+
+    #[test]
+    fn unmappable_change_is_skipped_without_destroying_text() {
+        let mut doc = Document::new(1, "abc\ndef\n".to_string());
+        doc.apply_changes(&[change(
+            Range::new(Position::new(99, 0), Position::new(99, 1)),
+            "x",
+        )]);
+        assert_eq!(doc.text, "abc\ndef\n");
     }
 }

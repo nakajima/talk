@@ -452,10 +452,11 @@ pub async fn start() {
                         let last_char = if ends_with_newline {
                             0
                         } else {
+                            // LSP positions count UTF-16 code units, not bytes.
                             text.rsplit('\n')
                                 .next()
-                                .map(|s| s.len())
-                                .unwrap_or(text.len()) as u32
+                                .map(|s| s.encode_utf16().count())
+                                .unwrap_or_default() as u32
                         };
 
                         Ok(Some(vec![TextEdit::new(
