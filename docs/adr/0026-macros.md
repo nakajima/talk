@@ -140,10 +140,12 @@ fixed depth or work budget and reports the invocation chain when exceeded.
 ### Evaluation count
 
 Hygiene does not make repeated splicing semantically harmless. Repeating an
-expression can repeat effects, copies, borrows, or moves. Declarative macro
-checking diagnoses an expression metavariable used more than once unless the
-rule explicitly acknowledges duplication. Generated code remains the final
-authority: ordinary effect and ownership checking must accept the expansion.
+expression can repeat effects, copies, borrows, or moves. Duplication is
+permitted without ceremony: the first splice of a parameter retains the
+source node's identity and later splices receive fresh identities, and
+generated code remains the final authority — ordinary effect and ownership
+checking must accept the expansion, so a duplicated move or borrow is
+rejected the same way it would be if written by hand.
 
 ### Packages
 
@@ -255,7 +257,7 @@ associated-type bindings from protocol equalities such as
 conformance rows so generic stdlib helpers specialize correctly downstream.
 
 Pattern/type/declaration invocation positions, attached roles, repetition,
-explicit duplication, persistent expansion caching, and the complete
+persistent expansion caching, and the complete
 source/expanded analysis map remain follow-ups.
 
 ## Consequences

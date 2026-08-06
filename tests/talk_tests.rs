@@ -216,6 +216,32 @@ fn in_struct_method_call_sites_record_borrowed_param_modes() {
 }
 
 #[test]
+fn mut_param_reassignment_drops_the_displaced_value() {
+    // A writeback param's slot holds the caller's donated value: the
+    // frame owns the pointee for the call's duration and the return
+    // tuple moves the evolved value out. Assigning the parameter must
+    // drop the displaced value — the leak fence (empty stderr) catches
+    // it when the drop is missing.
+    assert_runs(
+        b"func reassign(mut s: String) -> Void {\n\ts = \"x\"\n}\nlet v = \"a\" + \"b\"\nreassign(s: mut v)\nprint(v)\n",
+        &[],
+        b"x\n",
+    );
+}
+
+#[test]
+fn mut_param_read_snapshots_before_reassignment() {
+    // Reading a `mut` parameter loans its content; reassigning the
+    // parameter must displace (not free) the content while the loan is
+    // live — snapshot semantics — and the loan's escape retains it.
+    assert_runs(
+        b"func replace2(mut place: String, consume replacement: String) -> String {\n\tlet previous = place\n\tplace = replacement\n\tprevious\n}\nlet current = \"old\" + \" value\"\nlet previous = replace2(place: mut current, replacement: \"new\" + \" value\")\nprint(previous)\nprint(current)\n",
+        &[],
+        b"old value\nnew value\n",
+    );
+}
+
+#[test]
 fn borrowed_iteration_over_copy_inline_elements() {
     // The checker erases `&T` to `T` for Copy-grade types ("the same type
     // up to representation"), so `Optional<&Scope>` — what borrowed array

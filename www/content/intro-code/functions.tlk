@@ -1,4 +1,3 @@
-func fizz() {
-	print("BUZZ")
-}
-fizz()
+func increment(x) { x + 1 }
+
+increment(1)

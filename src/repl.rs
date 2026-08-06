@@ -415,6 +415,7 @@ impl<'a> ReplInput<'a> {
                 TokenKind::Pub | TokenKind::Public => saw_public = true,
                 TokenKind::Let
                 | TokenKind::Func
+                | TokenKind::Macro
                 | TokenKind::Struct
                 | TokenKind::Enum
                 | TokenKind::Extend

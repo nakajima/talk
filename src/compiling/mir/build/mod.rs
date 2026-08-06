@@ -2252,7 +2252,12 @@ impl<'a> ProgramBuilder<'a> {
                 // assigned-so-far fields own individually through shadow
                 // entries so an abort tears down exactly what was built.
                 if !((suppress_self_drop || fx.in_init) && ix == 0) {
-                    fx.own_local(local, &ty);
+                    let receiver_writeback = ix == 0
+                        && matches!(
+                            callable.receiver,
+                            crate::node_kinds::decl::ReceiverMode::Ref
+                        );
+                    fx.own_param(local, &ty, receiver_writeback);
                 }
             }
             if let Name::Resolved(symbol, _) = &param.name {
@@ -2940,6 +2945,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 layout,
                 args,
             });
+            // Writeback params own their pointee for the frame's
+            // duration (see own_param): packing the tuple is the move
+            // out, or the frame-exit release would free the value the
+            // caller is about to receive.
+            for local in self.writeback_params.clone() {
+                if self.owns(local) && !self.moved.contains(&local) {
+                    self.record_flow(verify::FlowEvent::Move(local));
+                }
+            }
             self.terminate(Term::Return(Operand::Local(paired)));
             return;
         }
@@ -3669,6 +3683,26 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             self.stmt_temps.push(local);
             self.record_flow(verify::FlowEvent::Def(local));
         }
+    }
+
+    /// Parameter ownership at frame entry. An explicit writeback
+    /// (exclusive-borrow) param's slot holds the caller's donated value
+    /// for the frame's duration: the frame owns the POINTEE, and the
+    /// return tuple's packing moves the evolved value back out. Owning
+    /// the pointee (not the borrow, which releases nothing) is what lets
+    /// a reassignment drop the displaced value. The `mut` RECEIVER is
+    /// exempt: its interior legitimately re-borrows to the caller
+    /// (core's `uniqued_storage`), which pointee ownership would read as
+    /// an escaping view of frame-owned data.
+    fn own_param(&mut self, local: LocalId, ty: &Ty, receiver_writeback: bool) {
+        if !receiver_writeback
+            && self.writeback_params.contains(&local)
+            && let Ty::Borrow(_, inner) = ty
+        {
+            self.own_local(local, inner);
+            return;
+        }
+        self.own_local(local, ty);
     }
 
     /// Register a binding as a scope-owned droppable local.
@@ -5853,9 +5887,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // aliased temporary carries one: a desugared binding's
                 // pattern type can be an unreduced projection (a
                 // for-loop's iterator), which the release classifier
-                // cannot see through.
+                // cannot see through. A borrow-typed binding is exempt:
+                // it is a view of the source (a `mut` parameter read
+                // loans the slot's content), so it owns nothing whatever
+                // the source owns.
                 let value_ty = match value {
-                    Operand::Local(source) => self.owned_ty(source).cloned(),
+                    Operand::Local(source) if !matches!(ty, Ty::Borrow(_, _)) => {
+                        self.owned_ty(source).cloned()
+                    }
                     _ => None,
                 };
                 // Consume before the symbol points at the aliased local:
@@ -5865,9 +5904,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.consume_binding(value, ty, pattern.span)?;
                 self.locals.insert(*symbol, local);
                 self.frame_entry(local).declared = Some(ty.clone());
-                self.propagate_view(Operand::Local(local), value);
                 if contains_borrow_classified(self.program_builder, ty) {
                     self.view_locals.insert(local);
+                    // A borrow-typed bind roots at the source even when
+                    // the source carries no provenance of its own (a
+                    // `mut` parameter is the root): displaced writes to
+                    // the root must keep the referent alive for the view.
+                    self.record_view(Operand::Local(local), value);
+                } else {
+                    self.propagate_view(Operand::Local(local), value);
                 }
                 if let Operand::Local(source) = value
                     && self.borrow_roots.contains_key(&source)
@@ -9336,7 +9381,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             // them).
             fx.frame_entry(local).declared = Some(ty.clone());
             fx.check_copy(&ty, body.span)?;
-            fx.own_local(local, &ty);
+            fx.own_param(local, &ty, false);
             if let Name::Resolved(symbol, _) = &param.name {
                 fx.locals.insert(*symbol, local);
             }
@@ -9633,7 +9678,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // cannot type them).
                 fx.frame_entry(local).declared = Some(ty.clone());
                 fx.check_copy(&ty, func.body.span)?;
-                fx.own_local(local, &ty);
+                fx.own_param(local, &ty, false);
             }
             if let Name::Resolved(symbol, _) = &param.name {
                 fx.locals.insert(*symbol, local);
@@ -10096,6 +10141,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.push(Inst::Copy { dest, src: value });
                 let owned = self.resolved(ty);
                 self.produce_temp(dest, &owned);
+                // The take moved the content out of the source place:
+                // mark it so a later overwrite does not drop a value the
+                // result already carries.
+                if let Operand::Local(local) = value
+                    && self.owns(local)
+                    && !self.moved.contains(&local)
+                {
+                    self.moved.insert(local);
+                    self.record_flow(verify::FlowEvent::Move(local));
+                }
                 return Ok(Operand::Local(dest));
             }
             K::MemCopy { from, to, length } => {

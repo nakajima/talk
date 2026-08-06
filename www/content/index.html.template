@@ -33,6 +33,21 @@ class="number" data-example="ints">ints</span>, <span class="number" data-exampl
       </header>
       {CONTENT_GOES_HERE}
       <script>
+        // the intro code panel swaps snippets on hover; pin its height
+        // to the tallest snippet and center the code vertically so
+        // shorter snippets don't leave trailing space
+        (() => {
+          const panel = document.querySelector(".intro-code");
+          if (!panel) return;
+          let maxLines = 1;
+          for (const t of document.querySelectorAll("template[data-example]")) {
+            const lines = t.innerHTML.trimEnd().split("\n").length;
+            if (lines > maxLines) maxLines = lines;
+          }
+          panel.style.minHeight = `calc(${maxLines * 1.6}em + 3rem)`;
+        })();
+      </script>
+      <script>
         (() => {
           const main = document.querySelector("main");
           const heads = [...main.querySelectorAll(":scope > h2")];
@@ -87,6 +102,22 @@ class="number" data-example="ints">ints</span>, <span class="number" data-exampl
             centerNav(nav, "instant");
             document.fonts?.ready.then(() => centerNav(nav, "instant"));
           }
+
+          // default anchor scrolling targets the band's visual position,
+          // which for a stuck sticky band is already at the top of the
+          // viewport, so the browser doesn't scroll. scroll to the band's
+          // natural position instead.
+          main.addEventListener("click", (e) => {
+            const a = e.target.closest(".band-nav a");
+            if (!a) return;
+            const target = document.getElementById(a.hash.slice(1));
+            if (!target) return;
+            e.preventDefault();
+            let top = 0;
+            for (let n = target; n; n = n.offsetParent) top += n.offsetTop;
+            window.scrollTo({ top });
+            history.pushState(null, "", a.hash);
+          });
 
           // when a different band sticks to the top, scroll its strip
           // so the active section is in view

@@ -289,7 +289,6 @@ pub fn expand_macros_with_sources_and_service(
 #[visitor(Node(enter), Expr(enter), Stmt(enter), TypeAnnotation(enter))]
 struct TemplateValidator<'a> {
     params: HashSet<&'a str>,
-    uses: HashMap<String, usize>,
     error: Option<String>,
 }
 
@@ -307,18 +306,12 @@ impl<'a> TemplateValidator<'a> {
 
         let mut validator = Self {
             params: names,
-            uses: HashMap::new(),
             error: None,
         };
         template.drive(&mut validator);
 
         if let Some(error) = validator.error {
             return Err(error);
-        }
-        if let Some((param, _)) = validator.uses.iter().find(|(_, uses)| **uses > 1) {
-            return Err(format!(
-                "expression parameter `${param}` is spliced more than once; explicit duplication is not implemented"
-            ));
         }
 
         Ok(())
@@ -354,9 +347,7 @@ impl<'a> TemplateValidator<'a> {
         match &expr.kind {
             ExprKind::Variable(Name::Raw(name)) if name.starts_with('$') => {
                 let param = &name[1..];
-                if self.params.contains(param) {
-                    *self.uses.entry(param.into()).or_default() += 1;
-                } else {
+                if !self.params.contains(param) {
                     self.reject(format!("unknown template parameter `${param}`"));
                 }
             }
@@ -749,7 +740,12 @@ impl MacroExpander<'_> {
             .zip(args)
             .map(|(param, arg)| (param.name.clone(), arg))
             .collect();
-        expanded.drive_mut(&mut TemplateSubstituter { substitutions });
+        expanded.drive_mut(&mut TemplateSubstituter {
+            substitutions,
+            spliced: HashSet::new(),
+            file_id: self.file_id,
+            node_ids: &mut self.node_ids,
+        });
         *expr = expanded;
         self.changed = true;
     }
@@ -757,11 +753,14 @@ impl MacroExpander<'_> {
 
 #[derive(VisitorMut)]
 #[visitor(Expr(enter))]
-struct TemplateSubstituter {
+struct TemplateSubstituter<'a> {
     substitutions: HashMap<String, Expr>,
+    spliced: HashSet<String>,
+    file_id: FileID,
+    node_ids: &'a mut IDGenerator,
 }
 
-impl TemplateSubstituter {
+impl TemplateSubstituter<'_> {
     fn enter_expr(&mut self, expr: &mut Expr) {
         let ExprKind::Variable(Name::Raw(name)) = &expr.kind else {
             return;
@@ -769,9 +768,20 @@ impl TemplateSubstituter {
         let Some(param) = name.strip_prefix('$') else {
             return;
         };
-        if let Some(replacement) = self.substitutions.get(param) {
-            *expr = replacement.clone();
+        let Some(replacement) = self.substitutions.get(param) else {
+            return;
+        };
+        let mut replacement = replacement.clone();
+        if !self.spliced.insert(param.to_string()) {
+            // A repeated splice re-evaluates the argument. The first splice
+            // keeps the source node's identity; later splices are re-stamped
+            // with fresh ids so the expansion never contains duplicate NodeIDs.
+            replacement.drive_mut(&mut NodeIdRemapper {
+                file_id: self.file_id,
+                node_ids: self.node_ids,
+            });
         }
+        *expr = replacement;
     }
 }
 
