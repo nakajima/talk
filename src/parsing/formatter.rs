@@ -619,11 +619,9 @@ impl<'a> Formatter<'a> {
                 args,
                 ..
             } => {
-                let input = self
-                    .source
-                    .and_then(|source| {
-                        source.get(input_span.start as usize..input_span.end as usize)
-                    });
+                let input = self.source.and_then(|source| {
+                    source.get(input_span.start as usize..input_span.end as usize)
+                });
                 match input {
                     // Brace and bracket inputs, and parenthesized inputs
                     // without parsed arguments, keep their source form.
@@ -654,9 +652,7 @@ impl<'a> Formatter<'a> {
             } => {
                 let body = self
                     .source
-                    .and_then(|source| {
-                        source.get(body_span.start as usize..body_span.end as usize)
-                    })
+                    .and_then(|source| source.get(body_span.start as usize..body_span.end as usize))
                     .map(str::trim)
                     .unwrap_or_default();
                 text("macro ")
@@ -975,6 +971,24 @@ impl<'a> Formatter<'a> {
         self.format_block_inner(block, false)
     }
 
+    fn format_func_block(&self, func: &Func, allow_single_line: bool) -> Doc {
+        let capture_docs = func
+            .captures
+            .iter()
+            .map(|capture| self.format_capture_spec(capture))
+            .collect();
+        let capture_header = (!func.captures.is_empty()).then(|| {
+            concat(
+                text("["),
+                concat(
+                    join(capture_docs, concat(text(","), text(" "))),
+                    text("] in"),
+                ),
+            )
+        });
+        self.format_block_inner_with_header(&func.body, allow_single_line, capture_header)
+    }
+
     fn wrap_block_single_line(inner: Doc) -> Doc {
         group(concat(
             text("{"),
@@ -1119,8 +1133,21 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_block_inner(&self, block: &Block, allow_single_line: bool) -> Doc {
+        self.format_block_inner_with_header(block, allow_single_line, None)
+    }
+
+    fn format_block_inner_with_header(
+        &self,
+        block: &Block,
+        allow_single_line: bool,
+        leading_header: Option<Doc>,
+    ) -> Doc {
         let has_comments = self.has_comments_between(block.span.start, block.span.end);
-        let args_doc = self.format_block_args(&block.args);
+        let args_doc = match (leading_header, self.format_block_args(&block.args)) {
+            (Some(leading), Some(args)) => Some(concat(leading, concat(text(" "), args))),
+            (Some(leading), None) => Some(leading),
+            (None, args) => args,
+        };
         if block.body.is_empty() {
             return self.format_empty_block(
                 args_doc,
@@ -1366,14 +1393,9 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    fn format_macro_invocation(
-        &self,
-        name: &str,
-        input_span: crate::parsing::span::Span,
-    ) -> Doc {
+    fn format_macro_invocation(&self, name: &str, input_span: crate::parsing::span::Span) -> Doc {
         if let Some(source) = self.source
-            && let Some(input) =
-                source.get(input_span.start as usize..input_span.end as usize)
+            && let Some(input) = source.get(input_span.start as usize..input_span.end as usize)
         {
             let separator = if input.starts_with('{') { " " } else { "" };
             return text(format!("@{name}{separator}{input}"));
@@ -1545,6 +1567,7 @@ impl<'a> Formatter<'a> {
 
         match &import.symbols {
             ImportedSymbols::All => join(vec![text("use"), path], text(" ")),
+            ImportedSymbols::Glob => concat(concat(text("use "), path), text("::*")),
             ImportedSymbols::Named(symbols) => {
                 let symbol_docs: Vec<_> = symbols
                     .iter()
@@ -1974,22 +1997,6 @@ impl<'a> Formatter<'a> {
             );
         }
 
-        if !func.captures.is_empty() {
-            let capture_docs: Vec<_> = func
-                .captures
-                .iter()
-                .map(|capture| self.format_capture_spec(capture))
-                .collect();
-
-            result = concat_space(
-                result,
-                concat(
-                    text("["),
-                    concat(join(capture_docs, concat(text(","), text(" "))), text("]")),
-                ),
-            );
-        }
-
         let param_docs: Vec<_> = func
             .params
             .iter()
@@ -2027,17 +2034,17 @@ impl<'a> Formatter<'a> {
             || func.effects.names.is_empty()
         {
             if has_comments {
-                return concat_space(result, self.format_block_multiline(&func.body));
+                return concat_space(result, self.format_func_block(func, false));
             }
-            let inline = concat_space(result.clone(), self.format_block(&func.body));
+            let inline = concat_space(result.clone(), self.format_func_block(func, true));
             if Self::flat_width(&inline).is_some_and(|width| width <= SINGLE_LINE_FUNC_MAX_WIDTH) {
                 return group(inline);
             }
 
-            return concat_space(result, self.format_block_multiline(&func.body));
+            return concat_space(result, self.format_func_block(func, false));
         }
 
-        concat_space(result, self.format_block(&func.body))
+        concat_space(result, self.format_func_block(func, true))
     }
 
     fn format_init(&self, _name: &Name, params: &[Parameter], body: &Block) -> Doc {
@@ -3355,8 +3362,15 @@ mod formatter_tests {
     #[test]
     fn test_capture_spec_formatting() {
         assert_eq!(
-            format_code("let f = func [copy a, consuming b, &c, &mut d]() {}", 80),
-            "let f = func [a, consuming b, &c, &mut d]() {}"
+            format_code(
+                "let f = func() { [copy a, consuming b, &c, &mut d] in }",
+                80,
+            ),
+            "let f = func() { [a, consuming b, &c, &mut d] in\n}"
+        );
+        assert_eq!(
+            format_code("func values() { [value] }", 80),
+            "func values() { [value] }"
         );
     }
 

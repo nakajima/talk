@@ -37,9 +37,9 @@ use crate::types::ty::{ParamKind, Perm, ProtocolRef, StaticValue, Ty, TyFold};
 use super::BackendError;
 
 pub(crate) use talk_mir::{
-    BlockData, BlockId, CmpKind, Constant, DisplayEntry, DisplayNames, FuncId, Function, Inst,
-    LocalId, LocalInfo, MirSymbol, MirSymbolKind, Module as Program, Operand, ScalarOp, Term,
-    TypeKind,
+    BlockData, BlockDebug, BlockId, CmpKind, Constant, DebugSpan, DisplayEntry, DisplayNames,
+    FuncId, Function, Inst, LocalId, LocalInfo, MirSymbol, MirSymbolKind, Module as Program,
+    Operand, ScalarOp, Term, TypeKind,
 };
 
 /// The executable identity of a source symbol, when one exists: only
@@ -513,6 +513,7 @@ fn frame_uses(nodes: &[&Node]) -> FxHashMap<Symbol, usize> {
 /// `capture_env`, nowhere else.
 fn bind_env(
     enclosing_locals: &FxHashMap<Symbol, LocalId>,
+    enclosing_names: &[String],
     enclosing_cells: &rustc_hash::FxHashSet<LocalId>,
     fx: &mut FunctionBuilder,
     captured: &[Symbol],
@@ -526,6 +527,13 @@ fn bind_env(
             index: u16::try_from(index).unwrap_or_default(),
         });
         fx.locals.insert(*symbol, local);
+        if let Some(name) = enclosing_locals
+            .get(symbol)
+            .and_then(|outer| enclosing_names.get(usize::from(*outer)))
+            .filter(|name| !name.is_empty())
+        {
+            fx.name_local(local, name);
+        }
         fx.captured_locals.insert(local);
         if enclosing_locals
             .get(symbol)
@@ -860,9 +868,7 @@ fn unique_specialization(
                 }
             }
         }
-        if !keep_rigid
-            && let Some(arg) = pinned
-        {
+        if !keep_rigid && let Some(arg) = pinned {
             specialization.push((*param, arg));
         }
     }
@@ -938,8 +944,9 @@ pub(crate) fn build(
     programs: &[ProgramInput<'_>],
     entry: Entry,
     check_all: bool,
+    collect_debug: bool,
 ) -> Result<Program, BackendError> {
-    let mut builder = ProgramBuilder::new(programs);
+    let mut builder = ProgramBuilder::new(programs, collect_debug);
     builder.index_callables();
 
     // Stored positions cannot hold borrows (CHG-04's storage face): a
@@ -1002,8 +1009,10 @@ pub(crate) fn build(
         Err(error) if check_all && error.message.contains("nothing to run") => {
             let id = builder.reserve("empty_entry");
             let fx = FunctionBuilder::new(&mut builder, 0, 0);
-            let (n_locals, blocks, _return_repr) = fx.finish(Operand::Const(Constant::Unit))?;
+            let (n_locals, blocks, _return_repr, debug_names) =
+                fx.finish(Operand::Const(Constant::Unit))?;
             builder.functions[id] = Function {
+                debug_names,
                 frame_sites: Default::default(),
                 param_reprs: Vec::new(),
                 return_repr: None,
@@ -1095,6 +1104,7 @@ pub(crate) fn build(
             function.frame_sites = Default::default();
             function.locals = crate::compiling::mir::build::LocalInfo::uniform(arity.max(1));
             function.blocks = vec![BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: Vec::new(),
                 term: Some(Term::Trap("check-only instance is not executable")),
@@ -1104,6 +1114,7 @@ pub(crate) fn build(
     let layout_table = builder.layouts.borrow().table();
 
     Ok(Program {
+        debug_files: builder.debug_files,
         functions: builder.functions,
         entry: entry_id,
         global_slots: u32::try_from(builder.global_slots.len()).unwrap_or_default()
@@ -1241,10 +1252,18 @@ struct ProgramBuilder<'a> {
     /// The layout oracle (ADR 0045): one classification per type,
     /// memoized like the structural caches above.
     layouts: std::cell::RefCell<layout::Layouts<'a>>,
+    /// Debug-mode collection (TOOL-10): when on, every emitted
+    /// instruction records the source statement it came from, and the
+    /// module publishes the file table `DebugSpan::file` indexes.
+    collect_debug: bool,
+    debug_files: Vec<String>,
+    debug_file_ids: FxHashMap<crate::node_id::FileID, Option<u32>>,
+    /// Line-start byte offsets per debug file, for span to line:col.
+    debug_line_starts: Vec<Vec<u32>>,
 }
 
 impl<'a> ProgramBuilder<'a> {
-    fn new(programs: &'a [ProgramInput<'a>]) -> Self {
+    fn new(programs: &'a [ProgramInput<'a>], collect_debug: bool) -> Self {
         // Catalog symbols are absolute (ADR 0038): every program's
         // artifacts already carry their real module stamps, so the
         // merge is a plain union with value-dedup.
@@ -1311,7 +1330,79 @@ impl<'a> ProgramBuilder<'a> {
             glue: FxHashMap::default(),
             equality_glue: FxHashMap::default(),
             show_glue: FxHashMap::default(),
+            collect_debug,
+            debug_files: Vec::new(),
+            debug_file_ids: FxHashMap::default(),
+            debug_line_starts: Vec::new(),
         }
+    }
+
+    /// Resolve a source span to a published debug span: the file joins
+    /// the module's table, and line/col come from a cached line-start
+    /// index per file. Synthesized or unlocatable spans record nothing.
+    fn debug_span(&mut self, span: Span) -> Option<DebugSpan> {
+        if span == Span::SYNTHESIZED || span == Span::ANY {
+            return None;
+        }
+        if !self.debug_file_ids.contains_key(&span.file_id) {
+            let mut located = None;
+            'files: for input in self.programs {
+                for (source, file) in input.program.files() {
+                    if file.file_id != span.file_id {
+                        continue;
+                    }
+                    let Ok(text) = source.read() else {
+                        break 'files;
+                    };
+                    let mut starts = vec![0u32];
+                    for (offset, byte) in text.bytes().enumerate() {
+                        if byte == b'\n' {
+                            starts
+                                .push(u32::try_from(offset).unwrap_or(u32::MAX).saturating_add(1));
+                        }
+                    }
+                    let index = u32::try_from(self.debug_files.len()).ok()?;
+                    let path = source.path();
+                    let path = std::path::Path::new(path.as_ref());
+                    let display =
+                        if let Ok(relative) = path.strip_prefix(env!("CARGO_MANIFEST_DIR")) {
+                            relative.display().to_string()
+                        } else if let Some(root) = option_env!("TALK_CORE_PATH")
+                            && let Ok(relative) = path.strip_prefix(root)
+                        {
+                            std::path::Path::new("core")
+                                .join(relative)
+                                .display()
+                                .to_string()
+                        } else if let Some(root) = option_env!("TALK_STDLIB_PATH")
+                            && let Ok(relative) = path.strip_prefix(root)
+                        {
+                            std::path::Path::new("stdlib")
+                                .join(relative)
+                                .display()
+                                .to_string()
+                        } else {
+                            path.display().to_string()
+                        };
+                    self.debug_files.push(display);
+                    self.debug_line_starts.push(starts);
+                    located = Some(index);
+                    break 'files;
+                }
+            }
+            self.debug_file_ids.insert(span.file_id, located);
+        }
+        let index = self.debug_file_ids.get(&span.file_id).copied().flatten()?;
+        let starts = &self.debug_line_starts[usize::try_from(index).ok()?];
+        let line = starts.partition_point(|start| *start <= span.start);
+        let line_start = starts[line.saturating_sub(1)];
+        Some(DebugSpan {
+            file: index,
+            line: u32::try_from(line).unwrap_or(u32::MAX),
+            col: span.start - line_start + 1,
+            start: span.start,
+            end: span.end,
+        })
     }
 
     /// Walk every program's typed roots and record each function or method
@@ -1456,13 +1547,9 @@ impl<'a> ProgramBuilder<'a> {
         // Best-effort mirror of the initializer compile (the
         // authoritative check): the same triage, except a concrete
         // disagreement leaves the type raw — the compile reports it.
-        let specialization = unique_specialization(
-            &params,
-            uses,
-            &|ty| ty.clone(),
-            Span::SYNTHESIZED,
-        )
-        .unwrap_or_default();
+        let specialization =
+            unique_specialization(&params, uses, &|ty| ty.clone(), Span::SYNTHESIZED)
+                .unwrap_or_default();
         let subst: FxHashMap<Symbol, Ty> = specialization.into_iter().collect();
         rhs_ty.substitute(&subst, &FxHashMap::default(), &FxHashMap::default())
     }
@@ -1599,6 +1686,7 @@ impl<'a> ProgramBuilder<'a> {
     fn reserve(&mut self, name: &str) -> FuncId {
         let id = self.functions.len();
         self.functions.push(Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -2028,9 +2116,10 @@ impl<'a> ProgramBuilder<'a> {
         self.show_glue.insert(ty.clone(), id);
         let mut fx = FunctionBuilder::new(self, 1, 0);
         let result = fx.emit_show(Operand::Local(0), ty, protocol, span)?;
-        let (n_locals, blocks, _return_repr) = fx.finish(result)?;
+        let (n_locals, blocks, _return_repr, debug_names) = fx.finish(result)?;
         let layout = self.layouts.borrow_mut().id_of(ty);
         self.functions[id] = Function {
+            debug_names,
             frame_sites: Default::default(),
             param_reprs: vec![layout::ParamRepr::Value(layout)],
             return_repr: None,
@@ -2057,9 +2146,10 @@ impl<'a> ProgramBuilder<'a> {
         self.equality_glue.insert(ty.clone(), id);
         let mut fx = FunctionBuilder::new(self, 2, 0);
         let result = fx.emit_equality(Operand::Local(0), Operand::Local(1), ty, protocol, span)?;
-        let (n_locals, blocks, _return_repr) = fx.finish(result)?;
+        let (n_locals, blocks, _return_repr, debug_names) = fx.finish(result)?;
         let layout = self.layouts.borrow_mut().id_of(ty);
         self.functions[id] = Function {
+            debug_names,
             frame_sites: Default::default(),
             param_reprs: vec![layout::ParamRepr::Value(layout); 2],
             return_repr: None,
@@ -2260,8 +2350,9 @@ impl<'a> ProgramBuilder<'a> {
                     fx.own_param(local, &ty, receiver_writeback);
                 }
             }
-            if let Name::Resolved(symbol, _) = &param.name {
+            if let Name::Resolved(symbol, name) = &param.name {
                 fx.locals.insert(*symbol, local);
+                fx.name_local(local, name);
             }
         }
 
@@ -2287,7 +2378,7 @@ impl<'a> ProgramBuilder<'a> {
             CallableBody::Init { .. } => Operand::Local(0),
             CallableBody::Func(_) => value,
         };
-        let (n_locals, blocks, return_repr) = fx.finish(value)?;
+        let (n_locals, blocks, return_repr, debug_names) = fx.finish(value)?;
         // An initializer returns its receiver, fully assigned (definite
         // assignment is the checker's guarantee), so the published
         // return is the receiver's layout even though `self` arrived
@@ -2297,6 +2388,7 @@ impl<'a> ProgramBuilder<'a> {
             CallableBody::Func(_) => return_repr,
         };
         Ok(Function {
+            debug_names,
             frame_sites: Default::default(),
             param_reprs,
             return_repr,
@@ -2520,17 +2612,23 @@ struct FunctionBuilder<'p, 'a> {
     /// This function returns a borrowed view: returning one of its own
     /// owned locals would let the loan escape its owner (CHG-04).
     returns_borrow: bool,
+    /// Debug-mode collection: the span of the statement currently
+    /// compiling, stamped on every emitted instruction, and the source
+    /// binding names of this frame's locals.
+    current_span: Span,
+    debug_names: Vec<String>,
 }
 
 impl<'p, 'a> FunctionBuilder<'p, 'a> {
     fn new(program_builder: &'p mut ProgramBuilder<'a>, arity: u16, program: usize) -> Self {
+        let collect_debug = program_builder.collect_debug;
         Self {
             program_builder,
             program,
             subst: FxHashMap::default(),
             locals: FxHashMap::default(),
             frame: vec![BuildLocal::default(); usize::from(arity)],
-            blocks: vec![BlockData::default()],
+            blocks: vec![BlockData::debugged(collect_debug)],
             current: 0,
             loop_stack: Vec::new(),
             scopes: vec![Vec::new()],
@@ -2571,6 +2669,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             unique_locals: rustc_hash::FxHashSet::default(),
             in_return_consume: false,
             returns_borrow: false,
+            current_span: Span::SYNTHESIZED,
+            debug_names: Vec::new(),
         }
     }
 
@@ -2716,16 +2816,26 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     fn finish(
         mut self,
         value: Operand,
-    ) -> Result<(u16, Vec<BlockData>, Option<layout::LayoutId>), BackendError> {
+    ) -> Result<
+        (
+            u16,
+            Vec<BlockData>,
+            Option<layout::LayoutId>,
+            Option<Vec<String>>,
+        ),
+        BackendError,
+    > {
         if !self.terminated() {
             self.emit_return(value);
         }
         self.elaborate_and_verify();
         self.deferred_error()?;
+        let debug_names = self.take_debug_names();
         Ok((
             self.n_locals(),
             self.blocks,
             self.published_return.flatten(),
+            debug_names,
         ))
     }
 
@@ -2755,6 +2865,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         )
     )]
     fn elaborate_and_verify(&mut self) {
+        // Drop elaboration emits below: those instructions implement the
+        // ownership plan rather than any statement, so they carry no
+        // source span (a stale one would misattribute them).
+        self.current_span = Span::SYNTHESIZED;
         let plan = release::plan(&self.blocks, &self.flow_events);
         // An equalization edge on an init-field shadow IS divergence:
         // the field was assigned on one join predecessor and not the
@@ -2791,7 +2905,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .map(|record| format!("{record:?}"))
                     .collect();
                 let rendered = Program {
+                    debug_files: Vec::new(),
                     functions: vec![Function {
+                        debug_names: None,
                         frame_sites: Default::default(),
                         param_reprs: Vec::new(),
                         return_repr: None,
@@ -3884,7 +4000,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     }
 
     fn new_block(&mut self) -> BlockId {
-        self.blocks.push(BlockData::default());
+        self.blocks
+            .push(BlockData::debugged(self.program_builder.collect_debug));
         self.blocks.len() - 1
     }
 
@@ -4014,8 +4131,34 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     fn push(&mut self, inst: Inst) {
         self.track_anchored(&inst);
         if !self.terminated() {
-            self.blocks[self.current].insts.push(inst);
+            let span = if self.program_builder.collect_debug {
+                self.program_builder.debug_span(self.current_span)
+            } else {
+                None
+            };
+            self.blocks[self.current].push_inst(inst, span);
         }
+    }
+
+    /// Record a local's source binding name for the debug dump.
+    fn name_local(&mut self, local: LocalId, name: &str) {
+        if !self.program_builder.collect_debug || name.is_empty() {
+            return;
+        }
+        let index = usize::from(local);
+        if self.debug_names.len() <= index {
+            self.debug_names.resize(index + 1, String::new());
+        }
+        if self.debug_names[index].is_empty() {
+            self.debug_names[index] = name.to_string();
+        }
+    }
+
+    /// Hand the collected binding names to the published function.
+    fn take_debug_names(&mut self) -> Option<Vec<String>> {
+        self.program_builder
+            .collect_debug
+            .then(|| std::mem::take(&mut self.debug_names))
     }
 
     /// Propagate the frame-anchored closure mark through value copies,
@@ -4495,6 +4638,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         });
         block.term = Some(Term::Return(Operand::Local(arity)));
         self.program_builder.functions[id] = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -5097,14 +5241,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 .program_builder
                 .conformance_dictionary(&arg, &protocol)
                 .ok_or_else(|| {
-                    BackendError::new(
-                        "conformance without a catalog entry".into(),
-                        span,
-                    )
+                    BackendError::new("conformance without a catalog entry".into(), span)
                 })?;
             for entry in &entries {
-                let closure =
-                    self.requirement_closure(&arg, &protocol, entry, &subst, span)?;
+                let closure = self.requirement_closure(&arg, &protocol, entry, &subst, span)?;
                 operands.push(closure);
             }
         }
@@ -5545,7 +5685,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// for parameters shared mutably with this frame's closures).
     fn cell_celled_params(&mut self, params: &[crate::typed_ast::Parameter]) {
         for param in params {
-            let Name::Resolved(symbol, _) = &param.name else {
+            let Name::Resolved(symbol, name) = &param.name else {
                 continue;
             };
             if !self.celled.contains(symbol) {
@@ -5560,6 +5700,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 init: Operand::Local(local),
             });
             self.locals.insert(*symbol, handle);
+            self.name_local(handle, name);
             self.cell_handles.insert(handle);
         }
     }
@@ -5692,6 +5833,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     }
 
     fn compile_node(&mut self, node: &Node) -> Result<Operand, BackendError> {
+        self.current_span = match node {
+            Node::Expr(expr) => expr.span,
+            Node::Stmt(stmt) => stmt.span,
+            Node::Decl(decl) => decl.span,
+        };
         match node {
             Node::Expr(expr) => self.compile_expr(expr),
             Node::Stmt(stmt) => self.compile_stmt(stmt),
@@ -5714,7 +5860,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     // first assignment initializes without releasing
                     // garbage, and a never-initialized owned binding
                     // releases nothing at scope exit.
-                    let PatternKind::Bind(Name::Resolved(symbol, _)) = &lhs.kind else {
+                    let PatternKind::Bind(Name::Resolved(symbol, bind_name)) = &lhs.kind else {
                         return Err(BackendError::unsupported(
                             "destructuring in a `let` without an initializer is not supported yet"
                                 .into(),
@@ -5730,6 +5876,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     let ty = self.resolved(&lhs.ty.clone().unwrap_or(Ty::Error));
                     let local = self.fresh_local();
                     self.locals.insert(*symbol, local);
+                    self.name_local(local, bind_name);
                     self.frame_entry(local).declared = Some(ty.clone());
                     self.own_local(local, &ty);
                     self.moved.insert(local);
@@ -5774,6 +5921,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         });
                     }
                     self.locals.insert(*symbol, local);
+                    self.name_local(local, bind_name);
                     self.frame_entry(local).declared =
                         Some(Ty::Borrow(Perm::Shared, Box::new(self.resolved(&rhs.ty))));
                     return Ok(Operand::Const(Constant::Unit));
@@ -5782,7 +5930,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // locals and is referenced from a nested function (its
                 // own body, or a sibling closure declared later) binds
                 // through a cell created before the closure compiles.
-                if let PatternKind::Bind(Name::Resolved(symbol, _)) = &lhs.kind
+                if let PatternKind::Bind(Name::Resolved(symbol, bind_name)) = &lhs.kind
                     && let ExprKind::Func(func) = &rhs.kind
                     && self.nested_refs.contains(symbol)
                 {
@@ -5801,6 +5949,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             init: Operand::Const(Constant::Unit),
                         });
                         self.locals.insert(*symbol, handle);
+                        self.name_local(handle, bind_name);
                         self.cell_handles.insert(handle);
                         let closure = self.compile_closure(func, &rhs.ty)?;
                         self.push(Inst::CellSet {
@@ -5842,7 +5991,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         ty: &Ty,
     ) -> Result<(), BackendError> {
         match &pattern.kind {
-            PatternKind::Bind(Name::Resolved(symbol, _)) => {
+            PatternKind::Bind(Name::Resolved(symbol, bind_name)) => {
                 if self.celled.contains(symbol) {
                     // Assignment-converted: the binding becomes a cell
                     // shared with the closures that capture it. Owning
@@ -5857,6 +6006,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     });
                     self.consume_binding(value, ty, pattern.span)?;
                     self.locals.insert(*symbol, handle);
+                    self.name_local(handle, bind_name);
                     self.frame_entry(handle).declared = Some(ty.clone());
                     self.cell_handles.insert(handle);
                     if self.needs_release(ty) {
@@ -5903,6 +6053,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // (which would donate a reference nothing releases).
                 self.consume_binding(value, ty, pattern.span)?;
                 self.locals.insert(*symbol, local);
+                self.name_local(local, bind_name);
                 self.frame_entry(local).declared = Some(ty.clone());
                 if contains_borrow_classified(self.program_builder, ty) {
                     self.view_locals.insert(local);
@@ -6066,6 +6217,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     }
 
     fn compile_stmt(&mut self, stmt: &Stmt) -> Result<Operand, BackendError> {
+        self.current_span = stmt.span;
         match &stmt.kind {
             StmtKind::Expr(expr) => self.compile_expr(expr),
             StmtKind::Return(expr) => {
@@ -8028,7 +8180,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.terminate(Term::Goto(matched, Vec::new()));
                 Ok(())
             }
-            PatternKind::Bind(Name::Resolved(symbol, _)) => {
+            PatternKind::Bind(Name::Resolved(symbol, bind_name)) => {
                 let local = match self.locals.get(symbol) {
                     Some(local) => *local,
                     None => {
@@ -8037,6 +8189,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         local
                     }
                 };
+                self.name_local(local, bind_name);
                 self.push(Inst::Copy {
                     dest: local,
                     src: scrutinee,
@@ -8195,18 +8348,18 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // `label: pattern` also binds the label to the slot;
                 // register those binders exactly like Bind cells.
                 for (cell, slot) in cells.iter().zip(&extracted) {
-                    let Some(symbol) = cell.bind.as_ref().and_then(|name| name.symbol().ok())
-                    else {
+                    let Some(Name::Resolved(symbol, bind_name)) = cell.bind.as_ref() else {
                         continue;
                     };
-                    let local = match self.locals.get(&symbol) {
+                    let local = match self.locals.get(symbol) {
                         Some(local) => *local,
                         None => {
                             let local = self.fresh_local();
-                            self.locals.insert(symbol, local);
+                            self.locals.insert(*symbol, local);
                             local
                         }
                     };
+                    self.name_local(local, bind_name);
                     self.push(Inst::Copy {
                         dest: local,
                         src: *slot,
@@ -9325,6 +9478,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     ) -> Result<(), BackendError> {
         let body_nodes: Vec<&Node> = body.body.iter().collect();
         let captured = self.live_captures(body);
+        let captured_names: Vec<Option<String>> = captured
+            .iter()
+            .map(|symbol| {
+                self.locals
+                    .get(symbol)
+                    .and_then(|local| self.debug_names.get(usize::from(*local)))
+                    .filter(|name| !name.is_empty())
+                    .cloned()
+            })
+            .collect();
         let cont = self.fresh_local();
         self.push(Inst::MakeCont { dest: cont });
 
@@ -9382,8 +9545,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             fx.frame_entry(local).declared = Some(ty.clone());
             fx.check_copy(&ty, body.span)?;
             fx.own_param(local, &ty, false);
-            if let Name::Resolved(symbol, _) = &param.name {
+            if let Name::Resolved(symbol, name) = &param.name {
                 fx.locals.insert(*symbol, local);
+                fx.name_local(local, name);
             }
         }
         let delimiter = fx.fresh_local();
@@ -9399,6 +9563,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 index: u16::try_from(index + 1).unwrap_or_default(),
             });
             fx.locals.insert(*symbol, local);
+            if let Some(name) = &captured_names[index] {
+                fx.name_local(local, name);
+            }
         }
         // Rebind the inherited witness blocks in the same layout
         // `push_witness_block` appended them (the clause-frame mirror of
@@ -9447,8 +9614,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
         fx.elaborate_and_verify();
         fx.deferred_error()?;
+        let debug_names = fx.take_debug_names();
         let (n_locals, blocks) = (fx.n_locals(), fx.blocks);
         self.program_builder.functions[id] = Function {
+            debug_names,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -9680,13 +9849,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 fx.check_copy(&ty, func.body.span)?;
                 fx.own_param(local, &ty, false);
             }
-            if let Name::Resolved(symbol, _) = &param.name {
+            if let Name::Resolved(symbol, name) = &param.name {
                 fx.locals.insert(*symbol, local);
+                fx.name_local(local, name);
             }
         }
         fx.cell_celled_params(&func.params);
         bind_env(
             &self.locals,
+            &self.debug_names,
             &self.cell_handles,
             &mut fx,
             &captured,
@@ -9694,8 +9865,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             &effects,
         );
         let value = fx.compile_block(&func.body)?;
-        let (n_locals, blocks, _return_repr) = fx.finish(value)?;
+        let (n_locals, blocks, _return_repr, debug_names) = fx.finish(value)?;
         self.program_builder.functions[id] = Function {
+            debug_names,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,

@@ -5,9 +5,16 @@ use crate::{
     name::Name,
     node_id::NodeID,
     node_kinds::{
-        block::Block, body::Body, expr::{Expr, MacroToken}, func::Func, func_signature::FuncSignature,
-        generic_decl::GenericDecl, parameter::Parameter, pattern::Pattern,
-        type_annotation::TypeAnnotation, type_application::TypeApplication,
+        block::Block,
+        body::Body,
+        expr::{Expr, MacroToken},
+        func::Func,
+        func_signature::FuncSignature,
+        generic_decl::GenericDecl,
+        parameter::Parameter,
+        pattern::Pattern,
+        type_annotation::TypeAnnotation,
+        type_application::TypeApplication,
         where_clause::WhereClause,
     },
     parsing::span::Span,
@@ -78,6 +85,10 @@ pub enum ImportedSymbols {
     Named(Vec<ImportedSymbol>),
     /// Import all public symbols.
     All,
+    /// Import all public symbols from the module and, recursively, every
+    /// submodule under its directory: use package::foo::*  For a compiled
+    /// package module (no source tree) this behaves like `All`.
+    Glob,
 }
 
 /// Full import statement

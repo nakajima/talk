@@ -78,6 +78,7 @@ mod tests {
 
     fn function(name: &str, insts: Vec<Inst>) -> Function {
         Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -85,6 +86,7 @@ mod tests {
             arity: 0,
             locals: LocalInfo::uniform(1),
             blocks: vec![BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts,
                 term: Some(Term::Return(Operand::Const(Constant::Unit))),
@@ -111,6 +113,7 @@ mod tests {
 
     fn program(functions: Vec<Function>, entry: usize, exports: Vec<(&str, usize)>) -> Program {
         Program {
+            debug_files: Vec::new(),
             functions,
             entry,
             global_slots: 0,

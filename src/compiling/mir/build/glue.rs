@@ -58,8 +58,10 @@ impl<'a> ProgramBuilder<'a> {
             });
             fx.drop_value(Operand::Local(field), &field_ty);
         }
-        let (n_locals, blocks, _return_repr) = fx.finish(Operand::Const(Constant::Unit))?;
+        let (n_locals, blocks, _return_repr, debug_names) =
+            fx.finish(Operand::Const(Constant::Unit))?;
         self.functions[id] = Function {
+            debug_names,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -140,12 +142,14 @@ impl<'a> ProgramBuilder<'a> {
                 fx.retain_value(Operand::Local(0), &retained, Span::SYNTHESIZED)?;
             }
         }
-        let (n_locals, blocks, _return_repr) = fx.finish(Operand::Const(Constant::Unit))?;
+        let (n_locals, blocks, _return_repr, debug_names) =
+            fx.finish(Operand::Const(Constant::Unit))?;
         // The glue's one parameter is the value itself, at its published
         // layout: scope-exit drops of native locals then pass the struct
         // straight in instead of boxing at every death.
         let layout = self.layouts.borrow_mut().id_of(ty);
         self.functions[id] = Function {
+            debug_names,
             frame_sites: Default::default(),
             param_reprs: vec![layout::ParamRepr::Value(layout)],
             return_repr: None,
@@ -520,11 +524,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             unwind: None,
         });
         let block = BlockData {
+            debug: None,
             params: Vec::new(),
             insts,
             term: Some(Term::Return(Operand::Local(result))),
         };
         self.program_builder.functions[id] = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,

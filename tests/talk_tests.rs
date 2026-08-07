@@ -604,7 +604,7 @@ fn run_explicit_capture_modes_over_owned_values() {
     assert_runs(
         b"func f() -> Int {\n\
           \tlet s = \"a\" + \"b\"\n\
-          \tlet g = func [s]() -> Int { s.byte_count }\n\
+          \tlet g = func() -> Int { [s] in s.byte_count }\n\
           \tg() + s.byte_count\n\
           }\n\
           print(f())\n",
@@ -615,7 +615,7 @@ fn run_explicit_capture_modes_over_owned_values() {
     assert_runs(
         b"func f() -> Int {\n\
           \tlet s = \"a\" + \"b\"\n\
-          \tlet g = func [&s]() -> Int { s.byte_count }\n\
+          \tlet g = func() -> Int { [&s] in s.byte_count }\n\
           \tg() + s.byte_count\n\
           }\n\
           print(f())\n",
@@ -627,7 +627,7 @@ fn run_explicit_capture_modes_over_owned_values() {
     assert_runs(
         b"func f() -> Int {\n\
           \tlet s = \"a\" + \"b\"\n\
-          \tlet g = func [consuming s]() -> Int { s.byte_count }\n\
+          \tlet g = func() -> Int { [consuming s] in s.byte_count }\n\
           \tg()\n\
           }\n\
           print(f())\n",
@@ -637,7 +637,7 @@ fn run_explicit_capture_modes_over_owned_values() {
     let output = run_source(
         b"func f() -> Int {\n\
           \tlet s = \"a\" + \"b\"\n\
-          \tlet g = func [consuming s]() -> Int { s.byte_count }\n\
+          \tlet g = func() -> Int { [consuming s] in s.byte_count }\n\
           \tg() + s.byte_count\n\
           }\n\
           print(f())\n",
@@ -1462,7 +1462,7 @@ fn run_enforces_capture_list_modes() {
     assert_runs(
         b"func run() -> Int {\n\
           \tlet a = 40\n\
-          \tlet f = func [copy a]() -> Int { a }\n\
+          \tlet f = func() -> Int { [copy a] in a }\n\
           \tf() + 2\n\
           }\n\
           run()\n",
@@ -1473,7 +1473,7 @@ fn run_enforces_capture_list_modes() {
     let output = run_source(
         b"func run() -> Int {\n\
           \tlet s = (1, 2)\n\
-          \tlet f = func [consuming s]() -> Int { s.0 }\n\
+          \tlet f = func() -> Int { [consuming s] in s.0 }\n\
           \tf() + s.1\n\
           }\n\
           run()\n",
@@ -1488,7 +1488,7 @@ fn run_enforces_capture_list_modes() {
         b"func run() -> Int {\n\
           \tlet a = 1\n\
           \tlet b = 2\n\
-          \tlet f = func [copy a]() -> Int { a + b }\n\
+          \tlet f = func() -> Int { [copy a] in a + b }\n\
           \tf()\n\
           }\n\
           run()\n",

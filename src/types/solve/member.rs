@@ -827,10 +827,8 @@ impl<'s> Solver<'s> {
                             member,
                             origin,
                         ));
-                        self.resolved_member_types.insert(
-                            origin.node,
-                            Ty::Func(params[1..].to_vec(), ret, eff),
-                        );
+                        self.resolved_member_types
+                            .insert(origin.node, Ty::Func(params[1..].to_vec(), ret, eff));
                         // Publish the instance-head bindings (the extend's
                         // rigid params at the receiver's application).
                         self.instantiations

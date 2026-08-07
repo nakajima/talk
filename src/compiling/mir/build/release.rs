@@ -260,6 +260,7 @@ mod tests {
 
     fn ret_block(insts: Vec<Inst>) -> BlockData {
         BlockData {
+            debug: None,
             params: Vec::new(),
             insts,
             term: Some(Term::Return(Operand::Const(Constant::Unit))),
@@ -300,6 +301,7 @@ mod tests {
         // the divergence the old merge machinery hand-computed.
         let blocks = vec![
             BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![Inst::Copy {
                     dest: 1,
@@ -312,6 +314,7 @@ mod tests {
                 }),
             },
             BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![Inst::Copy {
                     dest: 2,
@@ -320,6 +323,7 @@ mod tests {
                 term: Some(Term::Goto(3, Vec::new())),
             },
             BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: Vec::new(),
                 term: Some(Term::Goto(3, Vec::new())),
@@ -363,11 +367,13 @@ mod tests {
         // in-loop scope drops provided.
         let blocks = vec![
             BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: Vec::new(),
                 term: Some(Term::Goto(1, Vec::new())),
             },
             BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: Vec::new(),
                 term: Some(Term::Branch {
@@ -377,6 +383,7 @@ mod tests {
                 }),
             },
             BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![Inst::Copy {
                     dest: 1,
@@ -399,6 +406,7 @@ mod tests {
         // frame exit.
         let blocks = vec![
             BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![Inst::Copy {
                     dest: 1,
@@ -407,6 +415,7 @@ mod tests {
                 term: Some(Term::Goto(1, Vec::new())),
             },
             BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: Vec::new(),
                 term: Some(Term::Branch {
@@ -416,6 +425,7 @@ mod tests {
                 }),
             },
             BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![Inst::Copy {
                     dest: 2,

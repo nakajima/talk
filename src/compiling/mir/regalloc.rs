@@ -108,7 +108,7 @@ fn fuse_adjacent_copies(function: &mut Function) {
                 {
                     *count -= 1;
                 }
-                block.insts.remove(i);
+                block.remove_inst(i);
                 continue;
             }
             // Def-copy fusion with the immediately following copy.
@@ -133,7 +133,7 @@ fn fuse_adjacent_copies(function: &mut Function) {
                             *local = fused;
                         }
                     });
-                    block.insts.remove(i + 1);
+                    block.remove_inst(i + 1);
                     // Re-examine the same position: the rewritten
                     // instruction may pair with the next copy in a chain.
                     continue;
@@ -247,6 +247,7 @@ pub(crate) fn reuse_locals(
 ) {
     layout_blocks(function);
     fuse_adjacent_copies(function);
+    debug_assert!(function.blocks.iter().all(BlockData::debug_is_aligned));
     let arity = usize::from(function.arity);
     let n_locals = usize::from(function.n_locals());
     // Layout classes (ADR 0045): a register may be reused only by locals
@@ -582,8 +583,29 @@ pub(crate) fn reuse_locals(
     }
     // Publish each register's layout class on the final numbering: a
     // register's class is by construction the common class of every
-    // local allocated into it.
+    // local allocated into it. Debug names follow the same map; when
+    // nonoverlapping bindings reuse a register, list all of them rather
+    // than pretending the slot has one identity for the whole frame.
     let n_regs = next.max(function.arity).max(1);
+    if let Some(names) = function.debug_names.take() {
+        let mut remapped = vec![String::new(); usize::from(n_regs)];
+        for (old, name) in names.into_iter().enumerate() {
+            if name.is_empty() || old >= map.len() || old >= start.len() || start[old] == UNSET {
+                continue;
+            }
+            let register = usize::from(map[old]);
+            let Some(slot) = remapped.get_mut(register) else {
+                continue;
+            };
+            if slot.is_empty() {
+                *slot = name;
+            } else if !slot.split(", ").any(|existing| existing == name) {
+                slot.push_str(", ");
+                slot.push_str(&name);
+            }
+        }
+        function.debug_names = Some(remapped);
+    }
     function.locals = (0..n_regs)
         .map(|register| crate::compiling::mir::build::LocalInfo {
             layout: register_class.get(&register).copied().flatten(),
@@ -620,6 +642,7 @@ mod tests {
 
     fn function(arity: u16, n_locals: u16, blocks: Vec<BlockData>) -> Function {
         Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -650,6 +673,7 @@ mod tests {
             },
         )];
         let blocks = vec![BlockData {
+            debug: None,
             params: Vec::new(),
             insts: vec![
                 Inst::Aggregate {
@@ -685,6 +709,7 @@ mod tests {
             0,
             3,
             vec![BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![
                     copy(0, int(1)),
@@ -717,6 +742,7 @@ mod tests {
             0,
             width * 2,
             vec![BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts,
                 term: Some(Term::Return(result)),
@@ -761,6 +787,7 @@ mod tests {
             0,
             4,
             vec![BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![
                     copy(0, int(1)),
@@ -791,6 +818,7 @@ mod tests {
             0,
             2,
             vec![BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![copy(0, int(5)), add(1, local(0), int(1)), copy(0, local(1))],
                 term: Some(Term::Return(local(0))),
@@ -815,6 +843,7 @@ mod tests {
         // dies at the edge, so the parameter takes its register and the
         // edge move lowers to nothing.
         let mut f = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -823,11 +852,13 @@ mod tests {
             locals: crate::compiling::mir::build::LocalInfo::uniform(2),
             blocks: vec![
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: vec![add(0, int(1), int(1))],
                     term: Some(Term::Goto(1, vec![local(0)])),
                 },
                 BlockData {
+                    debug: None,
                     params: vec![1],
                     insts: vec![],
                     term: Some(Term::Return(local(1))),
@@ -851,6 +882,7 @@ mod tests {
             2,
             4,
             vec![BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![add(2, local(0), local(1)), add(3, local(2), local(0))],
                 term: Some(Term::Return(local(3))),
@@ -874,11 +906,13 @@ mod tests {
             2,
             vec![
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: vec![copy(0, int(7))],
                     term: Some(Term::Goto(1, Vec::new())),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: vec![Inst::Scalar {
                         dest: 1,
@@ -893,6 +927,7 @@ mod tests {
                     }),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: vec![],
                     term: Some(Term::Return(local(0))),
@@ -922,6 +957,7 @@ mod tests {
             2,
             vec![
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: vec![
                         copy(0, int(5)),
@@ -935,6 +971,7 @@ mod tests {
                     term: Some(Term::Return(local(1))),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: vec![Inst::Free { src: local(0) }],
                     term: Some(Term::UnwindRet),
@@ -972,6 +1009,7 @@ mod tests {
             },
         )];
         let build = || Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -979,6 +1017,7 @@ mod tests {
             arity: 1,
             locals: crate::compiling::mir::build::LocalInfo::uniform(4),
             blocks: vec![BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![
                     Inst::Aggregate {

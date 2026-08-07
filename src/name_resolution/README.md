@@ -80,6 +80,7 @@ File imports use Talk's `use` syntax:
 use package::file::{ name }
 use package::file::{ OldName as LocalName }
 use package::file
+use package::foo::*
 ```
 
 A local import resolves against the target file's public symbols. `package`
@@ -88,8 +89,13 @@ current source module. The driver discovers and parses local imports before
 name resolution; the resolver checks that each named import exists and is
 public, applies aliases, and inserts the imported symbol into the importing
 file's root scope. A path-only `use` imports all public, non-builtin symbols
-from the target. Package-style imports (`use package::{ name }` or `use
-package`) resolve against the `ModuleEnvironment` instead of a source file.
+from the target file. A local glob (`use package::foo::*`, with `self` and
+`super` accepted too) imports those symbols from `foo.tlk` when it exists and
+from every `.tlk` file under `foo/`, recursively. Duplicate bindings use the
+same hard collision diagnostics as separate explicit imports. Package-style
+imports (`use package::{ name }` or `use package`) resolve against the
+`ModuleEnvironment` instead of a source file; `::*` on a compiled package is
+therefore equivalent to its path-only import.
 
 Qualified names such as `package::file::Thing`, `super::lib::Thing`, and
 `Package::Thing` are resolved through the same public-symbol rules. Core

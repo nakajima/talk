@@ -272,8 +272,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             })
             .collect();
         for (node, scheme) in forall_nodes {
-            let identity: Vec<Symbol> =
-                scheme.params.iter().map(|param| param.symbol).collect();
+            let identity: Vec<Symbol> = scheme.params.iter().map(|param| param.symbol).collect();
             let projected = self
                 .artifacts
                 .projection_instantiations

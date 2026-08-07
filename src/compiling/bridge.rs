@@ -2272,6 +2272,7 @@ impl ResultAdapter<'_, '_> {
                     self.variant(&take(&mut import, "symbols")?, "ImportedSymbols")?;
                 let symbols = match symbols_variant.as_str() {
                     "all" => ImportedSymbols::All,
+                    "glob" => ImportedSymbols::Glob,
                     "named" => {
                         let mut named = Vec::new();
                         for symbol in self.array(&symbols_payload[0])? {

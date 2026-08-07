@@ -3205,6 +3205,11 @@ struct Parser {
 		// after the path.
 		let path_end = self.current().span.lower
 		let symbols: ImportedSymbols = .all
+		if self.peek_is(kind: .double_colon) && self.next_kind() == .star {
+			self.consume(kind: .double_colon)
+			self.consume(kind: .star)
+			symbols = .glob
+		}
 		if self.peek_is(kind: .double_colon) && self.next_kind() == .left_brace {
 			self.consume(kind: .double_colon)
 			self.consume(kind: .left_brace)
@@ -3231,7 +3236,7 @@ struct Parser {
 	mut func module_path() -> (String, Bool) {
 		let head = self.identifier()
 		let path = head
-		loop self.peek_is(kind: .double_colon) && self.next_kind() != .left_brace {
+		loop self.peek_is(kind: .double_colon) && self.next_kind() != .left_brace && self.next_kind() != .star {
 			self.consume(kind: .double_colon)
 			path = path + "::" + self.identifier()
 		}
@@ -3271,8 +3276,6 @@ struct Parser {
 		}
 		let generics = self.generics_list()
 		if self.is_failed() { return dummy_decl_kind() }
-		let captures = self.capture_specs()
-		if self.is_failed() { return dummy_decl_kind() }
 		self.consume(kind: .left_paren)
 		if self.is_failed() { return dummy_decl_kind() }
 		let params = self.parameters()
@@ -3291,8 +3294,32 @@ struct Parser {
 		if context == .protocol_body && self.peek_is(kind: .left_brace) == false {
 			return .func_signature(FuncSignature(name: name, params: params, effects: effects, generics: generics, where_clause: wc, ret: ret, start: start_tok.span.lower, end: self.span_end()))
 		}
-		let body = self.block(context: .func_body, consumes_left_brace: true)
+		let body_start = self.current().span.lower
+		self.consume(kind: .left_brace)
 		if self.is_failed() { return dummy_decl_kind() }
+		self.skip_newlines()
+		let captures: [CaptureSpec] = []
+		if self.peek_is(kind: .left_bracket) {
+			// Probe because an ordinary function body may begin with an array
+			// expression. Only a bracketed name list followed by `in` is a
+			// capture list.
+			let checkpoint = self.pos
+			let log_mark = self.id_log.count
+			let candidate = self.capture_specs()
+			if self.is_failed() {
+				self.pos = checkpoint
+				self.failed = .none
+				self.mark_probe(from: log_mark)
+			} else if self.did_match(kind: .keyword_in) {
+				captures = candidate
+			} else {
+				self.pos = checkpoint
+				self.mark_probe(from: log_mark)
+			}
+		}
+		let parsed_body = self.block(context: .func_body, consumes_left_brace: false)
+		if self.is_failed() { return dummy_decl_kind() }
+		let body = Block(params: parsed_body.params, body: parsed_body.body, start: body_start, end: parsed_body.end, copied: parsed_body.copied)
 		let b_start = body.start
 		let b_end = body.end
 		return .func_decl(Func(name: name, name_start: name_start, name_end: name_end, effects: effects, generics: generics, captures: captures, where_clause: wc, params: params, body: body, ret: ret, start: b_start, end: b_end, meta_start: start_tok.span.lower, meta_end: self.span_end()))
@@ -3940,7 +3967,7 @@ struct Parser {
 		params
 	}
 
-	// A capture list on a func head (`func f[x, &y, copy z](…)`).
+	// A capture list at the start of a func body (`func() { [x, &y, copy z] in ... }`).
 	mut func capture_specs() -> [CaptureSpec] {
 		let captures: [CaptureSpec] = []
 		if self.did_match(kind: .left_bracket) == false { return captures }

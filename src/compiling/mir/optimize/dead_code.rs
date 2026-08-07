@@ -66,7 +66,7 @@ pub(super) fn run(function: &mut Function) -> PassResult {
         let uses = UseCounts::collect(function);
         let mut removed = 0;
         for block in &mut function.blocks {
-            block.insts.retain(|inst| {
+            block.retain_insts(|inst| {
                 let remove = removable(inst).is_some_and(|dest| uses.unused(dest, function.arity));
                 if remove {
                     removed += 1;
@@ -89,6 +89,7 @@ mod tests {
     #[test]
     fn removes_dead_pure_chains() {
         let mut function = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -96,6 +97,7 @@ mod tests {
             arity: 0,
             locals: crate::compiling::mir::build::LocalInfo::uniform(2),
             blocks: vec![BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![
                     Inst::Copy {
@@ -120,6 +122,7 @@ mod tests {
     #[test]
     fn removes_dead_member_reads() {
         let mut function = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -127,6 +130,7 @@ mod tests {
             arity: 1,
             locals: crate::compiling::mir::build::LocalInfo::uniform(2),
             blocks: vec![BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![Inst::Field {
                     dest: 1,
@@ -146,6 +150,7 @@ mod tests {
     #[test]
     fn keeps_unused_operations_that_can_trap() {
         let mut function = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -153,6 +158,7 @@ mod tests {
             arity: 0,
             locals: crate::compiling::mir::build::LocalInfo::uniform(1),
             blocks: vec![BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![Inst::Scalar {
                     dest: 0,

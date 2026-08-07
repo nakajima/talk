@@ -107,8 +107,7 @@ fn source_requirement_signature<'a>(
     asts: impl IntoIterator<Item = &'a AST<NameResolved>>,
     symbol: Symbol,
 ) -> Option<String> {
-    asts
-        .into_iter()
+    asts.into_iter()
         .find_map(|ast| source_requirement_signature_in_ast(ast, symbol))
 }
 
@@ -198,7 +197,8 @@ mod tests {
 
     #[test]
     fn suggestion_by_name_finds_the_source_signature() {
-        let code = "protocol P {\n\tfunc required(count: Int) -> Bool\n}\nstruct S {}\nextend S: P {}\n";
+        let code =
+            "protocol P {\n\tfunc required(count: Int) -> Bool\n}\nstruct S {}\nextend S: P {}\n";
         let ws = workspace(code);
         let suggestion = requirement_suggestion_by_name(&ws, "P", "required")
             .expect("suggestion for the missing witness");

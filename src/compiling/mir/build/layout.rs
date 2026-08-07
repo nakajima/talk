@@ -1283,6 +1283,7 @@ mod tests {
 
     fn function(n_locals: u16, blocks: Vec<crate::compiling::mir::build::BlockData>) -> Function {
         Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -1298,6 +1299,7 @@ mod tests {
         use crate::compiling::mir::build::{BlockData, Term};
         let blocks = vec![
             BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![
                     Inst::Aggregate {
@@ -1314,6 +1316,7 @@ mod tests {
                 term: Some(Term::Goto(1, vec![Operand::Local(2)])),
             },
             BlockData {
+                debug: None,
                 params: vec![3],
                 insts: Vec::new(),
                 term: Some(Term::Return(Operand::Local(3))),
@@ -1327,6 +1330,7 @@ mod tests {
     fn conflicting_definitions_degrade_to_uniform() {
         use crate::compiling::mir::build::{BlockData, Term};
         let blocks = vec![BlockData {
+            debug: None,
             params: Vec::new(),
             insts: vec![
                 Inst::Aggregate {
@@ -1352,6 +1356,7 @@ mod tests {
     fn boxed_constructions_stay_uniform() {
         use crate::compiling::mir::build::{BlockData, Term};
         let blocks = vec![BlockData {
+            debug: None,
             params: Vec::new(),
             insts: vec![Inst::Aggregate {
                 tag: 0,
@@ -1388,6 +1393,7 @@ mod tests {
         // Param 0 arrives as an inline pair (by-value borrow), the call
         // returns another; both class their locals.
         let blocks = vec![BlockData {
+            debug: None,
             params: Vec::new(),
             insts: vec![Inst::Call {
                 dest: 1,
@@ -1410,6 +1416,7 @@ mod tests {
         // struct: both it and the read's destination stay uniform even
         // though the construction alone would class the source.
         let blocks = vec![BlockData {
+            debug: None,
             params: Vec::new(),
             insts: vec![
                 Inst::Aggregate {

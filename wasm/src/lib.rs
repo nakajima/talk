@@ -67,7 +67,7 @@ fn render_ir(source: &str) -> Result<String, String> {
             .collect::<Vec<_>>()
             .join("\n"));
     }
-    typed.render_mir(None, true)
+    typed.render_mir(None, true, true)
 }
 
 #[wasm_bindgen]

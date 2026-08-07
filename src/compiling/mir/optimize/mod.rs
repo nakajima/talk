@@ -14,7 +14,7 @@ mod match_switch;
 mod simplify_block_params;
 mod unreachable_blocks;
 
-use super::build::{Function, Program};
+use super::build::{BlockData, Function, Program};
 use super::{OptimizationPassStats, OptimizationStats};
 
 const MAX_SIMPLIFY_ROUNDS: usize = 8;
@@ -159,5 +159,12 @@ pub(crate) fn run(program: &mut Program) -> OptimizationStats {
         }
         counters.dead_functions += dead_functions::run(program).applied;
     }
+    debug_assert!(
+        program
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .all(BlockData::debug_is_aligned)
+    );
     counters.finish()
 }

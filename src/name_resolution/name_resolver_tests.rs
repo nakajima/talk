@@ -971,7 +971,7 @@ pub mod tests {
             let c = 3
             let d = 4
             let e = 5
-            let f = func [a, copy b, consuming c, &d, &mut e]() {
+            let f = func() { [a, copy b, consuming c, &d, &mut e] in
                 a
             }
         }

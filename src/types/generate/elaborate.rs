@@ -65,7 +65,6 @@ pub(super) struct Elaborator<'e, 'c> {
 }
 
 impl<'e, 'c> Elaborator<'e, 'c> {
-
     /// A nested elaboration context (static where-clause operands
     /// lower through their own), reborrowing every field.
     pub(super) fn elaborator(&mut self) -> Elaborator<'_, '_> {

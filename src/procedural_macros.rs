@@ -441,7 +441,7 @@ impl ProceduralMacroEnvironment {
                 continue;
             };
             match &import.symbols {
-                ImportedSymbols::All => {
+                ImportedSymbols::All | ImportedSymbols::Glob => {
                     for name in imported.service.exported_names() {
                         bindings.insert(
                             name,

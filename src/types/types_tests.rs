@@ -8873,9 +8873,6 @@ mod nested_types {
     }
 }
 
-
-
-
 #[cfg(test)]
 mod rank_n_field_tests {
     use super::tests::{check, ty_of, type_errors};
@@ -9015,7 +9012,12 @@ mod declared_struct_field_tests {
             )],
             config,
         );
-        let typed = driver_b.parse().unwrap().resolve_names().unwrap().type_check();
+        let typed = driver_b
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check();
         assert_eq!(type_errors(&typed), Vec::<String>::new());
     }
 }

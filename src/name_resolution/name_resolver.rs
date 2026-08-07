@@ -583,112 +583,128 @@ impl NameResolver {
                     let mut procedural_macro_exports = FxHashSet::default();
 
                     let mut harvested = Vec::new();
-                    let target_symbols: Vec<(String, Vec<Symbol>, bool)> = match &import.path {
-                        ImportPath::Package(pkg_name) => {
-                            let Some(module) = self.modules.get_module_by_name(pkg_name) else {
-                                self.diagnostic(
-                                    decl_id,
-                                    NameResolverError::ModuleNotFound(pkg_name.clone()),
-                                );
-                                continue;
-                            };
-                            imported_module = true;
-                            if let Some(artifact) = &module.procedural_macros {
-                                procedural_macro_exports
-                                    .extend(artifact.exported_names().map(str::to_string));
-                            }
-                            let symbols: Vec<(String, Vec<Symbol>, bool)> = module
-                                .exports
-                                .iter()
-                                .map(|(name, set)| {
-                                    let is_type =
-                                        set.last().is_some_and(|symbol| is_type_symbol(symbol));
-                                    (name.clone(), set.clone(), is_type)
-                                })
-                                .collect();
-                            for (_, set, _) in &symbols {
-                                harvested.extend(Self::collect_module_labels(module, set));
-                            }
-                            symbols
-                        }
-                        ImportPath::Local(module_path) => {
-                            let Some(resolved) =
-                                self.local_modules.resolve(&source_path, module_path)
-                            else {
-                                self.diagnostic(
-                                    decl_id,
-                                    NameResolverError::ModuleNotFound(module_path.clone()),
-                                );
-                                continue;
-                            };
-                            let target_path = resolved.to_string_lossy().to_string();
-
-                            let Some(target_file_id) = module_path_keys(&target_path)
-                                .into_iter()
-                                .find_map(|key| self.path_to_file_id.get(&key).copied())
-                            else {
-                                self.diagnostic(
-                                    decl_id,
-                                    NameResolverError::ModuleNotFound(module_path.clone()),
-                                );
-                                continue;
-                            };
-                            imported_file_id = Some(target_file_id);
-
-                            let target_scope_id = NodeID(target_file_id, 0);
-
-                            // Get symbols from the target scope. If the target is a core file
-                            // and we have the pre-compiled Core module, use its exports instead
-                            // to avoid type identity conflicts from re-compiling core sources.
-                            let core_module = is_core_source_path(&target_path)
-                                .then(|| self.modules.get_module_by_name("Core"))
-                                .flatten();
-                            if let Some(core) = core_module {
-                                imported_module = true;
-                                let symbols: Vec<(String, Vec<Symbol>, bool)> = core
-                                    .exports
-                                    .iter()
-                                    .map(|(name, set)| {
-                                        let is_type =
-                                            set.last().is_some_and(|symbol| is_type_symbol(symbol));
-                                        (name.clone(), set.clone(), is_type)
-                                    })
-                                    .collect();
-                                for (_, set, _) in &symbols {
-                                    harvested.extend(Self::collect_module_labels(core, set));
-                                }
-                                symbols
-                            } else {
-                                let Some(target_scope) = self.scopes.get(&target_scope_id) else {
+                    let target_symbols: Vec<(String, Vec<Symbol>, bool)> =
+                        match (&import.path, &import.symbols) {
+                            (ImportPath::Local(module_path), ImportedSymbols::Glob) => {
+                                // Glob import: the module file plus every
+                                // .tlk under its directory, recursively.
+                                let Some(base) =
+                                    self.local_modules.resolve_base(&source_path, module_path)
+                                else {
+                                    self.diagnostic(
+                                        decl_id,
+                                        NameResolverError::ModuleNotFound(module_path.clone()),
+                                    );
                                     continue;
                                 };
-                                let mut symbols: Vec<(String, Vec<Symbol>, bool)> = Vec::new();
-                                for (name, &symbol) in &target_scope.values {
-                                    // A sibling file's overload set travels
-                                    // whole (ADR 0041); labels are already in
-                                    // this session's table.
-                                    let set = match target_scope.overloads.get(name) {
-                                        Some(set) if set.len() > 1 => set.clone(),
-                                        _ => vec![symbol],
-                                    };
-                                    symbols.push((name.clone(), set, is_type_symbol(&symbol)));
+                                let mut matched: Vec<(FileID, String)> = self
+                                    .file_path_by_id
+                                    .iter()
+                                    .filter(|(_, path)| {
+                                        LocalModulePaths::glob_member(&base, Path::new(path))
+                                    })
+                                    .map(|(file_id, path)| (*file_id, path.clone()))
+                                    .collect();
+                                matched.sort_by(|left, right| left.1.cmp(&right.1));
+                                if matched.is_empty() {
+                                    self.diagnostic(
+                                        decl_id,
+                                        NameResolverError::ModuleNotFound(module_path.clone()),
+                                    );
+                                    continue;
                                 }
-                                for (name, &symbol) in &target_scope.types {
-                                    symbols.push((
-                                        name.clone(),
-                                        vec![symbol],
-                                        is_type_symbol(&symbol),
-                                    ));
+                                // As with a single-file import, core sources
+                                // redirect to the compiled Core module's
+                                // exports to avoid duplicate type identities.
+                                let core_module =
+                                    self.modules.get_module_by_name("Core").filter(|_| {
+                                        matched.iter().all(|(_, path)| is_core_source_path(path))
+                                    });
+                                if let Some(core) = core_module {
+                                    imported_module = true;
+                                    let symbols = Self::module_export_symbols(core);
+                                    for (_, set, _) in &symbols {
+                                        harvested.extend(Self::collect_module_labels(core, set));
+                                    }
+                                    symbols
+                                } else {
+                                    let mut symbols: Vec<(String, Vec<Symbol>, bool)> = Vec::new();
+                                    for (target_file_id, _) in matched {
+                                        symbols.extend(
+                                            self.scope_export_symbols(NodeID(target_file_id, 0)),
+                                        );
+                                    }
+                                    symbols
+                                }
+                            }
+                            (ImportPath::Package(pkg_name), _) => {
+                                let Some(module) = self.modules.get_module_by_name(pkg_name) else {
+                                    self.diagnostic(
+                                        decl_id,
+                                        NameResolverError::ModuleNotFound(pkg_name.clone()),
+                                    );
+                                    continue;
+                                };
+                                imported_module = true;
+                                if let Some(artifact) = &module.procedural_macros {
+                                    procedural_macro_exports
+                                        .extend(artifact.exported_names().map(str::to_string));
+                                }
+                                let symbols = Self::module_export_symbols(module);
+                                for (_, set, _) in &symbols {
+                                    harvested.extend(Self::collect_module_labels(module, set));
                                 }
                                 symbols
                             }
-                        }
-                    };
+                            (ImportPath::Local(module_path), _) => {
+                                let Some(resolved) =
+                                    self.local_modules.resolve(&source_path, module_path)
+                                else {
+                                    self.diagnostic(
+                                        decl_id,
+                                        NameResolverError::ModuleNotFound(module_path.clone()),
+                                    );
+                                    continue;
+                                };
+                                let target_path = resolved.to_string_lossy().to_string();
+
+                                let Some(target_file_id) = module_path_keys(&target_path)
+                                    .into_iter()
+                                    .find_map(|key| self.path_to_file_id.get(&key).copied())
+                                else {
+                                    self.diagnostic(
+                                        decl_id,
+                                        NameResolverError::ModuleNotFound(module_path.clone()),
+                                    );
+                                    continue;
+                                };
+                                imported_file_id = Some(target_file_id);
+
+                                let target_scope_id = NodeID(target_file_id, 0);
+
+                                // Get symbols from the target scope. If the target is a core file
+                                // and we have the pre-compiled Core module, use its exports instead
+                                // to avoid type identity conflicts from re-compiling core sources.
+                                let core_module = is_core_source_path(&target_path)
+                                    .then(|| self.modules.get_module_by_name("Core"))
+                                    .flatten();
+                                if let Some(core) = core_module {
+                                    imported_module = true;
+                                    let symbols = Self::module_export_symbols(core);
+                                    for (_, set, _) in &symbols {
+                                        harvested.extend(Self::collect_module_labels(core, set));
+                                    }
+                                    symbols
+                                } else {
+                                    self.scope_export_symbols(target_scope_id)
+                                }
+                            }
+                        };
 
                     self.apply_callable_labels(harvested);
                     // Import the requested symbols
                     match &import.symbols {
-                        ImportedSymbols::All => {
+                        ImportedSymbols::All | ImportedSymbols::Glob => {
                             // Import all public non-builtin symbols
                             let public_symbols: FxHashSet<Symbol> =
                                 self.phase.public_symbols().collect();
@@ -960,6 +976,41 @@ impl NameResolver {
                 self.diagnostic(node, NameResolverError::DuplicateExport(name.clone()));
             }
         }
+    }
+
+    /// A compiled module's exports as importable symbol sets. Callable
+    /// overload sets travel whole (ADR 0041).
+    fn module_export_symbols(
+        module: &crate::compiling::module::Module,
+    ) -> Vec<(String, Vec<Symbol>, bool)> {
+        module
+            .exports
+            .iter()
+            .map(|(name, set)| {
+                let is_type = set.last().is_some_and(is_type_symbol);
+                (name.clone(), set.clone(), is_type)
+            })
+            .collect()
+    }
+
+    /// Importable symbols in one source file's root scope. Labels for
+    /// source callables are already present in this resolution session.
+    fn scope_export_symbols(&self, target_scope_id: NodeID) -> Vec<(String, Vec<Symbol>, bool)> {
+        let Some(target_scope) = self.scopes.get(&target_scope_id) else {
+            return Vec::new();
+        };
+        let mut symbols = Vec::new();
+        for (name, &symbol) in &target_scope.values {
+            let set = match target_scope.overloads.get(name) {
+                Some(set) if set.len() > 1 => set.clone(),
+                _ => vec![symbol],
+            };
+            symbols.push((name.clone(), set, is_type_symbol(&symbol)));
+        }
+        for (name, &symbol) in &target_scope.types {
+            symbols.push((name.clone(), vec![symbol], is_type_symbol(&symbol)));
+        }
+        symbols
     }
 
     /// Insert an explicit import binding (ADR 0042). Import insertion
@@ -1991,8 +2042,7 @@ impl NameResolver {
                 // memberwise init copies struct field annotations)
                 // reuses the first declaration's symbol, so every copy
                 // of the field names one scheme.
-                if let Some(symbol) = self.quantified_generic_symbols.get(&generic.id).copied()
-                {
+                if let Some(symbol) = self.quantified_generic_symbols.get(&generic.id).copied() {
                     let name_str = generic.name.name_str();
                     generic.name = Name::Resolved(symbol, name_str.clone());
                     self.bind_value(&name_str, symbol);

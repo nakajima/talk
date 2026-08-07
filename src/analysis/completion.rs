@@ -579,7 +579,10 @@ fn conformance_requirement_completions(
             items.entry(label.clone()).or_insert(CompletionItem {
                 label,
                 kind: Some(CompletionItemKind::Method),
-                detail: Some(format!("required by {}: {}", suggestion.owner, suggestion.signature)),
+                detail: Some(format!(
+                    "required by {}: {}",
+                    suggestion.owner, suggestion.signature
+                )),
                 insert_text: Some(suggestion.stub(true)),
                 insert_text_is_snippet: true,
                 sort_text: None,
@@ -1205,17 +1208,26 @@ mod scratch_tests {
     #[ignore = "debugging scaffold: dumps completion internals and panics"]
     fn scratch_dump_incomplete_member() {
         let with_tail = "pub func generate(code: String) -> [String] {\n\tlet parsed = code\n\tparsed.\n\n\t[]\n}\n";
-        let without_tail = "pub func generate(code: String) -> [String] {\n\tlet parsed = code\n\tparsed.\n}\n";
+        let without_tail =
+            "pub func generate(code: String) -> [String] {\n\tlet parsed = code\n\tparsed.\n}\n";
         for (label, code) in [("with_tail", with_tail), ("without_tail", without_tail)] {
             let analyzed = super::tests::analyze(code);
             let dot = code.find("parsed.").unwrap() as u32 + 6;
-            let items = super::complete(code, &super::CompletionAnalysis {
-                ast: &analyzed.ast,
-                all_asts: None,
-                resolved_names: &analyzed.resolved_names,
-                types: &analyzed.types,
-            }, dot + 1);
-            eprintln!("== {label}: {} items: {:?}", items.len(), items.iter().map(|i| i.label.clone()).collect::<Vec<_>>());
+            let items = super::complete(
+                code,
+                &super::CompletionAnalysis {
+                    ast: &analyzed.ast,
+                    all_asts: None,
+                    resolved_names: &analyzed.resolved_names,
+                    types: &analyzed.types,
+                },
+                dot + 1,
+            );
+            eprintln!(
+                "== {label}: {} items: {:?}",
+                items.len(),
+                items.iter().map(|i| i.label.clone()).collect::<Vec<_>>()
+            );
             eprintln!("{:#?}", analyzed.ast.roots);
         }
         panic!("dump");

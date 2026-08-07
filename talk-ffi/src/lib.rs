@@ -1634,7 +1634,7 @@ pub extern "C" fn talk_render_lowered_utf8(
         let path = RawBytes::new(path_ptr, path_len, "path").string()?;
         let source = RawBytes::new(source_ptr, source_len, "source").string()?;
         ProgramRunner::typed(path, source)?
-            .render_mir(None, false)
+            .render_mir(None, false, false)
             .map_err(ApiError::failed)
     })
 }

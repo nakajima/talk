@@ -245,10 +245,12 @@ mod tests {
 
     fn function(arity: u16, n_locals: u16, insts: Vec<Inst>, term: Term) -> Function {
         Function {
+            debug_names: None,
             name: String::new(),
             arity,
             locals: LocalInfo::uniform(n_locals),
             blocks: vec![BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts,
                 term: Some(term),
@@ -261,6 +263,7 @@ mod tests {
 
     fn program(functions: Vec<Function>) -> Program {
         Program {
+            debug_files: Vec::new(),
             functions,
             entry: 0,
             global_slots: 0,

@@ -442,6 +442,27 @@ pub enum Term {
     UnwindRet,
 }
 
+/// Source provenance for one instruction, resolved when the compiler
+/// collects it: `file` indexes [`Module::debug_files`], `line`/`col`
+/// are 1-based, and `start`/`end` are the statement's byte offsets for
+/// consumers that want to link back to the source text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DebugSpan {
+    pub file: u32,
+    pub line: u32,
+    pub col: u32,
+    pub start: u32,
+    pub end: u32,
+}
+
+/// Per-instruction source spans for one block, aligned with
+/// [`BlockData::insts`]: `spans[i]` is the statement that produced
+/// instruction `i`, or `None` for compiler-generated code.
+#[derive(Clone, Debug)]
+pub struct BlockDebug {
+    pub spans: Vec<Option<DebugSpan>>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct BlockData {
     /// Values this block receives from its predecessors' `Goto`
@@ -449,6 +470,73 @@ pub struct BlockData {
     pub params: Vec<LocalId>,
     pub insts: Vec<Inst>,
     pub term: Option<Term>,
+    /// Source provenance per instruction (debug-mode compiles only);
+    /// `None` in production modules.
+    pub debug: Option<Box<BlockDebug>>,
+}
+
+impl BlockData {
+    /// A block that records instruction provenance when `debug` is on.
+    pub fn debugged(debug: bool) -> Self {
+        Self {
+            debug: debug.then_some(Box::new(BlockDebug { spans: Vec::new() })),
+            ..Self::default()
+        }
+    }
+
+    /// Push an instruction, recording its provenance when this block
+    /// carries debug spans.
+    pub fn push_inst(&mut self, inst: Inst, span: Option<DebugSpan>) {
+        if let Some(debug) = &mut self.debug {
+            debug.spans.push(span);
+        }
+        self.insts.push(inst);
+    }
+
+    /// Retain matching instructions, keeping the debug spans aligned.
+    pub fn retain_insts(&mut self, mut keep: impl FnMut(&Inst) -> bool) {
+        let Some(debug) = &mut self.debug else {
+            self.insts.retain(keep);
+            return;
+        };
+        debug_assert_eq!(debug.spans.len(), self.insts.len());
+        let spans = std::mem::take(&mut debug.spans);
+        let mut next = spans.iter();
+        let mut kept = Vec::with_capacity(spans.len());
+        self.insts.retain(|inst| {
+            let span = next.next().copied().flatten();
+            let keep = keep(inst);
+            if keep {
+                kept.push(span);
+            }
+            keep
+        });
+        debug.spans = kept;
+    }
+
+    /// Drain a range of instructions, keeping the debug spans aligned.
+    pub fn drain_insts(&mut self, range: std::ops::Range<usize>) {
+        if let Some(debug) = &mut self.debug {
+            debug.spans.drain(range.clone());
+        }
+        self.insts.drain(range);
+    }
+
+    /// Remove the instruction at `index`, keeping the debug spans
+    /// aligned.
+    pub fn remove_inst(&mut self, index: usize) -> Inst {
+        if let Some(debug) = &mut self.debug {
+            debug.spans.remove(index);
+        }
+        self.insts.remove(index)
+    }
+
+    /// Whether every instruction has a matching debug-span slot.
+    pub fn debug_is_aligned(&self) -> bool {
+        self.debug
+            .as_ref()
+            .is_none_or(|debug| debug.spans.len() == self.insts.len())
+    }
 }
 
 /// One frame local's published facts (ADR 0045): the locals table IS
@@ -494,6 +582,10 @@ pub struct Function {
     /// in this frame: the backend may give them reusable frame storage
     /// instead of the arena. Stamped by the compiler's frame shaping.
     pub frame_sites: std::collections::HashSet<(usize, usize)>,
+    /// Binding names per local (debug-mode compiles only), indexed by
+    /// `LocalId`; empty strings are unnamed, and a register reused for
+    /// several bindings lists them all. `None` in production modules.
+    pub debug_names: Option<Vec<String>>,
 }
 
 impl Function {
@@ -546,6 +638,9 @@ pub struct Module {
     /// Storage.
     pub string_symbol: MirSymbol,
     pub storage_symbol: MirSymbol,
+    /// The file paths [`DebugSpan::file`] indexes; empty unless the
+    /// module was compiled in debug mode.
+    pub debug_files: Vec<String>,
 }
 
 impl Module {
@@ -584,9 +679,36 @@ impl Module {
                 function.arity,
                 function.n_locals()
             );
+            if let Some(names) = &function.debug_names {
+                let named: Vec<String> = names
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, name)| !name.is_empty())
+                    .map(|(local, name)| format!("L{local}({name})"))
+                    .collect();
+                if !named.is_empty() {
+                    let _ = writeln!(out, "  // locals: {}", named.join(", "));
+                }
+            }
             for (block, data) in function.blocks.iter().enumerate() {
                 let _ = writeln!(out, "  b{block}:");
-                for inst in &data.insts {
+                let mut last_span: Option<DebugSpan> = None;
+                for (index, inst) in data.insts.iter().enumerate() {
+                    let span = data
+                        .debug
+                        .as_ref()
+                        .and_then(|debug| debug.spans.get(index).copied().flatten());
+                    if span != last_span
+                        && let Some(span) = span
+                    {
+                        let file = self
+                            .debug_files
+                            .get(span.file as usize)
+                            .map(String::as_str)
+                            .unwrap_or("?");
+                        let _ = writeln!(out, "    // {}:{}:{}", file, span.line, span.col);
+                    }
+                    last_span = span;
                     // Aggregate constructions render their layout as a
                     // table id so shapes are legible next to the code.
                     match inst {
@@ -622,5 +744,68 @@ impl Module {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_prints_debug_comments_and_local_names() {
+        let span = DebugSpan {
+            file: 0,
+            line: 4,
+            col: 3,
+            start: 20,
+            end: 32,
+        };
+        let module = Module {
+            debug_files: vec!["playground.tlk".into()],
+            functions: vec![Function {
+                debug_names: Some(vec!["value".into(), String::new()]),
+                frame_sites: Default::default(),
+                param_reprs: Vec::new(),
+                return_repr: None,
+                name: "main".into(),
+                arity: 0,
+                locals: LocalInfo::uniform(2),
+                blocks: vec![BlockData {
+                    debug: Some(Box::new(BlockDebug {
+                        spans: vec![Some(span), Some(span), None, Some(span)],
+                    })),
+                    params: Vec::new(),
+                    insts: vec![
+                        Inst::Copy {
+                            dest: 0,
+                            src: Operand::Const(Constant::Int(1)),
+                        },
+                        Inst::Copy {
+                            dest: 1,
+                            src: Operand::Local(0),
+                        },
+                        Inst::Free {
+                            src: Operand::Local(1),
+                        },
+                        Inst::Copy {
+                            dest: 0,
+                            src: Operand::Const(Constant::Int(2)),
+                        },
+                    ],
+                    term: Some(Term::Return(Operand::Local(0))),
+                }],
+            }],
+            entry: 0,
+            global_slots: 0,
+            exports: Vec::new(),
+            layout_table: Vec::new(),
+            display: DisplayNames::default(),
+            string_symbol: MirSymbol::STRING,
+            storage_symbol: MirSymbol::STORAGE,
+        };
+
+        let rendered = module.render();
+        assert!(rendered.contains("// locals: L0(value)"));
+        assert_eq!(rendered.matches("// playground.tlk:4:3").count(), 2);
     }
 }

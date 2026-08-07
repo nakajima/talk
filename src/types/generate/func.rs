@@ -31,7 +31,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 schemes: &*self.schemes,
                 mono: &*self.mono,
                 instantiations: &mut self.artifacts.instantiations,
-            projection_instantiations: &mut self.artifacts.projection_instantiations,
+                projection_instantiations: &mut self.artifacts.projection_instantiations,
                 member_resolutions: &mut self.artifacts.member_resolutions,
                 resolved_member_types: &mut self.artifacts.resolved_member_types,
                 member_call_slots: &self.artifacts.member_call_slots,
@@ -82,10 +82,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     roots.sort_unstable();
                     roots.dedup();
                     if let Some(root) = roots.first().copied() {
-                        let predicate = Predicate::TypeEq(
-                            self.store.zonk_ty(a),
-                            self.store.zonk_ty(b),
-                        );
+                        let predicate =
+                            Predicate::TypeEq(self.store.zonk_ty(a), self.store.zonk_ty(b));
                         let predicates = var_predicates.entry(root).or_default();
                         if !predicates.contains(&predicate) {
                             predicates.push(predicate);
@@ -168,9 +166,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 }
             }
         }
-        self.diagnostics.errors.extend(
-            BindingGroupChecker::ambiguous_declared_predicate_errors(&scheme, &declared),
-        );
+        self.diagnostics
+            .errors
+            .extend(BindingGroupChecker::ambiguous_declared_predicate_errors(
+                &scheme, &declared,
+            ));
         // Obligations whose root never quantified ride no scheme — they
         // mention something the field shares with the group, so they
         // float back to the enclosing wanteds.
@@ -201,7 +201,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             std::ops::ControlFlow::<()>::Continue(())
         });
     }
-
 
     /// Bind a parameter's type: into the mono environment for the body, and
     /// onto the parameter's node so downstream stages (typed-tree baking, the flow

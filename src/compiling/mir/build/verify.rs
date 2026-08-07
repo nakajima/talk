@@ -318,6 +318,7 @@ mod tests {
 
     fn block(insts: usize, term: Term) -> BlockData {
         BlockData {
+            debug: None,
             params: Vec::new(),
             insts: vec![
                 Inst::Copy {
@@ -449,6 +450,7 @@ mod tests {
         // is a leak at UnwindRet.
         let blocks = vec![
             BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![Inst::Call {
                     dest: 7,

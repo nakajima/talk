@@ -21,7 +21,9 @@
 
 use rustc_hash::FxHashMap;
 
-use crate::compiling::mir::build::{FuncId, Function, Inst, LocalId, Operand, Program, Term};
+use crate::compiling::mir::build::{
+    BlockDebug, FuncId, Function, Inst, LocalId, Operand, Program, Term,
+};
 
 use super::PassResult;
 
@@ -215,14 +217,21 @@ fn inline_round(program: &mut Program) -> u64 {
                 };
                 (*dest, *func, args.clone())
             };
+            let call_span = function.blocks[b]
+                .debug
+                .as_ref()
+                .and_then(|debug| debug.spans.get(position).copied().flatten());
+            let debug = function.blocks[b].debug.is_some();
             #[allow(clippy::expect_used)]
             let body = candidates.get(&func).expect("membership checked above");
             let base = function.n_locals();
-            function.locals = crate::compiling::mir::build::LocalInfo::uniform(
-                function
-                    .n_locals()
-                    .saturating_add(body.n_locals - body.arity),
-            );
+            let n_locals = function
+                .n_locals()
+                .saturating_add(body.n_locals - body.arity);
+            function.locals = crate::compiling::mir::build::LocalInfo::uniform(n_locals);
+            if let Some(names) = &mut function.debug_names {
+                names.resize(usize::from(n_locals), String::new());
+            }
 
             // Straight-line bodies splice in place — no block split, no
             // jump chain — the overwhelmingly common case (scalar
@@ -244,7 +253,13 @@ fn inline_round(program: &mut Program) -> u64 {
                     dest,
                     src: remap(*value, &args, base, body.arity),
                 });
+                let count = splice.len();
                 function.blocks[b].insts.splice(position..=position, splice);
+                if let Some(debug) = &mut function.blocks[b].debug {
+                    debug
+                        .spans
+                        .splice(position..=position, vec![call_span; count]);
+                }
                 applied += 1;
                 // Rescan the same block: later insts may hold more
                 // candidate calls, and the spliced body holds none.
@@ -256,6 +271,11 @@ fn inline_round(program: &mut Program) -> u64 {
             // Split the caller block: everything after the call moves to
             // the join block, and the call is replaced by a jump into the
             // spliced entry.
+            let tail_debug = function.blocks[b].debug.as_mut().map(|debug| {
+                let tail = debug.spans.split_off(position + 1);
+                debug.spans.pop();
+                tail
+            });
             let tail: Vec<Inst> = function.blocks[b].insts.split_off(position + 1);
             function.blocks[b].insts.pop();
             let term = function.blocks[b]
@@ -315,9 +335,15 @@ fn inline_round(program: &mut Program) -> u64 {
                     Some(Term::Trap(message)) => Some(Term::Trap(message)),
                     other => other.clone(),
                 };
+                let block_debug = debug.then(|| {
+                    Box::new(BlockDebug {
+                        spans: vec![call_span; insts.len()],
+                    })
+                });
                 function
                     .blocks
                     .push(crate::compiling::mir::build::BlockData {
+                        debug: block_debug,
                         params,
                         insts,
                         term,
@@ -326,6 +352,7 @@ fn inline_round(program: &mut Program) -> u64 {
             function
                 .blocks
                 .push(crate::compiling::mir::build::BlockData {
+                    debug: tail_debug.map(|spans| Box::new(BlockDebug { spans })),
                     params: Vec::new(),
                     insts: tail,
                     term,
@@ -355,6 +382,7 @@ mod tests {
     /// Core-style `add`: one scalar instruction over its parameters.
     fn scalar_add() -> Function {
         Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -362,6 +390,7 @@ mod tests {
             arity: 2,
             locals: crate::compiling::mir::build::LocalInfo::uniform(3),
             blocks: vec![BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts: vec![Inst::Scalar {
                     dest: 2,
@@ -376,6 +405,7 @@ mod tests {
 
     fn caller(insts: Vec<Inst>, ret: Operand) -> Function {
         Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -383,6 +413,7 @@ mod tests {
             arity: 0,
             locals: crate::compiling::mir::build::LocalInfo::uniform(2),
             blocks: vec![BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts,
                 term: Some(Term::Return(ret)),
@@ -393,6 +424,7 @@ mod tests {
     #[test]
     fn scalar_call_becomes_the_scalar_instruction() {
         let mut program = Program {
+            debug_files: Vec::new(),
             functions: vec![
                 scalar_add(),
                 caller(
@@ -439,6 +471,7 @@ mod tests {
         // the `get` shape. The call disappears, the trap block arrives,
         // and the caller's tail runs after the join.
         let checked_get = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -447,6 +480,7 @@ mod tests {
             locals: crate::compiling::mir::build::LocalInfo::uniform(3),
             blocks: vec![
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: vec![Inst::Scalar {
                         dest: 1,
@@ -461,11 +495,13 @@ mod tests {
                     }),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: vec![],
                     term: Some(Term::Trap("index out of bounds")),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: vec![Inst::Scalar {
                         dest: 2,
@@ -478,6 +514,7 @@ mod tests {
             ],
         };
         let mut program = Program {
+            debug_files: Vec::new(),
             functions: vec![
                 checked_get,
                 caller(
@@ -535,8 +572,10 @@ mod tests {
     #[test]
     fn param_writing_bodies_stay_calls() {
         let mut program = Program {
+            debug_files: Vec::new(),
             functions: vec![
                 Function {
+                    debug_names: None,
                     frame_sites: Default::default(),
                     param_reprs: Vec::new(),
                     return_repr: None,
@@ -544,6 +583,7 @@ mod tests {
                     arity: 1,
                     locals: crate::compiling::mir::build::LocalInfo::uniform(1),
                     blocks: vec![BlockData {
+                        debug: None,
                         params: Vec::new(),
                         insts: vec![Inst::Copy {
                             dest: 0,
@@ -585,6 +625,7 @@ mod tests {
         // add(t, 3) where t is caller local 1: the callee's temp must not
         // collide with existing caller locals.
         let mut program = Program {
+            debug_files: Vec::new(),
             functions: vec![
                 scalar_add(),
                 caller(

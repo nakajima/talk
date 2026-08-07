@@ -271,13 +271,16 @@ impl<'s> Solver<'s> {
                     .collect::<Vec<_>>()
             })
             .find(|committed| {
-                committed.iter().zip(&protocol.args).all(|(pattern, actual)| {
-                    crate::types::ty::match_key_pattern(
-                        pattern,
-                        actual,
-                        &mut FxHashMap::default(),
-                    )
-                })
+                committed
+                    .iter()
+                    .zip(&protocol.args)
+                    .all(|(pattern, actual)| {
+                        crate::types::ty::match_key_pattern(
+                            pattern,
+                            actual,
+                            &mut FxHashMap::default(),
+                        )
+                    })
             });
         let Some(committed_args) = committed_args else {
             return false;

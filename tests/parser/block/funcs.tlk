@@ -8,4 +8,4 @@ func first<T>(items: [T]) -> T? { items[0] }
 func pair<A, B: Show>(a: A, b: B) -> (A, B) where A: Show { (a, b) }
 func labeled(with value: Int, _ bare: Int, consume owned: String) -> Int { value }
 func effectful() 'io -> Int { 1 }
-func counter[count](n: Int) -> Int { count + n }
+func counter(n: Int) -> Int { [count] in count + n }

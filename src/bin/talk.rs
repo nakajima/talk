@@ -191,6 +191,10 @@ async fn main() {
             /// Render MIR before optimization.
             #[arg(long)]
             no_opt: bool,
+            /// Annotate the dump with source spans and binding names
+            /// (survives optimization).
+            #[arg(long)]
+            debug: bool,
         },
         /// Create a new package directory.
         New {
@@ -1019,9 +1023,10 @@ async fn main() {
             filenames,
             entry,
             no_opt,
+            debug,
         } => {
             let typed = check_or_exit(filenames);
-            match typed.render_mir(entry.as_deref(), !no_opt) {
+            match typed.render_mir(entry.as_deref(), !no_opt, *debug) {
                 Ok(rendered) => print!("{rendered}"),
                 Err(message) => {
                     eprintln!("error: {message}");

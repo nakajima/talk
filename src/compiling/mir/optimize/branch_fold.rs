@@ -144,6 +144,7 @@ mod tests {
     #[test]
     fn constant_branch_becomes_goto() {
         let mut function = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -152,6 +153,7 @@ mod tests {
             locals: crate::compiling::mir::build::LocalInfo::uniform(1),
             blocks: vec![
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Branch {
@@ -161,11 +163,13 @@ mod tests {
                     }),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Return(Operand::Const(Constant::Unit))),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Return(Operand::Const(Constant::Unit))),
@@ -193,6 +197,7 @@ mod tests {
                 (Operand::Local(0), Operand::Const(Constant::Bool(expected)))
             };
             let mut function = Function {
+                debug_names: None,
                 frame_sites: Default::default(),
                 param_reprs: Vec::new(),
                 return_repr: None,
@@ -201,6 +206,7 @@ mod tests {
                 locals: crate::compiling::mir::build::LocalInfo::uniform(2),
                 blocks: vec![
                     BlockData {
+                        debug: None,
                         params: Vec::new(),
                         insts: vec![Inst::Scalar {
                             dest: 1,
@@ -215,11 +221,13 @@ mod tests {
                         }),
                     },
                     BlockData {
+                        debug: None,
                         params: Vec::new(),
                         insts: Vec::new(),
                         term: Some(Term::Return(Operand::Const(Constant::Unit))),
                     },
                     BlockData {
+                        debug: None,
                         params: Vec::new(),
                         insts: Vec::new(),
                         term: Some(Term::Return(Operand::Const(Constant::Unit))),
@@ -242,11 +250,13 @@ mod tests {
     #[test]
     fn threads_true_and_false_edges_through_repeated_tests() {
         let terminal = || BlockData {
+            debug: None,
             params: Vec::new(),
             insts: Vec::new(),
             term: Some(Term::Return(Operand::Const(Constant::Unit))),
         };
         let repeated = |then_block, else_block| BlockData {
+            debug: None,
             params: Vec::new(),
             insts: Vec::new(),
             term: Some(Term::Branch {
@@ -256,6 +266,7 @@ mod tests {
             }),
         };
         let mut function = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -287,6 +298,7 @@ mod tests {
     #[test]
     fn threading_one_incoming_edge_preserves_other_predecessors() {
         let mut function = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -295,6 +307,7 @@ mod tests {
             locals: crate::compiling::mir::build::LocalInfo::uniform(1),
             blocks: vec![
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Branch {
@@ -304,11 +317,13 @@ mod tests {
                     }),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Goto(2, Vec::new())),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Branch {
@@ -318,11 +333,13 @@ mod tests {
                     }),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Return(Operand::Const(Constant::Unit))),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Return(Operand::Const(Constant::Unit))),
@@ -342,6 +359,7 @@ mod tests {
     #[test]
     fn does_not_thread_instructionful_parameterized_or_cyclic_blocks() {
         let mut function = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -350,6 +368,7 @@ mod tests {
             locals: crate::compiling::mir::build::LocalInfo::uniform(2),
             blocks: vec![
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Branch {
@@ -359,6 +378,7 @@ mod tests {
                     }),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: vec![Inst::Copy {
                         dest: 1,
@@ -371,6 +391,7 @@ mod tests {
                     }),
                 },
                 BlockData {
+                    debug: None,
                     params: vec![1],
                     insts: Vec::new(),
                     term: Some(Term::Branch {
@@ -380,11 +401,13 @@ mod tests {
                     }),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Return(Operand::Const(Constant::Unit))),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Return(Operand::Const(Constant::Unit))),
@@ -424,6 +447,7 @@ mod tests {
     #[test]
     fn threads_after_boolean_comparison_target_inversion() {
         let mut function = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -432,6 +456,7 @@ mod tests {
             locals: crate::compiling::mir::build::LocalInfo::uniform(2),
             blocks: vec![
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: vec![Inst::Scalar {
                         dest: 1,
@@ -446,11 +471,13 @@ mod tests {
                     }),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Return(Operand::Const(Constant::Unit))),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Branch {
@@ -460,11 +487,13 @@ mod tests {
                     }),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Return(Operand::Const(Constant::Unit))),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Return(Operand::Const(Constant::Unit))),
@@ -486,6 +515,7 @@ mod tests {
     #[test]
     fn comparison_that_overwrites_its_source_is_not_rewritten() {
         let mut function = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -494,6 +524,7 @@ mod tests {
             locals: crate::compiling::mir::build::LocalInfo::uniform(1),
             blocks: vec![
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: vec![Inst::Scalar {
                         dest: 0,
@@ -508,11 +539,13 @@ mod tests {
                     }),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Return(Operand::Const(Constant::Unit))),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Return(Operand::Const(Constant::Unit))),

@@ -169,24 +169,23 @@ struct TokenTags {
 
 fn token_tags() -> Result<&'static TokenTags, String> {
     static TAGS: std::sync::OnceLock<Result<TokenTags, String>> = std::sync::OnceLock::new();
-    TAGS
-        .get_or_init(|| {
-            let tag = crate::compiling::frontend::token_kind_tag;
-            Ok(TokenTags {
-                identifier: tag("identifier")?,
-                effect_name: tag("effect_name")?,
-                bound_var: tag("bound_var")?,
-                comma: tag("comma")?,
-                openers: [tag("left_paren")?, tag("left_bracket")?, tag("left_brace")?],
-                closers: [
-                    tag("right_paren")?,
-                    tag("right_bracket")?,
-                    tag("right_brace")?,
-                ],
-            })
+    TAGS.get_or_init(|| {
+        let tag = crate::compiling::frontend::token_kind_tag;
+        Ok(TokenTags {
+            identifier: tag("identifier")?,
+            effect_name: tag("effect_name")?,
+            bound_var: tag("bound_var")?,
+            comma: tag("comma")?,
+            openers: [tag("left_paren")?, tag("left_bracket")?, tag("left_brace")?],
+            closers: [
+                tag("right_paren")?,
+                tag("right_bracket")?,
+                tag("right_brace")?,
+            ],
         })
-        .as_ref()
-        .map_err(Clone::clone)
+    })
+    .as_ref()
+    .map_err(Clone::clone)
 }
 
 /// The tokens a template splices in, outer braces stripped.
@@ -418,9 +417,14 @@ pub fn expand_macros_with_sources_and_service(
     diagnostics
 }
 
-
 #[derive(Debug, VisitorMut)]
-#[visitor(Expr(enter), Block(enter), Body(enter), Pattern(enter), TypeAnnotation(enter))]
+#[visitor(
+    Expr(enter),
+    Block(enter),
+    Body(enter),
+    Pattern(enter),
+    TypeAnnotation(enter)
+)]
 struct MacroExpander<'a> {
     file_id: FileID,
     definitions: &'a HashMap<MacroKey, MacroDefinition>,
@@ -761,10 +765,12 @@ impl MacroExpander<'_> {
         };
         *expr = match roots.as_slice() {
             [Node::Expr(single)] => single.clone(),
-            [Node::Stmt(Stmt {
-                kind: StmtKind::Expr(single),
-                ..
-            })] => single.clone(),
+            [
+                Node::Stmt(Stmt {
+                    kind: StmtKind::Expr(single),
+                    ..
+                }),
+            ] => single.clone(),
             _ => Expr {
                 id: self.next_id(),
                 span,
@@ -796,8 +802,7 @@ impl MacroExpander<'_> {
     fn expand_decl_items(&mut self, items: &mut Vec<Node>) {
         let mut index = 0;
         while index < items.len() {
-            let (id, span, name, name_span, input_span, input_tokens, args) = match &items[index]
-            {
+            let (id, span, name, name_span, input_span, input_tokens, args) = match &items[index] {
                 Node::Decl(Decl {
                     id,
                     span,
@@ -906,27 +911,27 @@ impl MacroExpander<'_> {
     fn enter_body(&mut self, body: &mut crate::node_kinds::body::Body) {
         let mut index = 0;
         while index < body.decls.len() {
-            let (id, span, name, name_span, input_span, input_tokens) = match &body.decls[index].kind
-            {
-                DeclKind::MacroCall {
-                    name,
-                    name_span,
-                    input_span,
-                    input_tokens,
-                    ..
-                } => (
-                    body.decls[index].id,
-                    body.decls[index].span,
-                    name.clone(),
-                    *name_span,
-                    *input_span,
-                    input_tokens.clone(),
-                ),
-                _ => {
-                    index += 1;
-                    continue;
-                }
-            };
+            let (id, span, name, name_span, input_span, input_tokens) =
+                match &body.decls[index].kind {
+                    DeclKind::MacroCall {
+                        name,
+                        name_span,
+                        input_span,
+                        input_tokens,
+                        ..
+                    } => (
+                        body.decls[index].id,
+                        body.decls[index].span,
+                        name.clone(),
+                        *name_span,
+                        *input_span,
+                        input_tokens.clone(),
+                    ),
+                    _ => {
+                        index += 1;
+                        continue;
+                    }
+                };
             match self.expand_token_template(
                 id,
                 span,
@@ -950,7 +955,9 @@ impl MacroExpander<'_> {
                             id,
                             MacroError::InvalidProceduralExpansion {
                                 name,
-                                reason: "expansion in a declaration body must produce only declarations".into(),
+                                reason:
+                                    "expansion in a declaration body must produce only declarations"
+                                        .into(),
                                 span,
                             },
                         );
@@ -1171,7 +1178,8 @@ impl MacroExpander<'_> {
         }
 
         materialized.metadata.apply(&mut parsed.roots);
-        self.emitted_metadata.extend(materialized.metadata.identifiers);
+        self.emitted_metadata
+            .extend(materialized.metadata.identifiers);
         for root in &mut parsed.roots {
             root.drive_mut(&mut NodeIdRemapper {
                 file_id: self.file_id,
@@ -1224,7 +1232,8 @@ impl MacroExpander<'_> {
             }
         }
         for id in nested {
-            self.generated_sources.insert(id, materialized.source.clone());
+            self.generated_sources
+                .insert(id, materialized.source.clone());
         }
 
         self.expansions += 1;
@@ -1286,7 +1295,8 @@ impl MacroExpander<'_> {
                         if let Some(prev) = arg_prev {
                             if prev <= arg_token.span_start {
                                 out.push_str(
-                                    &invocation_source[prev as usize..arg_token.span_start as usize],
+                                    &invocation_source
+                                        [prev as usize..arg_token.span_start as usize],
                                 );
                             } else {
                                 out.push(' ');
@@ -1310,8 +1320,7 @@ impl MacroExpander<'_> {
             if token.kind_tag == self.tags.identifier || token.kind_tag == self.tags.effect_name {
                 let lexeme_offset = token.lexeme_start - token.span_start;
                 identifiers.push(crate::hygiene::MaterializedIdentifier {
-                    text: definition_source
-                        [token.lexeme_start as usize..token.lexeme_end as usize]
+                    text: definition_source[token.lexeme_start as usize..token.lexeme_end as usize]
                         .to_string(),
                     span: crate::parsing::span::Span {
                         file_id,
@@ -1479,7 +1488,10 @@ mod tests {
         let Node::Decl(decl) = &ast.roots[0] else {
             panic!("expected a let declaration");
         };
-        let DeclKind::Let { rhs: Some(expr), .. } = &decl.kind else {
+        let DeclKind::Let {
+            rhs: Some(expr), ..
+        } = &decl.kind
+        else {
             panic!("expected a let with a value");
         };
         let ExprKind::MacroCall {
@@ -1567,8 +1579,7 @@ mod tests {
 
     #[test]
     fn expands_expression_template_and_removes_definition() {
-        let source =
-            "macro choose($condition, $yes, $no) { if $condition { $yes } else { $no } }\n@choose(true, 1, 2)";
+        let source = "macro choose($condition, $yes, $no) { if $condition { $yes } else { $no } }\n@choose(true, 1, 2)";
         let mut ast = parse(source);
         let sources = HashMap::from([(ast.file_id, std::sync::Arc::from(source))]);
         let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);

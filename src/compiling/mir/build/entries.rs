@@ -173,9 +173,10 @@ impl<'a> ProgramBuilder<'a> {
                         ..
                     } = &decl.kind =>
                 {
+                    fx.current_span = decl.span;
                     // ADR 0035: a static-value-generic function has no
                     // slot (see registration above) and no generic clause
-                    // to compile — skip its initializer entirely.
+                    // to compile - skip its initializer entirely.
                     if let Some((_, func)) = bound_func(decl)
                         && func
                             .scheme
@@ -188,20 +189,17 @@ impl<'a> ProgramBuilder<'a> {
                         continue;
                     }
                     let specialization = fx.value_specialization(*symbol, &rhs.ty, rhs.span)?;
-                    let (initializer, initializer_ty) = fx.compile_with_specialization(
-                        &specialization,
-                        |fx| {
+                    let (initializer, initializer_ty) =
+                        fx.compile_with_specialization(&specialization, |fx| {
                             let initializer = fx.compile_expr(rhs)?;
                             let initializer_ty = fx.resolved(&rhs.ty);
                             Ok::<_, BackendError>((initializer, initializer_ty))
-                        },
-                    )?;
+                        })?;
                     // A view rooted in a temporary cannot be stored: the
                     // owner dies with this statement (a view of another
                     // global is fine — the global outlives everything).
-                    let initializer_is_view = {
-                        contains_borrow_classified(fx.program_builder, &initializer_ty)
-                    };
+                    let initializer_is_view =
+                        { contains_borrow_classified(fx.program_builder, &initializer_ty) };
                     if initializer_is_view
                         && let Operand::Local(view) = initializer
                         && fx.borrow_roots.contains_key(&view)
@@ -244,8 +242,9 @@ impl<'a> ProgramBuilder<'a> {
             }
         }
 
-        let (n_locals, blocks, _return_repr) = fx.finish(value)?;
+        let (n_locals, blocks, _return_repr, debug_names) = fx.finish(value)?;
         self.functions[id] = Function {
+            debug_names,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -292,8 +291,10 @@ impl<'a> ProgramBuilder<'a> {
                 global: slot,
                 src: Operand::Local(result),
             });
-            let (n_locals, blocks, _return_repr) = fx.finish(Operand::Const(Constant::Unit))?;
+            let (n_locals, blocks, _return_repr, debug_names) =
+                fx.finish(Operand::Const(Constant::Unit))?;
             self.functions[body_id] = Function {
+                debug_names,
                 frame_sites: Default::default(),
                 param_reprs: Vec::new(),
                 return_repr: None,
@@ -359,8 +360,10 @@ impl<'a> ProgramBuilder<'a> {
                 wrapper.drop_value(Operand::Local(loaded), &ty);
             }
         }
-        let (n_locals, blocks, _return_repr) = wrapper.finish(Operand::Local(result))?;
+        let (n_locals, blocks, _return_repr, debug_names) =
+            wrapper.finish(Operand::Local(result))?;
         self.functions[outer] = Function {
+            debug_names,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -397,8 +400,9 @@ impl<'a> ProgramBuilder<'a> {
             args: Vec::new(),
             unwind: None,
         });
-        let (n_locals, blocks, _return_repr) = fx.finish(Operand::Local(result))?;
+        let (n_locals, blocks, _return_repr, debug_names) = fx.finish(Operand::Local(result))?;
         self.functions[id] = Function {
+            debug_names,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -497,8 +501,10 @@ impl<'a> ProgramBuilder<'a> {
             });
             fx.flush_stmt_temps(None);
         }
-        let (n_locals, blocks, _return_repr) = fx.finish(Operand::Const(Constant::Unit))?;
+        let (n_locals, blocks, _return_repr, debug_names) =
+            fx.finish(Operand::Const(Constant::Unit))?;
         self.functions[id] = Function {
+            debug_names,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -661,8 +667,10 @@ impl<'a> ProgramBuilder<'a> {
         }
         let id = self.reserve("empty_entry");
         let fx = FunctionBuilder::new(self, 0, 0);
-        let (n_locals, blocks, _return_repr) = fx.finish(Operand::Const(Constant::Unit))?;
+        let (n_locals, blocks, _return_repr, debug_names) =
+            fx.finish(Operand::Const(Constant::Unit))?;
         self.functions[id] = Function {
+            debug_names,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -701,8 +709,10 @@ impl<'a> ProgramBuilder<'a> {
                 args,
                 unwind: None,
             });
-            let (n_locals, blocks, _return_repr) = fx.finish(Operand::Local(result))?;
+            let (n_locals, blocks, _return_repr, debug_names) =
+                fx.finish(Operand::Local(result))?;
             self.functions[outer] = Function {
+                debug_names,
                 frame_sites: Default::default(),
                 param_reprs: Vec::new(),
                 return_repr: None,
@@ -746,8 +756,10 @@ impl<'a> ProgramBuilder<'a> {
             global: slot,
             src: Operand::Local(result),
         });
-        let (n_locals, blocks, _return_repr) = fx.finish(Operand::Const(Constant::Unit))?;
+        let (n_locals, blocks, _return_repr, debug_names) =
+            fx.finish(Operand::Const(Constant::Unit))?;
         self.functions[body_id] = Function {
+            debug_names,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -794,8 +806,10 @@ impl<'a> ProgramBuilder<'a> {
                 wrapper.drop_value(Operand::Local(loaded), &ty);
             }
         }
-        let (n_locals, blocks, _return_repr) = wrapper.finish(Operand::Local(result))?;
+        let (n_locals, blocks, _return_repr, debug_names) =
+            wrapper.finish(Operand::Local(result))?;
         self.functions[outer] = Function {
+            debug_names,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,

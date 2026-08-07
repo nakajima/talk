@@ -172,7 +172,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let first = key("thing", &[("a.tlk", "let a = 1")], Some("stamp")).expect("key");
         store_in(&root, "thing", &first, b"payload");
-        assert_eq!(load_in(&root, "thing", &first).as_deref(), Some(b"payload".as_slice()));
+        assert_eq!(
+            load_in(&root, "thing", &first).as_deref(),
+            Some(b"payload".as_slice())
+        );
         // A different key does not read the entry.
         let second = key("thing", &[("a.tlk", "let a = 2")], Some("stamp")).expect("key");
         assert!(load_in(&root, "thing", &second).is_none());
@@ -195,7 +198,10 @@ mod tests {
             .flatten()
             .filter(|entry| entry.file_name().to_string_lossy().ends_with(".bin"))
             .count();
-        assert_eq!(retained, RETAIN_STAMPS, "old stamps are pruned, newest kept");
+        assert_eq!(
+            retained, RETAIN_STAMPS,
+            "old stamps are pruned, newest kept"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 }

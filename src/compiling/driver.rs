@@ -281,14 +281,12 @@ impl Source {
 
     pub fn read(&self) -> Result<Arc<str>, CompileError> {
         match &self.kind {
-            SourceKind::File(path) => std::fs::read_to_string(path)
-                .map(Arc::from)
-                .map_err(|e| {
-                    CompileError::IO(std::io::Error::new(
-                        e.kind(),
-                        format!("{}: {e}", path.display()),
-                    ))
-                }),
+            SourceKind::File(path) => std::fs::read_to_string(path).map(Arc::from).map_err(|e| {
+                CompileError::IO(std::io::Error::new(
+                    e.kind(),
+                    format!("{}: {e}", path.display()),
+                ))
+            }),
             SourceKind::String(string) => Ok(string.clone()),
             SourceKind::InMemory { text, .. } => Ok(text.clone()),
         }
@@ -330,7 +328,17 @@ mod frontend_parse_tests {
     }
 }
 
-fn extract_import_paths(ast: &AST<ast::Parsed>) -> Vec<ImportPath> {
+/// An import edge discovered while parsing: either one module file or a
+/// glob (`use package::foo::*`) covering the module file plus every
+/// `.tlk` under its directory.
+enum DiscoveredImport {
+    Single(ImportPath),
+    /// Local module path of a glob import. A glob over a compiled package
+    /// module has no source tree and stays `Single`.
+    Glob(String),
+}
+
+fn extract_import_paths(ast: &AST<ast::Parsed>) -> Vec<DiscoveredImport> {
     use derive_visitor::Drive;
 
     let mut paths = Vec::new();
@@ -338,7 +346,12 @@ fn extract_import_paths(ast: &AST<ast::Parsed>) -> Vec<ImportPath> {
         if let Node::Decl(decl) = root
             && let DeclKind::Import(import) = &decl.kind
         {
-            paths.push(import.path.clone());
+            match (&import.symbols, &import.path) {
+                (crate::node_kinds::decl::ImportedSymbols::Glob, ImportPath::Local(path)) => {
+                    paths.push(DiscoveredImport::Glob(path.clone()));
+                }
+                _ => paths.push(DiscoveredImport::Single(import.path.clone())),
+            }
         }
     }
 
@@ -347,7 +360,7 @@ fn extract_import_paths(ast: &AST<ast::Parsed>) -> Vec<ImportPath> {
             if let ExprKind::Variable(Name::Raw(raw)) = &expr.kind
                 && let Some(path) = qualified_local_module_path(raw)
             {
-                paths.push(ImportPath::Local(path));
+                paths.push(DiscoveredImport::Single(ImportPath::Local(path)));
             }
         });
     for root in &ast.roots {
@@ -363,7 +376,7 @@ fn extract_import_paths(ast: &AST<ast::Parsed>) -> Vec<ImportPath> {
             } = &ty.kind
                 && let Some(path) = qualified_local_module_path(raw)
             {
-                paths.push(ImportPath::Local(path));
+                paths.push(DiscoveredImport::Single(ImportPath::Local(path)));
             }
         },
     );
@@ -395,7 +408,25 @@ fn resolve_import_path(
         return Ok(None);
     };
 
-    // Canonicalize for cycle detection (normalizes symlinks).
+    let Some(canonical) = canonicalize_import(source_path, module_path, &resolved, workspace_root)?
+    else {
+        return Ok(None);
+    };
+
+    // Return both the canonical path (for tracking) and the resolved path for source.
+    Ok(Some((canonical, resolved)))
+}
+
+/// Canonicalizes a discovered source path for the import graph
+/// (normalizes symlinks) and checks workspace confinement. Returns None
+/// when the path does not exist on disk; in-memory sources are matched
+/// separately.
+fn canonicalize_import(
+    source_path: &str,
+    import_path: &str,
+    resolved: &Path,
+    workspace_root: Option<&Path>,
+) -> Result<Option<PathBuf>, CompileError> {
     let Ok(canonical) = resolved.canonicalize() else {
         return Ok(None);
     };
@@ -404,14 +435,46 @@ fn resolve_import_path(
         if !canonical.starts_with(&canonical_root) {
             return Err(CompileError::ImportOutsideWorkspace {
                 source: source_path.to_string(),
-                import_path: module_path.clone(),
+                import_path: import_path.to_string(),
                 workspace_root: root.to_path_buf(),
             });
         }
     }
+    Ok(Some(canonical))
+}
 
-    // Return both the canonical path (for tracking) and the resolved path for source.
-    Ok(Some((canonical, resolved)))
+/// Enters a discovered source into the parse queue (unless already
+/// tracked) and records the importer's edge to it.
+fn queue_discovered(
+    canonical: PathBuf,
+    resolved: PathBuf,
+    importer_id: FileID,
+    file_ids: &mut FxHashMap<PathBuf, FileID>,
+    next_file_id: &mut u32,
+    to_parse: &mut VecDeque<(Source, FileID)>,
+    file_dependencies: &mut Vec<(FileID, FileID)>,
+) {
+    let target_id = match file_ids.get(&canonical) {
+        Some(target_id) => *target_id,
+        None => {
+            let target_id = FileID(*next_file_id);
+            *next_file_id += 1;
+            file_ids.insert(canonical, target_id);
+            to_parse.push_back((Source::from(resolved), target_id));
+            target_id
+        }
+    };
+    record_edge(importer_id, target_id, file_dependencies);
+}
+
+fn record_edge(
+    importer_id: FileID,
+    target_id: FileID,
+    file_dependencies: &mut Vec<(FileID, FileID)>,
+) {
+    if target_id != importer_id && !file_dependencies.contains(&(importer_id, target_id)) {
+        file_dependencies.push((importer_id, target_id));
+    }
 }
 
 impl Driver {
@@ -521,7 +584,47 @@ impl Driver {
                     // Discover imports and queue them for parsing,
                     // recording the canonical edge either way.
                     let source_path = file.path();
-                    for import_path in extract_import_paths(&parsed) {
+                    for discovered in extract_import_paths(&parsed) {
+                        let import_path = match discovered {
+                            DiscoveredImport::Single(import_path) => import_path,
+                            // Glob import: the module file plus every
+                            // .tlk under its directory, one edge each.
+                            DiscoveredImport::Glob(module_path) => {
+                                let Some(base) =
+                                    local_modules.resolve_base(source_path.as_ref(), &module_path)
+                                else {
+                                    continue;
+                                };
+                                for resolved in LocalModulePaths::expand_glob(&base) {
+                                    let Some(canonical) = canonicalize_import(
+                                        source_path.as_ref(),
+                                        &module_path,
+                                        &resolved,
+                                        self.config.workspace_root.as_deref(),
+                                    )?
+                                    else {
+                                        continue;
+                                    };
+                                    queue_discovered(
+                                        canonical,
+                                        resolved,
+                                        file_id,
+                                        &mut file_ids,
+                                        &mut next_file_id,
+                                        &mut to_parse,
+                                        &mut file_dependencies,
+                                    );
+                                }
+                                // In-memory sources never canonicalize; match
+                                // them against the glob base by path.
+                                for (path, target_id) in &in_memory_ids {
+                                    if LocalModulePaths::glob_member(&base, path) {
+                                        record_edge(file_id, *target_id, &mut file_dependencies);
+                                    }
+                                }
+                                continue;
+                            }
+                        };
                         if let ImportPath::Package(package) = &import_path {
                             if self.config.modules.get_module_by_name(package).is_none()
                                 && let Some((id, module)) = super::stdlib::module_with_id(package)
@@ -538,31 +641,23 @@ impl Driver {
                             &local_modules,
                             self.config.workspace_root.as_deref(),
                         )? {
-                            let target_id = match file_ids.get(&canonical) {
-                                Some(target_id) => *target_id,
-                                None => {
-                                    let target_id = FileID(next_file_id);
-                                    next_file_id += 1;
-                                    file_ids.insert(canonical, target_id);
-                                    to_parse.push_back((Source::from(resolved), target_id));
-                                    target_id
-                                }
-                            };
-                            if target_id != file_id
-                                && !file_dependencies.contains(&(file_id, target_id))
-                            {
-                                file_dependencies.push((file_id, target_id));
-                            }
+                            queue_discovered(
+                                canonical,
+                                resolved,
+                                file_id,
+                                &mut file_ids,
+                                &mut next_file_id,
+                                &mut to_parse,
+                                &mut file_dependencies,
+                            );
                         } else if let ImportPath::Local(module_path) = &import_path {
                             // The target never canonicalized: match it
                             // against the session's in-memory sources.
                             if let Some(resolved) =
                                 local_modules.resolve(source_path.as_ref(), module_path)
                                 && let Some(target_id) = in_memory_ids.get(&resolved).copied()
-                                && target_id != file_id
-                                && !file_dependencies.contains(&(file_id, target_id))
                             {
-                                file_dependencies.push((file_id, target_id));
+                                record_edge(file_id, target_id, &mut file_dependencies);
                             }
                         }
                     }
@@ -857,14 +952,21 @@ impl Driver<Typed> {
     }
 
     /// Render the backend's middle representation for inspection
-    /// (TOOL-10). Same inputs as `compile_executable`.
-    pub fn render_mir(&self, entry: Option<&str>, optimized: bool) -> Result<String, String> {
+    /// (TOOL-10). Same inputs as `compile_executable`. `debug`
+    /// annotates the dump with source provenance; it survives
+    /// optimization, so the flags combine freely.
+    pub fn render_mir(
+        &self,
+        entry: Option<&str>,
+        optimized: bool,
+        debug: bool,
+    ) -> Result<String, String> {
         let entry = match entry {
             Some(name) => crate::compiling::mir::Entry::Named(name),
             None => crate::compiling::mir::Entry::Script,
         };
         self.with_backend_inputs(entry, |programs, entry| {
-            crate::compiling::mir::render_mir(programs, entry, optimized)
+            crate::compiling::mir::render_mir(programs, entry, optimized, debug)
         })
         .map_err(|error| self.locate_backend_error(&error))
     }
@@ -1902,10 +2004,8 @@ print_raw(rendered.into_string())
 
     impl SourceTree {
         fn new(name: &str, files: &[(&str, &str)]) -> Self {
-            let root = std::env::temp_dir().join(format!(
-                "talk-graph-{name}-{}",
-                std::process::id()
-            ));
+            let root =
+                std::env::temp_dir().join(format!("talk-graph-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&root);
             for (relative, text) in files {
                 let path = root.join(relative);
@@ -1941,17 +2041,72 @@ print_raw(rendered.into_string())
                 ("lib/util.tlk", "pub func answer() -> Int {\n\t42\n}\n"),
             ],
         );
-        let parsed = Driver::new(
-            vec![Source::from(tree.path("main.tlk"))],
-            tree.config(),
-        )
-        .parse()
-        .unwrap();
+        let parsed = Driver::new(vec![Source::from(tree.path("main.tlk"))], tree.config())
+            .parse()
+            .unwrap();
         assert_eq!(parsed.phase.asts.len(), 2, "the import is discovered");
         assert_eq!(
             parsed.phase.file_dependencies,
             vec![(FileID(0), FileID(1))],
             "the edge names canonical file ids, not paths or stems"
+        );
+    }
+
+    #[test]
+    fn recursive_glob_discovers_module_and_submodules() {
+        let tree = SourceTree::new(
+            "recursive-glob",
+            &[
+                (
+                    "main.tlk",
+                    "use package::foo::*\nroot_value\nchild_value\ndeep_value\n",
+                ),
+                ("foo.tlk", "pub let root_value = 1\n"),
+                ("foo/child.tlk", "pub let child_value = 2\n"),
+                ("foo/nested/deep.tlk", "pub let deep_value = 3\n"),
+            ],
+        );
+        let parsed = Driver::new(vec![Source::from(tree.path("main.tlk"))], tree.config())
+            .parse()
+            .unwrap();
+        assert_eq!(parsed.phase.asts.len(), 4);
+        assert_eq!(parsed.phase.file_dependencies.len(), 3);
+
+        let resolved = parsed.resolve_names().unwrap();
+        assert!(
+            !resolved.has_errors(),
+            "glob symbols resolve: {:?}",
+            resolved.phase.diagnostics
+        );
+    }
+
+    #[test]
+    fn recursive_glob_reports_symbol_collisions() {
+        let tree = SourceTree::new(
+            "recursive-glob-collision",
+            &[
+                ("main.tlk", "use package::foo::*\n"),
+                ("foo/a.tlk", "pub let shared = 1\n"),
+                ("foo/nested/b.tlk", "pub let shared = 2\n"),
+            ],
+        );
+        let resolved = Driver::new(vec![Source::from(tree.path("main.tlk"))], tree.config())
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap();
+        assert!(
+            resolved.phase.diagnostics.iter().any(|diagnostic| matches!(
+                diagnostic,
+                crate::common::diagnostic::AnyDiagnostic::NameResolution(
+                    crate::common::diagnostic::Diagnostic {
+                        kind: crate::name_resolution::name_resolver::NameResolverError::ImportCollision { .. },
+                        ..
+                    }
+                )
+            )),
+            "expected glob collision, got {:?}",
+            resolved.phase.diagnostics
         );
     }
 
@@ -1964,13 +2119,14 @@ print_raw(rendered.into_string())
                 ("dep.tlk", "pub func answer() -> Int {\n\t42\n}\n"),
             ],
         );
-        let parsed = Driver::new(
-            vec![Source::from(tree.path("main.tlk"))],
-            tree.config(),
-        )
-        .parse()
-        .unwrap();
-        assert_eq!(parsed.phase.asts.len(), 2, "the reference discovers the file");
+        let parsed = Driver::new(vec![Source::from(tree.path("main.tlk"))], tree.config())
+            .parse()
+            .unwrap();
+        assert_eq!(
+            parsed.phase.asts.len(),
+            2,
+            "the reference discovers the file"
+        );
         assert_eq!(parsed.phase.file_dependencies, vec![(FileID(0), FileID(1))]);
     }
 
@@ -1987,12 +2143,9 @@ print_raw(rendered.into_string())
                 ("b/util.tlk", "pub let from_b = 2\n"),
             ],
         );
-        let parsed = Driver::new(
-            vec![Source::from(tree.path("main.tlk"))],
-            tree.config(),
-        )
-        .parse()
-        .unwrap();
+        let parsed = Driver::new(vec![Source::from(tree.path("main.tlk"))], tree.config())
+            .parse()
+            .unwrap();
         assert_eq!(parsed.phase.asts.len(), 3);
         // Both `util` files are distinct edge targets; stem matching
         // could only ever name one of them.
@@ -2010,7 +2163,10 @@ print_raw(rendered.into_string())
         let tree = SourceTree::new(
             "order",
             &[
-                ("main.tlk", "let value = package::dep::answer()\nprint(value)\n"),
+                (
+                    "main.tlk",
+                    "let value = package::dep::answer()\nprint(value)\n",
+                ),
                 ("dep.tlk", "pub func answer() -> Int {\n\t42\n}\n"),
             ],
         );

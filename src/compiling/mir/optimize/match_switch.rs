@@ -171,6 +171,7 @@ mod tests {
         failed: BlockId,
     ) -> BlockData {
         BlockData {
+            debug: None,
             params: Vec::new(),
             insts: vec![Inst::Scalar {
                 dest: cond,
@@ -188,6 +189,7 @@ mod tests {
 
     fn terminal() -> BlockData {
         BlockData {
+            debug: None,
             params: Vec::new(),
             insts: Vec::new(),
             term: Some(Term::Return(Operand::Const(Constant::Unit))),
@@ -205,6 +207,7 @@ mod tests {
             },
         );
         let mut function = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -232,6 +235,7 @@ mod tests {
     #[test]
     fn requires_tags_and_does_not_bypass_instructionful_continuations() {
         let mut function = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,

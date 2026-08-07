@@ -139,6 +139,7 @@ mod tests {
     #[test]
     fn removes_dead_blocks_and_remaps_targets() {
         let mut function = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -147,16 +148,19 @@ mod tests {
             locals: crate::compiling::mir::build::LocalInfo::uniform(1),
             blocks: vec![
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Goto(2, Vec::new())),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Trap("dead")),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Return(Operand::Const(Constant::Unit))),

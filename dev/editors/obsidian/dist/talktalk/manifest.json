@@ -1,0 +1,9 @@
+{
+  "id": "talktalk",
+  "name": "TalkTalk",
+  "version": "0.2.0",
+  "minAppVersion": "1.4.0",
+  "description": "Syntax highlighting for TalkTalk code in ```tlk code blocks.",
+  "author": "talktalk",
+  "isDesktopOnly": false
+}

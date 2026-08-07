@@ -72,10 +72,8 @@ fn emit_compiler_content_stamp() {
         }
     }
 
-    let mut paths: Vec<std::path::PathBuf> = STAMP_FILES
-        .iter()
-        .map(std::path::PathBuf::from)
-        .collect();
+    let mut paths: Vec<std::path::PathBuf> =
+        STAMP_FILES.iter().map(std::path::PathBuf::from).collect();
     for dir in STAMP_DIRS {
         collect(std::path::Path::new(dir), SKIP_DIRS, &mut paths);
     }

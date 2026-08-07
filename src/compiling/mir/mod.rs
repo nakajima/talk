@@ -75,7 +75,7 @@ impl BackendError {
 pub(crate) fn check(programs: &[ProgramInput<'_>], entry: Entry) -> Result<(), BackendError> {
     // Checking means checking everything: every body compiles, called
     // or not, entry or no entry.
-    build::build(programs, entry, true).map(|_| ())
+    build::build(programs, entry, true, false).map(|_| ())
 }
 
 /// The one finalized producer every target shares (ADR 0047): build and
@@ -87,7 +87,7 @@ pub(crate) fn compile_mir(
     programs: &[ProgramInput<'_>],
     entry: Entry,
 ) -> Result<(build::Program, OptimizationStats), BackendError> {
-    let mut program = build::build(programs, entry, false)?;
+    let mut program = build::build(programs, entry, false, false)?;
     let optimizations = finalize(&mut program);
     Ok((program, optimizations))
 }
@@ -118,13 +118,17 @@ fn allocate_registers(program: &mut build::Program) {
     }
 }
 
-/// Render the middle representation for inspection (TOOL-10).
+/// Render the middle representation for inspection (TOOL-10). `debug`
+/// collects source provenance during the build: per-statement span
+/// comments and local binding names. It survives optimization, so the
+/// two flags combine freely.
 pub(crate) fn render_mir(
     programs: &[ProgramInput<'_>],
     entry: Entry,
     optimized: bool,
+    debug: bool,
 ) -> Result<String, BackendError> {
-    let mut program = build::build(programs, entry, false)?;
+    let mut program = build::build(programs, entry, false, debug)?;
     if optimized {
         finalize(&mut program);
     }

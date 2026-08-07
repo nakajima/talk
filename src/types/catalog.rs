@@ -1962,9 +1962,7 @@ impl TypeCatalog {
                         .args
                         .iter()
                         .zip(&protocol.args)
-                        .all(|(pattern, actual)| {
-                            match_key_pattern(pattern, actual, &mut bindings)
-                        })
+                        .all(|(pattern, actual)| match_key_pattern(pattern, actual, &mut bindings))
                 });
             if !matches {
                 continue;

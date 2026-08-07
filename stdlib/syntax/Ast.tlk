@@ -514,6 +514,9 @@ pub struct ImportedSymbol {
 pub enum ImportedSymbols {
 	case all
 	case named([ImportedSymbol])
+	// use package::foo::* : the module's public symbols plus, recursively,
+	// every submodule under its directory.
+	case glob
 }
 
 pub struct Import {

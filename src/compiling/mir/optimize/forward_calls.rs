@@ -99,6 +99,7 @@ mod tests {
 
     fn function(arity: u16, insts: Vec<Inst>, term: Term) -> Function {
         Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -106,6 +107,7 @@ mod tests {
             arity,
             locals: crate::compiling::mir::build::LocalInfo::uniform(arity + 1),
             blocks: vec![BlockData {
+                debug: None,
                 params: Vec::new(),
                 insts,
                 term: Some(term),
@@ -124,6 +126,7 @@ mod tests {
 
     fn program(functions: Vec<Function>) -> Program {
         Program {
+            debug_files: Vec::new(),
             functions,
             entry: 0,
             global_slots: 0,
@@ -138,6 +141,7 @@ mod tests {
     #[test]
     fn threads_identity_forwarder_and_preserves_caller_unwind() {
         let caller = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -146,6 +150,7 @@ mod tests {
             locals: crate::compiling::mir::build::LocalInfo::uniform(3),
             blocks: vec![
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: vec![call(
                         2,
@@ -156,6 +161,7 @@ mod tests {
                     term: Some(Term::Return(Operand::Local(2))),
                 },
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::UnwindRet),

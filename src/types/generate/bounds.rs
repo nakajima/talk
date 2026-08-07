@@ -1,5 +1,5 @@
-use super::*;
 use super::elaborate::Elaborator;
+use super::*;
 
 macro_rules! impl_bounds_for {
     ($target:ident<$session:lifetime, $source:lifetime>) => {

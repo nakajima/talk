@@ -20,6 +20,7 @@ fn storage_symbol() -> MirSymbol {
 
 fn module(functions: Vec<Function>) -> Module {
     Module {
+        debug_files: Vec::new(),
         functions,
         entry: 0,
         global_slots: 0,
@@ -33,10 +34,12 @@ fn module(functions: Vec<Function>) -> Module {
 
 fn function(name: &str, arity: u16, insts: Vec<Inst>, term: Term) -> Function {
     Function {
+        debug_names: None,
         name: name.into(),
         arity,
         locals: talk_mir::LocalInfo::uniform(arity.max(1)),
         blocks: vec![BlockData {
+            debug: None,
             params: vec![],
             insts,
             term: Some(term),

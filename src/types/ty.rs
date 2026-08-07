@@ -493,9 +493,7 @@ impl Predicate {
                 a.try_visit(visitor)?;
                 b.try_visit(visitor)
             }
-            Predicate::EffectEq(..) | Predicate::RowEq(..) => {
-                std::ops::ControlFlow::Continue(())
-            }
+            Predicate::EffectEq(..) | Predicate::RowEq(..) => std::ops::ControlFlow::Continue(()),
             Predicate::Conforms { ty, protocol } => {
                 ty.try_visit(visitor)?;
                 for arg in &protocol.args {
@@ -863,9 +861,7 @@ pub(crate) trait TyFold {
     fn fold_predicate(&mut self, predicate: &Predicate) -> Predicate {
         match predicate {
             Predicate::TypeEq(a, b) => Predicate::TypeEq(self.fold_ty(a), self.fold_ty(b)),
-            Predicate::EffectEq(a, b) => {
-                Predicate::EffectEq(self.fold_eff(a), self.fold_eff(b))
-            }
+            Predicate::EffectEq(a, b) => Predicate::EffectEq(self.fold_eff(a), self.fold_eff(b)),
             Predicate::RowEq(a, b) => Predicate::RowEq(self.fold_row(a), self.fold_row(b)),
             Predicate::Conforms { ty, protocol } => Predicate::Conforms {
                 ty: self.fold_ty(ty),

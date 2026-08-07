@@ -31,10 +31,7 @@ impl Document {
                 }
                 (Some(range), new_text) => {
                     // Minimal UTF-16 aware range edit
-                    let (start, end) = (
-                        self.byte_offset(range.start),
-                        self.byte_offset(range.end),
-                    );
+                    let (start, end) = (self.byte_offset(range.start), self.byte_offset(range.end));
                     if let (Some(start), Some(end)) = (start, end)
                         && start <= end
                     {

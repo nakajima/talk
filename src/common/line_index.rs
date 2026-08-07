@@ -63,7 +63,8 @@ impl LineIndex {
     pub fn line_info_utf8(&self, text: &str, byte_offset: u32) -> (u32, u32, usize, usize) {
         let offset = clamp_to_char_boundary(text, byte_offset as usize);
         let line = self.line_of(offset as u32);
-        let (line_start, line_end) = self.line_bounds(text, self.line_starts[line as usize] as usize);
+        let (line_start, line_end) =
+            self.line_bounds(text, self.line_starts[line as usize] as usize);
         let col = text[line_start..offset].chars().count() as u32 + 1;
         (line + 1, col, line_start, line_end)
     }
@@ -73,7 +74,8 @@ impl LineIndex {
     pub fn line_info_utf16(&self, text: &str, byte_offset: u32) -> (u32, u32, usize, usize) {
         let offset = clamp_to_char_boundary(text, byte_offset as usize);
         let line = self.line_of(offset as u32);
-        let (line_start, line_end) = self.line_bounds(text, self.line_starts[line as usize] as usize);
+        let (line_start, line_end) =
+            self.line_bounds(text, self.line_starts[line as usize] as usize);
         let col = text[line_start..offset].encode_utf16().count() as u32 + 1;
         (line + 1, col, line_start, line_end)
     }
@@ -108,7 +110,11 @@ impl LineIndex {
     /// The 0-based `(line, character)` in UTF-16 code units for a byte
     /// offset: the LSP position shape. `None` beyond the text's end or
     /// mid-character.
-    pub fn utf16_position_of_byte_offset(&self, text: &str, byte_offset: usize) -> Option<(u32, u32)> {
+    pub fn utf16_position_of_byte_offset(
+        &self,
+        text: &str,
+        byte_offset: usize,
+    ) -> Option<(u32, u32)> {
         if byte_offset > text.len() {
             return None;
         }
@@ -231,7 +237,10 @@ mod tests {
         let text = "a\u{1F600}";
         let index = LineIndex::new(text);
         assert_eq!(index.utf16_position_of_byte_offset(text, 2), None);
-        assert_eq!(index.utf16_position_of_byte_offset(text, text.len() + 1), None);
+        assert_eq!(
+            index.utf16_position_of_byte_offset(text, text.len() + 1),
+            None
+        );
     }
 
     #[test]

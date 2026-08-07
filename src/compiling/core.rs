@@ -163,7 +163,10 @@ pub(crate) fn compiler_stamp() -> Option<&'static str> {
 
     #[cfg(not(target_family = "wasm"))]
     {
-        Some(include_str!(concat!(env!("OUT_DIR"), "/compiler_stamp.txt")))
+        Some(include_str!(concat!(
+            env!("OUT_DIR"),
+            "/compiler_stamp.txt"
+        )))
     }
 }
 

@@ -379,10 +379,9 @@ pub async fn start() {
 
                 tracing::info!("did open {document_url}");
 
-                state.documents.insert(
-                    document_url.clone(),
-                    Document::new(version, text),
-                );
+                state
+                    .documents
+                    .insert(document_url.clone(), Document::new(version, text));
                 state.schedule_document_work(document_url.clone());
                 state.invalidate_root(&document_url, true);
                 std::ops::ControlFlow::Continue(())
@@ -646,7 +645,9 @@ pub async fn start() {
                     }
 
                     if let Some(root) = analysis_root_for_uri(state, &uri) {
-                        diagnostics_workspaces.entry(root).or_insert_with(|| uri.clone());
+                        diagnostics_workspaces
+                            .entry(root)
+                            .or_insert_with(|| uri.clone());
                     }
                     if state.documents.contains_key(&uri) {
                         state.schedule_document_work(uri.clone());
@@ -1182,7 +1183,8 @@ fn lsp_diagnostic_for_analysis(
     text: &str,
     diagnostic: &AnalysisDiagnostic,
 ) -> Option<Diagnostic> {
-    let range = byte_span_to_range_utf16_in(index, text, diagnostic.range.start, diagnostic.range.end)?;
+    let range =
+        byte_span_to_range_utf16_in(index, text, diagnostic.range.start, diagnostic.range.end)?;
     let severity = match diagnostic.severity {
         AnalysisSeverity::Error => DiagnosticSeverity::ERROR,
         AnalysisSeverity::Warning => DiagnosticSeverity::WARNING,
@@ -2698,10 +2700,9 @@ mod tests {
             core: None,
             workspace_roots: vec![root],
         };
-        state.documents.insert(
-            uri_a.clone(),
-            Document::new(0, code_a.to_string()),
-        );
+        state
+            .documents
+            .insert(uri_a.clone(), Document::new(0, code_a.to_string()));
 
         let workspace = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
         // Find the "foo" reference after the import statement
@@ -3366,8 +3367,10 @@ func foo() 'fizz -> Int {
         let doc_id = super::document_id_for_uri(&uri);
         let candidates = workspace.import_candidates(&doc_id);
         assert!(
-            candidates.iter().any(|candidate| candidate.name == "Property"
-                && candidate.module_path == "package::documentables::property"),
+            candidates
+                .iter()
+                .any(|candidate| candidate.name == "Property"
+                    && candidate.module_path == "package::documentables::property"),
             "auto-import path must match what talk check accepts: {candidates:?}"
         );
         std::fs::remove_dir_all(&root).ok();
@@ -3401,7 +3404,10 @@ func foo() 'fizz -> Int {
             "an invalidated root rebuilds"
         );
         assert!(
-            third.texts.iter().any(|text| text.text().contains("let x = 2")),
+            third
+                .texts
+                .iter()
+                .any(|text| text.text().contains("let x = 2")),
             "the rebuilt workspace reads the new disk content"
         );
         std::fs::remove_dir_all(state.workspace_roots.first().expect("root")).ok();
@@ -3425,14 +3431,12 @@ func foo() 'fizz -> Int {
         std::fs::write(root_a.join("main.tlk"), "let a = 2\n").expect("rewrite a");
         state.invalidate_root(&uri_a, true);
 
-        let workspace_b_after =
-            super::workspace_analysis(&mut state, &uri_b).expect("workspace b");
+        let workspace_b_after = super::workspace_analysis(&mut state, &uri_b).expect("workspace b");
         assert!(
             std::sync::Arc::ptr_eq(&workspace_b, &workspace_b_after),
             "an unrelated root keeps its analysis"
         );
-        let workspace_a_after =
-            super::workspace_analysis(&mut state, &uri_a).expect("workspace a");
+        let workspace_a_after = super::workspace_analysis(&mut state, &uri_a).expect("workspace a");
         assert!(
             !std::sync::Arc::ptr_eq(&workspace_a, &workspace_a_after),
             "the changed root rebuilds"
@@ -3449,9 +3453,10 @@ func foo() 'fizz -> Int {
         std::fs::write(&path_a, "let x = 1\n").expect("write a");
         let uri_a = Url::from_file_path(&path_a).expect("uri a");
         let mut state = state_with_roots(vec![root.clone()]);
-        state
-            .documents
-            .insert(uri_a.clone(), super::Document::new(0, "let x = 1\n".to_string()));
+        state.documents.insert(
+            uri_a.clone(),
+            super::Document::new(0, "let x = 1\n".to_string()),
+        );
 
         let first = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
 

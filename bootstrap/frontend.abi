@@ -207,6 +207,7 @@ struct ImportedSymbol @ struct:65535.42
 enum ImportedSymbols @ enum:65535.43
 	all
 	named([ImportedSymbol])
+	glob
 
 enum Item @ enum:65535.49
 	decl_item(Decl)

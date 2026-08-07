@@ -2420,10 +2420,14 @@ fn missing_witness_quick_fixes(
     let crate::node_kinds::decl::DeclKind::Extend { body, .. } = &extend.kind else {
         return vec![];
     };
-    let suggestion = crate::analysis::requirement_suggestion_by_name(workspace, protocol, requirement)
-        .unwrap_or_else(|| {
-            crate::analysis::requirements::RequirementSuggestion::fallback(protocol, requirement)
-        });
+    let suggestion =
+        crate::analysis::requirement_suggestion_by_name(workspace, protocol, requirement)
+            .unwrap_or_else(|| {
+                crate::analysis::requirements::RequirementSuggestion::fallback(
+                    protocol,
+                    requirement,
+                )
+            });
     let stub = suggestion.stub(false);
     let Some((insert_offset, insert_text)) = insertion_before_closing_brace(text, body.span, &stub)
     else {

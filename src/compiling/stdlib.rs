@@ -332,7 +332,10 @@ fn cache_key_dynamic(name: &'static str, visiting: &mut Vec<&'static str>) -> Op
         let dependency_key = cache_key_dynamic(dependency, visiting)?;
         inputs.push((
             format!("$dependency:{dependency}"),
-            dependency_key.iter().map(|byte| format!("{byte:02x}")).collect(),
+            dependency_key
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
         ));
     }
     visiting.pop();
@@ -341,7 +344,11 @@ fn cache_key_dynamic(name: &'static str, visiting: &mut Vec<&'static str>) -> Op
         .iter()
         .map(|(path, content)| (path.as_str(), content.as_str()))
         .collect();
-    super::cache::key(&format!("stdlib/{name}"), &refs, super::core::compiler_stamp())
+    super::cache::key(
+        &format!("stdlib/{name}"),
+        &refs,
+        super::core::compiler_stamp(),
+    )
 }
 
 /// The stdlib modules a source set imports, by scanning `use` lines.
@@ -377,7 +384,9 @@ fn load_cached(name: &'static str) -> Option<CompiledStdlib> {
 }
 
 fn store_cached(name: &'static str, compiled: &CompiledStdlib) {
-    let Some(key) = cache_key_for(name) else { return };
+    let Some(key) = cache_key_for(name) else {
+        return;
+    };
     let Ok(payload) = bincode::serialize(&(compiled.1.as_ref(), compiled.2.as_ref())) else {
         return;
     };

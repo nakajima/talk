@@ -640,6 +640,34 @@ mod tests {
     }
 
     #[test]
+    fn embedded_frontend_classifies_recursive_glob_imports() {
+        let session = ParserSession::from_artifact(EMBEDDED_ARTIFACT, EMBEDDED_ABI)
+            .expect("embedded parser session");
+        let (ast, diagnostics) = parse_ast_in(
+            Some(&session),
+            "use package::foo::*\n",
+            crate::node_id::FileID(0),
+            "main.tlk",
+        )
+        .expect("glob import parses");
+        assert!(diagnostics.is_empty());
+        let crate::node::Node::Decl(decl) = &ast.roots[0] else {
+            panic!("expected import declaration");
+        };
+        let crate::node_kinds::decl::DeclKind::Import(import) = &decl.kind else {
+            panic!("expected import declaration");
+        };
+        assert_eq!(
+            import.path,
+            crate::node_kinds::decl::ImportPath::Local("package::foo".to_string())
+        );
+        assert_eq!(
+            import.symbols,
+            crate::node_kinds::decl::ImportedSymbols::Glob
+        );
+    }
+
+    #[test]
     fn embedded_session_is_shared_across_threads() {
         fn assert_shareable<T: Send + Sync>() {}
         assert_shareable::<talk_vm::Module>();

@@ -82,6 +82,7 @@ mod tests {
     #[test]
     fn removes_unused_parameter_and_matching_edge_argument() {
         let mut function = Function {
+            debug_names: None,
             frame_sites: Default::default(),
             param_reprs: Vec::new(),
             return_repr: None,
@@ -90,6 +91,7 @@ mod tests {
             locals: crate::compiling::mir::build::LocalInfo::uniform(3),
             blocks: vec![
                 BlockData {
+                    debug: None,
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Goto(
@@ -101,6 +103,7 @@ mod tests {
                     )),
                 },
                 BlockData {
+                    debug: None,
                     params: vec![1, 2],
                     insts: Vec::new(),
                     term: Some(Term::Return(Operand::Local(1))),

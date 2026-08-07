@@ -40,6 +40,7 @@ fn flat_pair(symbol: MirSymbol) -> Layout {
 
 fn function(arity: u16, n_locals: u16, insts: Vec<Inst>, term: Term) -> Function {
     Function {
+        debug_names: None,
         frame_sites: Default::default(),
         param_reprs: Vec::new(),
         return_repr: None,
@@ -47,6 +48,7 @@ fn function(arity: u16, n_locals: u16, insts: Vec<Inst>, term: Term) -> Function
         arity,
         locals: LocalInfo::uniform(n_locals),
         blocks: vec![BlockData {
+            debug: None,
             params: Vec::new(),
             insts,
             term: Some(term),
@@ -72,6 +74,7 @@ fn module(
     exports: Vec<(String, usize)>,
 ) -> Program {
     Program {
+        debug_files: Vec::new(),
         functions,
         entry: 0,
         global_slots: 0,

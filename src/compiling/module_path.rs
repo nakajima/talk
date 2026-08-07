@@ -23,6 +23,15 @@ impl LocalModulePaths {
 
     /// Resolves a `package`, `self`, or `super` path to a `.tlk` source file.
     pub fn resolve(&self, source_path: &str, module_path: &str) -> Option<PathBuf> {
+        let mut target = self.resolve_base(source_path, module_path)?;
+        target.set_extension("tlk");
+        Some(target)
+    }
+
+    /// Resolves a module path to its extensionless filesystem base:
+    /// `<base>.tlk` names the module file and `<base>/` its submodule
+    /// directory. Glob imports (`use package::foo::*`) match both.
+    pub fn resolve_base(&self, source_path: &str, module_path: &str) -> Option<PathBuf> {
         let mut segments = module_path.split("::");
         let anchor = segments.next()?;
         let mut tail: Vec<&str> = segments.collect();
@@ -78,8 +87,51 @@ impl LocalModulePaths {
         for segment in tail {
             target.push(segment);
         }
-        target.set_extension("tlk");
         Some(target)
+    }
+
+    /// Expands a glob import base to its member source files: `<base>.tlk`
+    /// when it exists plus every `.tlk` file under the `<base>/`
+    /// directory, recursively. The result is sorted so discovery order
+    /// is deterministic.
+    pub fn expand_glob(base: &Path) -> Vec<PathBuf> {
+        let mut members = Vec::new();
+        let module_file = base.with_extension("tlk");
+        if module_file.is_file() {
+            members.push(module_file);
+        }
+        if base.is_dir() {
+            Self::walk_glob_dir(base, &mut members);
+        }
+        members.sort();
+        members
+    }
+
+    fn walk_glob_dir(dir: &Path, members: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                Self::walk_glob_dir(&path, members);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("tlk") {
+                members.push(path);
+            }
+        }
+    }
+
+    /// Whether `path` belongs to the glob import rooted at `base`: the
+    /// module file itself or a `.tlk` file under the module directory.
+    /// Mirrors `expand_glob` for sources that never touch disk.
+    pub fn glob_member(base: &Path, path: &Path) -> bool {
+        let is_module_file = path == base.with_extension("tlk");
+        let is_tree_member = path.extension().and_then(|ext| ext.to_str()) == Some("tlk")
+            && path.starts_with(base);
+        is_module_file || is_tree_member
     }
 
     pub fn infer_source_root(paths: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {

@@ -541,7 +541,7 @@ impl Runner {
     fn execute(typed: &Driver<Typed>) -> Result<(String, i64), TestError> {
         // Diagnostic: dump the composed suite's middle representation.
         if std::env::var_os("TALK_DUMP_MIR").is_some() {
-            match typed.render_mir(None, false) {
+            match typed.render_mir(None, false, false) {
                 Ok(rendered) => eprintln!("{rendered}"),
                 Err(error) => eprintln!("mir render failed: {error}"),
             }
@@ -623,7 +623,7 @@ impl Runner {
             .unwrap_or(0);
         let mut file_id_to_document = vec![String::new(); file_count];
         let mut texts: Vec<crate::common::source_snapshot::SourceSnapshot> =
-            vec![crate::common::source_snapshot::SourceSnapshot::new("") ; file_count];
+            vec![crate::common::source_snapshot::SourceSnapshot::new(""); file_count];
         let mut asts = vec![None; file_count];
 
         for (source, ast) in asts_by_source {
@@ -632,8 +632,9 @@ impl Runner {
                 continue;
             }
             file_id_to_document[index] = source.path().into_owned();
-            texts[index] =
-                crate::common::source_snapshot::SourceSnapshot::new(source.read().unwrap_or_default());
+            texts[index] = crate::common::source_snapshot::SourceSnapshot::new(
+                source.read().unwrap_or_default(),
+            );
             asts[index] = Some(ast.clone());
         }
 

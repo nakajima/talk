@@ -1238,7 +1238,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                                 // form of a func-literal field).
                                 let materialization_start = self.wanteds.len();
                                 self.infer_expr(&field.value, ctx);
-                                self.deferred.extend(self.wanteds.split_off(materialization_start));
+                                self.deferred
+                                    .extend(self.wanteds.split_off(materialization_start));
                                 let ty = Ty::Forall(Box::new(self.schemes[symbol].clone()));
                                 self.artifacts.node_types.insert(field.value.id, ty.clone());
                                 ty
