@@ -253,16 +253,14 @@ impl<'a> Higlighter<'a> {
                 }
                 DeclKind::Import(_) => (),
                 DeclKind::Macro {
-                    name_span,
-                    params,
-                    template,
-                    ..
+                    name_span, params, ..
                 } => {
                     result.push(self.make_span(Kind::MACRO, *name_span));
                     for param in params {
                         result.push(self.make_span(Kind::PARAMETER, param.span));
                     }
-                    result.extend(self.tokens_from_expr(template, ast));
+                    // The template body is unparsed tokens; it receives no
+                    // AST-driven classification.
                 }
                 DeclKind::Struct {
                     generics,

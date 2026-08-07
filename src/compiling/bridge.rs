@@ -2437,7 +2437,8 @@ impl ResultAdapter<'_, '_> {
                     name: self.string(&p[0])?,
                     name_span: self.span(int(&p[1])?, int(&p[2])?)?,
                     params,
-                    template: self.expr(&p[4])?,
+                    body_span: self.span(int(&p[4])?, int(&p[5])?)?,
+                    tokens: self.macro_tokens(&p[6])?,
                 }
             }
             other => return Err(format!("unknown DeclKind variant `{other}`")),

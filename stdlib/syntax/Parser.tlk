@@ -1254,7 +1254,7 @@ struct Parser {
 		loop expected.count > 0 {
 			let token = self.current()
 			if token.kind == .eof {
-				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected a closing macro delimiter, got EOF")
+				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected a closing macro delimiter, got end of input")
 				return dummy_expr()
 			}
 			let nested_close: TokenKind?
@@ -1317,7 +1317,7 @@ struct Parser {
 		loop expected.count > 0 {
 			let token = self.current()
 			if token.kind == .eof {
-				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected a closing quotation delimiter, got EOF")
+				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected a closing quotation delimiter, got end of input")
 				return dummy_expr()
 			}
 			let nested_close: TokenKind?
@@ -3573,11 +3573,58 @@ struct Parser {
 			self.consume(kind: .comma)
 			if self.is_failed() { return dummy_decl() }
 		}
-		self.consume(kind: .equals)
-		if self.is_failed() { return dummy_decl() }
-		let template = self.require_expr(e: self.expr())
-		if self.is_failed() { return dummy_decl() }
-		Decl(kind: .macro_decl(name, name_tok.lexeme.lower, name_tok.lexeme.upper, params, template), is_public: false, start: start_tok.span.lower, end: self.span_end())
+		let open = self.current()
+		if open.kind == .left_brace { } else {
+			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected `{`, got " + describe_kind(kind: open.kind))
+			return dummy_decl()
+		}
+		self.advance()
+		// Balanced capture of the template body, mirroring macro_call(): the
+		// body stays an unparsed token template until an invocation site's
+		// category parses it.
+		let expected: [TokenKind] = [.right_brace]
+		let inner: [Token] = []
+		let close = open
+		loop expected.count > 0 {
+			let token = self.current()
+			if token.kind == .eof {
+				self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected a closing macro delimiter, got end of input")
+				return dummy_decl()
+			}
+			let nested_close: TokenKind?
+			match token.kind {
+				.left_paren -> nested_close = .some(.right_paren),
+				.left_bracket -> nested_close = .some(.right_bracket),
+				.left_brace -> nested_close = .some(.right_brace),
+				_ -> nested_close = .none
+			}
+			if let .some(kind) = nested_close {
+				expected.push(kind)
+				inner.push(token)
+				self.advance()
+				continue
+			}
+			if token.kind == .right_paren || token.kind == .right_bracket || token.kind == .right_brace {
+				let wanted = expected.pop()
+				if let .some(kind) = wanted {
+					if token.kind != kind {
+						self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected " + describe_kind(kind: kind) + ", got " + describe_kind(kind: token.kind))
+						return dummy_decl()
+					}
+				}
+				close = token
+				self.advance()
+				if expected.count == 0 { break }
+				inner.push(token)
+				continue
+			}
+			inner.push(token)
+			self.advance()
+		}
+		let canonical: [MacroToken] = [macro_token(token: open)]
+		for token in inner { canonical.push(macro_token(token: token)) }
+		canonical.push(macro_token(token: close))
+		Decl(kind: .macro_decl(name, name_tok.lexeme.lower, name_tok.lexeme.upper, params, open.lexeme.upper, close.lexeme.lower, canonical), is_public: false, start: start_tok.span.lower, end: self.span_end())
 	}
 
 	// A nominal declaration's member list (the reference `body`): decls
@@ -4162,7 +4209,7 @@ struct Parser {
 			.import_decl(_) -> self.reject_pub(what: "an import"),
 			.extend_decl(_, _, _, _, _) -> self.reject_pub(what: "an extension"),
 			.enum_variant(_, _, _, _, _, _, _) -> self.reject_pub(what: "an enum case"),
-			.macro_decl(_, _, _, _, _) -> self.fail(code: "parser.macro-export-unsupported", message: "Macros cannot be exported; remove `pub`"),
+			.macro_decl(_, _, _, _, _, _, _) -> self.fail(code: "parser.macro-export-unsupported", message: "Macros cannot be exported; remove `pub`"),
 			.associated_decl(_, _) -> self.reject_pub(what: "a protocol requirement"),
 			.method_requirement(_, _) -> self.reject_pub(what: "a protocol requirement"),
 			.init_requirement(_) -> self.reject_pub(what: "a protocol requirement"),
@@ -4838,7 +4885,7 @@ func meta_decl(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: 
 			meta_generic_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, generic: generic)
 			meta_optional_where(ctx: ctx, metas: metas, claimed: claimed, live: live, wc: wc)
 		},
-		.macro_decl(_, _, _, _, template) -> meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: template)
+		.macro_decl(_, _, _, _, _, _, _) -> ()
 	}
 	claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: slot, start: decl.start, end: decl.end)
 	if copy_from >= 0 {

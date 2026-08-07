@@ -1,1 +1,1 @@
-macro double($x) = $x + $x
+macro double($x) { $x + $x }

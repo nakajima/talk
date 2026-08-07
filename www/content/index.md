@@ -8,7 +8,7 @@ Here, have some math.
 
 ok ok, that was exciting, let’s write a function now
 
-```tlk accumulate norun
+```tlk accumulate(func) norun
 func add(x, y) {
   x + y
 }
@@ -16,13 +16,13 @@ func add(x, y) {
 
 Let's call the function with `Int`s:
 
-```tlk accumulate
+```tlk accumulate(func)
 add(1, 2) // => 3
 ```
 
 Now let's call it with `String`s:
 
-```tlk accumulate
+```tlk accumulate(func)
 add("hello ", "world") // => "hello world"
 ```
 
@@ -53,14 +53,14 @@ c // => 3
 
 Ok Philip Wadler, maybe you like types? You can specify them if you want.
 
-```tlk accumulate norun
+```tlk accumulate(types) norun
 let a: Int = 1
 let b: Float = 2.0
 ```
 
 They’ll be checked. 
 
-```tlk accumulate
+```tlk accumulate(types)
 let c = a + b // Uh oh, type error!
 ```
 
@@ -167,17 +167,18 @@ print(rec.greeting("pat"))
 
 What about enumerations? You ever enumerate stuff? It's the best!
 
-```tlk accumulate
+```tlk accumulate(enums)
 enum Response {
     case ok(String), redirect(String), other(Int)
 }
+
+let response = Response.ok("all good here, how are you?")
 ```
 
 You can pattern match on `enum`s. Your `match` expression will be checked for exhaustivity.
 
-
-```tlk accumulate
-match Response.ok("success!") {
+```tlk accumulate(enums)
+match response {
     .ok(string) -> string,
     .redirect(message) -> message,
     .other(code) -> "uh oh"
@@ -186,30 +187,12 @@ match Response.ok("success!") {
 
 We can pattern match in conditionals too.
 
-```tlk 
-enum Maybe<T> {
-	case some(T)
-	case none
-}
-
-let value = Maybe.some(31)
-
-if let .some(x) = value, x == 31 {
-   "it's 31, bestie"
+```tlk accumulate(enums)
+if let .ok(message) = response {
+   "ok: " + message
 } else {
    "who even knows"
 }
-```
-
-And `let else` is handy when you want to bail out early.
-
-```tlk accumulate
-func unwrap_or_zero(_ value: Optional<Int>) -> Int {
-	let .some(x) = value else { return 0 }
-	x
-}
-
-unwrap_or_zero(.some(42))
 ```
 
 Records can be pattern matched too.
@@ -223,19 +206,50 @@ match point {
 }
 ```
 
+One enum everyone loves is `Optional`. We love it so much there's a shorthand for it: `?`.
+
+Let's see an example of it with `let else`, which lets you bail unless the pattern matches.
+
+```tlk
+func unwrap_or_zero(_ value: Int?) -> Int {
+	let .some(x) = value else { return 0 }
+	x
+}
+
+unwrap_or_zero(.some(42))
+```
+
+Speaking of bailing early, any two-variant enum can short circuit a function. Think rust's `?` operator but dumber but simpler. Elegant? One might say. But one might say a lot of things so who knows.
+
+```tlk
+// For example
+enum Option {
+	case some(Int), none
+}
+
+func maybe_increment(x: Option<Int>) -> Option<Int> {
+	// if x is the second variant (none), we just return it here
+	let unwrapped_x = x?
+	
+	// if it's the first variant (some), it's unwrapped 
+	return .some(unwrapped_x + 1)
+}
+```
 ## protocols
 
 Ok what about ~~traits~~ ~~type classes~~ ~~interfaces~~ protocols? For making ad-hoc polymorphism less ad-hoc? Yea we've got those.
 
-```tlk accumulate norun
+Let's write a super basic protocol that let's a type be added to itself.
+
+```tlk accumulate(protocols) norun
 protocol Addable {
     func add(to other: Self) -> Self
 }
 ```
 
-Ok so what if we want some types to conform to it? Ez, use an `extend` block.
+How do we make types conform to it? With a lil `extend` declaration. Think rust's `impl Y for X` or swift's `extension X: Y`.
 
-```tlk accumulate
+```tlk accumulate(protocols)
 // Make Int addable
 extend Int: Addable {
     func add(to other: Int) -> Int {
@@ -256,7 +270,7 @@ print("world".add(to: "hello "))
 
 Conformances are verified.
 
-```tlk accumulate
+```tlk
 extend Float: Addable {}
 ```
 

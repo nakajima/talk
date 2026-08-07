@@ -59,6 +59,17 @@ while fixing several type-checker and lexer correctness bugs.
 
 ### Changed
 
+- **Declarative macros are category-agnostic token templates.** Macro
+  definitions replace `macro name($param) = expression` with a braced token
+  body: `macro name($param) { ... }`. The body is captured unparsed and each
+  invocation position's grammar decides what the expansion must be, so bodies
+  may now contain binders, free identifiers, and type names. Template-written
+  names are hygienic: introduced bindings neither capture caller names nor
+  leak into caller scope, and template free names resolve at the definition
+  site. A spliced parameter may now appear more than once; each splice
+  re-evaluates the argument, and ordinary effect and ownership checking is
+  the final authority on the expansion.
+
 - **Payload-free enums are `Copy`.** Enums whose cases have no payloads are
   treated as bare runtime tags. Borrowed values of these enums can flow into
   owned parameters and fields without requiring `consume`.

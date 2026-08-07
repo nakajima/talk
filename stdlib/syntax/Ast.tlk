@@ -546,8 +546,10 @@ pub enum DeclKind {
 	// name + its token span, generics, where, params, return type.
 	case effect_decl(String, Int, Int, [GenericDecl], WhereClause?, [Parameter], TypeAnnotation)
 	case associated_decl(GenericDecl, WhereClause?)
-	// name + its token span, parameters, template.
-	case macro_decl(String, Int, Int, [MacroParam], Expr)
+	// name + its token span, parameters, template body range + canonical tokens.
+	// The body is an unparsed token template: the invocation position's
+	// category decides how it parses (ADR 0026's unified template model).
+	case macro_decl(String, Int, Int, [MacroParam], Int, Int, [MacroToken])
 }
 
 pub struct Decl {

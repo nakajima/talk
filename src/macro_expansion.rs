@@ -111,11 +111,12 @@ impl std::fmt::Display for MacroError {
 
 impl std::error::Error for MacroError {}
 
-use derive_visitor::{Drive, DriveMut, Visitor, VisitorMut};
+use derive_visitor::{Drive, DriveMut, VisitorMut};
 
 use crate::{
     ast::{AST, Parsed},
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
+    hygiene::{SyntaxContext, SyntaxScope},
     id_generator::IDGenerator,
     label::Label,
     name::Name,
@@ -150,14 +151,9 @@ struct MacroDefinition {
     template: Expr,
 }
 
-/// Expand ADR 0026's first, deliberately restricted expression-template
-/// macros. Definitions are file-local in this slice.
-pub fn expand_macros(asts: &mut [AST<Parsed>]) -> Vec<AnyDiagnostic> {
-    expand_macros_with_sources(asts, &HashMap::new())
-}
-
 /// Expand macros with the original source text available to source-reflecting
-/// built-ins such as `@assert`.
+/// built-ins such as `@assert` and to declarative token templates, which
+/// parse their bodies out of the defining file's source.
 pub fn expand_macros_with_sources(
     asts: &mut [AST<Parsed>],
     sources: &HashMap<FileID, Arc<str>>,
@@ -184,7 +180,8 @@ pub fn expand_macros_with_sources_and_service(
                 name,
                 name_span,
                 params,
-                template,
+                body_span,
+                ..
             } = &decl.kind
             else {
                 retained.push(root);
@@ -224,13 +221,13 @@ pub fn expand_macros_with_sources_and_service(
                 continue;
             }
 
-            match TemplateValidator::validate(params, template) {
-                Ok(()) => {
+            match parse_template(ast.file_id, params, *body_span, sources) {
+                Ok(template) => {
                     definitions.insert(
                         key,
                         MacroDefinition {
                             params: params.clone(),
-                            template: template.clone(),
+                            template,
                         },
                     );
                 }
@@ -285,92 +282,88 @@ pub fn expand_macros_with_sources_and_service(
     diagnostics
 }
 
-#[derive(Visitor)]
-#[visitor(Node(enter), Expr(enter), Stmt(enter), TypeAnnotation(enter))]
-struct TemplateValidator<'a> {
-    params: HashSet<&'a str>,
-    error: Option<String>,
-}
-
-impl<'a> TemplateValidator<'a> {
-    fn validate(params: &'a [MacroParameter], template: &Expr) -> Result<(), String> {
-        let mut names = HashSet::new();
-        for param in params {
-            if !names.insert(param.name.as_str()) {
-                return Err(format!(
-                    "parameter `${}` is declared more than once",
-                    param.name
-                ));
-            }
-        }
-
-        let mut validator = Self {
-            params: names,
-            error: None,
-        };
-        template.drive(&mut validator);
-
-        if let Some(error) = validator.error {
-            return Err(error);
-        }
-
-        Ok(())
-    }
-
-    fn reject(&mut self, reason: impl Into<String>) {
-        if self.error.is_none() {
-            self.error = Some(reason.into());
+/// Parse a declarative macro's token template into syntax. The body is
+/// parsed in place: blanking the source prefix keeps every byte offset
+/// identical to the real file, so the template carries true definition-site
+/// spans. The result is still category-agnostic at this point — a single
+/// expression stays an expression, anything else becomes a block — and the
+/// invocation position's own grammar is the final judge of the expansion.
+fn parse_template(
+    file_id: FileID,
+    params: &[MacroParameter],
+    body_span: crate::parsing::span::Span,
+    sources: &HashMap<FileID, Arc<str>>,
+) -> Result<Expr, String> {
+    let mut names = HashSet::new();
+    for param in params {
+        if !names.insert(param.name.as_str()) {
+            return Err(format!(
+                "parameter `${}` is declared more than once",
+                param.name
+            ));
         }
     }
 
-    fn enter_node(&mut self, node: &Node) {
-        if matches!(node, Node::Decl(_)) {
-            self.reject("binding and declaration forms are not yet allowed");
-        }
+    let Some(source) = sources.get(&file_id) else {
+        return Err("template source is unavailable".into());
+    };
+    let bytes = source.as_bytes();
+    let (start, end) = (body_span.start as usize, body_span.end as usize);
+    if start > end || end > bytes.len() {
+        return Err("template body span is out of range".into());
+    }
+    let mut virtual_source = Vec::with_capacity(end);
+    for &byte in &bytes[..start] {
+        virtual_source.push(if byte == b'\n' { b'\n' } else { b' ' });
+    }
+    virtual_source.extend_from_slice(&bytes[start..end]);
+    let virtual_source = String::from_utf8(virtual_source)
+        .map_err(|_| "template body is not valid UTF-8".to_string())?;
+
+    let parsed = crate::compiling::frontend::parse_source(&virtual_source, file_id)
+        .map_err(|error| format!("template body failed to parse: {error}"))?;
+    let failure = parsed.failure.or_else(|| parsed.diags.into_iter().next());
+    if let Some(failure) = failure {
+        return Err(format!("template body failed to parse: {}", failure.message));
     }
 
-    fn enter_stmt(&mut self, stmt: &Stmt) {
-        match &stmt.kind {
-            StmtKind::For { .. } => self.reject("`for` introduces bindings"),
-            StmtKind::Handling { .. } => {
-                self.reject("effect names in templates require definition-site hygiene")
-            }
-            _ => {}
+    let template = match parsed.roots.as_slice() {
+        [Node::Expr(expr)] => expr.clone(),
+        [Node::Stmt(Stmt {
+            kind: StmtKind::Expr(expr),
+            ..
+        })] => expr.clone(),
+        roots => Expr {
+            id: NodeID(file_id, 0),
+            span: body_span,
+            kind: ExprKind::Block(crate::node_kinds::block::Block {
+                id: NodeID(file_id, 0),
+                args: Vec::new(),
+                body: roots.to_vec(),
+                span: body_span,
+            }),
+        },
+    };
+
+    // Splice sites are the only `$names` a template may reference; check
+    // them now so a malformed rule fails at its definition.
+    let mut unknown = None;
+    template.drive(&mut derive_visitor::visitor_enter_fn(|expr: &Expr| {
+        if unknown.is_some() {
+            return;
         }
+        if let ExprKind::Variable(Name::Raw(name)) = &expr.kind
+            && let Some(param) = name.strip_prefix('$')
+            && !names.contains(param)
+        {
+            unknown = Some(format!("unknown template parameter `${param}`"));
+        }
+    }));
+    if let Some(error) = unknown {
+        return Err(error);
     }
 
-    fn enter_type_annotation(&mut self, _annotation: &TypeAnnotation) {
-        self.reject("type names in templates require definition-site hygiene");
-    }
-
-    fn enter_expr(&mut self, expr: &Expr) {
-        match &expr.kind {
-            ExprKind::Variable(Name::Raw(name)) if name.starts_with('$') => {
-                let param = &name[1..];
-                if !self.params.contains(param) {
-                    self.reject(format!("unknown template parameter `${param}`"));
-                }
-            }
-            ExprKind::Variable(name) => self.reject(format!(
-                "free identifier `{}` requires definition-site hygiene",
-                name.name_str()
-            )),
-            ExprKind::Constructor(name, ..) => self.reject(format!(
-                "constructor `{}` requires definition-site hygiene",
-                name.name_str()
-            )),
-            ExprKind::CallEffect { .. } => {
-                self.reject("effect names in templates require definition-site hygiene")
-            }
-            ExprKind::Func(_) => self.reject("function templates introduce bindings"),
-            ExprKind::Match(..) => self.reject("match templates may introduce pattern bindings"),
-            ExprKind::As(..) => {
-                self.reject("type names in templates require definition-site hygiene")
-            }
-            ExprKind::InlineIR(..) => self.reject("inline IR is not valid macro template syntax"),
-            _ => {}
-        }
-    }
+    Ok(template)
 }
 
 #[derive(Debug, VisitorMut)]
@@ -729,6 +722,19 @@ impl MacroExpander<'_> {
 
         self.expansions += 1;
         let mut expanded = definition.template;
+        // Template-written names receive the definition-site lexical scope
+        // plus one fresh expansion scope shared by this expansion's
+        // introduced bindings and their references. Spliced arguments keep
+        // their use-site names, so they resolve exactly as written.
+        let namespace = (u64::from(self.file_id.0) << 32) | u64::from(expr.id.1);
+        let context =
+            SyntaxContext::lexical(NodeID(self.file_id, 0)).with_scope(SyntaxScope::Expansion {
+                namespace,
+                ordinal: self.expansions as u64,
+            });
+        expanded.drive_mut(&mut crate::hygiene::TemplateContextStamp {
+            context: &context,
+        });
         expanded.drive_mut(&mut NodeIdRemapper {
             file_id: self.file_id,
             node_ids: &mut self.node_ids,
@@ -879,8 +885,12 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::{
-        macro_expansion::{MacroError, expand_macros, expand_macros_with_sources},
-        node_kinds::{decl::DeclKind, expr::ExprKind, stmt::StmtKind},
+        macro_expansion::{MacroError, expand_macros_with_sources},
+        node::Node,
+        node_kinds::{
+            expr::ExprKind,
+            stmt::{Stmt, StmtKind},
+        },
         parser_tests::tests::parse,
     };
 
@@ -955,22 +965,37 @@ mod tests {
 
     #[test]
     fn expands_expression_template_and_removes_definition() {
-        let mut ast = parse(
-            "macro choose($condition, $yes, $no) = if $condition { $yes } else { $no }\n@choose(true, 1, 2)",
-        );
-        let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
+        let source =
+            "macro choose($condition, $yes, $no) { if $condition { $yes } else { $no } }\n@choose(true, 1, 2)";
+        let mut ast = parse(source);
+        let sources = HashMap::from([(ast.file_id, std::sync::Arc::from(source))]);
+        let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(ast.roots.len(), 1);
         let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {
             panic!("expected expression statement");
         };
-        assert!(matches!(expr.kind, ExprKind::If(..)));
+        // A file-level `if` parses as a statement, so the expansion wraps
+        // it in a block; either shape is a faithful expansion here.
+        match &expr.kind {
+            ExprKind::If(..) => {}
+            ExprKind::Block(block) => assert!(matches!(
+                block.body.first(),
+                Some(Node::Stmt(Stmt {
+                    kind: StmtKind::If(..),
+                    ..
+                }))
+            )),
+            other => panic!("expected an if expansion, got {other:?}"),
+        }
     }
 
     #[test]
     fn selects_rules_by_arity() {
-        let mut ast = parse("macro pick($one) = $one\nmacro pick($one, $two) = $two\n@pick(1, 2)");
-        let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
+        let source = "macro pick($one) { $one }\nmacro pick($one, $two) { $two }\n@pick(1, 2)";
+        let mut ast = parse(source);
+        let sources = HashMap::from([(ast.file_id, std::sync::Arc::from(source))]);
+        let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {
             panic!("expected expression statement");
@@ -980,9 +1005,11 @@ mod tests {
 
     #[test]
     fn recursively_expands_macros_emitted_by_templates() {
-        let mut ast =
-            parse("macro inner($value) = $value\nmacro outer($value) = @inner($value)\n@outer(7)");
-        let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
+        let source =
+            "macro inner($value) { $value }\nmacro outer($value) { @inner($value) }\n@outer(7)";
+        let mut ast = parse(source);
+        let sources = HashMap::from([(ast.file_id, std::sync::Arc::from(source))]);
+        let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {
             panic!("expected expression statement");
@@ -991,45 +1018,55 @@ mod tests {
     }
 
     #[test]
-    fn rejects_type_annotations_nested_in_templates() {
-        let mut ast = parse("macro invoke($value) = $value.map<Int>()\n@invoke([1])");
-        let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
-        assert!(diagnostics.iter().any(|diagnostic| matches!(
-            diagnostic,
-            crate::diagnostic::AnyDiagnostic::Macro(crate::diagnostic::Diagnostic {
-                kind: MacroError::InvalidMacroTemplate { reason, .. },
-                ..
-            }) if reason == "type names in templates require definition-site hygiene"
-        )));
+    fn template_bodies_may_contain_binders_and_free_identifiers() {
+        // The unified template model: bodies are unparsed token templates, so
+        // binders, type names, and definition-site references are all allowed.
+        let source = "macro once($value) { let y = $value\ny + y }\n@once(21)";
+        let mut ast = parse(source);
+        let sources = HashMap::from([(ast.file_id, std::sync::Arc::from(source))]);
+        let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {
+            panic!("expected expression statement");
+        };
+        let ExprKind::Block(block) = &expr.kind else {
+            panic!("expected the template to expand to a block, got {:?}", expr.kind);
+        };
+        assert_eq!(block.body.len(), 2);
     }
 
     #[test]
-    fn rejects_free_template_identifiers() {
-        let mut ast = parse("macro bad($value) = helper($value)\n@bad(1)");
-        let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
-        assert_eq!(diagnostics.len(), 2);
+    fn template_names_receive_an_expansion_context() {
+        let source = "macro call_it($value) { helper($value) }\n@call_it(1)";
+        let mut ast = parse(source);
+        let sources = HashMap::from([(ast.file_id, std::sync::Arc::from(source))]);
+        let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {
+            panic!("expected expression statement");
+        };
+        let ExprKind::Call { callee, args, .. } = &expr.kind else {
+            panic!("expected a call");
+        };
+        // The template-written callee carries a hygienic context...
         assert!(matches!(
-            diagnostics[0],
-            crate::diagnostic::AnyDiagnostic::Macro(crate::diagnostic::Diagnostic {
-                kind: MacroError::InvalidMacroTemplate { .. },
-                ..
-            })
+            &callee.kind,
+            ExprKind::Variable(crate::name::Name::Syntax(name, context))
+                if name == "helper" && context.has_expansion_scope()
         ));
-        assert!(!ast.roots.iter().any(|node| {
-            matches!(
-                node,
-                crate::node::Node::Decl(crate::node_kinds::decl::Decl {
-                    kind: DeclKind::Macro { .. },
-                    ..
-                })
-            )
-        }));
+        // ...while the spliced argument keeps its use-site name.
+        assert!(matches!(
+            &args[0].value.kind,
+            ExprKind::LiteralInt(value) if value == "1"
+        ));
     }
 
     #[test]
     fn reports_arity_mismatch() {
-        let mut ast = parse("macro one($value) = $value\n@one(1, 2)");
-        let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
+        let source = "macro one($value) { $value }\n@one(1, 2)";
+        let mut ast = parse(source);
+        let sources = HashMap::from([(ast.file_id, std::sync::Arc::from(source))]);
+        let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
         assert!(diagnostics.iter().any(|diagnostic| matches!(
             diagnostic,
             crate::diagnostic::AnyDiagnostic::Macro(crate::diagnostic::Diagnostic {
@@ -1041,8 +1078,10 @@ mod tests {
 
     #[test]
     fn bounds_recursive_expansion() {
-        let mut ast = parse("macro recurse($value) = @recurse($value)\n@recurse(1)");
-        let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
+        let source = "macro recurse($value) { @recurse($value) }\n@recurse(1)";
+        let mut ast = parse(source);
+        let sources = HashMap::from([(ast.file_id, std::sync::Arc::from(source))]);
+        let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
         assert!(diagnostics.iter().any(|diagnostic| matches!(
             diagnostic,
             crate::diagnostic::AnyDiagnostic::Macro(crate::diagnostic::Diagnostic {
@@ -1058,7 +1097,7 @@ mod tests {
 
         let driver = Driver::new_bare(
             vec![Source::from(
-                "macro choose($condition, $yes, $no) = if $condition { $yes } else { $no }\nlet answer = @choose(true, 1, 2)",
+                "macro choose($condition, $yes, $no) { if $condition { $yes } else { $no } }\nlet answer = @choose(true, 1, 2)",
             )],
             DriverConfig::new("MacroTest"),
         );
@@ -1077,8 +1116,10 @@ mod tests {
 
     #[test]
     fn gives_each_template_node_a_fresh_id() {
-        let mut ast = parse("macro one($value) = 1 + $value\n(@one(2), @one(3))");
-        let diagnostics = expand_macros(std::slice::from_mut(&mut ast));
+        let source = "macro one($value) { 1 + $value }\n(@one(2), @one(3))";
+        let mut ast = parse(source);
+        let sources = HashMap::from([(ast.file_id, std::sync::Arc::from(source))]);
+        let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {
             panic!("expected expression statement");

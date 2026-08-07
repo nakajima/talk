@@ -4,13 +4,16 @@ tokens:
   LeftParen @12..13 "("
   BoundVar @13..15 "$x"
   RightParen @15..16 ")"
-  Equals @17..18 "="
+  LeftBrace @17..18 "{"
   BoundVar @19..21 "$x"
   Plus @22..23 "+"
   BoundVar @24..26 "$x"
-  Newline @26..27
+  RightBrace @27..28 "}"
+  Newline @28..29
 tree:
-  Decl::Macro @0..26 "macro double($x) = $x + $x"
-    Expr::Binary @19..26 "$x + $x"
-      Expr::Variable @19..21 "$x"
-      Expr::Variable @24..26 "$x"
+  Decl::Macro @0..28 "macro double($x) { $x + $x }"
+    MacroToken @17..18 "{"
+    MacroToken @20..21 "x"
+    MacroToken @22..23 "+"
+    MacroToken @25..26 "x"
+    MacroToken @27..28 "}"

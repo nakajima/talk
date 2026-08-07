@@ -616,9 +616,16 @@ impl<'a> Formatter<'a> {
             DeclKind::Macro {
                 name,
                 params,
-                template,
+                body_span,
                 ..
             } => {
+                let body = self
+                    .source
+                    .and_then(|source| {
+                        source.get(body_span.start as usize..body_span.end as usize)
+                    })
+                    .map(str::trim)
+                    .unwrap_or_default();
                 text("macro ")
                     + text(name)
                     + text("(")
@@ -629,8 +636,9 @@ impl<'a> Formatter<'a> {
                             .collect(),
                         text(", "),
                     )
-                    + text(") = ")
-                    + self.format_expr(template)
+                    + text(") { ")
+                    + text(body)
+                    + text(" }")
             }
             DeclKind::Struct {
                 name,
@@ -3354,8 +3362,8 @@ mod formatter_tests {
     #[test]
     fn formats_macro_rules_and_invocations() {
         assert_eq!(
-            format_code("macro choose($yes,$no)=$yes\n@choose(1,2)", 80),
-            "macro choose($yes, $no) = $yes\n@choose(1, 2)"
+            format_code("macro choose($yes,$no) {$yes}\n@choose(1,2)", 80),
+            "macro choose($yes, $no) { $yes }\n@choose(1, 2)"
         );
         assert_eq!(
             format_code("@html { div class=@card { <not talk> } }", 80),

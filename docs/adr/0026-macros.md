@@ -95,10 +95,12 @@ contract.
 
 ### Declarative first, procedural later
 
-The first authoring model is declarative expression-template rules. Rules match
-syntax categories and construct results with quotation and antiquotation. Arity
-is represented by distinct rules rather than inspecting an untyped array of
-arguments.
+The first authoring model is declarative token-template rules. A rule
+captures its body as balanced tokens at definition and each invocation
+position parses the substituted expansion against its own category, so one
+definition form serves expression, block, and (later) declaration
+positions. Arity is represented by distinct rules rather than inspecting an
+untyped array of arguments.
 
 A later procedural API may transform the same syntax objects. Procedural
 transformers run as portable Talk macro bytecode in a restricted compile-time
@@ -159,22 +161,40 @@ link dependencies merely because a consumer invokes them.
 
 The first implementation intentionally proves only the expansion seam:
 
-- file-local expression template declarations;
+- file-local declarative macro declarations;
 - one fixed-arity rule per declaration, with overloads selected by arity;
 - `@name(...)` expression invocations;
 - fresh node identities, recursive expansion limits, formatter/highlighter
   support, and structured diagnostics; and
-- hygiene by construction: templates may splice expression parameters and use
-  identifier-free expression forms, but may not yet contain free identifiers,
-  type names, effect names, or binding forms.
+- hygiene by construction: template-written names are stamped with the
+  definition-site lexical scope plus a fresh expansion scope per expansion,
+  so introduced binders neither capture caller names nor leak into caller
+  scope, and template free names resolve at the definition site.
 
-The initial source form is deliberately smaller than the final quotation API:
+Declarative macros are category-agnostic token templates rather than parsed
+expression rules. The body is captured as balanced tokens at definition;
+each invocation position's grammar decides what the expansion must parse as.
+There is one definition spelling:
 
 ```tlk
-macro choose($condition, $yes, $no) = if $condition { $yes } else { $no }
+macro choose($condition, $yes, $no) { if $condition { $yes } else { $no } }
 
 let value = @choose(flag, 1, 2)
 ```
+
+A body that parses as one expression expands to that expression; anything
+else expands to a block, so binders are ordinary template contents:
+
+```tlk
+macro once($value) { let y = $value
+y + y }
+```
+
+Splice sites are validated at definition (an unknown `$name` is a
+definition-time error); shape errors surface as ordinary parse, type, or
+ownership errors at the invocation, blamed on the expansion. Declaration,
+pattern, and type invocation positions are follow-ups; the token template a
+definition stores today already carries what those positions need.
 
 The first slice also reserves one compiler-provided source-reflecting macro for
 the test system:
@@ -191,9 +211,10 @@ with the syntax that was compiled. This built-in is transitional evidence for
 a future syntax-source operation and exported macro artifacts; it does not give
 ordinary templates unrestricted source or compiler access.
 
-Rejecting template identifiers and binders keeps this slice genuinely
-capture-free until syntax contexts land; it is not permission to ship an
-unhygienic general transformer.
+Template hygiene now lands through the same set-of-scopes machinery the
+procedural path uses (ADR 0043): every template-written name is stamped at
+expansion, so binders, free identifiers, type names, and effect names are
+all permitted in bodies without a capture-freedom caveat.
 
 The first procedural follow-up is now implemented for expression macros. Sorted
 `*.macro.tlk` units compile as a restricted Talk service; public functions

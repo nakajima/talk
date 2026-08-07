@@ -80,7 +80,7 @@ enum DeclKind @ enum:65535.45
 	typealias_decl(String, Int, Int, TypeAnnotation)
 	effect_decl(String, Int, Int, [GenericDecl], WhereClause?, [Parameter], TypeAnnotation)
 	associated_decl(GenericDecl, WhereClause?)
-	macro_decl(String, Int, Int, [MacroParam], Expr)
+	macro_decl(String, Int, Int, [MacroParam], Int, Int, [MacroToken])
 
 struct EffectSet @ struct:65535.4
 	names: [String]

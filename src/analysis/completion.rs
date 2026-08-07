@@ -895,13 +895,13 @@ mod tests {
         types::TypeOutput,
     };
 
-    struct Analyzed {
-        ast: AST<NameResolved>,
-        resolved_names: ResolvedNames,
-        types: TypeOutput,
+    pub(crate) struct Analyzed {
+        pub(crate) ast: AST<NameResolved>,
+        pub(crate) resolved_names: ResolvedNames,
+        pub(crate) types: TypeOutput,
     }
 
-    fn analyze(code: &str) -> Analyzed {
+    pub(crate) fn analyze(code: &str) -> Analyzed {
         analyze_with_driver(code, Driver::new_bare)
     }
 
@@ -1202,6 +1202,7 @@ mod tests {
 #[cfg(test)]
 mod scratch_tests {
     #[test]
+    #[ignore = "debugging scaffold: dumps completion internals and panics"]
     fn scratch_dump_incomplete_member() {
         let with_tail = "pub func generate(code: String) -> [String] {\n\tlet parsed = code\n\tparsed.\n\n\t[]\n}\n";
         let without_tail = "pub func generate(code: String) -> [String] {\n\tlet parsed = code\n\tparsed.\n}\n";

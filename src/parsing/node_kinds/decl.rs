@@ -5,7 +5,7 @@ use crate::{
     name::Name,
     node_id::NodeID,
     node_kinds::{
-        block::Block, body::Body, expr::Expr, func::Func, func_signature::FuncSignature,
+        block::Block, body::Body, expr::{Expr, MacroToken}, func::Func, func_signature::FuncSignature,
         generic_decl::GenericDecl, parameter::Parameter, pattern::Pattern,
         type_annotation::TypeAnnotation, type_application::TypeApplication,
         where_clause::WhereClause,
@@ -92,8 +92,10 @@ pub struct Import {
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum DeclKind {
     Import(Import),
-    /// A module-local declarative expression macro rule (ADR 0026's first
-    /// implementation slice). Expansion removes these before name resolution.
+    /// A module-local declarative macro: a category-agnostic token template
+    /// (ADR 0026). The body is captured as balanced tokens at definition and
+    /// parsed against the category each invocation position requires.
+    /// Expansion removes these before name resolution.
     Macro {
         #[drive(skip)]
         name: String,
@@ -101,7 +103,12 @@ pub enum DeclKind {
         name_span: Span,
         #[drive(skip)]
         params: Vec<MacroParameter>,
-        template: Expr,
+        /// Byte range of the template body inside the outer braces.
+        #[drive(skip)]
+        body_span: Span,
+        /// Canonical body tokens, including the outer braces.
+        #[drive(skip)]
+        tokens: Vec<MacroToken>,
     },
     Effect {
         #[drive(skip)]

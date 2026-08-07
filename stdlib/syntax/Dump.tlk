@@ -15,7 +15,7 @@ use package::Ast::{
 	Pattern, PatternKind, RecordFieldPattern, RecordFieldPatternKind,
 	TypeAnnotation, TypeAnnotationKind, GenericArg, StaticExpr, StaticExprKind,
 	RecordFieldTypeAnnotation, AnyAssocBinding,
-	Decl, DeclKind, Stmt, StmtKind, Item,
+	Decl, DeclKind, Stmt, StmtKind, Item, MacroToken,
 	Func, FuncSignature, Body, GenericDecl, WhereClause, WherePredicate,
 	WherePredicateKind, TypeApplication
 }
@@ -35,6 +35,12 @@ func node_line(mut buf: [Byte], view: UTF8View, label: String, start: Int, end: 
 	append_int(buf: buf, value: end)
 	append_snippet(buf: buf, view: view, start: start, end: end)
 	append(buf: buf, text: "\n")
+}
+
+func render_macro_tokens(mut buf: [Byte], view: UTF8View, tokens: [MacroToken], depth: Int) -> Void {
+	for token in tokens {
+		node_line(buf: buf, view: view, label: "MacroToken", start: token.lexeme_start, end: token.lexeme_end, depth: depth)
+	}
 }
 
 func expr_label(kind: &ExprKind) -> String {
@@ -562,7 +568,7 @@ func decl_label(kind: &DeclKind) -> String {
 		.typealias_decl(_, _, _, _) -> "Decl::TypeAlias",
 		.effect_decl(_, _, _, _, _, _, _) -> "Decl::Effect",
 		.associated_decl(_, _) -> "Decl::Associated",
-		.macro_decl(_, _, _, _, _) -> "Decl::Macro"
+		.macro_decl(_, _, _, _, _, _, _) -> "Decl::Macro"
 	}
 }
 
@@ -666,7 +672,7 @@ func render_decl(mut buf: [Byte], view: UTF8View, decl: &Decl, depth: Int) -> Vo
 			render_generic_decl(buf: buf, view: view, generic: generic, depth: child)
 			render_optional_where(buf: buf, view: view, wc: wc, depth: child)
 		},
-		.macro_decl(_, _, _, _, template) -> render_expr(buf: buf, view: view, expr: template, depth: child)
+		.macro_decl(_, _, _, _, _, _, tokens) -> render_macro_tokens(buf: buf, view: view, tokens: tokens, depth: child)
 	}
 }
 
