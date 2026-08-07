@@ -114,6 +114,7 @@ mod tests {
     fn program(functions: Vec<Function>, entry: usize, exports: Vec<(&str, usize)>) -> Program {
         Program {
             debug_files: Vec::new(),
+            debug_sources: Vec::new(),
             functions,
             entry,
             global_slots: 0,

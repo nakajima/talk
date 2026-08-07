@@ -264,6 +264,7 @@ mod tests {
     fn program(functions: Vec<Function>) -> Program {
         Program {
             debug_files: Vec::new(),
+            debug_sources: Vec::new(),
             functions,
             entry: 0,
             global_slots: 0,

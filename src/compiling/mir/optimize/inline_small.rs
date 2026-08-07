@@ -425,6 +425,7 @@ mod tests {
     fn scalar_call_becomes_the_scalar_instruction() {
         let mut program = Program {
             debug_files: Vec::new(),
+            debug_sources: Vec::new(),
             functions: vec![
                 scalar_add(),
                 caller(
@@ -515,6 +516,7 @@ mod tests {
         };
         let mut program = Program {
             debug_files: Vec::new(),
+            debug_sources: Vec::new(),
             functions: vec![
                 checked_get,
                 caller(
@@ -573,6 +575,7 @@ mod tests {
     fn param_writing_bodies_stay_calls() {
         let mut program = Program {
             debug_files: Vec::new(),
+            debug_sources: Vec::new(),
             functions: vec![
                 Function {
                     debug_names: None,
@@ -626,6 +629,7 @@ mod tests {
         // collide with existing caller locals.
         let mut program = Program {
             debug_files: Vec::new(),
+            debug_sources: Vec::new(),
             functions: vec![
                 scalar_add(),
                 caller(

@@ -2,7 +2,7 @@ use talk::compiling::driver::{Driver, DriverConfig, Source};
 
 const FIXTURE: &str = r#"
 func report(value: Int) -> Int {
-    print(value)
+    print(value + 1)
     value
 }
 
@@ -27,9 +27,11 @@ fn optimized_render_preserves_source_debug_metadata() {
         .render_mir(None, true, true)
         .expect("fixture renders optimized debug MIR");
 
-    assert!(rendered.contains("// fixture.tlk:"));
+    assert!(rendered.contains("// source fixture.tlk:"));
     assert!(rendered.contains("// locals:"));
     assert!(rendered.contains("value"));
+    assert!(rendered.contains(": value + 1"));
+    assert!(rendered.contains(": print(value + 1)"));
 }
 
 #[test]
@@ -38,6 +40,6 @@ fn ordinary_render_does_not_include_debug_metadata() {
         .render_mir(None, true, false)
         .expect("fixture renders optimized MIR");
 
-    assert!(!rendered.contains("// fixture.tlk:"));
+    assert!(!rendered.contains("// source fixture.tlk:"));
     assert!(!rendered.contains("// locals:"));
 }

@@ -105,16 +105,17 @@ class="number" data-example="ints">ints</span>, <span class="number" data-exampl
 
           // default anchor scrolling targets the band's visual position,
           // which for a stuck sticky band is already at the top of the
-          // viewport, so the browser doesn't scroll. scroll to the band's
-          // natural position instead.
+          // viewport, so the browser doesn't scroll. scroll to the start of
+          // the band's section instead.
           main.addEventListener("click", (e) => {
             const a = e.target.closest(".band-nav a");
             if (!a) return;
             const target = document.getElementById(a.hash.slice(1));
             if (!target) return;
             e.preventDefault();
+            const section = target.closest("section") ?? target;
             let top = 0;
-            for (let n = target; n; n = n.offsetParent) top += n.offsetTop;
+            for (let n = section; n; n = n.offsetParent) top += n.offsetTop;
             window.scrollTo({ top });
             history.pushState(null, "", a.hash);
           });

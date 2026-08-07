@@ -641,9 +641,29 @@ pub struct Module {
     /// The file paths [`DebugSpan::file`] indexes; empty unless the
     /// module was compiled in debug mode.
     pub debug_files: Vec<String>,
+    /// Source text aligned with `debug_files`, used to show the exact
+    /// source construct for each contiguous MIR origin group.
+    pub debug_sources: Vec<String>,
 }
 
 impl Module {
+    fn debug_snippet(&self, span: DebugSpan) -> Option<String> {
+        let source = self.debug_sources.get(span.file as usize)?;
+        let start = usize::try_from(span.start).ok()?;
+        let end = usize::try_from(span.end).ok()?;
+        let mut snippet = source
+            .get(start..end)?
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        const MAX_SNIPPET_CHARS: usize = 120;
+        if snippet.chars().count() > MAX_SNIPPET_CHARS {
+            snippet = snippet.chars().take(MAX_SNIPPET_CHARS - 3).collect();
+            snippet.push_str("...");
+        }
+        (!snippet.is_empty()).then_some(snippet)
+    }
+
     /// Render the middle representation for inspection (`talk mir`,
     /// TOOL-10). The shape is debug output, not a stable format.
     pub fn render(&self) -> String {
@@ -692,21 +712,39 @@ impl Module {
             }
             for (block, data) in function.blocks.iter().enumerate() {
                 let _ = writeln!(out, "  b{block}:");
+                let debug = !self.debug_sources.is_empty();
                 let mut last_span: Option<DebugSpan> = None;
                 for (index, inst) in data.insts.iter().enumerate() {
                     let span = data
                         .debug
                         .as_ref()
                         .and_then(|debug| debug.spans.get(index).copied().flatten());
-                    if span != last_span
-                        && let Some(span) = span
-                    {
-                        let file = self
-                            .debug_files
-                            .get(span.file as usize)
-                            .map(String::as_str)
-                            .unwrap_or("?");
-                        let _ = writeln!(out, "    // {}:{}:{}", file, span.line, span.col);
+                    if debug && (index == 0 || span != last_span) {
+                        if index != 0 {
+                            let _ = writeln!(out);
+                        }
+                        if let Some(span) = span {
+                            let file = self
+                                .debug_files
+                                .get(span.file as usize)
+                                .map(String::as_str)
+                                .unwrap_or("?");
+                            if let Some(snippet) = self.debug_snippet(span) {
+                                let _ = writeln!(
+                                    out,
+                                    "    // source {file}:{}:{}: {snippet}",
+                                    span.line, span.col
+                                );
+                            } else {
+                                let _ = writeln!(
+                                    out,
+                                    "    // source {file}:{}:{}",
+                                    span.line, span.col
+                                );
+                            }
+                        } else {
+                            let _ = writeln!(out, "    // generated MIR (no direct source span)");
+                        }
                     }
                     last_span = span;
                     // Aggregate constructions render their layout as a
@@ -757,11 +795,12 @@ mod tests {
             file: 0,
             line: 4,
             col: 3,
-            start: 20,
-            end: 32,
+            start: 0,
+            end: 9,
         };
         let module = Module {
             debug_files: vec!["playground.tlk".into()],
+            debug_sources: vec!["value = 1".into()],
             functions: vec![Function {
                 debug_names: Some(vec!["value".into(), String::new()]),
                 frame_sites: Default::default(),
@@ -806,6 +845,12 @@ mod tests {
 
         let rendered = module.render();
         assert!(rendered.contains("// locals: L0(value)"));
-        assert_eq!(rendered.matches("// playground.tlk:4:3").count(), 2);
+        assert_eq!(
+            rendered
+                .matches("// source playground.tlk:4:3: value = 1")
+                .count(),
+            2
+        );
+        assert!(rendered.contains("// generated MIR (no direct source span)"));
     }
 }

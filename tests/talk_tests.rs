@@ -4154,6 +4154,27 @@ fn run_rejects_escaping_owned_captures() {
 }
 
 #[test]
+fn run_treats_consuming_callback_as_an_escape_sink() {
+    // A consuming callback contract permits retention even when this
+    // implementation happens to call synchronously, so a frame-anchored
+    // environment must fail closed at the call boundary.
+    let output = run_source(
+        b"func invoke(consume callback: () -> Int) -> Int { callback() }\nfunc outer() -> Int {\n\tlet s = \"a\" + \"b\"\n\tinvoke(callback: func() -> Int { s.byte_count })\n}\nprint(outer())\n",
+        &[],
+    );
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cannot escape"), "{stderr}");
+
+    // A borrowed callback contract remains noescape.
+    assert_runs(
+        b"func invoke(callback: () -> Int) -> Int { callback() }\nfunc outer() -> Int {\n\tlet s = \"a\" + \"b\"\n\tinvoke(callback: func() -> Int { s.byte_count })\n}\nprint(outer())\n",
+        &[],
+        b"2\n",
+    );
+}
+
+#[test]
 fn run_tears_down_globals_after_a_top_level_discontinue() {
     // A handler clause's finite value aborts the delimited statements,
     // but guarded global teardown still runs (ADR 0033).

@@ -21,6 +21,7 @@ fn storage_symbol() -> MirSymbol {
 fn module(functions: Vec<Function>) -> Module {
     Module {
         debug_files: Vec::new(),
+        debug_sources: Vec::new(),
         functions,
         entry: 0,
         global_slots: 0,

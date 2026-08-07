@@ -1115,6 +1115,7 @@ pub(crate) fn build(
 
     Ok(Program {
         debug_files: builder.debug_files,
+        debug_sources: builder.debug_sources,
         functions: builder.functions,
         entry: entry_id,
         global_slots: u32::try_from(builder.global_slots.len()).unwrap_or_default()
@@ -1257,6 +1258,7 @@ struct ProgramBuilder<'a> {
     /// module publishes the file table `DebugSpan::file` indexes.
     collect_debug: bool,
     debug_files: Vec<String>,
+    debug_sources: Vec<String>,
     debug_file_ids: FxHashMap<crate::node_id::FileID, Option<u32>>,
     /// Line-start byte offsets per debug file, for span to line:col.
     debug_line_starts: Vec<Vec<u32>>,
@@ -1332,6 +1334,7 @@ impl<'a> ProgramBuilder<'a> {
             show_glue: FxHashMap::default(),
             collect_debug,
             debug_files: Vec::new(),
+            debug_sources: Vec::new(),
             debug_file_ids: FxHashMap::default(),
             debug_line_starts: Vec::new(),
         }
@@ -1385,6 +1388,7 @@ impl<'a> ProgramBuilder<'a> {
                             path.display().to_string()
                         };
                     self.debug_files.push(display);
+                    self.debug_sources.push(text.to_string());
                     self.debug_line_starts.push(starts);
                     located = Some(index);
                     break 'files;
@@ -2906,6 +2910,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .collect();
                 let rendered = Program {
                     debug_files: Vec::new(),
+                    debug_sources: Vec::new(),
                     functions: vec![Function {
                         debug_names: None,
                         frame_sites: Default::default(),
@@ -3768,6 +3773,24 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
         }
         Ok(())
+    }
+
+    /// Transfer a call argument into an owning parameter. An owned
+    /// function parameter permits the callee to retain the callback
+    /// beyond this call, so it is an escape sink even when the current
+    /// callee implementation happens to invoke it synchronously.
+    fn consume_call_argument_into(
+        &mut self,
+        operand: Operand,
+        ty: &Ty,
+        span: Span,
+    ) -> Result<(), BackendError> {
+        if matches!(self.resolved(ty), Ty::Func(..))
+            && matches!(operand, Operand::Local(local) if self.anchored_closures.contains(&local))
+        {
+            return Err(anchored_escape());
+        }
+        self.consume_into(operand, ty, span)
     }
 
     /// Whether this frame can release a value of `ty` later: every bare
@@ -5833,11 +5856,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     }
 
     fn compile_node(&mut self, node: &Node) -> Result<Operand, BackendError> {
-        self.current_span = match node {
-            Node::Expr(expr) => expr.span,
-            Node::Stmt(stmt) => stmt.span,
-            Node::Decl(decl) => decl.span,
-        };
         match node {
             Node::Expr(expr) => self.compile_expr(expr),
             Node::Stmt(stmt) => self.compile_stmt(stmt),
@@ -5846,6 +5864,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     }
 
     fn compile_decl(&mut self, decl: &Decl) -> Result<Operand, BackendError> {
+        let previous = std::mem::replace(&mut self.current_span, decl.span);
+        let result = self.compile_decl_scoped(decl);
+        self.current_span = previous;
+        result
+    }
+
+    fn compile_decl_scoped(&mut self, decl: &Decl) -> Result<Operand, BackendError> {
         match &decl.kind {
             DeclKind::Let {
                 lhs,
@@ -6217,7 +6242,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     }
 
     fn compile_stmt(&mut self, stmt: &Stmt) -> Result<Operand, BackendError> {
-        self.current_span = stmt.span;
+        let previous = std::mem::replace(&mut self.current_span, stmt.span);
+        let result = self.compile_stmt_scoped(stmt);
+        self.current_span = previous;
+        result
+    }
+
+    fn compile_stmt_scoped(&mut self, stmt: &Stmt) -> Result<Operand, BackendError> {
         match &stmt.kind {
             StmtKind::Expr(expr) => self.compile_expr(expr),
             StmtKind::Return(expr) => {
@@ -6586,6 +6617,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     }
 
     fn compile_expr(&mut self, expr: &Expr) -> Result<Operand, BackendError> {
+        let previous = std::mem::replace(&mut self.current_span, expr.span);
+        let result = self.compile_expr_scoped(expr);
+        self.current_span = previous;
+        result
+    }
+
+    fn compile_expr_scoped(&mut self, expr: &Expr) -> Result<Operand, BackendError> {
         let operand = self.compile_expr_inner(expr)?;
         // The checker recorded an existential coercion here: pack the
         // concrete payload behind its witness table.
@@ -8175,6 +8213,21 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         matched: BlockId,
         failed: BlockId,
     ) -> Result<(), BackendError> {
+        let previous = std::mem::replace(&mut self.current_span, pattern.span);
+        let result =
+            self.compile_pattern_test_scoped(pattern, scrutinee, scrutinee_ty, matched, failed);
+        self.current_span = previous;
+        result
+    }
+
+    fn compile_pattern_test_scoped(
+        &mut self,
+        pattern: &Pattern,
+        scrutinee: Operand,
+        scrutinee_ty: &Ty,
+        matched: BlockId,
+        failed: BlockId,
+    ) -> Result<(), BackendError> {
         match &pattern.kind {
             PatternKind::Wildcard => {
                 self.terminate(Term::Goto(matched, Vec::new()));
@@ -8657,7 +8710,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         if let Ty::Func(params, _, _) = &callee_ty {
             for (operand, param) in operands.iter().zip(params) {
                 if !matches!(param, Ty::Borrow(_, _)) {
-                    self.consume_operand(*operand);
+                    self.consume_call_argument_into(*operand, param, expr.span)?;
                 }
             }
         }
@@ -8898,7 +8951,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             let offset = operands.len().saturating_sub(params.len());
                             for (ix, param) in params.iter().enumerate() {
                                 if !matches!(param, Ty::Borrow(_, _)) {
-                                    self.consume_into(operands[offset + ix], param, expr.span)?;
+                                    self.consume_call_argument_into(
+                                        operands[offset + ix],
+                                        param,
+                                        expr.span,
+                                    )?;
                                 }
                             }
                         }
@@ -9084,7 +9141,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 let offset = operands.len().saturating_sub(params.len());
                                 for (ix, param) in params.iter().enumerate() {
                                     if !matches!(param, Ty::Borrow(_, _)) {
-                                        self.consume_into(operands[offset + ix], param, expr.span)?;
+                                        self.consume_call_argument_into(
+                                            operands[offset + ix],
+                                            param,
+                                            expr.span,
+                                        )?;
                                     }
                                 }
                             }
@@ -9228,7 +9289,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             let offset = operands.len().saturating_sub(params.len());
             for (operand, param) in operands[offset..].to_vec().iter().zip(&params) {
                 if !matches!(param, Ty::Borrow(_, _)) {
-                    self.consume_into(*operand, param, expr.span)?;
+                    self.consume_call_argument_into(*operand, param, expr.span)?;
                 }
             }
             if offset == 1

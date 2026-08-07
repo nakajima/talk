@@ -67,6 +67,7 @@ Status vocabulary:
 - [0037 - Eliminate backend capability rejections](adr/0037-eliminate-backend-unsupported-behavior.md)
 - [0044 - Unified memory model](adr/0044-the-unified-memory-model.md)
 - [0049 - Proof-gated effect handler elimination](adr/0049-proof-gated-effect-handler-elimination.md)
+- [0050 - Rust-style futures and parallel execution](adr/0050-rust-style-futures-and-parallel-execution.md)
 
 ### Current implemented decisions
 
