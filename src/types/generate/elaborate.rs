@@ -461,6 +461,9 @@ impl<'e, 'c> Elaborator<'e, 'c> {
 
     pub(super) fn lower_annotation(&mut self, annotation: &TypeAnnotation) -> Ty {
         match &annotation.kind {
+            TypeAnnotationKind::MacroCall { .. } => {
+                unreachable!("macro invocations are expanded before type lowering")
+            }
             TypeAnnotationKind::Borrow { mutable, inner } => {
                 let inner = self.lower_annotation(inner);
                 // `&Int` never surfaces (ADR 0014): a shared borrow of a

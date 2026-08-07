@@ -81,6 +81,7 @@ enum DeclKind @ enum:65535.45
 	effect_decl(String, Int, Int, [GenericDecl], WhereClause?, [Parameter], TypeAnnotation)
 	associated_decl(GenericDecl, WhereClause?)
 	macro_decl(String, Int, Int, [MacroParam], Int, Int, [MacroToken])
+	macro_call_decl(String, Int, Int, Int, Int, [MacroToken], [Expr])
 
 struct EffectSet @ struct:65535.4
 	names: [String]
@@ -300,6 +301,7 @@ enum PatternKind @ enum:65535.37
 	variant(String?, [[GenericArg]], String, Int, Int, [Pattern], [String?])
 	struct_pattern(String, [[GenericArg]], [Pattern], [String], Bool)
 	record([RecordFieldPattern])
+	macro_call_pattern(String, Int, Int, Int, Int, [MacroToken])
 
 enum ReceiverMode @ enum:65535.26
 	none_receiver
@@ -480,6 +482,7 @@ enum TypeAnnotationKind @ enum:65535.11
 	tuple([TypeAnnotation])
 	record_type([RecordFieldTypeAnnotation])
 	any_type([TypeAnnotation], [AnyAssocBinding])
+	macro_call_type(String, Int, Int, Int, Int, [MacroToken])
 
 struct TypeApplication @ struct:65535.25
 	name: String

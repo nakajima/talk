@@ -351,6 +351,7 @@ fn occurrence_from_type_annotation(
             .symbol()
             .ok()
             .map(|symbol| Occurrence::span(symbol, ty.span, OccurrenceKind::Reference)),
+        TypeAnnotationKind::MacroCall { .. } => None,
         TypeAnnotationKind::Any {
             protocol,
             assoc_bindings,

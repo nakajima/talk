@@ -1767,6 +1767,12 @@ impl ResultAdapter<'_, '_> {
                     fields: record_fields,
                 }
             }
+            "macro_call_pattern" => PatternKind::MacroCall {
+                name: self.string(&p[0])?,
+                name_span: self.span(int(&p[1])?, int(&p[2])?)?,
+                input_span: self.span(int(&p[3])?, int(&p[4])?)?,
+                input_tokens: self.macro_tokens(&p[5])?,
+            },
             other => return Err(format!("unknown PatternKind variant `{other}`")),
         };
         Ok(Pattern { id, kind, span })
@@ -1899,6 +1905,12 @@ impl ResultAdapter<'_, '_> {
                     assoc_bindings: bindings,
                 }
             }
+            "macro_call_type" => TypeAnnotationKind::MacroCall {
+                name: self.string(&p[0])?,
+                name_span: self.span(int(&p[1])?, int(&p[2])?)?,
+                input_span: self.span(int(&p[3])?, int(&p[4])?)?,
+                input_tokens: self.macro_tokens(&p[5])?,
+            },
             other => return Err(format!("unknown TypeAnnotationKind variant `{other}`")),
         };
         Ok(TypeAnnotation {
@@ -2441,6 +2453,13 @@ impl ResultAdapter<'_, '_> {
                     tokens: self.macro_tokens(&p[6])?,
                 }
             }
+            "macro_call_decl" => DeclKind::MacroCall {
+                name: self.string(&p[0])?,
+                name_span: self.span(int(&p[1])?, int(&p[2])?)?,
+                input_span: self.span(int(&p[3])?, int(&p[4])?)?,
+                input_tokens: self.macro_tokens(&p[5])?,
+                args: self.exprs(&p[6])?,
+            },
             other => return Err(format!("unknown DeclKind variant `{other}`")),
         };
         Ok(Decl {

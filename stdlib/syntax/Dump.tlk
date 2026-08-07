@@ -92,7 +92,8 @@ func pattern_label(kind: &PatternKind) -> String {
 		.or_pattern(_) -> "Pattern::Or",
 		.variant(_, _, _, _, _, _, _) -> "Pattern::Variant",
 		.struct_pattern(_, _, _, _, _) -> "Pattern::Struct",
-		.record(_) -> "Pattern::Record"
+		.record(_) -> "Pattern::Record",
+		.macro_call_pattern(_, _, _, _, _, _) -> "Pattern::MacroCall"
 	}
 }
 
@@ -403,12 +404,16 @@ func type_label(kind: &TypeAnnotationKind) -> String {
 		.nominal(_, _, _, _) -> "TypeAnnotation::Nominal",
 		.tuple(_) -> "TypeAnnotation::Tuple",
 		.record_type(_) -> "TypeAnnotation::Record",
-		.any_type(_, _) -> "TypeAnnotation::Any"
+		.any_type(_, _) -> "TypeAnnotation::Any",
+		.macro_call_type(_, _, _, _, _, _) -> "TypeAnnotation::MacroCall"
 	}
 }
 
 func render_type(mut buf: [Byte], view: UTF8View, annotation: &TypeAnnotation, depth: Int) -> Void {
 	node_line(buf: buf, view: view, label: type_label(kind: annotation.kind), start: annotation.start, end: annotation.end, depth: depth)
+	if let .macro_call_type(_, _, _, _, _, tokens) = annotation.kind {
+		render_macro_tokens(buf: buf, view: view, tokens: tokens, depth: depth + 1)
+	}
 	if let .borrow(_, inner) = annotation.kind {
 		for target in inner {
 			render_type(buf: buf, view: view, annotation: target, depth: depth + 1)
@@ -507,6 +512,9 @@ func pattern_line(mut buf: [Byte], view: UTF8View, pattern: &Pattern, depth: Int
 
 func render_pattern(mut buf: [Byte], view: UTF8View, pattern: &Pattern, depth: Int) -> Void {
 	pattern_line(buf: buf, view: view, pattern: pattern, depth: depth)
+	if let .macro_call_pattern(_, _, _, _, _, tokens) = pattern.kind {
+		render_macro_tokens(buf: buf, view: view, tokens: tokens, depth: depth + 1)
+	}
 	if let PatternKind.tuple(items) = pattern.kind {
 		for item in items {
 			render_pattern(buf: buf, view: view, pattern: item, depth: depth + 1)
@@ -568,7 +576,8 @@ func decl_label(kind: &DeclKind) -> String {
 		.typealias_decl(_, _, _, _) -> "Decl::TypeAlias",
 		.effect_decl(_, _, _, _, _, _, _) -> "Decl::Effect",
 		.associated_decl(_, _) -> "Decl::Associated",
-		.macro_decl(_, _, _, _, _, _, _) -> "Decl::Macro"
+		.macro_decl(_, _, _, _, _, _, _) -> "Decl::Macro",
+		.macro_call_decl(_, _, _, _, _, _, _) -> "Decl::MacroCall"
 	}
 }
 
@@ -672,7 +681,8 @@ func render_decl(mut buf: [Byte], view: UTF8View, decl: &Decl, depth: Int) -> Vo
 			render_generic_decl(buf: buf, view: view, generic: generic, depth: child)
 			render_optional_where(buf: buf, view: view, wc: wc, depth: child)
 		},
-		.macro_decl(_, _, _, _, _, _, tokens) -> render_macro_tokens(buf: buf, view: view, tokens: tokens, depth: child)
+		.macro_decl(_, _, _, _, _, _, tokens) -> render_macro_tokens(buf: buf, view: view, tokens: tokens, depth: child),
+		.macro_call_decl(_, _, _, _, _, tokens, _) -> render_macro_tokens(buf: buf, view: view, tokens: tokens, depth: child)
 	}
 }
 

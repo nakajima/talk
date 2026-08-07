@@ -252,6 +252,9 @@ impl<'a> Higlighter<'a> {
                     result.extend(self.tokens_from_expr(ret, ast));
                 }
                 DeclKind::Import(_) => (),
+                DeclKind::MacroCall { name_span, .. } => {
+                    result.push(self.make_span(Kind::MACRO, *name_span));
+                }
                 DeclKind::Macro {
                     name_span, params, ..
                 } => {
@@ -416,6 +419,9 @@ impl<'a> Higlighter<'a> {
                 }
             }
             Node::TypeAnnotation(type_annotation) => match &type_annotation.kind {
+                TypeAnnotationKind::MacroCall { name_span, .. } => {
+                    result.push(self.make_span(Kind::MACRO, *name_span));
+                }
                 TypeAnnotationKind::Borrow { inner, .. } | TypeAnnotationKind::Unique { inner } => {
                     result.extend(self.tokens_from_expr(inner.as_ref(), ast));
                 }

@@ -611,6 +611,9 @@ impl TypedTreeBuilder<'_> {
                 typed_ast::PatternKind::Or(ps.iter().map(|p| self.pattern(p)).collect())
             }
             pattern::PatternKind::Wildcard => typed_ast::PatternKind::Wildcard,
+            pattern::PatternKind::MacroCall { .. } => {
+                unreachable!("macro invocations are expanded before typed-program build")
+            }
             pattern::PatternKind::Variant {
                 enum_name,
                 variant_name,
@@ -1218,6 +1221,9 @@ impl TypedTreeBuilder<'_> {
         match k {
             decl::DeclKind::Macro { .. } => {
                 unreachable!("macro declarations are removed before typed-program build")
+            }
+            decl::DeclKind::MacroCall { .. } => {
+                unreachable!("macro invocations are expanded before typed-program build")
             }
             decl::DeclKind::Import(import) => typed_ast::DeclKind::Import(import.clone()),
             decl::DeclKind::Effect {

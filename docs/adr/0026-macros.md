@@ -192,9 +192,22 @@ y + y }
 
 Splice sites are validated at definition (an unknown `$name` is a
 definition-time error); shape errors surface as ordinary parse, type, or
-ownership errors at the invocation, blamed on the expansion. Declaration,
-pattern, and type invocation positions are follow-ups; the token template a
-definition stores today already carries what those positions need.
+ownership errors at the invocation, blamed on the expansion.
+
+Invocations are now implemented in every freestanding position. The same
+`@name(argument, ...)` spelling is accepted in expression, item (root and
+block), nominal-body, pattern, and type positions; each position parses the
+substituted template against its own grammar category. Item and
+nominal-body expansions splice their declarations where the invocation
+stood, so a caller-provided `$name` in binder position is the intentional
+way to expose a generated declaration, and nominal bodies parse with member
+grammar so generated functions become methods. Multi-token arguments in
+expression position are wrapped in synthetic grouping parentheses, so a
+splice stays one syntax node; single-token arguments and declaration,
+pattern, and type splices stay ungrouped. One consequence of the item
+grammar: a bare `@name(...)` at statement level is an item-position
+invocation, so its expansion splices statements and declarations rather
+than evaluating as one expression.
 
 The first slice also reserves one compiler-provided source-reflecting macro for
 the test system:
@@ -277,8 +290,7 @@ associated-type bindings from protocol equalities such as
 `Iterator.Element == Iterable.Element`, preserving those bindings in exported
 conformance rows so generic stdlib helpers specialize correctly downstream.
 
-Pattern/type/declaration invocation positions, attached roles, repetition,
-persistent expansion caching, and the complete
+Attached roles, repetition, persistent expansion caching, and the complete
 source/expanded analysis map remain follow-ups.
 
 ## Consequences

@@ -149,128 +149,6 @@ impl SyntaxMetadata {
     }
 }
 
-/// Stamp every template-written name in a declarative macro expansion with
-/// one syntax context (definition-site scopes plus a fresh expansion
-/// scope). `$`-prefixed template placeholders keep their raw names so that
-/// substitution can still find them, and spliced argument syntax is never
-/// part of the template tree this visits.
-#[derive(VisitorMut)]
-#[visitor(
-    Decl(enter),
-    Expr(enter),
-    Func(enter),
-    FuncSignature(enter),
-    GenericDecl(enter),
-    Parameter(enter),
-    Pattern(enter),
-    RecordField(enter),
-    Stmt(enter),
-    TypeAnnotation(enter)
-)]
-pub struct TemplateContextStamp<'a> {
-    pub context: &'a SyntaxContext,
-}
-
-impl TemplateContextStamp<'_> {
-    fn stamp(&self, name: &mut Name) {
-        let Name::Raw(text) = name else {
-            return;
-        };
-        if text.starts_with('$') {
-            return;
-        }
-        *name = Name::Syntax(text.clone(), self.context.clone());
-    }
-
-    fn enter_decl(&mut self, decl: &mut Decl) {
-        match &mut decl.kind {
-            DeclKind::Effect { name, .. }
-            | DeclKind::Struct { name, .. }
-            | DeclKind::Protocol { name, .. }
-            | DeclKind::Property { name, .. }
-            | DeclKind::Enum { name, .. }
-            | DeclKind::EnumVariant { name, .. } => self.stamp(name),
-            DeclKind::TypeAlias(name, _, _) => self.stamp(name),
-            _ => {}
-        }
-    }
-
-    fn enter_expr(&mut self, expr: &mut Expr) {
-        match &mut expr.kind {
-            ExprKind::Variable(name) | ExprKind::Constructor(name, _) => self.stamp(name),
-            ExprKind::CallEffect { effect_name, .. } => self.stamp(effect_name),
-            _ => {}
-        }
-    }
-
-    fn enter_func(&mut self, func: &mut Func) {
-        self.stamp(&mut func.name);
-        for name in &mut func.effects.names {
-            self.stamp(name);
-        }
-        for capture in &mut func.captures {
-            self.stamp(&mut capture.name);
-        }
-    }
-
-    fn enter_func_signature(&mut self, signature: &mut FuncSignature) {
-        self.stamp(&mut signature.name);
-        for name in &mut signature.effects.names {
-            self.stamp(name);
-        }
-    }
-
-    fn enter_generic_decl(&mut self, generic: &mut GenericDecl) {
-        self.stamp(&mut generic.name);
-    }
-
-    fn enter_parameter(&mut self, parameter: &mut Parameter) {
-        self.stamp(&mut parameter.name);
-    }
-
-    fn enter_pattern(&mut self, pattern: &mut Pattern) {
-        match &mut pattern.kind {
-            PatternKind::Bind(name) => self.stamp(name),
-            PatternKind::Variant {
-                enum_name: Some(name),
-                ..
-            }
-            | PatternKind::Struct {
-                struct_name: Some(name),
-                ..
-            } => self.stamp(name),
-            PatternKind::Record { fields } => {
-                for field in fields {
-                    match &mut field.kind {
-                        RecordFieldPatternKind::Bind(name) => self.stamp(name),
-                        RecordFieldPatternKind::Equals { name, .. } => self.stamp(name),
-                        RecordFieldPatternKind::Rest => {}
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn enter_record_field(&mut self, field: &mut RecordField) {
-        self.stamp(&mut field.label);
-    }
-
-    fn enter_stmt(&mut self, stmt: &mut Stmt) {
-        if let StmtKind::Handling { effect_name, .. } = &mut stmt.kind {
-            self.stamp(effect_name);
-        }
-    }
-
-    fn enter_type_annotation(&mut self, annotation: &mut TypeAnnotation) {
-        match &mut annotation.kind {
-            TypeAnnotationKind::SelfType(name) => self.stamp(name),
-            TypeAnnotationKind::Nominal { name, .. } => self.stamp(name),
-            _ => {}
-        }
-    }
-}
-
 #[derive(VisitorMut)]
 #[visitor(
     Decl(enter),
@@ -328,6 +206,7 @@ impl SyntaxAnnotator<'_> {
             DeclKind::TypeAlias(name, span, _) => self.annotate(name, *span),
             DeclKind::Import(_)
             | DeclKind::Macro { .. }
+            | DeclKind::MacroCall { .. }
             | DeclKind::Let { .. }
             | DeclKind::Init { .. }
             | DeclKind::Method { .. }

@@ -114,6 +114,7 @@ impl Coverage<'_> {
         let ty = Self::pattern_ty(ty);
         match &pattern.kind {
             PatternKind::Wildcard | PatternKind::Bind(_) => Pat::Wild,
+            PatternKind::MacroCall { .. } => Pat::Wild,
             PatternKind::LiteralTrue => Pat::Ctor(Ctor::Bool(true), vec![]),
             PatternKind::LiteralFalse => Pat::Ctor(Ctor::Bool(false), vec![]),
             PatternKind::LiteralInt(text) => match text.replace('_', "").parse::<i128>() {

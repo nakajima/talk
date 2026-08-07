@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 /// validates during migration. `parse_file_source` is the structured
 /// result op — it returns the `ParseOutcome` value the ABI descriptor
 /// describes, where the `parse` dump ops return rendered text.
-pub const EXPORTS: [&str; 10] = [
+pub const EXPORTS: [&str; 14] = [
     "lex",
     "trees",
     "parse",
@@ -27,6 +27,13 @@ pub const EXPORTS: [&str; 10] = [
     "parse_pattern",
     "parse_type",
     "lex_tokens",
+    // Structured category entries for macro expansion (ADR 0026): the
+    // substituted token text of an expansion parses against the invocation
+    // position's category.
+    "parse_block_items_source",
+    "parse_pattern_source",
+    "parse_type_source",
+    "parse_members_source",
 ];
 
 /// Effects the frontend may perform (ADR 0043 §7): deterministic
@@ -278,6 +285,68 @@ fn parse_source_in(
         // (ADR 0048 wasm carve-out).
         #[cfg(target_arch = "wasm32")]
         None => parse_source_vm(FrontendSession::shared()?, source, file_id),
+    }
+}
+
+/// The canonical ABI tag for a TokenKind variant, read from the frontend
+/// schema so Rust never hardcodes the enum's ordering.
+pub fn token_kind_tag(variant: &str) -> Result<u32, String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    let schema = shared_schema()?;
+    #[cfg(target_arch = "wasm32")]
+    let schema = &FrontendSession::shared()?.schema;
+    let Some(crate::compiling::abi::AbiTypeKind::Enum(variants)) =
+        schema.types.get("TokenKind").map(|ty| &ty.kind)
+    else {
+        return Err("schema has no TokenKind".into());
+    };
+    variants
+        .iter()
+        .position(|(name, _)| name == variant)
+        .map(|index| index as u32)
+        .ok_or_else(|| format!("schema TokenKind has no variant `{variant}`"))
+}
+
+/// One structured category parse through the frontend: the substituted
+/// token text of a macro expansion, parsed as block items, a pattern, or a
+/// type (`export` is one of `parse_block_items_source`,
+/// `parse_pattern_source`, or `parse_type_source`).
+pub fn parse_category_source(
+    export: &str,
+    source: &str,
+    file_id: crate::node_id::FileID,
+) -> Result<crate::compiling::bridge::BridgedParse, String> {
+    crate::profile::init();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let schema = shared_schema()?;
+        crate::compiling::native_frontend::run_export(export, &[source.as_bytes()], |run| {
+            crate::compiling::bridge::adapt(
+                crate::compiling::bridge::FrontendRun::Native(run),
+                schema,
+                file_id,
+            )
+        })
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let session = FrontendSession::shared()?;
+        let mut io = talk_vm::io::CaptureIO::default();
+        let run = talk_vm::interp::run_export(
+            &session.module,
+            export,
+            &[talk_vm::interp::HostValue::String(
+                source.as_bytes().to_vec(),
+            )],
+            crate::compiling::mir::string_shape(),
+            talk_vm::interp::Budgets::default(),
+            &mut io,
+        )?;
+        crate::compiling::bridge::adapt(
+            crate::compiling::bridge::FrontendRun::Vm(&run),
+            &session.schema,
+            file_id,
+        )
     }
 }
 

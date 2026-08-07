@@ -110,6 +110,23 @@ pub enum DeclKind {
         #[drive(skip)]
         tokens: Vec<MacroToken>,
     },
+    /// An @macro invocation in declaration position (ADR 0026). Expansion
+    /// replaces it with the parsed declarations before name resolution.
+    MacroCall {
+        #[drive(skip)]
+        name: String,
+        #[drive(skip)]
+        name_span: Span,
+        /// The complete balanced input, including its outer delimiters.
+        #[drive(skip)]
+        input_span: Span,
+        /// Canonical invocation tokens, including the outer delimiters.
+        #[drive(skip)]
+        input_tokens: Vec<MacroToken>,
+        /// Parsed only for the parenthesized form; the compiler-provided
+        /// `@assert` expands from these.
+        args: Vec<Expr>,
+    },
     Effect {
         #[drive(skip)]
         name: Name,

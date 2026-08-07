@@ -124,6 +124,9 @@ pub enum TypeAnnotationKind {
 	case record_type([RecordFieldTypeAnnotation])
 	// The protocol head as a one-element array, then `Assoc = T` bindings.
 	case any_type([TypeAnnotation], [AnyAssocBinding])
+	// An @macro invocation in type position: name + its token span, the
+	// input extent, and canonical tokens (outer delimiters included).
+	case macro_call_type(String, Int, Int, Int, Int, [MacroToken])
 }
 
 pub struct TypeAnnotation {
@@ -465,6 +468,9 @@ pub enum PatternKind {
 	// parallel field names, and whether a `..` rest closed the list.
 	case struct_pattern(String, [[GenericArg]], [Pattern], [String], Bool)
 	case record([RecordFieldPattern])
+	// An @macro invocation in pattern position: name + its token span, the
+	// input extent, and canonical tokens (outer delimiters included).
+	case macro_call_pattern(String, Int, Int, Int, Int, [MacroToken])
 }
 
 pub struct Pattern {
@@ -550,6 +556,11 @@ pub enum DeclKind {
 	// The body is an unparsed token template: the invocation position's
 	// category decides how it parses (ADR 0026's unified template model).
 	case macro_decl(String, Int, Int, [MacroParam], Int, Int, [MacroToken])
+	// An @macro invocation in declaration position: name + its token span,
+	// the input extent, canonical tokens (outer delimiters included), and
+	// the parsed arguments when the input is a parenthesized expression list
+	// (used by the compiler-provided @assert).
+	case macro_call_decl(String, Int, Int, Int, Int, [MacroToken], [Expr])
 }
 
 pub struct Decl {

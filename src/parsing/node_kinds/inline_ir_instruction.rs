@@ -334,6 +334,7 @@ impl TypeAnnotation {
                 }
             }
             TypeAnnotationKind::SelfType(name) => name.name_str(),
+            TypeAnnotationKind::MacroCall { name, .. } => format!("@{name}(...)"),
             TypeAnnotationKind::Func {
                 params,
                 effects,

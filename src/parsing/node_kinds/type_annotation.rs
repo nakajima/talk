@@ -73,6 +73,20 @@ pub enum TypeAnnotationKind {
         protocol: Box<TypeAnnotation>,
         assoc_bindings: Vec<AnyAssocBinding>,
     },
+    /// An @macro invocation in type position (ADR 0026). Expansion
+    /// replaces it with the parsed type before name resolution.
+    MacroCall {
+        #[drive(skip)]
+        name: String,
+        #[drive(skip)]
+        name_span: Span,
+        /// The complete balanced input, including its outer delimiters.
+        #[drive(skip)]
+        input_span: Span,
+        /// Canonical invocation tokens, including the outer delimiters.
+        #[drive(skip)]
+        input_tokens: Vec<crate::node_kinds::expr::MacroToken>,
+    },
 }
 
 impl TypeAnnotation {

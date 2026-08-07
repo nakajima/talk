@@ -979,6 +979,7 @@ impl<'a> DeclDeclarer<'a> {
             | DeclKind::InitRequirement { signature } => signature.name.symbol().ok(),
             DeclKind::Import(_)
             | DeclKind::Macro { .. }
+            | DeclKind::MacroCall { .. }
             | DeclKind::Extend { .. }
             | DeclKind::Let { .. } => None,
         }

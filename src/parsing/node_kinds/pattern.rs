@@ -1,8 +1,8 @@
 use derive_visitor::{Drive, DriveMut};
 
 use crate::{
-    impl_into_node, name::Name, name_resolution::symbol::Symbol, node::Node, node_id::NodeID,
-    parsing::span::Span,
+    impl_into_node, name::Name, name_resolution::symbol::Symbol, node::Node,
+    node_id::NodeID, node_kinds::expr::MacroToken, parsing::span::Span,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
@@ -81,6 +81,21 @@ pub enum PatternKind {
         #[drive(skip)]
         rest: bool, // Whether there's a .. pattern to ignore remaining fields
     },
+
+    /// An @macro invocation in pattern position (ADR 0026). Expansion
+    /// replaces it with the parsed pattern before name resolution.
+    MacroCall {
+        #[drive(skip)]
+        name: String,
+        #[drive(skip)]
+        name_span: Span,
+        /// The complete balanced input, including its outer delimiters.
+        #[drive(skip)]
+        input_span: Span,
+        /// Canonical invocation tokens, including the outer delimiters.
+        #[drive(skip)]
+        input_tokens: Vec<MacroToken>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
@@ -118,6 +133,7 @@ impl Pattern {
                 }
             }
             PatternKind::Wildcard => (),
+            PatternKind::MacroCall { .. } => (),
             PatternKind::Variant { fields, .. } => {
                 for pattern in fields {
                     result.extend(pattern.collect_binders());

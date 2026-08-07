@@ -124,6 +124,26 @@ unsafe extern "C" {
         args: *const NativeValue,
         argc: usize,
     ) -> i32;
+    fn talk_frontend_parse__block__items__source(
+        out: *mut NativeValue,
+        args: *const NativeValue,
+        argc: usize,
+    ) -> i32;
+    fn talk_frontend_parse__pattern__source(
+        out: *mut NativeValue,
+        args: *const NativeValue,
+        argc: usize,
+    ) -> i32;
+    fn talk_frontend_parse__type__source(
+        out: *mut NativeValue,
+        args: *const NativeValue,
+        argc: usize,
+    ) -> i32;
+    fn talk_frontend_parse__members__source(
+        out: *mut NativeValue,
+        args: *const NativeValue,
+        argc: usize,
+    ) -> i32;
 }
 
 /// The frontend's export wrappers by export name (the C symbols carry
@@ -141,6 +161,10 @@ fn export_fn(name: &str) -> Option<ExportFn> {
         "parse_pattern" => talk_frontend_parse__pattern,
         "parse_type" => talk_frontend_parse__type,
         "lex_tokens" => talk_frontend_lex__tokens,
+        "parse_block_items_source" => talk_frontend_parse__block__items__source,
+        "parse_pattern_source" => talk_frontend_parse__pattern__source,
+        "parse_type_source" => talk_frontend_parse__type__source,
+        "parse_members_source" => talk_frontend_parse__members__source,
         _ => return None,
     })
 }

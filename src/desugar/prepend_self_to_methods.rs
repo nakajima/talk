@@ -3,6 +3,7 @@ use derive_visitor::{DriveMut, VisitorMut};
 use crate::{
     ast::{AST, Parsed},
     id_generator::IDGenerator,
+    name::Name,
     node_id::{FileID, NodeID},
     node_kinds::{
         decl::{Decl, DeclKind, ReceiverMode},
@@ -40,8 +41,15 @@ impl PrependSelfToMethods {
         } = &mut decl.kind
         {
             let span = decl.span;
-            func.params
-                .insert(0, self.implicit_self_param(span, span, *receiver_mode));
+            // A macro-generated method stamps its body names with the
+            // expansion's context; the synthesized receiver must carry the
+            // same context or template-written `self` references cannot
+            // resolve to it.
+            let context = func.name.syntax_context().cloned();
+            func.params.insert(
+                0,
+                self.implicit_self_param(span, span, *receiver_mode, context),
+            );
         }
 
         if let DeclKind::MethodRequirement {
@@ -51,14 +59,14 @@ impl PrependSelfToMethods {
         {
             signature.params.insert(
                 0,
-                self.implicit_self_param(signature.span, decl.span, *receiver_mode),
+                self.implicit_self_param(signature.span, decl.span, *receiver_mode, None),
             );
         }
 
         if let DeclKind::Init { params, .. } = &mut decl.kind {
             params.insert(
                 0,
-                self.implicit_self_param(decl.span, decl.span, ReceiverMode::Consuming),
+                self.implicit_self_param(decl.span, decl.span, ReceiverMode::Consuming, None),
             );
         }
 
@@ -79,6 +87,7 @@ impl PrependSelfToMethods {
         name_span: Span,
         annotation_span: Span,
         receiver_mode: ReceiverMode,
+        context: Option<crate::hygiene::SyntaxContext>,
     ) -> Parameter {
         let self_ty = TypeAnnotation {
             id: NodeID(self.file_id, self.node_ids.next_id()),
@@ -102,7 +111,10 @@ impl PrependSelfToMethods {
             mode: None,
             mode_span: None,
             id: NodeID(self.file_id, self.node_ids.next_id()),
-            name: "self".into(),
+            name: match context {
+                Some(context) => Name::Syntax("self".into(), context),
+                None => "self".into(),
+            },
             name_span,
             type_annotation: Some(TypeAnnotation {
                 id: NodeID(self.file_id, self.node_ids.next_id()),

@@ -125,19 +125,20 @@ use crate::{
     node_kinds::{
         attribute::Attribute,
         block::Block,
+        body::Body,
         call_arg::{CallArg, CallArgOrigin},
         decl::{Decl, DeclKind, MacroParameter},
-        expr::{Expr, ExprKind},
+        expr::{Expr, ExprKind, MacroToken},
         func::Func,
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
         inline_ir_instruction::InlineIRInstruction,
         match_arm::MatchArm,
         parameter::Parameter,
-        pattern::Pattern,
+        pattern::{Pattern, PatternKind},
         record_field::RecordField,
         stmt::{Stmt, StmtKind},
-        type_annotation::TypeAnnotation,
+        type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
 };
 
@@ -148,7 +149,109 @@ type MacroKey = (FileID, String, usize);
 #[derive(Clone, Debug)]
 struct MacroDefinition {
     params: Vec<MacroParameter>,
-    template: Expr,
+    /// Canonical template tokens, including the outer braces. The body is
+    /// never parsed at definition time; each invocation position substitutes
+    /// its arguments and parses the result against its own category.
+    tokens: Vec<MacroToken>,
+}
+
+/// Canonical TokenKind tags the expander matches on, read from the frontend
+/// schema once so Rust never hardcodes the enum's ordering.
+#[derive(Debug)]
+struct TokenTags {
+    identifier: u32,
+    effect_name: u32,
+    bound_var: u32,
+    comma: u32,
+    openers: [u32; 3],
+    closers: [u32; 3],
+}
+
+fn token_tags() -> Result<&'static TokenTags, String> {
+    static TAGS: std::sync::OnceLock<Result<TokenTags, String>> = std::sync::OnceLock::new();
+    TAGS
+        .get_or_init(|| {
+            let tag = crate::compiling::frontend::token_kind_tag;
+            Ok(TokenTags {
+                identifier: tag("identifier")?,
+                effect_name: tag("effect_name")?,
+                bound_var: tag("bound_var")?,
+                comma: tag("comma")?,
+                openers: [tag("left_paren")?, tag("left_bracket")?, tag("left_brace")?],
+                closers: [
+                    tag("right_paren")?,
+                    tag("right_bracket")?,
+                    tag("right_brace")?,
+                ],
+            })
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+/// The tokens a template splices in, outer braces stripped.
+fn template_inner(tokens: &[MacroToken]) -> &[MacroToken] {
+    if tokens.len() >= 2 {
+        &tokens[1..tokens.len() - 1]
+    } else {
+        &[]
+    }
+}
+
+/// Definition-time checks that need no parse: distinct parameters, and every
+/// `$name` in the body naming a declared parameter.
+fn validate_definition(
+    params: &[MacroParameter],
+    tokens: &[MacroToken],
+    source: Option<&str>,
+    tags: &TokenTags,
+) -> Result<(), String> {
+    let mut names = HashSet::new();
+    for param in params {
+        if !names.insert(param.name.as_str()) {
+            return Err(format!(
+                "parameter `${}` is declared more than once",
+                param.name
+            ));
+        }
+    }
+    let source = source.ok_or("template source is unavailable")?;
+    for token in template_inner(tokens) {
+        if token.kind_tag == tags.bound_var {
+            let name = &source[token.lexeme_start as usize..token.lexeme_end as usize];
+            if !names.contains(name) {
+                return Err(format!("unknown template parameter `${name}`"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Split an invocation's canonical tokens (outer delimiters included) into
+/// top-level comma-separated argument token groups.
+fn split_macro_args(input_tokens: &[MacroToken], tags: &TokenTags) -> Vec<Vec<MacroToken>> {
+    let inner = template_inner(input_tokens);
+    let mut args: Vec<Vec<MacroToken>> = Vec::new();
+    let mut current = Vec::new();
+    let mut depth = 0i32;
+    for token in inner {
+        if token.kind_tag == tags.comma && depth == 0 {
+            args.push(std::mem::take(&mut current));
+            continue;
+        }
+        if tags.openers.contains(&token.kind_tag) {
+            depth += 1;
+        }
+        if tags.closers.contains(&token.kind_tag) {
+            depth -= 1;
+        }
+        current.push(*token);
+    }
+    // A trailing comma leaves an empty final group, which is not an argument.
+    if !current.is_empty() || args.is_empty() && !inner.is_empty() {
+        args.push(current);
+    }
+    args
 }
 
 /// Expand macros with the original source text available to source-reflecting
@@ -180,7 +283,7 @@ pub fn expand_macros_with_sources_and_service(
                 name,
                 name_span,
                 params,
-                body_span,
+                tokens,
                 ..
             } = &decl.kind
             else {
@@ -221,13 +324,22 @@ pub fn expand_macros_with_sources_and_service(
                 continue;
             }
 
-            match parse_template(ast.file_id, params, *body_span, sources) {
-                Ok(template) => {
+            let validated = match token_tags() {
+                Ok(tags) => validate_definition(
+                    params,
+                    tokens,
+                    sources.get(&ast.file_id).map(AsRef::as_ref),
+                    tags,
+                ),
+                Err(error) => Err(error),
+            };
+            match validated {
+                Ok(()) => {
                     definitions.insert(
                         key,
                         MacroDefinition {
                             params: params.clone(),
-                            template,
+                            tokens: tokens.clone(),
                         },
                     );
                 }
@@ -253,6 +365,28 @@ pub fn expand_macros_with_sources_and_service(
             .map(|environment| environment.bindings_for(ast))
             .unwrap_or_default();
         let node_ids = std::mem::take(&mut ast.node_ids);
+        let tags = match token_tags() {
+            Ok(tags) => tags,
+            Err(error) => {
+                diagnostics.push(
+                    Diagnostic {
+                        id: NodeID(ast.file_id, 0),
+                        severity: Severity::Error,
+                        kind: MacroError::InvalidProceduralExpansion {
+                            name: "macro".into(),
+                            reason: error,
+                            span: crate::parsing::span::Span {
+                                file_id: ast.file_id,
+                                start: 0,
+                                end: 0,
+                            },
+                        },
+                    }
+                    .into(),
+                );
+                continue;
+            }
+        };
         let mut expander = MacroExpander {
             file_id: ast.file_id,
             definitions: &definitions,
@@ -261,12 +395,14 @@ pub fn expand_macros_with_sources_and_service(
             expansions: 0,
             changed: false,
             source: sources.get(&ast.file_id).map(AsRef::as_ref),
+            tags,
             procedural: &procedural_bindings,
             generated_sources: HashMap::new(),
             emitted_metadata: Vec::new(),
         };
         loop {
             expander.changed = false;
+            expander.expand_decl_items(&mut ast.roots);
             for root in &mut ast.roots {
                 root.drive_mut(&mut expander);
             }
@@ -282,92 +418,9 @@ pub fn expand_macros_with_sources_and_service(
     diagnostics
 }
 
-/// Parse a declarative macro's token template into syntax. The body is
-/// parsed in place: blanking the source prefix keeps every byte offset
-/// identical to the real file, so the template carries true definition-site
-/// spans. The result is still category-agnostic at this point — a single
-/// expression stays an expression, anything else becomes a block — and the
-/// invocation position's own grammar is the final judge of the expansion.
-fn parse_template(
-    file_id: FileID,
-    params: &[MacroParameter],
-    body_span: crate::parsing::span::Span,
-    sources: &HashMap<FileID, Arc<str>>,
-) -> Result<Expr, String> {
-    let mut names = HashSet::new();
-    for param in params {
-        if !names.insert(param.name.as_str()) {
-            return Err(format!(
-                "parameter `${}` is declared more than once",
-                param.name
-            ));
-        }
-    }
-
-    let Some(source) = sources.get(&file_id) else {
-        return Err("template source is unavailable".into());
-    };
-    let bytes = source.as_bytes();
-    let (start, end) = (body_span.start as usize, body_span.end as usize);
-    if start > end || end > bytes.len() {
-        return Err("template body span is out of range".into());
-    }
-    let mut virtual_source = Vec::with_capacity(end);
-    for &byte in &bytes[..start] {
-        virtual_source.push(if byte == b'\n' { b'\n' } else { b' ' });
-    }
-    virtual_source.extend_from_slice(&bytes[start..end]);
-    let virtual_source = String::from_utf8(virtual_source)
-        .map_err(|_| "template body is not valid UTF-8".to_string())?;
-
-    let parsed = crate::compiling::frontend::parse_source(&virtual_source, file_id)
-        .map_err(|error| format!("template body failed to parse: {error}"))?;
-    let failure = parsed.failure.or_else(|| parsed.diags.into_iter().next());
-    if let Some(failure) = failure {
-        return Err(format!("template body failed to parse: {}", failure.message));
-    }
-
-    let template = match parsed.roots.as_slice() {
-        [Node::Expr(expr)] => expr.clone(),
-        [Node::Stmt(Stmt {
-            kind: StmtKind::Expr(expr),
-            ..
-        })] => expr.clone(),
-        roots => Expr {
-            id: NodeID(file_id, 0),
-            span: body_span,
-            kind: ExprKind::Block(crate::node_kinds::block::Block {
-                id: NodeID(file_id, 0),
-                args: Vec::new(),
-                body: roots.to_vec(),
-                span: body_span,
-            }),
-        },
-    };
-
-    // Splice sites are the only `$names` a template may reference; check
-    // them now so a malformed rule fails at its definition.
-    let mut unknown = None;
-    template.drive(&mut derive_visitor::visitor_enter_fn(|expr: &Expr| {
-        if unknown.is_some() {
-            return;
-        }
-        if let ExprKind::Variable(Name::Raw(name)) = &expr.kind
-            && let Some(param) = name.strip_prefix('$')
-            && !names.contains(param)
-        {
-            unknown = Some(format!("unknown template parameter `${param}`"));
-        }
-    }));
-    if let Some(error) = unknown {
-        return Err(error);
-    }
-
-    Ok(template)
-}
 
 #[derive(Debug, VisitorMut)]
-#[visitor(Expr(enter))]
+#[visitor(Expr(enter), Block(enter), Body(enter), Pattern(enter), TypeAnnotation(enter))]
 struct MacroExpander<'a> {
     file_id: FileID,
     definitions: &'a HashMap<MacroKey, MacroDefinition>,
@@ -376,6 +429,7 @@ struct MacroExpander<'a> {
     expansions: usize,
     changed: bool,
     source: Option<&'a str>,
+    tags: &'a TokenTags,
     procedural: &'a crate::procedural_macros::ProceduralMacroBindings,
     generated_sources: HashMap<NodeID, String>,
     emitted_metadata: Vec<crate::hygiene::MaterializedIdentifier>,
@@ -691,104 +745,628 @@ impl MacroExpander<'_> {
             return;
         }
 
-        let key = (self.file_id, name.clone(), args.len());
+        let id = expr.id;
+        let span = expr.span;
+        let Some(roots) = self.expand_token_template(
+            id,
+            span,
+            &name,
+            name_span,
+            input_span,
+            &input_tokens,
+            Category::Expr,
+        ) else {
+            self.replace_with_unit(expr);
+            return;
+        };
+        *expr = match roots.as_slice() {
+            [Node::Expr(single)] => single.clone(),
+            [Node::Stmt(Stmt {
+                kind: StmtKind::Expr(single),
+                ..
+            })] => single.clone(),
+            _ => Expr {
+                id: self.next_id(),
+                span,
+                kind: ExprKind::Block(Block {
+                    id: self.next_id(),
+                    args: Vec::new(),
+                    body: roots,
+                    span,
+                }),
+            },
+        };
+    }
+
+    fn expr_statement(&mut self, expr: Expr) -> Node {
+        let span = expr.span;
+        Node::Stmt(Stmt {
+            id: self.next_id(),
+            span,
+            kind: StmtKind::Expr(expr),
+        })
+    }
+
+    /// Expand declaration-position invocations inside one item list,
+    /// splicing each expansion in where its invocation stood. Newly spliced
+    /// items are left for the next fixpoint pass, so nested declaration
+    /// macros expand in order. Invocations of expression-producing macros
+    /// (the compiler-provided `@assert`, procedural macros) expand to an
+    /// expression statement.
+    fn expand_decl_items(&mut self, items: &mut Vec<Node>) {
+        let mut index = 0;
+        while index < items.len() {
+            let (id, span, name, name_span, input_span, input_tokens, args) = match &items[index]
+            {
+                Node::Decl(Decl {
+                    id,
+                    span,
+                    kind:
+                        DeclKind::MacroCall {
+                            name,
+                            name_span,
+                            input_span,
+                            input_tokens,
+                            args,
+                        },
+                    ..
+                }) => (
+                    *id,
+                    *span,
+                    name.clone(),
+                    *name_span,
+                    *input_span,
+                    input_tokens.clone(),
+                    args.clone(),
+                ),
+                _ => {
+                    index += 1;
+                    continue;
+                }
+            };
+
+            if name == "assert" {
+                let mut expr = Expr {
+                    id,
+                    span,
+                    kind: ExprKind::MacroCall {
+                        name: name.clone(),
+                        name_span,
+                        input_span,
+                        input_tokens,
+                        args: args.clone(),
+                    },
+                };
+                self.expand_assert(&mut expr, name, args);
+                items.splice(index..index + 1, [self.expr_statement(expr)]);
+                index += 1;
+                continue;
+            }
+
+            match self.procedural.resolve(&name) {
+                crate::procedural_macros::ProceduralMacroResolution::Found(binding) => {
+                    let mut expr = Expr {
+                        id,
+                        span,
+                        kind: ExprKind::MacroCall {
+                            name: name.clone(),
+                            name_span,
+                            input_span,
+                            input_tokens: input_tokens.clone(),
+                            args,
+                        },
+                    };
+                    self.expand_procedural(&mut expr, name, binding, input_span, &input_tokens);
+                    items.splice(index..index + 1, [self.expr_statement(expr)]);
+                    index += 1;
+                    continue;
+                }
+                crate::procedural_macros::ProceduralMacroResolution::Ambiguous(packages) => {
+                    self.error(
+                        id,
+                        MacroError::AmbiguousProceduralMacro {
+                            name,
+                            packages,
+                            span: name_span,
+                        },
+                    );
+                    items.remove(index);
+                    index += 1;
+                    continue;
+                }
+                crate::procedural_macros::ProceduralMacroResolution::Missing => {}
+            }
+
+            match self.expand_token_template(
+                id,
+                span,
+                &name,
+                name_span,
+                input_span,
+                &input_tokens,
+                Category::BlockItems,
+            ) {
+                Some(nodes) => {
+                    let inserted = nodes.len();
+                    items.splice(index..index + 1, nodes);
+                    index += inserted.max(1);
+                }
+                None => {
+                    items.remove(index);
+                    index += 1;
+                }
+            }
+        }
+    }
+
+    fn enter_block(&mut self, block: &mut Block) {
+        self.expand_decl_items(&mut block.body);
+    }
+
+    fn enter_body(&mut self, body: &mut crate::node_kinds::body::Body) {
+        let mut index = 0;
+        while index < body.decls.len() {
+            let (id, span, name, name_span, input_span, input_tokens) = match &body.decls[index].kind
+            {
+                DeclKind::MacroCall {
+                    name,
+                    name_span,
+                    input_span,
+                    input_tokens,
+                    ..
+                } => (
+                    body.decls[index].id,
+                    body.decls[index].span,
+                    name.clone(),
+                    *name_span,
+                    *input_span,
+                    input_tokens.clone(),
+                ),
+                _ => {
+                    index += 1;
+                    continue;
+                }
+            };
+            match self.expand_token_template(
+                id,
+                span,
+                &name,
+                name_span,
+                input_span,
+                &input_tokens,
+                Category::Members,
+            ) {
+                Some(nodes) => {
+                    let mut decls = Vec::with_capacity(nodes.len());
+                    let mut nondecl = false;
+                    for node in nodes {
+                        match node {
+                            Node::Decl(decl) => decls.push(decl),
+                            _ => nondecl = true,
+                        }
+                    }
+                    if nondecl {
+                        self.error(
+                            id,
+                            MacroError::InvalidProceduralExpansion {
+                                name,
+                                reason: "expansion in a declaration body must produce only declarations".into(),
+                                span,
+                            },
+                        );
+                        body.decls.remove(index);
+                        index += 1;
+                    } else {
+                        let inserted = decls.len();
+                        body.decls.splice(index..index + 1, decls);
+                        index += inserted.max(1);
+                    }
+                }
+                None => {
+                    body.decls.remove(index);
+                    index += 1;
+                }
+            }
+        }
+    }
+
+    fn enter_pattern(&mut self, pattern: &mut Pattern) {
+        let PatternKind::MacroCall {
+            name,
+            name_span,
+            input_span,
+            input_tokens,
+        } = pattern.kind.clone()
+        else {
+            return;
+        };
+        let id = pattern.id;
+        let span = pattern.span;
+        let Some(roots) = self.expand_token_template(
+            id,
+            span,
+            &name,
+            name_span,
+            input_span,
+            &input_tokens,
+            Category::Pattern,
+        ) else {
+            pattern.kind = PatternKind::Wildcard;
+            return;
+        };
+        match roots.as_slice() {
+            [Node::Pattern(single)] => *pattern = single.clone(),
+            _ => {
+                self.error(
+                    id,
+                    MacroError::InvalidProceduralExpansion {
+                        name,
+                        reason: format!("expected one pattern, got {} items", roots.len()),
+                        span,
+                    },
+                );
+                pattern.kind = PatternKind::Wildcard;
+            }
+        }
+    }
+
+    fn enter_type_annotation(&mut self, annotation: &mut TypeAnnotation) {
+        let TypeAnnotationKind::MacroCall {
+            name,
+            name_span,
+            input_span,
+            input_tokens,
+        } = annotation.kind.clone()
+        else {
+            return;
+        };
+        let id = annotation.id;
+        let span = annotation.span;
+        let Some(roots) = self.expand_token_template(
+            id,
+            span,
+            &name,
+            name_span,
+            input_span,
+            &input_tokens,
+            Category::Type,
+        ) else {
+            annotation.kind = TypeAnnotationKind::Tuple(Vec::new());
+            return;
+        };
+        match roots.as_slice() {
+            [Node::TypeAnnotation(single)] => *annotation = single.clone(),
+            _ => {
+                self.error(
+                    id,
+                    MacroError::InvalidProceduralExpansion {
+                        name,
+                        reason: format!("expected one type, got {} items", roots.len()),
+                        span,
+                    },
+                );
+                annotation.kind = TypeAnnotationKind::Tuple(Vec::new());
+            }
+        }
+    }
+
+    /// Substitute a declarative macro's arguments into its token template
+    /// and parse the result against the invocation position's category.
+    /// Returns the expansion's roots with hygiene contexts applied and fresh
+    /// node identities; diagnostics are reported internally.
+    fn expand_token_template(
+        &mut self,
+        invocation_id: NodeID,
+        invocation_span: crate::parsing::span::Span,
+        name: &str,
+        name_span: crate::parsing::span::Span,
+        _input_span: crate::parsing::span::Span,
+        input_tokens: &[MacroToken],
+        category: Category,
+    ) -> Option<Vec<Node>> {
+        if self.expansions >= MAX_EXPANSIONS_PER_FILE {
+            self.error(
+                invocation_id,
+                MacroError::MacroExpansionLimit {
+                    name: name.into(),
+                    span: invocation_span,
+                },
+            );
+            return None;
+        }
+
+        let args = split_macro_args(input_tokens, self.tags);
+        let key = (self.file_id, name.to_string(), args.len());
         let Some(definition) = self.definitions.get(&key).cloned() else {
             let mut expected: Vec<_> = self
                 .definitions
                 .keys()
                 .filter_map(|(file, candidate, arity)| {
-                    (*file == self.file_id && candidate == &name).then_some(*arity)
+                    (*file == self.file_id && candidate == name).then_some(*arity)
                 })
                 .collect();
             expected.sort_unstable();
             expected.dedup();
             let kind = if expected.is_empty() {
                 MacroError::UndefinedMacro {
-                    name,
+                    name: name.into(),
                     span: name_span,
                 }
             } else {
                 MacroError::MacroArityMismatch {
-                    name,
+                    name: name.into(),
                     actual: args.len(),
                     expected,
-                    span: expr.span,
+                    span: invocation_span,
                 }
             };
-            self.error(expr.id, kind);
-            self.replace_with_unit(expr);
-            return;
+            self.error(invocation_id, kind);
+            return None;
         };
 
-        self.expansions += 1;
-        let mut expanded = definition.template;
-        // Template-written names receive the definition-site lexical scope
-        // plus one fresh expansion scope shared by this expansion's
-        // introduced bindings and their references. Spliced arguments keep
-        // their use-site names, so they resolve exactly as written.
-        let namespace = (u64::from(self.file_id.0) << 32) | u64::from(expr.id.1);
-        let context =
-            SyntaxContext::lexical(NodeID(self.file_id, 0)).with_scope(SyntaxScope::Expansion {
-                namespace,
-                ordinal: self.expansions as u64,
-            });
-        expanded.drive_mut(&mut crate::hygiene::TemplateContextStamp {
-            context: &context,
-        });
-        expanded.drive_mut(&mut NodeIdRemapper {
-            file_id: self.file_id,
-            node_ids: &mut self.node_ids,
-        });
-
-        let substitutions = definition
-            .params
-            .iter()
-            .zip(args)
-            .map(|(param, arg)| (param.name.clone(), arg))
-            .collect();
-        expanded.drive_mut(&mut TemplateSubstituter {
-            substitutions,
-            spliced: HashSet::new(),
-            file_id: self.file_id,
-            node_ids: &mut self.node_ids,
-        });
-        *expr = expanded;
-        self.changed = true;
-    }
-}
-
-#[derive(VisitorMut)]
-#[visitor(Expr(enter))]
-struct TemplateSubstituter<'a> {
-    substitutions: HashMap<String, Expr>,
-    spliced: HashSet<String>,
-    file_id: FileID,
-    node_ids: &'a mut IDGenerator,
-}
-
-impl TemplateSubstituter<'_> {
-    fn enter_expr(&mut self, expr: &mut Expr) {
-        let ExprKind::Variable(Name::Raw(name)) = &expr.kind else {
-            return;
+        let Some(invocation_source) = self
+            .generated_sources
+            .get(&invocation_id)
+            .cloned()
+            .or_else(|| self.source.map(str::to_string))
+        else {
+            self.error(
+                invocation_id,
+                MacroError::InvalidProceduralExpansion {
+                    name: name.into(),
+                    reason: "invocation source is unavailable".into(),
+                    span: invocation_span,
+                },
+            );
+            return None;
         };
-        let Some(param) = name.strip_prefix('$') else {
-            return;
+        let materialized = self.materialize(
+            invocation_id,
+            &definition,
+            &args,
+            &invocation_source,
+            matches!(category, Category::Expr),
+        );
+
+        let export = match category {
+            Category::Expr | Category::BlockItems => "parse_block_items_source",
+            Category::Pattern => "parse_pattern_source",
+            Category::Type => "parse_type_source",
+            Category::Members => "parse_members_source",
         };
-        let Some(replacement) = self.substitutions.get(param) else {
-            return;
+        let mut parsed = match crate::compiling::frontend::parse_category_source(
+            export,
+            &materialized.source,
+            self.file_id,
+        ) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                self.error(
+                    invocation_id,
+                    MacroError::ProceduralMacroFailure {
+                        name: name.into(),
+                        code: "macro.expansion-parse".into(),
+                        message: error,
+                        span: invocation_span,
+                    },
+                );
+                return None;
+            }
         };
-        let mut replacement = replacement.clone();
-        if !self.spliced.insert(param.to_string()) {
-            // A repeated splice re-evaluates the argument. The first splice
-            // keeps the source node's identity; later splices are re-stamped
-            // with fresh ids so the expansion never contains duplicate NodeIDs.
-            replacement.drive_mut(&mut NodeIdRemapper {
+        let parse_failure = parsed
+            .failure
+            .take()
+            .or_else(|| parsed.diags.drain(..).next());
+        if let Some(failure) = parse_failure {
+            self.error(
+                invocation_id,
+                MacroError::ProceduralMacroFailure {
+                    name: name.into(),
+                    code: failure.code,
+                    message: failure.message,
+                    span: invocation_span,
+                },
+            );
+            return None;
+        }
+
+        materialized.metadata.apply(&mut parsed.roots);
+        self.emitted_metadata.extend(materialized.metadata.identifiers);
+        for root in &mut parsed.roots {
+            root.drive_mut(&mut NodeIdRemapper {
                 file_id: self.file_id,
-                node_ids: self.node_ids,
+                node_ids: &mut self.node_ids,
             });
         }
-        *expr = replacement;
+
+        // Invocations nested in the expansion carry tokens that index the
+        // materialized source; record it so their own expansion can slice
+        // arguments out of it.
+        let mut nested = Vec::new();
+        {
+            let mut collect = derive_visitor::visitor_enter_fn(|candidate: &Expr| {
+                if matches!(candidate.kind, ExprKind::MacroCall { .. }) {
+                    nested.push(candidate.id);
+                }
+            });
+            for root in &parsed.roots {
+                root.drive(&mut collect);
+            }
+        }
+        {
+            let mut collect = derive_visitor::visitor_enter_fn(|candidate: &Pattern| {
+                if matches!(candidate.kind, PatternKind::MacroCall { .. }) {
+                    nested.push(candidate.id);
+                }
+            });
+            for root in &parsed.roots {
+                root.drive(&mut collect);
+            }
+        }
+        {
+            let mut collect = derive_visitor::visitor_enter_fn(|candidate: &TypeAnnotation| {
+                if matches!(candidate.kind, TypeAnnotationKind::MacroCall { .. }) {
+                    nested.push(candidate.id);
+                }
+            });
+            for root in &parsed.roots {
+                root.drive(&mut collect);
+            }
+        }
+        {
+            let mut collect = derive_visitor::visitor_enter_fn(|candidate: &Decl| {
+                if matches!(candidate.kind, DeclKind::MacroCall { .. }) {
+                    nested.push(candidate.id);
+                }
+            });
+            for root in &parsed.roots {
+                root.drive(&mut collect);
+            }
+        }
+        for id in nested {
+            self.generated_sources.insert(id, materialized.source.clone());
+        }
+
+        self.expansions += 1;
+        self.changed = true;
+        Some(parsed.roots)
     }
+
+    /// Build an expansion's virtual source: the template's tokens with each
+    /// `$param` replaced by its argument's tokens inside synthetic grouping
+    /// parentheses, so a splice stays one syntax node instead of becoming
+    /// textual precedence-sensitive substitution. Trivia between template
+    /// tokens (and between an argument's own tokens) is copied from the
+    /// original source, keeping newlines — and therefore statement breaks —
+    /// intact. Template-written identifiers are recorded with their virtual
+    /// spans and the expansion's hygiene context; argument tokens keep their
+    /// use-site names.
+    fn materialize(
+        &mut self,
+        invocation_id: NodeID,
+        definition: &MacroDefinition,
+        args: &[Vec<MacroToken>],
+        invocation_source: &str,
+        group_args: bool,
+    ) -> Materialized {
+        let definition_source = self.source.unwrap_or_default();
+        let context =
+            SyntaxContext::lexical(NodeID(self.file_id, 0)).with_scope(SyntaxScope::Expansion {
+                namespace: (u64::from(self.file_id.0) << 32) | u64::from(invocation_id.1),
+                ordinal: self.expansions as u64 + 1,
+            });
+        let file_id = self.file_id;
+        let mut out = String::new();
+        let mut identifiers = Vec::new();
+        let mut prev_end: Option<u32> = None;
+        for token in template_inner(&definition.tokens) {
+            if let Some(prev) = prev_end {
+                if prev <= token.span_start {
+                    out.push_str(&definition_source[prev as usize..token.span_start as usize]);
+                } else {
+                    out.push(' ');
+                }
+            }
+            if token.kind_tag == self.tags.bound_var {
+                let param =
+                    &definition_source[token.lexeme_start as usize..token.lexeme_end as usize];
+                if let Some(index) = definition.params.iter().position(|p| p.name == param) {
+                    // Synthetic grouping keeps a multi-token argument one
+                    // syntax node rather than textual precedence-sensitive
+                    // substitution. Grouping is only valid where a
+                    // parenthesized expression is; declaration, pattern, and
+                    // type splices stay ungrouped, as do single-token
+                    // arguments, which have no internal structure to protect.
+                    let group = group_args && args[index].len() > 1;
+                    if group {
+                        out.push('(');
+                    }
+                    let mut arg_prev: Option<u32> = None;
+                    for arg_token in &args[index] {
+                        if let Some(prev) = arg_prev {
+                            if prev <= arg_token.span_start {
+                                out.push_str(
+                                    &invocation_source[prev as usize..arg_token.span_start as usize],
+                                );
+                            } else {
+                                out.push(' ');
+                            }
+                        }
+                        out.push_str(
+                            &invocation_source
+                                [arg_token.span_start as usize..arg_token.span_end as usize],
+                        );
+                        arg_prev = Some(arg_token.span_end);
+                    }
+                    if group {
+                        out.push(')');
+                    }
+                    prev_end = Some(token.span_end);
+                    continue;
+                }
+            }
+            let start = out.len() as u32;
+            out.push_str(&definition_source[token.span_start as usize..token.span_end as usize]);
+            if token.kind_tag == self.tags.identifier || token.kind_tag == self.tags.effect_name {
+                let lexeme_offset = token.lexeme_start - token.span_start;
+                identifiers.push(crate::hygiene::MaterializedIdentifier {
+                    text: definition_source
+                        [token.lexeme_start as usize..token.lexeme_end as usize]
+                        .to_string(),
+                    span: crate::parsing::span::Span {
+                        file_id,
+                        start,
+                        end: out.len() as u32,
+                    },
+                    lexeme: crate::parsing::span::Span {
+                        file_id,
+                        start: start + lexeme_offset,
+                        end: start + lexeme_offset + (token.lexeme_end - token.lexeme_start),
+                    },
+                    context: context.clone(),
+                    origin: crate::hygiene::SyntaxOrigin::DefinitionSite,
+                    source_span: crate::parsing::span::Span {
+                        file_id,
+                        start: token.span_start,
+                        end: token.span_end,
+                    },
+                    source_lexeme: crate::parsing::span::Span {
+                        file_id,
+                        start: token.lexeme_start,
+                        end: token.lexeme_end,
+                    },
+                });
+            }
+            prev_end = Some(token.span_end);
+        }
+        Materialized {
+            source: out,
+            metadata: crate::hygiene::SyntaxMetadata::new(identifiers),
+        }
+    }
+}
+
+/// The grammar category an expansion is parsed against: the invocation
+/// position's own category.
+#[derive(Clone, Copy)]
+enum Category {
+    /// Expression position: parses as block items, then unwraps a single
+    /// expression or wraps the rest in a block. Arguments are grouped.
+    Expr,
+    /// Declaration position: expansion items splice into the item list.
+    BlockItems,
+    /// Nominal-body position (struct/extension bodies): member grammar, so
+    /// generated functions become methods.
+    Members,
+    Pattern,
+    Type,
+}
+
+/// An expansion's virtual source plus the hygiene metadata for its
+/// template-written identifiers.
+struct Materialized {
+    source: String,
+    metadata: crate::hygiene::SyntaxMetadata,
 }
 
 #[derive(VisitorMut)]
@@ -888,6 +1466,7 @@ mod tests {
         macro_expansion::{MacroError, expand_macros_with_sources},
         node::Node,
         node_kinds::{
+            decl::{Decl, DeclKind},
             expr::ExprKind,
             stmt::{Stmt, StmtKind},
         },
@@ -896,9 +1475,12 @@ mod tests {
 
     #[test]
     fn parser_captures_non_talk_macro_token_trees() {
-        let ast = parse("@html { div class=@card { <not talk> } }");
-        let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {
-            panic!("expected expression statement");
+        let ast = parse("let page = @html { div class=@card { <not talk> } }");
+        let Node::Decl(decl) = &ast.roots[0] else {
+            panic!("expected a let declaration");
+        };
+        let DeclKind::Let { rhs: Some(expr), .. } = &decl.kind else {
+            panic!("expected a let with a value");
         };
         let ExprKind::MacroCall {
             name,
@@ -911,11 +1493,31 @@ mod tests {
         };
         assert_eq!(name, "html");
         assert_eq!(
-            &"@html { div class=@card { <not talk> } }"
+            &"let page = @html { div class=@card { <not talk> } }"
                 [input_span.start as usize..input_span.end as usize],
             "{ div class=@card { <not talk> } }"
         );
         assert!(args.is_empty());
+    }
+
+    #[test]
+    fn parser_captures_item_position_macro_invocations() {
+        let ast = parse("@html { div class=@card { <not talk> } }");
+        let Node::Decl(decl) = &ast.roots[0] else {
+            panic!("expected an item-position macro invocation");
+        };
+        let DeclKind::MacroCall {
+            name, input_span, ..
+        } = &decl.kind
+        else {
+            panic!("expected a declaration macro call");
+        };
+        assert_eq!(name, "html");
+        assert_eq!(
+            &"@html { div class=@card { <not talk> } }"
+                [input_span.start as usize..input_span.end as usize],
+            "{ div class=@card { <not talk> } }"
+        );
     }
 
     #[test]
@@ -939,7 +1541,7 @@ mod tests {
     fn assert_expands_with_the_asserted_source_text() {
         let source = "@assert(left == \"right\")";
         let mut ast = parse(source);
-        let invocation_id = ast.roots[0].as_stmt().clone().as_expr().id;
+        let invocation_id = ast.roots[0].node_id();
         let sources = HashMap::from([(ast.file_id, std::sync::Arc::from(source))]);
         let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
@@ -972,22 +1574,9 @@ mod tests {
         let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
         assert_eq!(ast.roots.len(), 1);
-        let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {
-            panic!("expected expression statement");
+        let StmtKind::If(..) = &ast.roots[0].as_stmt().kind else {
+            panic!("expected an if statement, got {:?}", ast.roots[0]);
         };
-        // A file-level `if` parses as a statement, so the expansion wraps
-        // it in a block; either shape is a faithful expansion here.
-        match &expr.kind {
-            ExprKind::If(..) => {}
-            ExprKind::Block(block) => assert!(matches!(
-                block.body.first(),
-                Some(Node::Stmt(Stmt {
-                    kind: StmtKind::If(..),
-                    ..
-                }))
-            )),
-            other => panic!("expected an if expansion, got {other:?}"),
-        }
     }
 
     #[test]
@@ -1026,13 +1615,18 @@ mod tests {
         let sources = HashMap::from([(ast.file_id, std::sync::Arc::from(source))]);
         let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
-        let StmtKind::Expr(expr) = &ast.roots[0].as_stmt().kind else {
-            panic!("expected expression statement");
-        };
-        let ExprKind::Block(block) = &expr.kind else {
-            panic!("expected the template to expand to a block, got {:?}", expr.kind);
-        };
-        assert_eq!(block.body.len(), 2);
+        // At item position the expansion's items splice directly into the
+        // root list: the template's `let` and its trailing expression become
+        // two roots.
+        assert_eq!(ast.roots.len(), 2, "{:?}", ast.roots);
+        assert!(matches!(
+            &ast.roots[0],
+            Node::Decl(Decl {
+                kind: DeclKind::Let { .. },
+                ..
+            })
+        ));
+        assert!(matches!(&ast.roots[1], Node::Stmt(_)));
     }
 
     #[test]
@@ -1112,6 +1706,128 @@ mod tests {
             "{:?}",
             typed.phase.diagnostics
         );
+    }
+
+    /// Compile and run a whole program, returning captured stdout.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn run_program(source: &str) -> String {
+        use crate::compiling::driver::{Driver, DriverConfig, Source};
+
+        let typed = Driver::new(vec![Source::from(source)], DriverConfig::new("MacroTest"))
+            .parse()
+            .expect("parse")
+            .resolve_names()
+            .expect("resolve")
+            .type_check();
+        assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+        let executable = typed.compile_executable(None).expect("compile");
+        let mut io = talk_vm::io::CaptureIO::default();
+        executable.run(&mut io).expect("run");
+        String::from_utf8_lossy(&io.out).into_owned()
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn declaration_macros_generate_named_types() {
+        let output = run_program(
+            "macro point($name) {\n\
+            \x20   struct $name {\n\
+            \x20       let x: Float\n\
+            \x20       let y: Float\n\
+            \x20   }\n\
+            }\n\
+            @point(Point)\n\
+            func main() {\n\
+            \x20   let p = Point(x: 1.5, y: 2.5)\n\
+            \x20   print(p.x + p.y)\n\
+            }",
+        );
+        assert_eq!(output.trim(), "4.0");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn declaration_macros_hide_template_helpers() {
+        // The template-written helper resolves inside the expansion but is
+        // invisible to caller code; the spliced name is the public surface.
+        let typed_ok = run_program(
+            "macro with_helper($name) {\n\
+            \x20   func hidden_helper() -> Int { 41 }\n\
+            \x20   func $name() -> Int { hidden_helper() + 1 }\n\
+            }\n\
+            @with_helper(answer)\n\
+            func main() { print(answer()) }",
+        );
+        assert_eq!(typed_ok.trim(), "42");
+
+        use crate::compiling::driver::{Driver, DriverConfig, Source};
+        let typed = Driver::new(
+            vec![Source::from(
+                "macro with_helper($name) {\n\
+                \x20   func hidden_helper() -> Int { 41 }\n\
+                \x20   func $name() -> Int { hidden_helper() + 1 }\n\
+                }\n\
+                @with_helper(answer)\n\
+                func main() { print(hidden_helper()) }",
+            )],
+            DriverConfig::new("MacroTest"),
+        )
+        .parse()
+        .expect("parse")
+        .resolve_names()
+        .expect("resolve")
+        .type_check();
+        assert!(typed.has_errors(), "the helper must stay hidden");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn pattern_macros_expand_in_match_arms() {
+        let output = run_program(
+            "macro pair($a, $b) { ($a, $b) }\n\
+            func main() {\n\
+            \x20   match (1, 2) {\n\
+            \x20       @pair(x, y) -> print(x + y),\n\
+            \x20       _ -> print(0)\n\
+            \x20   }\n\
+            }",
+        );
+        assert_eq!(output.trim(), "3");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn type_macros_expand_in_signatures() {
+        let output = run_program(
+            "macro pair_of($t) { ($t, $t) }\n\
+            func sum(p: @pair_of(Int)) -> Int { p.0 + p.1 }\n\
+            func main() { print(sum(p: (3, 4))) }",
+        );
+        assert_eq!(output.trim(), "7");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn member_macros_expand_in_nominal_bodies() {
+        let output = run_program(
+            "macro getter($field, $ty) {\n\
+            \x20   func get() -> $ty { self.$field }\n\
+            }\n\
+            struct Box {\n\
+            \x20   let value: Int\n\
+            \x20   @getter(value, Int)\n\
+            }\n\
+            func main() { print(Box(value: 42).get()) }",
+        );
+        assert_eq!(output.trim(), "42");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn expression_splices_group_multi_token_arguments() {
+        // `0 - $x` with `1 - 2` must read `0 - (1 - 2)`, not `0 - 1 - 2`.
+        let output = run_program("macro neg($x) { 0 - $x }\nfunc main() { print(@neg(1 - 2)) }");
+        assert_eq!(output.trim(), "1");
     }
 
     #[test]

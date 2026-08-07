@@ -613,6 +613,39 @@ impl<'a> Formatter<'a> {
                 }
             }
             DeclKind::Import(import) => self.format_import(import),
+            DeclKind::MacroCall {
+                name,
+                input_span,
+                args,
+                ..
+            } => {
+                let input = self
+                    .source
+                    .and_then(|source| {
+                        source.get(input_span.start as usize..input_span.end as usize)
+                    });
+                match input {
+                    // Brace and bracket inputs, and parenthesized inputs
+                    // without parsed arguments, keep their source form.
+                    Some(input) if !input.starts_with('(') || args.is_empty() => {
+                        let separator = if input.starts_with('{') { " " } else { "" };
+                        text(format!("@{name}{separator}{input}"))
+                    }
+                    _ => group(
+                        text(format!("@{name}("))
+                            + nest(
+                                1,
+                                softline()
+                                    + join(
+                                        args.iter().map(|arg| self.format_expr(arg)).collect(),
+                                        text(",") + line(),
+                                    ),
+                            )
+                            + softline()
+                            + text(")"),
+                    ),
+                }
+            }
             DeclKind::Macro {
                 name,
                 params,
@@ -1333,8 +1366,26 @@ impl<'a> Formatter<'a> {
         }
     }
 
+    fn format_macro_invocation(
+        &self,
+        name: &str,
+        input_span: crate::parsing::span::Span,
+    ) -> Doc {
+        if let Some(source) = self.source
+            && let Some(input) =
+                source.get(input_span.start as usize..input_span.end as usize)
+        {
+            let separator = if input.starts_with('{') { " " } else { "" };
+            return text(format!("@{name}{separator}{input}"));
+        }
+        text(format!("@{name}(...)"))
+    }
+
     fn format_pattern(&self, pattern: &Pattern) -> Doc {
         match &pattern.kind {
+            PatternKind::MacroCall {
+                name, input_span, ..
+            } => self.format_macro_invocation(name, *input_span),
             PatternKind::LiteralInt(val) => text(val),
             PatternKind::LiteralFloat(val) => text(val),
             PatternKind::LiteralCharacter(val) => self.format_character_literal(val),
@@ -1694,6 +1745,9 @@ impl<'a> Formatter<'a> {
 
     fn format_type_annotation(&self, ty: &TypeAnnotation) -> Doc {
         match &ty.kind {
+            TypeAnnotationKind::MacroCall {
+                name, input_span, ..
+            } => self.format_macro_invocation(name, *input_span),
             TypeAnnotationKind::SelfType(..) => text("Self"),
             TypeAnnotationKind::Borrow { mutable, inner } => {
                 if *mutable {

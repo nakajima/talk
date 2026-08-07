@@ -1749,6 +1749,7 @@ impl NameResolver {
                 }
             }
             PatternKind::Wildcard => (),
+            PatternKind::MacroCall { .. } => (),
             PatternKind::LiteralFalse
             | PatternKind::LiteralTrue
             | PatternKind::LiteralInt(..)
@@ -1852,6 +1853,7 @@ impl NameResolver {
             | PatternKind::LiteralFloat(..)
             | PatternKind::LiteralCharacter(..)
             | PatternKind::LiteralString(..) => (),
+            PatternKind::MacroCall { .. } => (),
         }
     }
 
@@ -1943,6 +1945,7 @@ impl NameResolver {
             | PatternKind::LiteralTrue
             | PatternKind::LiteralFalse => (),
             PatternKind::Wildcard => (),
+            PatternKind::MacroCall { .. } => (),
             PatternKind::Struct {
                 struct_name,
                 fields,

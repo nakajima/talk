@@ -347,6 +347,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     ) -> PatternRefinement {
         match &pattern.kind {
             PatternKind::Wildcard => PatternRefinement::default(),
+            PatternKind::MacroCall { .. } => PatternRefinement::default(),
             PatternKind::Bind(name) => {
                 if let Ok(symbol) = name.symbol() {
                     // Or-pattern alternatives share their binder symbols

@@ -69,6 +69,13 @@ while fixing several type-checker and lexer correctness bugs.
   site. A spliced parameter may now appear more than once; each splice
   re-evaluates the argument, and ordinary effect and ownership checking is
   the final authority on the expansion.
+- **Macro invocations in declaration, pattern, and type positions.**
+  `@name(...)` is now accepted wherever items, members, patterns, or type
+  annotations appear. Declaration expansions splice their items where the
+  invocation stood — a caller-provided `$name` in binder position exposes a
+  generated declaration — and nominal bodies expand with member grammar, so
+  generated functions become methods. Multi-token expression arguments are
+  spliced inside synthetic grouping parentheses, preserving precedence.
 
 - **Payload-free enums are `Copy`.** Enums whose cases have no payloads are
   treated as bare runtime tags. Borrowed values of these enums can flow into

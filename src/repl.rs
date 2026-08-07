@@ -76,6 +76,29 @@ impl ReplSession {
             };
         }
 
+        if repl_input.is_macro_invocation_item() {
+            // An item-position macro invocation may expand to declarations,
+            // statements, or both; persist it whenever its expansion is
+            // usable, and treat a declaration-only expansion as success.
+            let result = Self::run(None, &source);
+            let declarative_only = matches!(
+                &result,
+                ReplEvalResult::Error(message) if message.contains("nothing to run")
+            );
+            if declarative_only || matches!(result, ReplEvalResult::Output { .. }) {
+                self.persist(input);
+            }
+            return if declarative_only {
+                ReplEvalResult::Output {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    value: None,
+                }
+            } else {
+                result
+            };
+        }
+
         let result = Self::run(None, &source);
         // The session is source-backed, so replay every successful input
         // with later evaluations. This rebuilds mutable top-level values
@@ -402,6 +425,16 @@ impl<'a> ReplInput<'a> {
         }
     }
 
+    fn is_macro_invocation_item(&self) -> bool {
+        let Ok((tokens, _)) = crate::compiling::frontend::lex(self.source) else {
+            return false;
+        };
+        tokens
+            .iter()
+            .find(|token| !matches!(token.kind, TokenKind::Newline | TokenKind::Semicolon))
+            .is_some_and(|token| token.kind == TokenKind::Attribute)
+    }
+
     fn is_declaration(&self) -> bool {
         // The frontend's lexing surface (ADR 0043 Stage 5).
         let Ok((tokens, _)) = crate::compiling::frontend::lex(self.source) else {
@@ -461,6 +494,25 @@ mod tests {
                 stdout: String::new(),
                 stderr: String::new(),
                 value: Some("2".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn macro_definitions_and_item_invocations_persist() {
+        let mut session = session();
+        session.eval("macro double($x) { $x + $x }");
+        session.eval("macro greet($name) { func $name() -> Int { 7 } }");
+        assert!(matches!(
+            session.eval("@greet(seven)"),
+            ReplEvalResult::Output { value: None, .. }
+        ));
+        assert_eq!(
+            session.eval("@double(seven())"),
+            ReplEvalResult::Output {
+                stdout: String::new(),
+                stderr: String::new(),
+                value: Some("14".to_string()),
             }
         );
     }
