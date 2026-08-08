@@ -5955,7 +5955,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         self.locals.insert(*symbol, handle);
                         self.name_local(handle, bind_name);
                         self.cell_handles.insert(handle);
-                        let closure = self.compile_closure(func, &rhs.ty)?;
+                        let closure = self.compile_closure(func)?;
                         self.push(Inst::CellSet {
                             cell: Operand::Local(handle),
                             src: closure,

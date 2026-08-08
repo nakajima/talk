@@ -3812,10 +3812,28 @@ fn run_function_values_use_ambient_handlers_at_invocation() {
 }
 
 #[test]
+fn run_named_entry_without_globals_reaches_the_host_fallback() {
+    assert_runs(
+        b"pub func go() -> () {\n\t'async()\n\tprint(7)\n}\n",
+        &["--entry", "go"],
+        b"7\n",
+    );
+}
+
+#[test]
+fn run_implicit_main_without_globals_reaches_the_host_fallback() {
+    assert_runs(
+        b"func main() -> () {\n\t'async()\n\tprint(7)\n}\n",
+        &[],
+        b"7\n",
+    );
+}
+
+#[test]
 fn run_module_initialization_may_perform_ambient_effects() {
-    // Fallbacks install before module initialization (ADR 0039 §3), so a
-    // top-level binding's initializer can perform an ambient effect —
-    // under a named entry too, where lets still initialize first.
+    // Fallbacks install before module initialization (ADR 0039 section 3), so a
+    // top-level binding's initializer can perform an ambient effect under a
+    // named entry too, where lets still initialize first.
     assert_runs(
         b"func f() -> Int {\n\t'async()\n\t3\n}\nlet ready = f()\npub func go() -> () {\n\tprint(ready)\n}\n",
         &["--entry", "go"],

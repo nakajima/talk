@@ -5,7 +5,8 @@ use std::{
 };
 
 use rustyline::{
-    CompletionType, Config, EditMode, Editor, Helper,
+    Cmd, CompletionType, ConditionalEventHandler, Config, EditMode, Editor, Event, EventContext,
+    EventHandler, Helper, KeyCode, KeyEvent, Modifiers, RepeatCount,
     completion::{Completer, Pair},
     error::ReadlineError,
     highlight::{CmdKind, Highlighter},
@@ -65,6 +66,10 @@ impl Repl {
         let mut editor = Editor::<ReplHelper, DefaultHistory>::with_config(config)
             .map_err(readline_to_io_error)?;
         editor.set_helper(Some(ReplHelper::new(&self.session, use_color)));
+        editor.bind_sequence(
+            KeyEvent(KeyCode::Enter, Modifiers::NONE),
+            EventHandler::Conditional(Box::new(ReplEnterHandler)),
+        );
         let history_path = history_path();
         if let Some(path) = &history_path {
             let _ = editor.load_history(path);
@@ -267,6 +272,57 @@ impl Repl {
         }
 
         Ok(())
+    }
+}
+
+struct ReplEnterHandler;
+
+impl ReplEnterHandler {
+    fn indentation_after(source: &str, pos: usize) -> Option<String> {
+        if pos > source.len() || !source.is_char_boundary(pos) {
+            return None;
+        }
+
+        use crate::parsing::lexing::token_kind::TokenKind;
+
+        let (tokens, _) = crate::compiling::frontend::lex(&source[..pos]).ok()?;
+        let mut closers = Vec::new();
+        for token in tokens {
+            let closer = match token.kind {
+                TokenKind::LeftBrace => Some(TokenKind::RightBrace),
+                TokenKind::LeftParen => Some(TokenKind::RightParen),
+                TokenKind::LeftBracket => Some(TokenKind::RightBracket),
+                TokenKind::RightBrace | TokenKind::RightParen | TokenKind::RightBracket => {
+                    if closers.pop() != Some(token.kind) {
+                        return None;
+                    }
+                    None
+                }
+                _ => None,
+            };
+            if let Some(closer) = closer {
+                closers.push(closer);
+            }
+        }
+
+        Some("\t".repeat(closers.len()))
+    }
+}
+
+impl ConditionalEventHandler for ReplEnterHandler {
+    fn handle(
+        &self,
+        _event: &Event,
+        _repeat: RepeatCount,
+        _positive: bool,
+        ctx: &EventContext<'_>,
+    ) -> Option<Cmd> {
+        let indentation = Self::indentation_after(ctx.line(), ctx.pos())?;
+        if indentation.is_empty() || !crate::repl::needs_more_input(ctx.line()) {
+            return None;
+        }
+
+        Some(Cmd::Insert(1, format!("\n{indentation}")))
     }
 }
 
@@ -575,6 +631,41 @@ mod tests {
 
     fn session() -> ReplSession {
         ReplSession::with_source_path(PathBuf::from("repl.tlk"))
+    }
+
+    #[test]
+    fn enter_indentation_follows_unclosed_delimiters() {
+        assert_eq!(
+            ReplEnterHandler::indentation_after("func foo() {", "func foo() {".len()),
+            Some("\t".to_string())
+        );
+
+        let nested = "func foo() {\n\tif true {";
+        assert_eq!(
+            ReplEnterHandler::indentation_after(nested, nested.len()),
+            Some("\t\t".to_string())
+        );
+
+        let balanced_inner = "func foo() {\n\tfoo(values: [1, 2])";
+        assert_eq!(
+            ReplEnterHandler::indentation_after(balanced_inner, balanced_inner.len()),
+            Some("\t".to_string())
+        );
+    }
+
+    #[test]
+    fn enter_indentation_ignores_delimiters_in_strings_and_comments() {
+        let string = "func foo() {\n\tlet brace = \"{\"";
+        assert_eq!(
+            ReplEnterHandler::indentation_after(string, string.len()),
+            Some("\t".to_string())
+        );
+
+        let comment = "func foo() {\n\t// {";
+        assert_eq!(
+            ReplEnterHandler::indentation_after(comment, comment.len()),
+            Some("\t".to_string())
+        );
     }
 
     #[test]

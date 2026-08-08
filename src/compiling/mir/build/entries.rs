@@ -104,7 +104,8 @@ impl<'a> ProgramBuilder<'a> {
                     Span::SYNTHESIZED,
                 )
             })?;
-            return self.demand(main, Vec::new(), Span::SYNTHESIZED);
+            let entry = self.demand(main, Vec::new(), Span::SYNTHESIZED)?;
+            return self.wrap_with_teardown(entry, None);
         }
 
         // Register the global slots first: later statements (and clause
@@ -375,14 +376,14 @@ impl<'a> ProgramBuilder<'a> {
         Ok(outer)
     }
 
-    /// A named entry still initializes the program's top-level bindings
-    /// (in declaration order) into their slots and tears them down around
-    /// the call — the same LINK-02 discipline scripts get.
+    /// A named entry always runs inside the host and teardown wrapper.
+    /// Its top-level bindings, when present, initialize first in declaration
+    /// order - the same LINK-02 discipline scripts get.
     pub(super) fn build_named_entry(&mut self, name: &str) -> Result<FuncId, BackendError> {
         let symbol = self.named_entry(name, true)?;
         let entry = self.demand(symbol, Vec::new(), Span::SYNTHESIZED)?;
         let Some(globals_init) = self.build_globals_init()? else {
-            return Ok(entry);
+            return self.wrap_with_teardown(entry, None);
         };
         let id = self.reserve("entry_init");
         let mut fx = FunctionBuilder::new(self, 0, 0);
