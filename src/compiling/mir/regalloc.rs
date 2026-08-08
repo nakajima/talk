@@ -22,7 +22,8 @@ use rustc_hash::FxHashMap;
 
 use super::build::layout::{Layout, LayoutId, local_layouts};
 use super::build::{
-    BlockData, Function, Inst, LocalId, Operand, Slot, Term, visit_inst, visit_term,
+    BlockData, DebugOrigin, Function, GeneratedMir, Inst, LocalId, Operand, Slot, Term, visit_inst,
+    visit_term,
 };
 
 /// A block's successors in the flow graph, unwind cleanup entries
@@ -576,6 +577,19 @@ pub(crate) fn reuse_locals(
         }
         for inst in &mut block.insts {
             visit_inst(inst, &mut |_, local| *local = map[usize::from(*local)]);
+        }
+        if let Some(debug) = &mut block.debug {
+            for origin in &mut debug.origins {
+                match origin {
+                    DebugOrigin::Generated(
+                        GeneratedMir::Cleanup { local, .. }
+                        | GeneratedMir::ClosureCapture { local, .. }
+                        | GeneratedMir::ClosureWitness { local, .. }
+                        | GeneratedMir::HandlerDelimiter { local, .. },
+                    ) => *local = map[usize::from(*local)],
+                    _ => {}
+                }
+            }
         }
         if let Some(term) = &mut block.term {
             visit_term(term, &mut |_, local| *local = map[usize::from(*local)]);

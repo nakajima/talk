@@ -81,8 +81,9 @@ pub mod tests {
     /// with their source names via the symbol-name context.
     pub fn ty_of(driver: &Driver<Typed>, name: &str) -> String {
         let resolved = &driver.phase.program.resolved_names();
-        let _names =
-            crate::name_resolution::symbol::set_symbol_names(resolved.symbol_names.clone());
+        let _names = crate::name_resolution::symbol::set_symbol_names(
+            driver.phase.program.types().display_names.clone(),
+        );
         let mut candidates: Vec<_> = resolved
             .symbol_names
             .iter()
@@ -1966,7 +1967,7 @@ pub mod tests {
             "// no-core\nfunc identity(x) { x }\nlet a = identity(123)\nlet b = identity(1.5)",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "identity"), "<T0>(&T0) -> &T0");
+        assert_eq!(ty_of(&t, "identity"), "<X>(&X) -> &X");
         assert_eq!(ty_of(&t, "a"), "Int");
         assert_eq!(ty_of(&t, "b"), "Float");
     }
@@ -2034,7 +2035,7 @@ pub mod tests {
         // happens after.
         let t = check("// no-core\nfunc f(n) { f(n) }");
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "f"), "<T0, T1>(&T0) -> T1");
+        assert_eq!(ty_of(&t, "f"), "<N, T>(&N) -> T");
     }
 
     #[test]
@@ -2045,7 +2046,7 @@ pub mod tests {
         assert_clean(&t);
         // The function-typed param is itself borrowed (calling through the
         // borrow is a read), matching `func apply<T>(f: () -> T)`.
-        assert_eq!(ty_of(&t, "apply"), "<T0>(&() -> T0) -> T0");
+        assert_eq!(ty_of(&t, "apply"), "<T>(&() -> T) -> T");
     }
 
     #[test]
@@ -2062,7 +2063,7 @@ pub mod tests {
     fn return_statements_unify_with_return_type() {
         let t = check("// no-core\nfunc f(x) {\n\tif true { return x }\n\treturn x\n}");
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "f"), "<T0>(&T0) -> &T0");
+        assert_eq!(ty_of(&t, "f"), "<X>(&X) -> &X");
     }
 
     #[test]
@@ -2334,7 +2335,7 @@ pub mod tests {
             "// no-core\nprotocol Foo {\n\tfunc foo() -> Int\n}\nstruct Thing {}\nextend Thing: Foo {\n\tfunc foo() { 123 }\n}\nfunc fizz<T: Foo>(t: T) { t.foo() }\nlet r = fizz(t: Thing())",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "fizz"), "<T0: Foo>(&T0) -> Int");
+        assert_eq!(ty_of(&t, "fizz"), "<T: Foo>(&T) -> Int");
         assert_eq!(ty_of(&t, "r"), "Int");
     }
 
@@ -2428,7 +2429,7 @@ pub mod tests {
             "// no-core\nprotocol Show {\n\tfunc show() -> Int\n}\nfunc showit(x) { x.show() }",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "showit"), "<T0: Show>(&T0) -> Int");
+        assert_eq!(ty_of(&t, "showit"), "<X: Show>(&X) -> Int");
     }
 
     #[test]
@@ -2441,7 +2442,7 @@ pub mod tests {
             "// no-core\nstruct Box {\n\tlet val: Int\n}\nfunc get(b) { b.val }\nlet r = get(Box(val: 3))",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "get"), "<T0, T1>(&T0) -> T1 where &T0.val: T1");
+        assert_eq!(ty_of(&t, "get"), "<B, T>(&B) -> T where &B.val: T");
         assert_eq!(ty_of(&t, "r"), "Int");
     }
 
@@ -2454,7 +2455,7 @@ pub mod tests {
             "// no-core\nprotocol A {\n\tfunc m() -> Int\n}\nprotocol B {\n\tfunc m() -> Int\n}\nfunc f(x) { x.m() }\nextend Int: A {\n\tfunc m() -> Int { 1 }\n}\nlet r = f(2)",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "f"), "<T0, T1>(&T0) -> T1 where &T0.m: () -> T1");
+        assert_eq!(ty_of(&t, "f"), "<X, T>(&X) -> T where &X.m: () -> T");
         assert_eq!(ty_of(&t, "r"), "Int");
     }
 
@@ -2526,7 +2527,7 @@ pub mod tests {
         // `T0`. Both discharge at Int, where the borrow erases.
         assert_eq!(
             ty_of(&t, "fib"),
-            "<T0: Add<T0> & Comparable<Int> & Subtract<Int>>(&T0) -> &T0 where &T0 == T0.Ret && T0 == T0.Ret"
+            "<T: Add<T> & Comparable<Int> & Subtract<Int>>(&T) -> &T where &T == T.Ret && T == T.Ret"
         );
     }
 
@@ -2981,8 +2982,8 @@ pub mod tests {
         assert_clean(&inferred);
         let annotated = check("// no-core\nfunc idg<T>(x: T) { x }");
         assert_clean(&annotated);
-        assert_eq!(ty_of(&inferred, "id"), "<T0>(&T0) -> &T0");
-        assert_eq!(ty_of(&annotated, "idg"), "<T0>(&T0) -> &T0");
+        assert_eq!(ty_of(&inferred, "id"), "<X>(&X) -> &X");
+        assert_eq!(ty_of(&annotated, "idg"), "<T>(&T) -> &T");
     }
 
     #[test]
@@ -2993,7 +2994,7 @@ pub mod tests {
             "// no-core\nstruct S {}\nfunc eat(consume x) -> Int {\n\t0\n}\nlet s = S()\nlet n = eat(s)",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "eat"), "<T0>(T0) -> Int");
+        assert_eq!(ty_of(&t, "eat"), "<X>(X) -> Int");
     }
 
     #[test]
@@ -3643,7 +3644,7 @@ pub mod tests {
         assert_clean(&t);
         let f = ty_of(&t, "f");
         assert!(
-            f.contains("'state<Bool>") && f.contains("'state<Int>"),
+            f.contains("state<Bool>") && f.contains("state<Int>"),
             "both instantiations ride the row: {f}"
         );
     }
@@ -4373,7 +4374,7 @@ pub mod tests {
             .find_map(|(symbol, name)| (name == "impossible").then_some(*symbol))
             .expect("impossible symbol");
         let _names = crate::name_resolution::symbol::set_symbol_names(types.display_names.clone());
-        assert_eq!(types.schemes[&impossible].render(), "() -> Int ! <'panic>");
+        assert_eq!(types.schemes[&impossible].render(), "() 'panic -> Int");
     }
 
     #[test]
@@ -4405,7 +4406,7 @@ pub mod tests {
     fn unhandled_effects_grow_the_latent_row() {
         let t = check("// no-core\neffect 'oops(e) -> Never\nfunc risky() {\n\t'oops(1)\n\t2\n}");
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "risky"), "() -> Int ! <'oops>");
+        assert_eq!(ty_of(&t, "risky"), "() 'oops -> Int");
     }
 
     #[test]
@@ -4492,7 +4493,7 @@ pub mod tests {
             "// no-core\nprotocol Defaulted {\n\tassociated D\n\tfunc make() -> D\n}\nextend Int: Defaulted {\n\tfunc make() -> Bool { true }\n}\nfunc mk<T: Defaulted>(t: T) { t.make() }\nlet v = mk(t: 123)",
         );
         assert_clean(&t);
-        assert_eq!(ty_of(&t, "mk"), "<T0: Defaulted>(&T0) -> T0.D");
+        assert_eq!(ty_of(&t, "mk"), "<T: Defaulted>(&T) -> T.D");
         assert_eq!(ty_of(&t, "v"), "Bool");
     }
 
@@ -4837,7 +4838,7 @@ pub mod tests {
         assert_clean(&t);
         assert_eq!(
             ty_of(&t, "collect"),
-            "<T0: Iterator>(T0) -> Sink<Int> where Int == T0.Element"
+            "<T: Iterator>(T) -> Sink<Int> where Int == T.Element"
         );
     }
 
@@ -5109,11 +5110,11 @@ pub mod tests {
         );
         assert_eq!(
             info.variants["pair"].constructor_scheme.render(),
-            "<T0, T1>(Expr<T0>, Expr<T1>) -> Expr<(T0, T1)>"
+            "<A, B>(Expr<A>, Expr<B>) -> Expr<(A, B)>"
         );
         assert_eq!(
             info.variants["boxed"].constructor_scheme.render(),
-            "<T0: P>(T0) -> Expr<T0>"
+            "<A: P>(A) -> Expr<A>"
         );
     }
 
@@ -6365,6 +6366,27 @@ mod with_core {
     }
 
     #[test]
+    fn callback_arity_failure_does_not_cascade_into_generic_conformance() {
+        let t = check_with_core(Source::from(
+            "effect 'throw<T: Showable>(val: T) -> T\nfunc rescue<T: Showable>(fn: () 'throw -> T) -> T {\n\t#handle 'throw { val in\n\t\tprint(val)\n\t\t'continue val\n\t}\n\tfn()\n}\nrescue { val in\n\t'throw(\"oh no\")\n}",
+        ));
+        let errors = type_errors(&t);
+        assert_eq!(errors.len(), 2, "unexpected diagnostic cascade: {errors:?}");
+        assert!(
+            errors.iter().any(|error| error.contains(
+                "Callback expects 0 parameters, but the supplied function declares 1 parameter"
+            )),
+            "missing callback arity diagnostic: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Missing argument label 'val'")),
+            "missing effect-label diagnostic: {errors:?}"
+        );
+    }
+
+    #[test]
     fn aborting_handler_body_must_match_the_scope_value_type() {
         // A handler that completes without `continue` aborts the handled
         // scope with its value: an Int-valued handler over a ()-valued
@@ -6374,8 +6396,10 @@ mod with_core {
         ));
         let errors = type_errors(&t);
         assert!(
-            errors.iter().any(|e| e.to_lowercase().contains("mismatch")),
-            "expected a handler/scope type mismatch, got {errors:?}"
+            errors
+                .iter()
+                .any(|e| e.contains("Abortive handler body must produce")),
+            "expected a handler/scope result error, got {errors:?}"
         );
     }
 
@@ -6386,8 +6410,10 @@ mod with_core {
         ));
         let errors = type_errors(&t);
         assert!(
-            errors.iter().any(|e| e.to_lowercase().contains("mismatch")),
-            "expected a handler/return type mismatch, got {errors:?}"
+            errors
+                .iter()
+                .any(|e| e.contains("Abortive handler body must produce")),
+            "expected a handler/return result error, got {errors:?}"
         );
     }
 
@@ -6648,7 +6674,7 @@ struct Pair {
         super::tests::assert_clean(&t);
         assert_eq!(
             super::tests::ty_of(&t, "force"),
-            "(Outcome<Int, Bool>) -> Int ! <'panic>"
+            "(Outcome<Int, Bool>) 'panic -> Int"
         );
     }
 
@@ -6671,10 +6697,7 @@ struct Pair {
              }",
         );
         super::tests::assert_clean(&t);
-        assert_eq!(
-            super::tests::ty_of(&t, "force"),
-            "(Parser) -> Int ! <'panic>"
-        );
+        assert_eq!(super::tests::ty_of(&t, "force"), "(Parser) 'panic -> Int");
     }
 
     #[test]
@@ -8904,7 +8927,7 @@ mod rank_n_field_tests {
         assert_eq!(type_errors(&driver), Vec::<String>::new());
         assert_eq!(
             ty_of(&driver, "handlers"),
-            "{ double: <T0: Multiply<Int>, T1>(&T0) -> T1 where T0.Ret == T1, inc: <T0: Add<Int>, T1>(&T0) -> T1 where T0.Ret == T1 }"
+            "{ double: <X: Multiply<Int>, T>(&X) -> T where T == X.Ret, inc: <X: Add<Int>, T>(&X) -> T where T == X.Ret }"
         );
         assert_eq!(ty_of(&driver, "a"), "Int");
         assert_eq!(ty_of(&driver, "b"), "Int");

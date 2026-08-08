@@ -1692,16 +1692,38 @@ impl Scheme {
         }
     }
 
-    /// Render for display/tests: quantified type params are named
-    /// positionally (T0, T1, …); static value parameters (ADR 0035) render
-    /// with `static` and their declared value type; simple parameter
-    /// conformances render inline, and the remaining qualified context
-    /// renders after `where`.
+    /// Structural equality modulo quantified-parameter identities.
+    /// User-facing rendering is deliberately not part of type
+    /// identity.
+    pub fn alpha_eq(&self, other: &Scheme) -> bool {
+        AlphaEq::default().schemes(self, other)
+    }
+
+    /// Render a user-facing type description. Declared generic names are
+    /// preserved; checker-inferred parameters receive stable friendly names.
+    /// Simple parameter conformances render inline, and the remaining
+    /// qualified context renders after `where`.
     pub fn render(&self) -> String {
-        let mut names = FxHashMap::default();
-        for (i, param) in self.params.iter().enumerate() {
-            names.insert(param.symbol, format!("T{i}"));
-        }
+        self.render_with_callable(None)
+    }
+
+    /// Render a named source function with binder names and explicit ownership
+    /// modes. This is for editor descriptions; the scheme remains the semantic
+    /// authority.
+    pub fn render_callable(&self, name: &str, params: &[(String, String)]) -> String {
+        self.render_with_callable(Some((name, params)))
+    }
+
+    pub fn display_param_names(&self) -> FxHashMap<Symbol, String> {
+        let mut symbols: Vec<Symbol> = self.params.iter().map(|param| param.symbol).collect();
+        collect_display_params(&self.ty, &mut symbols);
+        friendly_param_names(symbols)
+    }
+
+    fn render_with_callable(&self, callable: Option<(&str, &[(String, String)])>) -> String {
+        let mut symbols: Vec<Symbol> = self.params.iter().map(|param| param.symbol).collect();
+        collect_display_params(&self.ty, &mut symbols);
+        let names = friendly_param_names(symbols);
 
         let mut inline_bounds: FxHashMap<Symbol, Vec<ProtocolRef>> = FxHashMap::default();
         let mut where_predicates = vec![];
@@ -1720,7 +1742,10 @@ impl Scheme {
             }
         }
 
-        let mut body = render_ty(&self.ty, &names);
+        let mut body = match callable {
+            Some((_, params)) => render_callable_body(&self.ty, params, &names),
+            None => render_ty(&self.ty, &names),
+        };
         if !where_predicates.is_empty() {
             let mut constraints: Vec<String> = where_predicates
                 .iter()
@@ -1730,41 +1755,440 @@ impl Scheme {
             constraints.dedup();
             body = format!("{body} where {}", constraints.join(" && "));
         }
-        if self.params.is_empty() {
-            body
+        let params: Vec<String> = self
+            .params
+            .iter()
+            .map(|param| {
+                let name = &names[&param.symbol];
+                if let ParamKind::Static(value_ty) = &param.kind {
+                    return format!("static {name}: {}", render_ty(value_ty, &names));
+                }
+                match inline_bounds.get(&param.symbol) {
+                    Some(bounds) if !bounds.is_empty() => {
+                        let mut bounds: Vec<String> = bounds
+                            .iter()
+                            .map(|b| render_protocol_ref(b, &names))
+                            .collect();
+                        bounds.sort();
+                        bounds.dedup();
+                        format!("{name}: {}", bounds.join(" & "))
+                    }
+                    _ => name.clone(),
+                }
+            })
+            .collect();
+        match callable {
+            Some((name, _)) if params.is_empty() => format!("func {name}{body}"),
+            Some((name, _)) => format!("func {name}<{}>{body}", params.join(", ")),
+            None if params.is_empty() => body,
+            None => format!("<{}>{body}", params.join(", ")),
+        }
+    }
+}
+
+struct DisplayParamCollector<'a> {
+    symbols: &'a mut Vec<Symbol>,
+}
+
+impl DisplayParamCollector<'_> {
+    fn push(&mut self, symbol: Symbol) {
+        if !self.symbols.contains(&symbol) {
+            self.symbols.push(symbol);
+        }
+    }
+}
+
+impl TyFold for DisplayParamCollector<'_> {
+    fn fold_param(&mut self, symbol: Symbol) -> Ty {
+        self.push(symbol);
+        Ty::Param(symbol)
+    }
+
+    fn fold_perm(&mut self, perm: Perm) -> Perm {
+        if let Perm::Param(symbol) = perm {
+            self.push(symbol);
+        }
+        perm
+    }
+
+    fn fold_eff_tail(&mut self, tail: &Option<EffTail>) -> Option<EffTail> {
+        if let Some(EffTail::Param(symbol)) = tail {
+            self.push(*symbol);
+        }
+        tail.clone()
+    }
+
+    fn fold_row_tail(&mut self, tail: &Option<RowTail>) -> Option<RowTail> {
+        if let Some(RowTail::Param(symbol)) = tail {
+            self.push(*symbol);
+        }
+        tail.clone()
+    }
+}
+
+fn collect_display_params(ty: &Ty, symbols: &mut Vec<Symbol>) {
+    let _ = DisplayParamCollector { symbols }.fold_ty(ty);
+}
+
+fn friendly_param_names(symbols: Vec<Symbol>) -> FxHashMap<Symbol, String> {
+    const FALLBACKS: &[&str] = &["T", "U", "V", "W", "X", "Y", "Z", "A", "B", "C", "D"];
+    let mut names = FxHashMap::default();
+    let mut used = rustc_hash::FxHashSet::default();
+    let mut fallback = 0usize;
+    for symbol in symbols {
+        if names.contains_key(&symbol) {
+            continue;
+        }
+        let source_name = crate::name_resolution::symbol::lookup_symbol_name(&symbol)
+            .filter(|name| !used.contains(name));
+        let name = if let Some(name) = source_name {
+            name
         } else {
-            let params: Vec<String> = self
-                .params
+            loop {
+                let candidate = FALLBACKS
+                    .get(fallback)
+                    .map(|name| (*name).to_string())
+                    .unwrap_or_else(|| format!("T{}", fallback - FALLBACKS.len() + 1));
+                fallback += 1;
+                if !used.contains(&candidate) {
+                    break candidate;
+                }
+            }
+        };
+        used.insert(name.clone());
+        names.insert(symbol, name);
+    }
+    names
+}
+
+#[derive(Clone, Default)]
+struct AlphaEq {
+    tys: FxHashMap<Symbol, Symbol>,
+    reverse_tys: FxHashMap<Symbol, Symbol>,
+    effs: FxHashMap<Symbol, Symbol>,
+    reverse_effs: FxHashMap<Symbol, Symbol>,
+    rows: FxHashMap<Symbol, Symbol>,
+    reverse_rows: FxHashMap<Symbol, Symbol>,
+    perms: FxHashMap<Symbol, Symbol>,
+    reverse_perms: FxHashMap<Symbol, Symbol>,
+}
+
+impl AlphaEq {
+    fn schemes(&self, left: &Scheme, right: &Scheme) -> bool {
+        if left.params.len() != right.params.len()
+            || left.eff_params.len() != right.eff_params.len()
+            || left.row_params.len() != right.row_params.len()
+            || left.perm_params.len() != right.perm_params.len()
+            || left.predicates.len() != right.predicates.len()
+        {
+            return false;
+        }
+        let mut nested = self.clone();
+        for (left, right) in left.params.iter().zip(&right.params) {
+            nested.tys.insert(left.symbol, right.symbol);
+            nested.reverse_tys.insert(right.symbol, left.symbol);
+        }
+        for (&left, &right) in left.eff_params.iter().zip(&right.eff_params) {
+            nested.effs.insert(left, right);
+            nested.reverse_effs.insert(right, left);
+        }
+        for (&left, &right) in left.row_params.iter().zip(&right.row_params) {
+            nested.rows.insert(left, right);
+            nested.reverse_rows.insert(right, left);
+        }
+        for (&left, &right) in left.perm_params.iter().zip(&right.perm_params) {
+            nested.perms.insert(left, right);
+            nested.reverse_perms.insert(right, left);
+        }
+        if !left.params.iter().zip(&right.params).all(|(left, right)| {
+            nested.param_kinds(&left.kind, &right.kind)
+                && nested.optional_tys(left.default.as_ref(), right.default.as_ref())
+        }) || !nested.tys(&left.ty, &right.ty)
+        {
+            return false;
+        }
+        let mut matched = vec![false; right.predicates.len()];
+        left.predicates.iter().all(|left| {
+            right
+                .predicates
                 .iter()
                 .enumerate()
-                .map(|(i, param)| {
-                    if let ParamKind::Static(value_ty) = &param.kind {
-                        return format!("static T{i}: {}", render_ty(value_ty, &names));
+                .find(|(index, right)| !matched[*index] && nested.predicates(left, right))
+                .map(|(index, _)| matched[index] = true)
+                .is_some()
+        })
+    }
+
+    fn param_kinds(&self, left: &ParamKind, right: &ParamKind) -> bool {
+        match (left, right) {
+            (ParamKind::Type, ParamKind::Type) => true,
+            (ParamKind::Static(left), ParamKind::Static(right)) => self.tys(left, right),
+            _ => false,
+        }
+    }
+
+    fn optional_tys(&self, left: Option<&Ty>, right: Option<&Ty>) -> bool {
+        match (left, right) {
+            (Some(left), Some(right)) => self.tys(left, right),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
+    fn params(&self, left: Symbol, right: Symbol) -> bool {
+        match (self.tys.get(&left), self.reverse_tys.get(&right)) {
+            (Some(mapped), _) => *mapped == right,
+            (None, Some(_)) => false,
+            (None, None) => left == right,
+        }
+    }
+
+    fn perms(&self, left: Perm, right: Perm) -> bool {
+        match (left, right) {
+            (Perm::Param(left), Perm::Param(right)) => {
+                match (self.perms.get(&left), self.reverse_perms.get(&right)) {
+                    (Some(mapped), _) => *mapped == right,
+                    (None, Some(_)) => false,
+                    (None, None) => left == right,
+                }
+            }
+            (Perm::Var(_), Perm::Var(_)) => true,
+            _ => left == right,
+        }
+    }
+
+    fn tys(&self, left: &Ty, right: &Ty) -> bool {
+        match (left, right) {
+            (Ty::Var(_), Ty::Var(_)) => true,
+            (Ty::Param(left), Ty::Param(right)) => self.params(*left, *right),
+            (Ty::Nominal(left_head, left_args), Ty::Nominal(right_head, right_args)) => {
+                left_head == right_head && self.ty_slices(left_args, right_args)
+            }
+            (Ty::Borrow(left_perm, left), Ty::Borrow(right_perm, right)) => {
+                self.perms(*left_perm, *right_perm) && self.tys(left, right)
+            }
+            (Ty::Unique(left), Ty::Unique(right)) => self.tys(left, right),
+            (
+                Ty::Func(left_params, left_ret, left_eff),
+                Ty::Func(right_params, right_ret, right_eff),
+            ) => {
+                self.ty_slices(left_params, right_params)
+                    && self.tys(left_ret, right_ret)
+                    && self.effects(left_eff, right_eff)
+            }
+            (Ty::Tuple(left), Ty::Tuple(right)) => self.ty_slices(left, right),
+            (Ty::Record(left), Ty::Record(right)) => self.records(left, right),
+            (Ty::Forall(left), Ty::Forall(right)) => self.schemes(left, right),
+            (
+                Ty::Any {
+                    protocol: left_protocol,
+                    assoc: left_assoc,
+                },
+                Ty::Any {
+                    protocol: right_protocol,
+                    assoc: right_assoc,
+                },
+            ) => {
+                self.protocols(left_protocol, right_protocol)
+                    && left_assoc.len() == right_assoc.len()
+                    && left_assoc.iter().zip(right_assoc).all(
+                        |((left_symbol, left_ty), (right_symbol, right_ty))| {
+                            left_symbol == right_symbol && self.tys(left_ty, right_ty)
+                        },
+                    )
+            }
+            (
+                Ty::Proj(left, left_protocol, left_assoc),
+                Ty::Proj(right, right_protocol, right_assoc),
+            ) => {
+                left_assoc == right_assoc
+                    && self.tys(left, right)
+                    && self.protocols(left_protocol, right_protocol)
+            }
+            (Ty::Eff(left), Ty::Eff(right)) => self.effects(left, right),
+            (Ty::Static(left), Ty::Static(right)) => {
+                let tys = self
+                    .tys
+                    .iter()
+                    .map(|(left, right)| (*left, Ty::Param(*right)))
+                    .collect();
+                let effs = self
+                    .effs
+                    .iter()
+                    .map(|(left, right)| (*left, EffTail::Param(*right)))
+                    .collect();
+                let rows = self
+                    .rows
+                    .iter()
+                    .map(|(left, right)| (*left, RowTail::Param(*right)))
+                    .collect();
+                Ty::Static(left.clone()).substitute(&tys, &effs, &rows) == Ty::Static(right.clone())
+            }
+            (Ty::Error, Ty::Error) => true,
+            _ => false,
+        }
+    }
+
+    fn ty_slices(&self, left: &[Ty], right: &[Ty]) -> bool {
+        left.len() == right.len()
+            && left
+                .iter()
+                .zip(right)
+                .all(|(left, right)| self.tys(left, right))
+    }
+
+    fn protocols(&self, left: &ProtocolRef, right: &ProtocolRef) -> bool {
+        left.protocol == right.protocol && self.ty_slices(&left.args, &right.args)
+    }
+
+    fn records(&self, left: &Row, right: &Row) -> bool {
+        left.fields.len() == right.fields.len()
+            && left.fields.iter().zip(&right.fields).all(
+                |((left_label, left_ty), (right_label, right_ty))| {
+                    left_label == right_label && self.tys(left_ty, right_ty)
+                },
+            )
+            && match (&left.tail, &right.tail) {
+                (Some(RowTail::Var(_)), Some(RowTail::Var(_))) => true,
+                (Some(RowTail::Param(left)), Some(RowTail::Param(right))) => {
+                    match (self.rows.get(left), self.reverse_rows.get(right)) {
+                        (Some(mapped), _) => mapped == right,
+                        (None, Some(_)) => false,
+                        (None, None) => left == right,
                     }
-                    match inline_bounds.get(&param.symbol) {
-                        Some(bounds) if !bounds.is_empty() => {
-                            let mut bounds: Vec<String> = bounds
-                                .iter()
-                                .map(|b| render_protocol_ref(b, &names))
-                                .collect();
-                            bounds.sort();
-                            bounds.dedup();
-                            format!("T{i}: {}", bounds.join(" & "))
-                        }
-                        _ => format!("T{i}"),
-                    }
+                }
+                (None, None) => true,
+                _ => false,
+            }
+    }
+
+    fn effects(&self, left: &EffectRow, right: &EffectRow) -> bool {
+        left.effects.len() == right.effects.len()
+            && left
+                .effects
+                .iter()
+                .zip(&right.effects)
+                .all(|(left, right)| {
+                    left.effect == right.effect && self.ty_slices(&left.args, &right.args)
                 })
-                .collect();
-            format!("<{}>{}", params.join(", "), body)
+            && match (&left.tail, &right.tail) {
+                (Some(EffTail::Var(_)), Some(EffTail::Var(_))) => true,
+                (Some(EffTail::Param(left)), Some(EffTail::Param(right))) => {
+                    match (self.effs.get(left), self.reverse_effs.get(right)) {
+                        (Some(mapped), _) => mapped == right,
+                        (None, Some(_)) => false,
+                        (None, None) => left == right,
+                    }
+                }
+                (None, None) => true,
+                _ => false,
+            }
+    }
+
+    fn predicates(&self, left: &Predicate, right: &Predicate) -> bool {
+        match (left, right) {
+            (Predicate::TypeEq(left_a, left_b), Predicate::TypeEq(right_a, right_b)) => {
+                (self.tys(left_a, right_a) && self.tys(left_b, right_b))
+                    || (self.tys(left_a, right_b) && self.tys(left_b, right_a))
+            }
+            (Predicate::EffectEq(left_a, left_b), Predicate::EffectEq(right_a, right_b)) => {
+                self.effects(left_a, right_a) && self.effects(left_b, right_b)
+            }
+            (Predicate::RowEq(left_a, left_b), Predicate::RowEq(right_a, right_b)) => {
+                self.records(left_a, right_a) && self.records(left_b, right_b)
+            }
+            (
+                Predicate::Conforms {
+                    ty: left_ty,
+                    protocol: left_protocol,
+                },
+                Predicate::Conforms {
+                    ty: right_ty,
+                    protocol: right_protocol,
+                },
+            ) => self.tys(left_ty, right_ty) && self.protocols(left_protocol, right_protocol),
+            (
+                Predicate::HasMember {
+                    receiver: left_receiver,
+                    label: left_label,
+                    member: left_member,
+                },
+                Predicate::HasMember {
+                    receiver: right_receiver,
+                    label: right_label,
+                    member: right_member,
+                },
+            ) => {
+                left_label == right_label
+                    && self.tys(left_receiver, right_receiver)
+                    && self.tys(left_member, right_member)
+            }
+            (
+                Predicate::StaticCmp {
+                    op: left_op,
+                    lhs: left_lhs,
+                    rhs: left_rhs,
+                },
+                Predicate::StaticCmp {
+                    op: right_op,
+                    lhs: right_lhs,
+                    rhs: right_rhs,
+                },
+            ) => {
+                left_op == right_op
+                    && self.tys(left_lhs, right_lhs)
+                    && self.tys(left_rhs, right_rhs)
+            }
+            _ => false,
         }
     }
 }
 
 impl Ty {
-    /// Render a type with no quantified-parameter naming context.
+    /// Render a type outside a scheme. Free rigid parameters are alpha-named
+    /// instead of exposing their compiler identities.
     pub fn render_mono(&self) -> String {
-        render_ty(self, &FxHashMap::default())
+        let mut symbols = vec![];
+        collect_display_params(self, &mut symbols);
+        render_ty(self, &friendly_param_names(symbols))
     }
+}
+
+fn render_callable_body(
+    ty: &Ty,
+    params: &[(String, String)],
+    param_names: &FxHashMap<Symbol, String>,
+) -> String {
+    let Ty::Func(types, ret, eff) = ty else {
+        return format!(": {}", render_ty(ty, param_names));
+    };
+    let rendered: Vec<String> = types
+        .iter()
+        .enumerate()
+        .map(|(index, ty)| {
+            let (name, mode) = params
+                .get(index)
+                .cloned()
+                .unwrap_or_else(|| (format!("arg{index}"), String::new()));
+            let annotation = match (mode.as_str(), ty) {
+                ("borrow", Ty::Borrow(_, inner)) | ("mut", Ty::Borrow(_, inner)) => {
+                    render_ty(inner, param_names)
+                }
+                _ => render_ty(ty, param_names),
+            };
+            if mode.is_empty() {
+                format!("{name}: {annotation}")
+            } else {
+                format!("{mode} {name}: {annotation}")
+            }
+        })
+        .collect();
+    format!(
+        "({}){} -> {}",
+        rendered.join(", "),
+        render_effect_row(eff, param_names),
+        render_ty(ret, param_names)
+    )
 }
 
 pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> String {
@@ -1774,7 +2198,8 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
         Ty::Param(sym) => param_names
             .get(sym)
             .cloned()
-            .unwrap_or_else(|| format!("{sym}")),
+            .or_else(|| crate::name_resolution::symbol::lookup_symbol_name(sym))
+            .unwrap_or_else(|| "_".to_string()),
         Ty::Nominal(sym, args) => {
             if *sym == Symbol::InlineArray
                 && let [element, count] = args.as_slice()
@@ -1786,10 +2211,17 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
                 );
             }
             let head = render_nominal_head(sym);
-            if args.is_empty() {
+            let visible_args: Vec<&Ty> = args
+                .iter()
+                .filter(|arg| !matches!(arg, Ty::Eff(_)))
+                .collect();
+            if visible_args.is_empty() {
                 head
             } else {
-                let args: Vec<String> = args.iter().map(|a| render_ty(a, param_names)).collect();
+                let args: Vec<String> = visible_args
+                    .iter()
+                    .map(|a| render_ty(a, param_names))
+                    .collect();
                 format!("{head}<{}>", args.join(", "))
             }
         }
@@ -1803,12 +2235,12 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
         Ty::Unique(inner) => format!("*{}", render_ty(inner, param_names)),
         Ty::Func(params, ret, eff) => {
             let params: Vec<String> = params.iter().map(|p| render_ty(p, param_names)).collect();
-            let eff = render_effect_row(eff);
+            let eff = render_effect_row(eff, param_names);
             format!(
-                "({}) -> {}{}",
+                "({}){} -> {}",
                 params.join(", "),
-                render_ty(ret, param_names),
-                eff
+                eff,
+                render_ty(ret, param_names)
             )
         }
         Ty::Tuple(items) => {
@@ -1821,10 +2253,8 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
                 .iter()
                 .map(|(l, t)| format!("{l}: {}", render_ty(t, param_names)))
                 .collect();
-            match &row.tail {
-                Some(RowTail::Var(_)) => fields.push("..".to_string()),
-                Some(RowTail::Param(sym)) => fields.push(format!("..{sym}")),
-                None => {}
+            if row.tail.is_some() {
+                fields.push("..".to_string());
             }
             format!("{{ {} }}", fields.join(", "))
         }
@@ -1834,7 +2264,11 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
             } else {
                 let bindings: Vec<String> = assoc
                     .iter()
-                    .map(|(symbol, ty)| format!("{symbol} = {}", render_ty(ty, param_names)))
+                    .map(|(symbol, ty)| {
+                        let name = crate::name_resolution::symbol::lookup_symbol_name(symbol)
+                            .unwrap_or_else(|| "<associated type>".to_string());
+                        format!("{name} = {}", render_ty(ty, param_names))
+                    })
                     .collect();
                 format!(
                     "any {}<{}>",
@@ -1844,13 +2278,17 @@ pub(crate) fn render_ty(ty: &Ty, param_names: &FxHashMap<Symbol, String>) -> Str
             }
         }
         Ty::Proj(base, _, assoc) => {
+            let assoc = crate::name_resolution::symbol::lookup_symbol_name(assoc)
+                .unwrap_or_else(|| "<associated type>".to_string());
             format!("{}.{assoc}", render_ty(base, param_names))
         }
-        // An effect argument renders as its row (it is a row, not a type).
+        // Effect indices are hidden on nominal heads. If one is described
+        // directly, use Talk's effect-row spelling rather than an internal
+        // kinded argument notation.
         Ty::Eff(eff) => {
-            let rendered = render_effect_row(eff);
+            let rendered = render_effect_row(eff, param_names);
             if rendered.is_empty() {
-                "'{}".to_string()
+                "'[]".to_string()
             } else {
                 rendered.trim_start().to_string()
             }
@@ -1895,7 +2333,12 @@ pub(crate) fn render_static_value(
             rendered
         }
         StaticValue::Bool(value) => value.to_string(),
-        StaticValue::Case(owner, case) => format!("{owner}.{case}"),
+        StaticValue::Case(owner, case) => {
+            let owner = render_nominal_head(owner);
+            let case = crate::name_resolution::symbol::lookup_symbol_name(case)
+                .unwrap_or_else(|| "<case>".to_string());
+            format!("{owner}.{case}")
+        }
     }
 }
 
@@ -1925,8 +2368,8 @@ fn render_predicate(predicate: &Predicate, param_names: &FxHashMap<Symbol, Strin
         }
         Predicate::EffectEq(a, b) => format!(
             "{} == {}",
-            render_full_effect_row(a),
-            render_full_effect_row(b)
+            render_full_effect_row(a, param_names),
+            render_full_effect_row(b, param_names)
         ),
         Predicate::RowEq(a, b) => format!(
             "{} == {}",
@@ -1959,46 +2402,65 @@ fn render_predicate(predicate: &Predicate, param_names: &FxHashMap<Symbol, Strin
     }
 }
 
-pub(crate) fn render_entry(entry: &EffectEntry, param_names: &FxHashMap<Symbol, String>) -> String {
+fn render_effect_name(effect: &Symbol) -> String {
+    crate::name_resolution::symbol::lookup_symbol_name(effect).unwrap_or_else(|| {
+        if *effect == Symbol::Unsafe {
+            "unsafe".to_string()
+        } else {
+            "<effect>".to_string()
+        }
+    })
+}
+
+fn render_effect_entry(entry: &EffectEntry, param_names: &FxHashMap<Symbol, String>) -> String {
+    let name = render_effect_name(&entry.effect);
     if entry.args.is_empty() {
-        return format!("'{}", entry.effect);
+        return name;
     }
     let args: Vec<String> = entry
         .args
         .iter()
         .map(|ty| render_ty(ty, param_names))
         .collect();
-    format!("'{}<{}>", entry.effect, args.join(", "))
+    format!("{name}<{}>", args.join(", "))
 }
 
-fn render_full_effect_row(eff: &EffectRow) -> String {
-    let names = FxHashMap::default();
+pub(crate) fn render_entry(entry: &EffectEntry, param_names: &FxHashMap<Symbol, String>) -> String {
+    format!("'{}", render_effect_entry(entry, param_names))
+}
+
+fn render_full_effect_row(eff: &EffectRow, param_names: &FxHashMap<Symbol, String>) -> String {
     let mut labels: Vec<String> = eff
         .effects
         .iter()
-        .map(|entry| render_entry(entry, &names))
+        .map(|entry| render_effect_entry(entry, param_names))
         .collect();
-    match &eff.tail {
-        Some(EffTail::Var(_)) => labels.push("..".to_string()),
-        Some(EffTail::Param(sym)) => labels.push(format!("..{sym}")),
-        None => {}
+    if eff.tail.is_some() {
+        labels.push("..".to_string());
     }
-    format!("! <{}>", labels.join(", "))
+    match labels.as_slice() {
+        [] => "'[]".to_string(),
+        [label] if eff.tail.is_none() => format!("'{label}"),
+        _ => format!("'[{}]", labels.join(", ")),
+    }
 }
 
-/// Concrete effects render as `! <'a, 'b>`; pure rows and rows that are just
-/// an (open or quantified) tail are elided — they say nothing concrete.
-fn render_effect_row(eff: &EffectRow) -> String {
+/// Pure rows and rows that are only an open tail are elided. Concrete
+/// effects use the same position and spelling as Talk function signatures.
+fn render_effect_row(eff: &EffectRow, param_names: &FxHashMap<Symbol, String>) -> String {
     if eff.effects.is_empty() {
         return String::new();
     }
-    let names = FxHashMap::default();
     let labels: Vec<String> = eff
         .effects
         .iter()
-        .map(|entry| render_entry(entry, &names))
+        .map(|entry| render_effect_entry(entry, param_names))
         .collect();
-    format!(" ! <{}>", labels.join(", "))
+    if let [label] = labels.as_slice() {
+        format!(" '{label}")
+    } else {
+        format!(" '[{}]", labels.join(", "))
+    }
 }
 
 fn render_nominal_head(sym: &Symbol) -> String {
@@ -2025,7 +2487,8 @@ fn render_nominal_head(sym: &Symbol) -> String {
     } else if *sym == Symbol::Byte {
         "Byte".into()
     } else {
-        format!("{sym}")
+        crate::name_resolution::symbol::lookup_symbol_name(sym)
+            .unwrap_or_else(|| "<type>".to_string())
     }
 }
 
@@ -2046,6 +2509,41 @@ mod traversal_tests {
 
         assert_eq!(ty.render_mono(), "Array<_, _>");
         assert_eq!(record.render_mono(), "{ .. }");
+    }
+
+    #[test]
+    fn scheme_alpha_equality_does_not_depend_on_rendered_parameter_names() {
+        use crate::compiling::module::ModuleId;
+        use crate::name_resolution::symbol::TypeParameterId;
+
+        let left = Symbol::TypeParameter(TypeParameterId::new(ModuleId::Current, 900));
+        let right = Symbol::TypeParameter(TypeParameterId::new(ModuleId::Current, 901));
+        let effect = Symbol::Effect(crate::name_resolution::symbol::EffectId::new(
+            ModuleId::Current,
+            1,
+        ));
+        let scheme = |param| Scheme {
+            params: vec![SchemeParam::ty(param)],
+            eff_params: vec![],
+            row_params: vec![],
+            perm_params: vec![],
+            predicates: vec![],
+            ty: Ty::Func(
+                vec![Ty::Param(param)],
+                Box::new(Ty::Param(param)),
+                EffectRow::new(
+                    vec![EffectEntry {
+                        effect,
+                        args: vec![Ty::Param(param)],
+                    }],
+                    None,
+                ),
+            ),
+        };
+        assert!(scheme(left).alpha_eq(&scheme(right)));
+        let rendered = scheme(left).render();
+        assert!(!rendered.contains("TypeParameter("), "{rendered}");
+        assert!(!rendered.contains("! <"), "{rendered}");
     }
 
     #[test]

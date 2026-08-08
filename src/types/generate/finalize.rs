@@ -676,6 +676,7 @@ impl<'a> TypecheckSession<'a> {
                 node_types,
                 schemes,
                 instantiations,
+                inferred_param_origins: self.artifacts.inferred_param_origins,
                 member_resolutions,
                 selected_callables: self.artifacts.selected_callables,
                 integer_literals: self.artifacts.integer_literals,

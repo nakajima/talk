@@ -59,6 +59,10 @@ pub enum TypeError {
         expected: usize,
         found: usize,
     },
+    CallbackParameterArityMismatch {
+        expected: usize,
+        found: usize,
+    },
     GenericArgumentArityMismatch {
         target: String,
         expected: usize,
@@ -351,6 +355,7 @@ impl TypeError {
             Self::Mismatch { .. } => "type.mismatch",
             Self::ArgumentArityMismatch { .. } => "type.argument-arity-mismatch",
             Self::FunctionParameterArityMismatch { .. } => "type.function-parameter-arity-mismatch",
+            Self::CallbackParameterArityMismatch { .. } => "type.callback-parameter-arity-mismatch",
             Self::GenericArgumentArityMismatch { .. } => "type.generic-argument-arity-mismatch",
             Self::ArgumentLabelMismatch { .. } => "type.argument-label-mismatch",
             Self::DuplicateCallable { .. } => "type.duplicate-callable",
@@ -498,6 +503,10 @@ impl Display for TypeError {
                     f,
                     "Type mismatch in expression: the surrounding context requires {expected}, but this expression has type {found}"
                 ),
+                CtReason::HandlerResult => write!(
+                    f,
+                    "Abortive handler body must produce {expected}, but it produces {found}; completing a handler without 'continue becomes the result of the handled computation"
+                ),
             },
             TypeError::DuplicateCallable { name } => {
                 write!(f, "Duplicate declaration of '{name}'")
@@ -526,6 +535,22 @@ impl Display for TypeError {
                 f,
                 "Function types have different parameter counts: expected {expected}, found {found}"
             ),
+            TypeError::CallbackParameterArityMismatch { expected, found } => {
+                let expected_noun = if *expected == 1 {
+                    "parameter"
+                } else {
+                    "parameters"
+                };
+                let found_noun = if *found == 1 {
+                    "parameter"
+                } else {
+                    "parameters"
+                };
+                write!(
+                    f,
+                    "Callback expects {expected} {expected_noun}, but the supplied function declares {found} {found_noun}"
+                )
+            }
             TypeError::GenericArgumentArityMismatch {
                 target,
                 expected,

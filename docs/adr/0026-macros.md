@@ -113,13 +113,97 @@ Procedural macros do not receive inferred types. A future typed-staging feature
 may expose typed code values, but it is a separate decision and may not create a
 solve-expand-solve inference cycle.
 
-### Attached macros have roles
+### Declaration wrapper macros
 
-Attached macros are additive and declare a role such as member, peer,
-extension, or conformance generation. A role bounds both the input context and
-the declarations an expansion may emit. Where practical, an attached macro
-also declares the names it can introduce so completion, collision checking,
-and incremental compilation do not need to execute it speculatively.
+A wrapper macro is a bounded, attached declaration transform. Its source
+spelling is distinct from the freestanding `@name(...)` namespace:
+
+```tlk
+#[logged(level: "debug")]
+pub func load(id: Int) -> User {
+    // ...
+}
+```
+
+The no-argument form is `#[name]`. Arguments, when present, are captured as one
+balanced token tree rather than parsed by the ordinary expression grammar.
+The wrapper and its target form one declaration for formatting, source
+provenance, and expansion ordering. Parsed wrapper applications therefore
+belong to `Decl`, not `Func` or any other individual declaration kind; the
+target syntax includes its visibility and other declaration modifiers.
+
+Wrapper exports are tagged with a declaration-wrapper role in the versioned
+macro artifact. Ordinary package import selection and aliasing make them
+visible, while `#[name]` resolution considers only exports with that role. A
+freestanding expression macro and a wrapper may consequently use the same
+visible spelling without either invocation form becoming ambiguous.
+
+A wrapper receives its argument tokens, the target as use-site
+`Syntax<Decl>`, the target's declaration context, and the ordinary hygiene and
+expansion context. It returns one explicit result:
+
+```text
+DeclWrapperResult =
+    Replace(Syntax<Decl>)
+    Remove
+    Failure(SyntaxFailure)
+```
+
+`Replace` may alter the target's name, visibility, signature, body, or kind. It
+must still produce exactly one declaration accepted by the grammar context in
+which the target appeared. `Remove` intentionally emits no declaration;
+because expansion precedes predeclaration and name resolution, a removed
+binder never enters the program's symbol environment. `Failure` reports a
+structured diagnostic at the wrapper or target span. Producing peer or member
+lists is a separate generation role, not an implicit widening of wrapper
+cardinality.
+
+Declaration context is part of the contract. File, block, struct, enum,
+protocol, and extension bodies admit different declarations and can assign
+different meanings to the same tokens. The compiler therefore captures the
+source declaration in its actual context and validates the replacement against
+that same context; it must not round-trip every wrapper through the plain
+file-declaration parser. A wrapper may be written to accept every context or
+reject unsupported targets with a diagnostic. The initial surface applies to
+semantic declarations, including local and nominal-body declarations. Imports
+and macro definitions are excluded because they establish the macro namespace
+that wrapper resolution itself depends on.
+
+Adjacent wrappers compose as lexical nesting. The wrapper closest to the
+declaration runs first:
+
+```tlk
+#[outer]
+#[inner]
+func example() {}
+```
+
+is `outer(inner(example))`. `Remove` and `Failure` stop that chain. Applied
+wrapper markers are not included in the `Syntax<Decl>` passed onward, so
+splicing the target cannot accidentally re-run them. A replacement may
+explicitly quote new wrapper markers; those are ordinary recursive expansion
+work and consume the same fixed expansion budget as freestanding macros.
+
+`Syntax<Decl>` remains an abstract syntax value rather than the compiler's Rust
+AST or rendered source text. To make alteration real rather than textual, the
+procedural syntax library must expose category-safe declaration views and
+rebuilders (or an equivalent syntax-lens API) for inspecting a declaration and
+replacing child syntax while preserving token provenance and hygiene. Whole-
+declaration quotation and splicing remain available for wrappers that do not
+need structural inspection.
+
+Wrapper expansion remains deterministic. Its versioned expansion context may
+contain only explicit, build-tracked configuration supplied by the compiler;
+it never exposes ambient environment, filesystem, process, or network state.
+Every configuration value observed by a wrapper participates in expansion and
+artifact cache keys. The first implementation may supply no configurable
+values, but the wrapper ABI must preserve this input surface so a future tool
+can implement conditional declaration transforms without a special-purpose
+wrapper kind.
+
+Like other procedural macros, wrappers receive no inferred types. They run
+before name resolution and may reason only about syntax, explicit arguments,
+declaration context, and build-tracked expansion inputs.
 
 Arbitrary whole-file AST rewriters are not part of the language.
 
@@ -290,8 +374,11 @@ associated-type bindings from protocol equalities such as
 `Iterator.Element == Iterable.Element`, preserving those bindings in exported
 conformance rows so generic stdlib helpers specialize correctly downstream.
 
-Attached roles, repetition, persistent expansion caching, and the complete
-source/expanded analysis map remain follow-ups.
+Declaration wrapper macros, list-producing attached generation roles,
+repetition, persistent expansion caching, and the complete source/expanded
+analysis map remain follow-ups. A wrapper is specifically the zero-or-one
+transform described above; implementing one does not implicitly add peer or
+member generation.
 
 ## Consequences
 
@@ -299,8 +386,11 @@ source/expanded analysis map remain follow-ups.
   macros, but generated code composes with Talk's existing semantic phases.
 - Hygiene and source provenance are architectural inputs rather than cleanup
   work after a macro ecosystem exists.
-- Fixed invocation syntax avoids making the hand-written parser, formatter,
-  and editor grammar dynamically extensible.
+- Fixed invocation and wrapper syntax avoids making the hand-written parser,
+  formatter, and editor grammar dynamically extensible.
+- Wrapper cardinality keeps attached transformation compositional while still
+  permitting intentional conditional removal; declaration-list generation
+  remains a separate role.
 - Type-aware generation, unrestricted compile-time evaluation, and static-value
   equality remain separate features.
 - Module interfaces carry macro artifacts; incremental analysis still needs a
@@ -323,6 +413,13 @@ call-site shadowing.
 
 Rejected because they are host-specific arbitrary code with weak
 reproducibility and a poor fit for embedded and WebAssembly compiler surfaces.
+
+### Additive-only attached roles
+
+Rejected as the only attached-macro model because it cannot express a bounded
+transformation of the declaration being annotated. Additive peer, member,
+extension, and conformance generation can still be introduced as separate,
+list-producing roles; it does not change a wrapper's zero-or-one result.
 
 ### Type-aware macros as the only macro system
 

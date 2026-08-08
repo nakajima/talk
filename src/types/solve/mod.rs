@@ -168,9 +168,7 @@ impl<'s> Solver<'s> {
                         let a_shallow = self.store.shallow(&a);
                         let b_shallow = self.store.shallow(&b);
                         if let (Ty::Forall(sa), Ty::Forall(sb)) = (&a_shallow, &b_shallow) {
-                            // The rendered form is the canonical
-                            // alpha-name (positional T0, T1, …).
-                            if sa.render() != sb.render() {
+                            if !sa.alpha_eq(sb) {
                                 self.report_mismatch(&a_shallow, &b_shallow, origin);
                             }
                             continue;

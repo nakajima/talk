@@ -22,7 +22,7 @@
 use rustc_hash::FxHashMap;
 
 use crate::compiling::mir::build::{
-    BlockDebug, FuncId, Function, Inst, LocalId, Operand, Program, Term,
+    BlockDebug, DebugOrigin, FuncId, Function, GeneratedMir, Inst, LocalId, Operand, Program, Term,
 };
 
 use super::PassResult;
@@ -217,10 +217,11 @@ fn inline_round(program: &mut Program) -> u64 {
                 };
                 (*dest, *func, args.clone())
             };
-            let call_span = function.blocks[b]
+            let call_origin = function.blocks[b]
                 .debug
                 .as_ref()
-                .and_then(|debug| debug.spans.get(position).copied().flatten());
+                .and_then(|debug| debug.origins.get(position).copied())
+                .unwrap_or(DebugOrigin::Generated(GeneratedMir::FrontendDesugaring));
             let debug = function.blocks[b].debug.is_some();
             #[allow(clippy::expect_used)]
             let body = candidates.get(&func).expect("membership checked above");
@@ -257,8 +258,8 @@ fn inline_round(program: &mut Program) -> u64 {
                 function.blocks[b].insts.splice(position..=position, splice);
                 if let Some(debug) = &mut function.blocks[b].debug {
                     debug
-                        .spans
-                        .splice(position..=position, vec![call_span; count]);
+                        .origins
+                        .splice(position..=position, vec![call_origin; count]);
                 }
                 applied += 1;
                 // Rescan the same block: later insts may hold more
@@ -272,8 +273,8 @@ fn inline_round(program: &mut Program) -> u64 {
             // the join block, and the call is replaced by a jump into the
             // spliced entry.
             let tail_debug = function.blocks[b].debug.as_mut().map(|debug| {
-                let tail = debug.spans.split_off(position + 1);
-                debug.spans.pop();
+                let tail = debug.origins.split_off(position + 1);
+                debug.origins.pop();
                 tail
             });
             let tail: Vec<Inst> = function.blocks[b].insts.split_off(position + 1);
@@ -337,7 +338,7 @@ fn inline_round(program: &mut Program) -> u64 {
                 };
                 let block_debug = debug.then(|| {
                     Box::new(BlockDebug {
-                        spans: vec![call_span; insts.len()],
+                        origins: vec![call_origin; insts.len()],
                     })
                 });
                 function
@@ -352,7 +353,7 @@ fn inline_round(program: &mut Program) -> u64 {
             function
                 .blocks
                 .push(crate::compiling::mir::build::BlockData {
-                    debug: tail_debug.map(|spans| Box::new(BlockDebug { spans })),
+                    debug: tail_debug.map(|origins| Box::new(BlockDebug { origins })),
                     params: Vec::new(),
                     insts: tail,
                     term,

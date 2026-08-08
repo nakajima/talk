@@ -37,9 +37,9 @@ use crate::types::ty::{ParamKind, Perm, ProtocolRef, StaticValue, Ty, TyFold};
 use super::BackendError;
 
 pub(crate) use talk_mir::{
-    BlockData, BlockDebug, BlockId, CmpKind, Constant, DebugSpan, DisplayEntry, DisplayNames,
-    FuncId, Function, Inst, LocalId, LocalInfo, MirSymbol, MirSymbolKind, Module as Program,
-    Operand, ScalarOp, Term, TypeKind,
+    BlockData, BlockDebug, BlockId, CleanupKind, CmpKind, Constant, DebugOrigin, DebugSpan,
+    DisplayEntry, DisplayNames, FuncId, Function, GeneratedMir, Inst, LocalId, LocalInfo,
+    MirSymbol, MirSymbolKind, Module as Program, Operand, ScalarOp, Term, TypeKind,
 };
 
 /// The executable identity of a source symbol, when one exists: only
@@ -517,12 +517,19 @@ fn bind_env(
     fx: &mut FunctionBuilder,
     captured: &[Symbol],
     inherited: &[(Symbol, (LocalId, LocalId))],
+    closure_at: Option<DebugSpan>,
 ) {
     for (index, symbol) in captured.iter().enumerate() {
         let local = fx.fresh_local();
+        let env_index = u16::try_from(index).unwrap_or_default();
+        fx.generated_origin = GeneratedMir::ClosureCapture {
+            local,
+            env_index,
+            closure_at,
+        };
         fx.push(Inst::EnvGet {
             dest: local,
-            index: u16::try_from(index).unwrap_or_default(),
+            index: env_index,
         });
         fx.locals.insert(*symbol, local);
         if let Some(name) = enclosing_locals
@@ -543,11 +550,21 @@ fn bind_env(
     let mut env_index = u16::try_from(captured.len()).unwrap_or_default();
     for (param_symbol, _) in inherited.iter() {
         let drop_local = fx.fresh_local();
+        fx.generated_origin = GeneratedMir::ClosureWitness {
+            local: drop_local,
+            env_index,
+            closure_at,
+        };
         fx.push(Inst::EnvGet {
             dest: drop_local,
             index: env_index,
         });
         let retain_local = fx.fresh_local();
+        fx.generated_origin = GeneratedMir::ClosureWitness {
+            local: retain_local,
+            env_index: env_index + 1,
+            closure_at,
+        };
         fx.push(Inst::EnvGet {
             dest: retain_local,
             index: env_index + 1,
@@ -564,6 +581,11 @@ fn bind_env(
             let mut locals = Vec::new();
             for _ in 0..count {
                 let local = fx.fresh_local();
+                fx.generated_origin = GeneratedMir::ClosureWitness {
+                    local,
+                    env_index,
+                    closure_at,
+                };
                 fx.push(Inst::EnvGet {
                     dest: local,
                     index: env_index,
@@ -2103,6 +2125,7 @@ impl<'a> ProgramBuilder<'a> {
         let id = self.reserve("derived_show");
         self.show_glue.insert(ty.clone(), id);
         let mut fx = FunctionBuilder::new(self, 1, 0);
+        fx.generated_origin = GeneratedMir::DerivedShow;
         let result = fx.emit_show(Operand::Local(0), ty, protocol, span)?;
         let (n_locals, blocks, _return_repr, debug_names) = fx.finish(result)?;
         let layout = self.layouts.borrow_mut().id_of(ty);
@@ -2133,6 +2156,7 @@ impl<'a> ProgramBuilder<'a> {
         let id = self.reserve("derived_equals");
         self.equality_glue.insert(ty.clone(), id);
         let mut fx = FunctionBuilder::new(self, 2, 0);
+        fx.generated_origin = GeneratedMir::DerivedEquality;
         let result = fx.emit_equality(Operand::Local(0), Operand::Local(1), ty, protocol, span)?;
         let (n_locals, blocks, _return_repr, debug_names) = fx.finish(result)?;
         let layout = self.layouts.borrow_mut().id_of(ty);
@@ -2433,11 +2457,23 @@ struct LoopFrame {
 /// current loop retains, because the loop may repeat). The two type
 /// slots stay separate because call sites consult them in different
 /// priority orders.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct BuildLocal {
     declared: Option<Ty>,
     owned: Option<Ty>,
     loop_depth: usize,
+    created_at: Span,
+}
+
+impl Default for BuildLocal {
+    fn default() -> Self {
+        Self {
+            declared: None,
+            owned: None,
+            loop_depth: 0,
+            created_at: Span::SYNTHESIZED,
+        }
+    }
 }
 
 struct FunctionBuilder<'p, 'a> {
@@ -2597,9 +2633,10 @@ struct FunctionBuilder<'p, 'a> {
     /// owned locals would let the loan escape its owner (CHG-04).
     returns_borrow: bool,
     /// Debug-mode collection: the span of the statement currently
-    /// compiling, stamped on every emitted instruction, and the source
-    /// binding names of this frame's locals.
+    /// compiling, or the compiler-owned reason when no source construct
+    /// directly emitted the instruction, plus this frame's local names.
     current_span: Span,
+    generated_origin: GeneratedMir,
     debug_names: Vec<String>,
 }
 
@@ -2653,6 +2690,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             in_return_consume: false,
             returns_borrow: false,
             current_span: Span::SYNTHESIZED,
+            generated_origin: GeneratedMir::FrontendDesugaring,
             debug_names: Vec::new(),
         }
     }
@@ -2694,6 +2732,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     None => {
                         let node = self.new_block();
                         self.switch_to(node);
+                        self.generated_origin = self.cleanup_origin(CleanupKind::Unwind, local);
                         self.release_planned(local);
                         match next {
                             Some(outer) => self.terminate(Term::Goto(outer, Vec::new())),
@@ -2723,6 +2762,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             };
             self.switch_to(block);
             for local in locals {
+                self.generated_origin = self.cleanup_origin(CleanupKind::BlockExit, *local);
                 self.release_planned(*local);
             }
             self.terminate(term);
@@ -2769,9 +2809,28 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             };
             self.switch_to(edge);
             for local in locals {
+                self.generated_origin = self.cleanup_origin(CleanupKind::Edge, *local);
                 self.release_planned(*local);
             }
             self.terminate(Term::Goto(old_target, old_args));
+        }
+    }
+
+    fn cleanup_origin(&mut self, kind: CleanupKind, local: LocalId) -> GeneratedMir {
+        let source_span = self
+            .frame
+            .get(usize::from(local))
+            .map(|entry| entry.created_at)
+            .unwrap_or(Span::SYNTHESIZED);
+        let created_at = self
+            .program_builder
+            .collect_debug
+            .then(|| self.program_builder.debug_span(source_span))
+            .flatten();
+        GeneratedMir::Cleanup {
+            kind,
+            local,
+            created_at,
         }
     }
 
@@ -2809,6 +2868,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         BackendError,
     > {
         if !self.terminated() {
+            if matches!(
+                self.generated_origin,
+                GeneratedMir::FrontendDesugaring
+                    | GeneratedMir::ClosureCapture { .. }
+                    | GeneratedMir::ClosureWitness { .. }
+                    | GeneratedMir::HandlerDelimiter { .. }
+            ) {
+                self.generated_origin = GeneratedMir::FunctionEpilogue;
+            }
             self.emit_return(value);
         }
         self.elaborate_and_verify();
@@ -3938,7 +4006,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
 
     fn fresh_local(&mut self) -> LocalId {
         let local = u16::try_from(self.frame.len()).unwrap_or(u16::MAX);
-        self.frame.push(BuildLocal::default());
+        self.frame.push(BuildLocal {
+            created_at: self.current_span,
+            ..BuildLocal::default()
+        });
         local
     }
 
@@ -4133,12 +4204,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     fn push(&mut self, inst: Inst) {
         self.track_anchored(&inst);
         if !self.terminated() {
-            let span = if self.program_builder.collect_debug {
-                self.program_builder.debug_span(self.current_span)
+            let origin = if self.program_builder.collect_debug {
+                self.program_builder
+                    .debug_span(self.current_span)
+                    .map(DebugOrigin::Source)
+                    .unwrap_or(DebugOrigin::Generated(self.generated_origin))
             } else {
-                None
+                DebugOrigin::Generated(self.generated_origin)
             };
-            self.blocks[self.current].push_inst(inst, span);
+            self.blocks[self.current].push_inst(inst, origin);
         }
     }
 
@@ -4631,13 +4705,17 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // instance's substitution grounds the enum's application, so the
         // construction publishes a concrete layout (rule 6).
         let layout = self.construction_layout(enum_ty, Some(enum_symbol));
-        let mut block = BlockData::default();
-        block.insts.push(Inst::Aggregate {
-            dest: arity,
-            tag,
-            layout,
-            args: (0..arity).map(Operand::Local).collect(),
-        });
+        let collect_debug = self.program_builder.collect_debug;
+        let mut block = BlockData::debugged(collect_debug);
+        block.push_inst(
+            Inst::Aggregate {
+                dest: arity,
+                tag,
+                layout,
+                args: (0..arity).map(Operand::Local).collect(),
+            },
+            DebugOrigin::Generated(GeneratedMir::EnumConstructor),
+        );
         block.term = Some(Term::Return(Operand::Local(arity)));
         self.program_builder.functions[id] = Function {
             debug_names: None,
@@ -9588,7 +9666,17 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 fx.name_local(local, name);
             }
         }
+        let handler_at = if fx.program_builder.collect_debug {
+            fx.program_builder.debug_span(body.span)
+        } else {
+            None
+        };
         let delimiter = fx.fresh_local();
+        fx.generated_origin = GeneratedMir::HandlerDelimiter {
+            local: delimiter,
+            env_index: 0,
+            handler_at,
+        };
         fx.push(Inst::EnvGet {
             dest: delimiter,
             index: 0,
@@ -9596,9 +9684,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         fx.clause_delimiter = Some(delimiter);
         for (index, symbol) in captured.iter().enumerate() {
             let local = fx.fresh_local();
+            let env_index = u16::try_from(index + 1).unwrap_or_default();
+            fx.generated_origin = GeneratedMir::ClosureCapture {
+                local,
+                env_index,
+                closure_at: handler_at,
+            };
             fx.push(Inst::EnvGet {
                 dest: local,
-                index: u16::try_from(index + 1).unwrap_or_default(),
+                index: env_index,
             });
             fx.locals.insert(*symbol, local);
             if let Some(name) = &captured_names[index] {
@@ -9611,11 +9705,21 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let mut env_index = u16::try_from(1 + captured.len()).unwrap_or_default();
         for (param_symbol, _) in &inherited {
             let drop_local = fx.fresh_local();
+            fx.generated_origin = GeneratedMir::ClosureWitness {
+                local: drop_local,
+                env_index,
+                closure_at: handler_at,
+            };
             fx.push(Inst::EnvGet {
                 dest: drop_local,
                 index: env_index,
             });
             let retain_local = fx.fresh_local();
+            fx.generated_origin = GeneratedMir::ClosureWitness {
+                local: retain_local,
+                env_index: env_index + 1,
+                closure_at: handler_at,
+            };
             fx.push(Inst::EnvGet {
                 dest: retain_local,
                 index: env_index + 1,
@@ -9632,6 +9736,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let mut locals = Vec::new();
                 for _ in 0..count {
                     let local = fx.fresh_local();
+                    fx.generated_origin = GeneratedMir::ClosureWitness {
+                        local,
+                        env_index,
+                        closure_at: handler_at,
+                    };
                     fx.push(Inst::EnvGet {
                         dest: local,
                         index: env_index,
@@ -9648,6 +9757,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             // A clause that finishes without `continue` discontinues: its
             // value becomes the delimiter frame's return (CHG-03), after
             // this clause's own cleanup.
+            fx.generated_origin = GeneratedMir::FunctionEpilogue;
             fx.emit_discontinue(Operand::Local(delimiter), value);
         }
         fx.elaborate_and_verify();
@@ -9862,6 +9972,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
         }
         fx.cell_celled_params(&func.params);
+        let closure_at = if fx.program_builder.collect_debug {
+            fx.program_builder.debug_span(func.body.span)
+        } else {
+            None
+        };
         bind_env(
             &self.locals,
             &self.debug_names,
@@ -9869,6 +9984,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             &mut fx,
             &captured,
             &inherited,
+            closure_at,
         );
         let value = fx.compile_block(&func.body)?;
         let (n_locals, blocks, _return_repr, debug_names) = fx.finish(value)?;

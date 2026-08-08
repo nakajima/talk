@@ -2378,23 +2378,33 @@ mod tests {
     }
 
     #[test]
-    fn hover_shows_generic_function_type_not_instantiation() {
+    fn hover_shows_generic_scheme_and_use_site_instantiation() {
         let code = "func id(x) { x }\nid(123)\nid(1.23)\n";
-        let uri =
-            Url::from_file_path(std::env::temp_dir().join("hover_shows_generic_function_type.tlk"))
-                .expect("file uri");
+        let uri = Url::from_file_path(
+            std::env::temp_dir().join("hover_shows_generic_scheme_and_instantiation.tlk"),
+        )
+        .expect("file uri");
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         let id_offsets: Vec<usize> = code.match_indices("id").map(|(i, _)| i).collect();
         assert_eq!(id_offsets.len(), 3, "expected 3 `id` occurrences");
-        for offset in id_offsets {
+        for (index, offset) in id_offsets.into_iter().enumerate() {
             let hover = super::hover_at_lsp(&module, &uri, offset as u32).expect("hover");
             let HoverContents::Markup(markup) = hover.contents else {
                 panic!("unexpected hover: {hover:?}");
             };
-            // The scheme, not a use site's instantiation.
-            assert!(markup.value.contains("id: <T0>(&T0) -> &T0"), "{markup:?}");
-            assert!(!markup.value.contains("Int"), "{markup:?}");
-            assert!(!markup.value.contains("Float"), "{markup:?}");
+            assert!(
+                markup.value.contains("func id<X>(borrow x: X) -> &X"),
+                "{markup:?}"
+            );
+            match index {
+                0 => {
+                    assert!(!markup.value.contains("X = Int"), "{markup:?}");
+                    assert!(!markup.value.contains("X = Float"), "{markup:?}");
+                }
+                1 => assert!(markup.value.contains("X = Int"), "{markup:?}"),
+                2 => assert!(markup.value.contains("X = Float"), "{markup:?}"),
+                _ => unreachable!(),
+            }
         }
     }
 

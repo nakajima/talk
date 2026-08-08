@@ -455,12 +455,96 @@ pub struct DebugSpan {
     pub end: u32,
 }
 
-/// Per-instruction source spans for one block, aligned with
-/// [`BlockData::insts`]: `spans[i]` is the statement that produced
-/// instruction `i`, or `None` for compiler-generated code.
+/// Why an instruction exists in finalized MIR.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DebugOrigin {
+    Source(DebugSpan),
+    Generated(GeneratedMir),
+}
+
+/// Where ownership cleanup runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CleanupKind {
+    Unwind,
+    BlockExit,
+    Edge,
+}
+
+impl CleanupKind {
+    fn description(self) -> &'static str {
+        match self {
+            Self::Unwind => "effect-unwind cleanup",
+            Self::BlockExit => "block-exit cleanup",
+            Self::Edge => "control-flow-edge cleanup",
+        }
+    }
+}
+
+/// Compiler-owned reasons for emitting MIR without a direct source span.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GeneratedMir {
+    FrontendDesugaring,
+    ClosureCapture {
+        local: LocalId,
+        env_index: u16,
+        closure_at: Option<DebugSpan>,
+    },
+    ClosureWitness {
+        local: LocalId,
+        env_index: u16,
+        closure_at: Option<DebugSpan>,
+    },
+    HandlerDelimiter {
+        local: LocalId,
+        env_index: u16,
+        handler_at: Option<DebugSpan>,
+    },
+    FunctionEpilogue,
+    Cleanup {
+        kind: CleanupKind,
+        local: LocalId,
+        created_at: Option<DebugSpan>,
+    },
+    ProgramEntry,
+    GlobalInitialization,
+    ExportAdapter,
+    HeapTeardown,
+    DropGlue,
+    RetainGlue,
+    DerivedShow,
+    DerivedEquality,
+    RequirementForwarder,
+    EnumConstructor,
+}
+
+impl GeneratedMir {
+    fn description(self) -> &'static str {
+        match self {
+            Self::FrontendDesugaring => "frontend desugaring",
+            Self::ClosureCapture { .. } => "closure capture binding",
+            Self::ClosureWitness { .. } => "closure witness binding",
+            Self::HandlerDelimiter { .. } => "effect-handler delimiter binding",
+            Self::FunctionEpilogue => "implicit function return and writeback",
+            Self::Cleanup { .. } => "ownership cleanup",
+            Self::ProgramEntry => "program entry and global teardown wrapper",
+            Self::GlobalInitialization => "top-level global initialization",
+            Self::ExportAdapter => "host-callable export adapter",
+            Self::HeapTeardown => "heap object teardown",
+            Self::DropGlue => "type-specific value destruction",
+            Self::RetainGlue => "type-specific value retain",
+            Self::DerivedShow => "derived Showable implementation",
+            Self::DerivedEquality => "derived Equatable implementation",
+            Self::RequirementForwarder => "protocol requirement witness forwarding",
+            Self::EnumConstructor => "first-class enum constructor",
+        }
+    }
+}
+
+/// Per-instruction provenance for one block, aligned with
+/// [`BlockData::insts`].
 #[derive(Clone, Debug)]
 pub struct BlockDebug {
-    pub spans: Vec<Option<DebugSpan>>,
+    pub origins: Vec<DebugOrigin>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -479,63 +563,67 @@ impl BlockData {
     /// A block that records instruction provenance when `debug` is on.
     pub fn debugged(debug: bool) -> Self {
         Self {
-            debug: debug.then_some(Box::new(BlockDebug { spans: Vec::new() })),
+            debug: debug.then_some(Box::new(BlockDebug {
+                origins: Vec::new(),
+            })),
             ..Self::default()
         }
     }
 
     /// Push an instruction, recording its provenance when this block
-    /// carries debug spans.
-    pub fn push_inst(&mut self, inst: Inst, span: Option<DebugSpan>) {
+    /// carries debug metadata.
+    pub fn push_inst(&mut self, inst: Inst, origin: DebugOrigin) {
         if let Some(debug) = &mut self.debug {
-            debug.spans.push(span);
+            debug.origins.push(origin);
         }
         self.insts.push(inst);
     }
 
-    /// Retain matching instructions, keeping the debug spans aligned.
+    /// Retain matching instructions, keeping debug origins aligned.
     pub fn retain_insts(&mut self, mut keep: impl FnMut(&Inst) -> bool) {
         let Some(debug) = &mut self.debug else {
             self.insts.retain(keep);
             return;
         };
-        debug_assert_eq!(debug.spans.len(), self.insts.len());
-        let spans = std::mem::take(&mut debug.spans);
-        let mut next = spans.iter();
-        let mut kept = Vec::with_capacity(spans.len());
+        debug_assert_eq!(debug.origins.len(), self.insts.len());
+        let origins = std::mem::take(&mut debug.origins);
+        let mut next = origins.iter();
+        let mut kept = Vec::with_capacity(origins.len());
         self.insts.retain(|inst| {
-            let span = next.next().copied().flatten();
+            let origin = next
+                .next()
+                .copied()
+                .expect("aligned debug origin exists for every instruction");
             let keep = keep(inst);
             if keep {
-                kept.push(span);
+                kept.push(origin);
             }
             keep
         });
-        debug.spans = kept;
+        debug.origins = kept;
     }
 
-    /// Drain a range of instructions, keeping the debug spans aligned.
+    /// Drain a range of instructions, keeping debug origins aligned.
     pub fn drain_insts(&mut self, range: std::ops::Range<usize>) {
         if let Some(debug) = &mut self.debug {
-            debug.spans.drain(range.clone());
+            debug.origins.drain(range.clone());
         }
         self.insts.drain(range);
     }
 
-    /// Remove the instruction at `index`, keeping the debug spans
-    /// aligned.
+    /// Remove the instruction at `index`, keeping debug origins aligned.
     pub fn remove_inst(&mut self, index: usize) -> Inst {
         if let Some(debug) = &mut self.debug {
-            debug.spans.remove(index);
+            debug.origins.remove(index);
         }
         self.insts.remove(index)
     }
 
-    /// Whether every instruction has a matching debug-span slot.
+    /// Whether every instruction has a matching debug-origin slot.
     pub fn debug_is_aligned(&self) -> bool {
         self.debug
             .as_ref()
-            .is_none_or(|debug| debug.spans.len() == self.insts.len())
+            .is_none_or(|debug| debug.origins.len() == self.insts.len())
     }
 }
 
@@ -591,6 +679,18 @@ pub struct Function {
 impl Function {
     pub fn n_locals(&self) -> u16 {
         u16::try_from(self.locals.len()).unwrap_or(u16::MAX)
+    }
+
+    fn debug_local(&self, local: LocalId) -> String {
+        match self
+            .debug_names
+            .as_ref()
+            .and_then(|names| names.get(usize::from(local)))
+            .filter(|name| !name.is_empty())
+        {
+            Some(name) => format!("L{local}({name})"),
+            None => format!("L{local}"),
+        }
     }
 }
 
@@ -664,6 +764,18 @@ impl Module {
         (!snippet.is_empty()).then_some(snippet)
     }
 
+    fn debug_location(&self, span: DebugSpan) -> String {
+        let file = self
+            .debug_files
+            .get(span.file as usize)
+            .map(String::as_str)
+            .unwrap_or("?");
+        match self.debug_snippet(span) {
+            Some(snippet) => format!("{file}:{}:{}: {snippet}", span.line, span.col),
+            None => format!("{file}:{}:{}", span.line, span.col),
+        }
+    }
+
     /// Render the middle representation for inspection (`talk mir`,
     /// TOOL-10). The shape is debug output, not a stable format.
     pub fn render(&self) -> String {
@@ -713,40 +825,129 @@ impl Module {
             for (block, data) in function.blocks.iter().enumerate() {
                 let _ = writeln!(out, "  b{block}:");
                 let debug = !self.debug_sources.is_empty();
-                let mut last_span: Option<DebugSpan> = None;
+                let mut last_origin: Option<DebugOrigin> = None;
                 for (index, inst) in data.insts.iter().enumerate() {
-                    let span = data
+                    let origin = data
                         .debug
                         .as_ref()
-                        .and_then(|debug| debug.spans.get(index).copied().flatten());
-                    if debug && (index == 0 || span != last_span) {
+                        .and_then(|debug| debug.origins.get(index).copied());
+                    if debug && (index == 0 || origin != last_origin) {
                         if index != 0 {
                             let _ = writeln!(out);
                         }
-                        if let Some(span) = span {
-                            let file = self
-                                .debug_files
-                                .get(span.file as usize)
-                                .map(String::as_str)
-                                .unwrap_or("?");
-                            if let Some(snippet) = self.debug_snippet(span) {
+                        match origin {
+                            Some(DebugOrigin::Source(span)) => {
+                                let file = self
+                                    .debug_files
+                                    .get(span.file as usize)
+                                    .map(String::as_str)
+                                    .unwrap_or("?");
+                                if let Some(snippet) = self.debug_snippet(span) {
+                                    let _ = writeln!(
+                                        out,
+                                        "    // source {file}:{}:{}: {snippet}",
+                                        span.line, span.col
+                                    );
+                                } else {
+                                    let _ = writeln!(
+                                        out,
+                                        "    // source {file}:{}:{}",
+                                        span.line, span.col
+                                    );
+                                }
+                            }
+                            Some(DebugOrigin::Generated(GeneratedMir::Cleanup {
+                                kind,
+                                local,
+                                created_at,
+                            })) => {
+                                let target = function.debug_local(local);
+                                if let Some(span) = created_at {
+                                    let file = self
+                                        .debug_files
+                                        .get(span.file as usize)
+                                        .map(String::as_str)
+                                        .unwrap_or("?");
+                                    if let Some(snippet) = self.debug_snippet(span) {
+                                        let _ = writeln!(
+                                            out,
+                                            "    // generated MIR: {} of {target}, created by {file}:{}:{}: {snippet}",
+                                            kind.description(),
+                                            span.line,
+                                            span.col
+                                        );
+                                    } else {
+                                        let _ = writeln!(
+                                            out,
+                                            "    // generated MIR: {} of {target}, created by {file}:{}:{}",
+                                            kind.description(),
+                                            span.line,
+                                            span.col
+                                        );
+                                    }
+                                } else {
+                                    let _ = writeln!(
+                                        out,
+                                        "    // generated MIR: {} of {target}",
+                                        kind.description()
+                                    );
+                                }
+                            }
+                            Some(DebugOrigin::Generated(GeneratedMir::ClosureCapture {
+                                local,
+                                env_index,
+                                closure_at,
+                            })) => {
+                                let local = function.debug_local(local);
+                                let location = closure_at
+                                    .map(|span| format!(" at {}", self.debug_location(span)))
+                                    .unwrap_or_default();
                                 let _ = writeln!(
                                     out,
-                                    "    // source {file}:{}:{}: {snippet}",
-                                    span.line, span.col
-                                );
-                            } else {
-                                let _ = writeln!(
-                                    out,
-                                    "    // source {file}:{}:{}",
-                                    span.line, span.col
+                                    "    // generated MIR: bind capture {local} from env[{env_index}] for closure fn{id} {}{location}",
+                                    function.name
                                 );
                             }
-                        } else {
-                            let _ = writeln!(out, "    // generated MIR (no direct source span)");
+                            Some(DebugOrigin::Generated(GeneratedMir::ClosureWitness {
+                                local,
+                                env_index,
+                                closure_at,
+                            })) => {
+                                let local = function.debug_local(local);
+                                let location = closure_at
+                                    .map(|span| format!(" at {}", self.debug_location(span)))
+                                    .unwrap_or_default();
+                                let _ = writeln!(
+                                    out,
+                                    "    // generated MIR: bind witness {local} from env[{env_index}] for closure fn{id} {}{location}",
+                                    function.name
+                                );
+                            }
+                            Some(DebugOrigin::Generated(GeneratedMir::HandlerDelimiter {
+                                local,
+                                env_index,
+                                handler_at,
+                            })) => {
+                                let local = function.debug_local(local);
+                                let location = handler_at
+                                    .map(|span| format!(" at {}", self.debug_location(span)))
+                                    .unwrap_or_default();
+                                let _ = writeln!(
+                                    out,
+                                    "    // generated MIR: bind handler delimiter {local} from env[{env_index}] for fn{id} {}{location}",
+                                    function.name
+                                );
+                            }
+                            Some(DebugOrigin::Generated(reason)) => {
+                                let _ =
+                                    writeln!(out, "    // generated MIR: {}", reason.description());
+                            }
+                            None => {
+                                let _ = writeln!(out, "    // MIR origin unavailable");
+                            }
                         }
                     }
-                    last_span = span;
+                    last_origin = origin;
                     // Aggregate constructions render their layout as a
                     // table id so shapes are legible next to the code.
                     match inst {
@@ -811,7 +1012,16 @@ mod tests {
                 locals: LocalInfo::uniform(2),
                 blocks: vec![BlockData {
                     debug: Some(Box::new(BlockDebug {
-                        spans: vec![Some(span), Some(span), None, Some(span)],
+                        origins: vec![
+                            DebugOrigin::Source(span),
+                            DebugOrigin::Source(span),
+                            DebugOrigin::Generated(GeneratedMir::Cleanup {
+                                kind: CleanupKind::BlockExit,
+                                local: 1,
+                                created_at: None,
+                            }),
+                            DebugOrigin::Source(span),
+                        ],
                     })),
                     params: Vec::new(),
                     insts: vec![
@@ -851,6 +1061,6 @@ mod tests {
                 .count(),
             2
         );
-        assert!(rendered.contains("// generated MIR (no direct source span)"));
+        assert!(rendered.contains("// generated MIR: block-exit cleanup of L1"));
     }
 }

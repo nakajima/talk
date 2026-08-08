@@ -772,6 +772,29 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     .extend(Self::ambiguous_declared_predicate_errors(&scheme, declared));
                 self.schemes.insert(*symbol, scheme);
             }
+            for (&param, &origin) in generalizer.inferred_param_origins() {
+                self.artifacts.inferred_param_origins.insert(param, origin);
+                if let Some(source_name) =
+                    self.resolved
+                        .symbols_to_node
+                        .iter()
+                        .find_map(|(symbol, node)| {
+                            (*node == origin
+                                && matches!(
+                                    symbol,
+                                    Symbol::ParamLocal(_) | Symbol::PatternBindLocal(_)
+                                ))
+                            .then(|| self.resolved.symbol_names.get(symbol))
+                            .flatten()
+                        })
+                {
+                    let mut chars = source_name.chars();
+                    if let Some(first) = chars.next() {
+                        let suggested = first.to_uppercase().collect::<String>() + chars.as_str();
+                        self.artifacts.display_names.insert(param, suggested);
+                    }
+                }
+            }
             // A held equation whose root no binder quantified rides no
             // scheme and meets no further given: unless its sides already
             // agree it is unprovable, and dropping it silently was the

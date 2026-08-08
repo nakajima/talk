@@ -341,7 +341,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 // the top-level scope's value). An always-resuming body is
                 // Never and constrains nothing.
                 if !body_ty.is_never() {
-                    self.emit_eq(ctx.ret.clone(), body_ty, stmt.id, CtReason::Body);
+                    self.emit_eq(ctx.ret.clone(), body_ty, stmt.id, CtReason::HandlerResult);
                 }
                 StmtValue::Unit
             }

@@ -320,6 +320,28 @@ impl<'s> Solver<'s> {
             }
 
             (Ty::Func(p1, r1, e1), Ty::Func(p2, r2, e2)) => {
+                // `Apply` auto-borrows the supplied argument to its parameter, but only at
+                // the immediate application. `nested` drops `Apply`, so parameters of a
+                // *nested* function type (which are contravariant) unify invariantly rather
+                // than letting a function needing `&mut`/owned satisfy one invoked with `&`.
+                let nested = origin.nested();
+                let callback = matches!(origin.reason, CtReason::Apply | CtReason::NestedApply);
+                let parameter_origin = if callback {
+                    CtOrigin {
+                        reason: CtReason::CallbackParameter,
+                        ..origin
+                    }
+                } else {
+                    nested
+                };
+                let result_origin = if callback {
+                    CtOrigin {
+                        reason: CtReason::CallbackResult,
+                        ..origin
+                    }
+                } else {
+                    nested
+                };
                 if p1.len() != p2.len() {
                     let error = match self.member_resolutions.get(&origin.node) {
                         Some(MemberResolution::Direct(method)) => {
@@ -343,36 +365,25 @@ impl<'s> Solver<'s> {
                                 found: p2.len(),
                             }
                         }
+                        None if callback => TypeError::CallbackParameterArityMismatch {
+                            expected: p1.len(),
+                            found: p2.len(),
+                        },
                         None => TypeError::FunctionParameterArityMismatch {
                             expected: p1.len(),
                             found: p2.len(),
                         },
                     };
                     self.errors.push((error, origin.node));
+                    // Parameter slots cannot be paired, but result recovery
+                    // remains independent. Solving it prevents the surrounding
+                    // generic call from reporting an unresolved conformance
+                    // caused only by this arity error. Effect rows stay
+                    // separate: equating them after a structural callback
+                    // failure can leak the callback's latent effects outward.
+                    self.push_borrow_downgrade_eq(r1, r2, result_origin, worklist);
                     return true;
                 }
-                // `Apply` auto-borrows the supplied argument to its parameter, but only at
-                // the immediate application. `nested` drops `Apply`, so parameters of a
-                // *nested* function type (which are contravariant) unify invariantly rather
-                // than letting a function needing `&mut`/owned satisfy one invoked with `&`.
-                let nested = origin.nested();
-                let callback = matches!(origin.reason, CtReason::Apply | CtReason::NestedApply);
-                let parameter_origin = if callback {
-                    CtOrigin {
-                        reason: CtReason::CallbackParameter,
-                        ..origin
-                    }
-                } else {
-                    nested
-                };
-                let result_origin = if callback {
-                    CtOrigin {
-                        reason: CtReason::CallbackResult,
-                        ..origin
-                    }
-                } else {
-                    nested
-                };
                 for (a1, a2) in p1.iter().zip(p2) {
                     if origin.reason == CtReason::Apply {
                         self.push_apply_param_eq(a1, a2, parameter_origin, worklist);

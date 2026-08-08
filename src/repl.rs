@@ -206,8 +206,7 @@ impl ReplSession {
 
         let resolved_names = typed.phase.program.resolved_names();
         let types = typed.phase.program.types();
-        let _names =
-            crate::name_resolution::symbol::set_symbol_names(resolved_names.symbol_names.clone());
+        let _names = crate::name_resolution::symbol::set_symbol_names(types.display_names.clone());
 
         // A bare identifier shows its (possibly polymorphic) scheme; any
         // other expression shows the type of the final statement.
@@ -597,7 +596,7 @@ mod tests {
             ReplEvalResult::Output {
                 stdout: String::new(),
                 stderr: String::new(),
-                value: Some("<T0>(&T0) -> &T0".to_string()),
+                value: Some("<X>(&X) -> &X".to_string()),
             }
         );
     }

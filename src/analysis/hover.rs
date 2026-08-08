@@ -3,10 +3,12 @@
 //! `schemes` for named binders). Serves the wasm `hover` entry point and
 //! `talk hover`.
 
+use derive_visitor::{Drive, Visitor};
+
 use crate::analysis::workspace::Workspace;
 use crate::analysis::{DocumentId, TextRange, node_ids_at_offset};
 use crate::node::Node;
-use crate::node_kinds::{expr::ExprKind, pattern::PatternKind};
+use crate::node_kinds::{expr::ExprKind, func::Func, pattern::PatternKind};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Hover {
@@ -103,7 +105,14 @@ fn hover_for_node(workspace: &Workspace, node: &Node) -> Option<Hover> {
             let symbol = func.name.symbol().ok()?;
             let scheme = workspace.types.schemes.get(&symbol)?;
             Some(Hover {
-                contents: format!("{}: {}", func.name.name_str(), scheme.render()),
+                contents: describe_callable(
+                    workspace,
+                    func.id,
+                    symbol,
+                    &func.name.name_str(),
+                    scheme,
+                    Some(func),
+                ),
                 range: TextRange::new(func.name_span.start, func.name_span.end),
             })
         }
@@ -178,7 +187,7 @@ fn hover_for_name(
 
 fn hover_for_symbol(
     workspace: &Workspace,
-    _node: crate::node_id::NodeID,
+    node: crate::node_id::NodeID,
     symbol: crate::name_resolution::symbol::Symbol,
     name: &str,
     range: TextRange,
@@ -186,7 +195,7 @@ fn hover_for_symbol(
 ) -> Option<Hover> {
     if let Some(scheme) = workspace.types.schemes.get(&symbol) {
         return Some(Hover {
-            contents: format!("{name}: {}", scheme.render()),
+            contents: describe_callable(workspace, node, symbol, name, scheme, None),
             range,
         });
     }
@@ -199,6 +208,151 @@ fn hover_for_symbol(
     }
 
     None
+}
+
+fn describe_callable(
+    workspace: &Workspace,
+    node: crate::node_id::NodeID,
+    symbol: crate::name_resolution::symbol::Symbol,
+    name: &str,
+    scheme: &crate::types::ty::Scheme,
+    source: Option<&crate::node_kinds::func::Func>,
+) -> String {
+    let resolved_source = source_func(workspace, symbol);
+    let source = source.or(resolved_source.as_ref());
+    let signature = source.map_or_else(
+        || format!("{name}: {}", scheme.render()),
+        |func| {
+            let params: Vec<(String, String)> = func
+                .params
+                .iter()
+                .map(|param| {
+                    let mode = param
+                        .mode
+                        .unwrap_or(crate::node_kinds::parameter::ParamMode::Borrow);
+                    (param.name.name_str(), mode.keyword().to_string())
+                })
+                .collect();
+            scheme.render_callable(name, &params)
+        },
+    );
+    let display_names = scheme.display_param_names();
+    let mut details = vec![];
+    for param in &scheme.params {
+        let Some(origin) = workspace.types.inferred_param_origins.get(&param.symbol) else {
+            continue;
+        };
+        let display = display_names
+            .get(&param.symbol)
+            .cloned()
+            .unwrap_or_else(|| "T".to_string());
+        let source = workspace
+            .asts
+            .get(origin.0.0 as usize)
+            .and_then(Option::as_ref)
+            .and_then(|ast| ast.find(*origin))
+            .and_then(|node| match node {
+                Node::Parameter(param) => Some(param.name.name_str()),
+                _ => None,
+            });
+        match source {
+            Some(source) => details.push(format!(
+                "{display} is an inferred generic parameter introduced by {source}."
+            )),
+            None => details.push(format!("{display} is an inferred generic parameter.")),
+        }
+        let constrained = scheme.predicates.iter().any(|predicate| {
+            let mut found = false;
+            let _ = predicate.try_visit::<()>(&mut |ty| {
+                if matches!(ty, crate::types::ty::Ty::Param(symbol) if *symbol == param.symbol) {
+                    found = true;
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(())
+                }
+            });
+            found
+        });
+        if !constrained {
+            details.push(format!("{display} has no constraints."));
+        }
+    }
+
+    if let Some(instantiation) = workspace.types.instantiations.get(&node) {
+        let substitutions: Vec<_> = instantiation
+            .iter()
+            .filter(|(param, ty)| {
+                scheme
+                    .params
+                    .iter()
+                    .any(|scheme_param| scheme_param.symbol == *param)
+                    && !matches!(
+                        ty,
+                        crate::types::ty::Ty::Var(_) | crate::types::ty::Ty::Error
+                    )
+            })
+            .collect();
+        if !substitutions.is_empty() {
+            details.push("This call:".to_string());
+            for (param, ty) in &substitutions {
+                let display = display_names
+                    .get(param)
+                    .cloned()
+                    .unwrap_or_else(|| "T".to_string());
+                details.push(format!("  {display} = {}", ty.render_mono()));
+            }
+            let tys = substitutions
+                .iter()
+                .map(|entry| (entry.0, entry.1.clone()))
+                .collect();
+            let instantiated = scheme
+                .ty
+                .substitute(&tys, &Default::default(), &Default::default());
+            if let crate::types::ty::Ty::Func(_, ret, _) = instantiated {
+                details.push(format!("  returns {}", ret.render_mono()));
+            }
+        }
+    }
+
+    if details.is_empty() {
+        signature
+    } else {
+        format!("{signature}\n\n{}", details.join("\n"))
+    }
+}
+
+fn source_func(
+    workspace: &Workspace,
+    symbol: crate::name_resolution::symbol::Symbol,
+) -> Option<crate::node_kinds::func::Func> {
+    for ast in workspace.asts.iter().flatten() {
+        let mut finder = SourceFuncFinder {
+            symbol,
+            found: None,
+        };
+        for root in &ast.roots {
+            root.drive(&mut finder);
+            if finder.found.is_some() {
+                return finder.found;
+            }
+        }
+    }
+    None
+}
+
+#[derive(Visitor)]
+#[visitor(Func(enter))]
+struct SourceFuncFinder {
+    symbol: crate::name_resolution::symbol::Symbol,
+    found: Option<crate::node_kinds::func::Func>,
+}
+
+impl SourceFuncFinder {
+    fn enter_func(&mut self, func: &crate::node_kinds::func::Func) {
+        if self.found.is_none() && func.name.symbol().ok() == Some(self.symbol) {
+            self.found = Some(func.clone());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -261,7 +415,7 @@ mod tests {
         let source = "func width<static N: Int>() -> Int {\n\tN\n}\nwidth<4>()";
         let hover = hover(source, "width<4>").expect("hover");
         assert!(
-            hover.contents.contains("static T0: Int"),
+            hover.contents.contains("static N: Int"),
             "{}",
             hover.contents
         );
@@ -275,6 +429,42 @@ mod tests {
             hover.contents.contains("double") && hover.contents.contains("Int"),
             "{}",
             hover.contents
+        );
+    }
+
+    #[test]
+    fn hover_explains_inferred_generics_and_call_instantiations() {
+        let source = "// no-core\nfunc id(x) { x }\nlet value = id(42)";
+        let declaration = hover(source, "id(x)").expect("declaration hover");
+        assert!(
+            declaration
+                .contents
+                .contains("func id<X>(borrow x: X) -> &X")
+                && declaration
+                    .contents
+                    .contains("X is an inferred generic parameter introduced by x."),
+            "{}",
+            declaration.contents
+        );
+
+        let call = hover(source, "id(42)").expect("call hover");
+        assert!(
+            call.contents.contains("X = Int") && call.contents.contains("returns &Int"),
+            "{}",
+            call.contents
+        );
+    }
+
+    #[test]
+    fn hover_uses_talk_effect_syntax_without_internal_effect_indices() {
+        let source = "// no-core\neffect 'ping() -> ()\nstruct Wrapper { let f: () -> Int }\nfunc make() { Wrapper(f: func() { 'ping(); 1 }) }";
+        let wrapper = hover(source, "Wrapper(f:").expect("wrapper hover");
+        assert!(wrapper.contents.contains("'ping"), "{}", wrapper.contents);
+        assert!(!wrapper.contents.contains("! <"), "{}", wrapper.contents);
+        assert!(
+            !wrapper.contents.contains("TypeParameter("),
+            "{}",
+            wrapper.contents
         );
     }
 

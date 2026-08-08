@@ -36,6 +36,7 @@ impl<'a> ProgramBuilder<'a> {
         let id = self.reserve("heap_teardown");
         self.glue.insert((ty.clone(), Glue::HeapTeardown), id);
         let mut fx = FunctionBuilder::new(self, 0, 0);
+        fx.generated_origin = GeneratedMir::HeapTeardown;
         fx.frame.resize(1, Default::default());
         if let Some((witness, subst)) = deinit {
             let func = fx
@@ -84,6 +85,11 @@ impl<'a> ProgramBuilder<'a> {
         });
         self.glue.insert((ty.clone(), glue), id);
         let mut fx = FunctionBuilder::new(self, 0, 0);
+        fx.generated_origin = match glue {
+            Glue::Drop => GeneratedMir::DropGlue,
+            Glue::Retain => GeneratedMir::RetainGlue,
+            Glue::HeapTeardown => unreachable!("heap teardown has its own builder"),
+        };
         fx.frame.resize(1, Default::default());
         // Glue over a type that mentions rigid effect-generics reads their
         // full witness blocks from its closure environment — the
@@ -523,8 +529,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             args,
             unwind: None,
         });
+        let debug = self.program_builder.collect_debug.then(|| {
+            Box::new(BlockDebug {
+                origins: vec![
+                    DebugOrigin::Generated(GeneratedMir::RequirementForwarder);
+                    insts.len()
+                ],
+            })
+        });
         let block = BlockData {
-            debug: None,
+            debug,
             params: Vec::new(),
             insts,
             term: Some(Term::Return(Operand::Local(result))),

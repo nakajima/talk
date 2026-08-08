@@ -4,6 +4,10 @@ use super::*;
 pub(super) struct TypeArtifacts {
     pub(super) node_types: FxHashMap<NodeID, Ty>,
     pub(super) instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
+    /// Checker-minted generic parameters and the source nodes whose inference
+    /// variables were generalized into them. Editor descriptions use this to
+    /// explain where an implicit generic came from.
+    pub(super) inferred_param_origins: FxHashMap<Symbol, NodeID>,
     /// Rank-N field projections as recorded at the Eq boundary (the
     /// field scheme's parameter symbols — a unique identity per
     /// generalization — the projection node, and the substitution

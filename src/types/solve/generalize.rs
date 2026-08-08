@@ -28,6 +28,7 @@ pub struct Generalizer<'s> {
     row_params: Vec<Symbol>,
     perm_params: Vec<Symbol>,
     predicates: Vec<Predicate>,
+    inferred_param_origins: FxHashMap<Symbol, NodeID>,
 }
 
 impl<'s> Generalizer<'s> {
@@ -50,6 +51,7 @@ impl<'s> Generalizer<'s> {
             row_params: vec![],
             perm_params: vec![],
             predicates: vec![],
+            inferred_param_origins: FxHashMap::default(),
         }
     }
 
@@ -101,6 +103,10 @@ impl<'s> Generalizer<'s> {
         let param = Symbol::TypeParameter(self.symbols.next_type_parameter(self.module_id));
         self.minted.insert(param);
         param
+    }
+
+    pub fn inferred_param_origins(&self) -> &FxHashMap<Symbol, NodeID> {
+        &self.inferred_param_origins
     }
 
     pub(super) fn quantify_predicate(&mut self, predicate: &Predicate) -> Predicate {
@@ -247,7 +253,9 @@ impl TyFold for Generalizer<'_> {
             Ty::Var(root_var) => {
                 let root = root_var.0;
                 if self.store.level(root) > self.base_level {
+                    let origin = self.store.origin(root);
                     let param = self.mint_param();
+                    self.inferred_param_origins.insert(param, origin);
                     self.store.bind(root, VarValue::Ty(Ty::Param(param)));
                     self.params.push(SchemeParam::ty(param));
                     if let Some(predicates) = self.var_predicates.remove(&root) {

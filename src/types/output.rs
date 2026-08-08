@@ -278,6 +278,10 @@ pub struct TypeOutput {
     /// Per-use-site instantiation of a scheme's parameters, preserved as a
     /// checked semantic fact on TypedProgram.
     pub instantiations: FxHashMap<NodeID, Vec<(Symbol, Ty)>>,
+    /// Source origin of each checker-inferred generic parameter. This is
+    /// presentation provenance, not part of type identity.
+    #[serde(default)]
+    pub inferred_param_origins: FxHashMap<Symbol, NodeID>,
     /// The one concrete assignment a stored rank-N closure compiles at,
     /// computed at finalize from its projections — baked onto the
     /// field-value node (a func literal or a generic reference) for

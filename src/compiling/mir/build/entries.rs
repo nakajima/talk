@@ -281,6 +281,7 @@ impl<'a> ProgramBuilder<'a> {
             self.result_slot = Some(slot);
             let body_id = self.reserve("entry_body");
             let mut fx = FunctionBuilder::new(self, 0, 0);
+            fx.generated_origin = GeneratedMir::ProgramEntry;
             let result = fx.fresh_local();
             fx.push(Inst::Call {
                 dest: result,
@@ -311,6 +312,7 @@ impl<'a> ProgramBuilder<'a> {
 
         let outer = self.reserve("script_main");
         let mut wrapper = FunctionBuilder::new(self, 0, 0);
+        wrapper.generated_origin = GeneratedMir::ProgramEntry;
         let result = wrapper.fresh_local();
         match hosted {
             Some((host, body_id, slot)) => {
@@ -387,6 +389,7 @@ impl<'a> ProgramBuilder<'a> {
         };
         let id = self.reserve("entry_init");
         let mut fx = FunctionBuilder::new(self, 0, 0);
+        fx.generated_origin = GeneratedMir::ProgramEntry;
         let unit = fx.fresh_local();
         fx.push(Inst::Call {
             dest: unit,
@@ -456,6 +459,7 @@ impl<'a> ProgramBuilder<'a> {
         }
         let id = self.reserve("globals_init");
         let mut fx = FunctionBuilder::new(self, 0, 0);
+        fx.generated_origin = GeneratedMir::GlobalInitialization;
         for decl in &lets {
             let DeclKind::Let {
                 lhs:
@@ -702,6 +706,7 @@ impl<'a> ProgramBuilder<'a> {
         if !self.callables.contains_key(&Symbol::WithHost) {
             // No core, no ambient effects to install: call directly.
             let mut fx = FunctionBuilder::new(self, arity, 0);
+            fx.generated_origin = GeneratedMir::ExportAdapter;
             let args: Vec<Operand> = (0..arity).map(Operand::Local).collect();
             let result = fx.fresh_local();
             fx.push(Inst::Call {
@@ -731,6 +736,7 @@ impl<'a> ProgramBuilder<'a> {
 
         let body_id = self.reserve("export_body");
         let mut fx = FunctionBuilder::new(self, 0, 0);
+        fx.generated_origin = GeneratedMir::ExportAdapter;
         if let Some(init) = globals_init {
             let unit = fx.fresh_local();
             fx.push(Inst::Call {
@@ -771,6 +777,7 @@ impl<'a> ProgramBuilder<'a> {
         };
 
         let mut wrapper = FunctionBuilder::new(self, arity, 0);
+        wrapper.generated_origin = GeneratedMir::ExportAdapter;
         let closure = wrapper.fresh_local();
         let env: Vec<Operand> = (0..arity).map(Operand::Local).collect();
         wrapper.push(Inst::MakeClosure {

@@ -119,9 +119,9 @@ fn allocate_registers(program: &mut build::Program) {
 }
 
 /// Render the middle representation for inspection (TOOL-10). `debug`
-/// collects source provenance during the build: per-statement span
-/// comments and local binding names. It survives optimization, so the
-/// two flags combine freely.
+/// collects instruction provenance during the build: source spans,
+/// compiler-generation reasons, and local binding names. It survives
+/// optimization, so the two flags combine freely.
 pub(crate) fn render_mir(
     programs: &[ProgramInput<'_>],
     entry: Entry,

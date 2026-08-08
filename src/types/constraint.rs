@@ -53,6 +53,9 @@ pub enum CtReason {
     Condition,
     Pattern,
     Body,
+    /// A handler clause that completes without resuming supplies the
+    /// handled computation's result.
+    HandlerResult,
     Effect,
 }
 

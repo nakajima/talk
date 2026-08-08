@@ -280,21 +280,24 @@ Check it out, we've got effects:
 
 ```tlk
 // Define an effect. Effect names have the prefix `'`
-effect 'fizz(x: Int) -> Int
+effect 'throw<T: Showable>(_ val: T) -> ()
 
 // Handles 'fizz for as long as handler is in scope
-#handle 'fizz { x in
-	// This effect doesn't do much, it just returns what it was passed
-	'continue x
+func rescue<T>(fn: () 'throw -> T) -> T? {
+	#handle 'throw { val in
+		print("oops got an error")
+		print(val)
+		return .none
+	}
+
+	.some(fn())
 }
 
-// Define a function with effects. The effect list is in `'[]`. Effects
-// can also be defined as `'_` and they'll be inferred.
-func fizzes(x) '[fizz] {
-	'fizz(x: x)
+rescue {
+	print("hello")
+	'throw("oh no")
+	print("this should not show up")
 }
-
-print(fizzes(123))
 ```
 
 Ok so are effects just weird functions? I mean kind of? But you can also use them as exceptions:

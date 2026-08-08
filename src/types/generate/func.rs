@@ -147,6 +147,29 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             var_predicates,
         );
         let mut scheme = generalizer.generalize(&ty, &declared.params);
+        for (&param, &origin) in generalizer.inferred_param_origins() {
+            self.artifacts.inferred_param_origins.insert(param, origin);
+            if let Some(source_name) =
+                self.resolved
+                    .symbols_to_node
+                    .iter()
+                    .find_map(|(symbol, node)| {
+                        (*node == origin
+                            && matches!(
+                                symbol,
+                                Symbol::ParamLocal(_) | Symbol::PatternBindLocal(_)
+                            ))
+                        .then(|| self.resolved.symbol_names.get(symbol))
+                        .flatten()
+                    })
+            {
+                let mut chars = source_name.chars();
+                if let Some(first) = chars.next() {
+                    let suggested = first.to_uppercase().collect::<String>() + chars.as_str();
+                    self.artifacts.display_names.insert(param, suggested);
+                }
+            }
+        }
         let mut predicates = declared.predicates.clone();
         predicates.extend(scheme.predicates);
         scheme.predicates = predicates;

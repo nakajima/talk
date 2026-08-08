@@ -1,3 +1,4 @@
+use derive_visitor::{Drive, Visitor};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::analysis::workspace::Workspace;
@@ -13,6 +14,7 @@ use crate::{
     node_kinds::{
         decl::{Decl, DeclKind},
         expr::{Expr, ExprKind},
+        func::Func,
         incomplete_expr::IncompleteExpr,
         type_annotation::{TypeAnnotation, TypeAnnotationKind},
     },
@@ -143,12 +145,13 @@ fn is_ident_byte(b: u8) -> bool {
 
 fn scope_completions(analysis: &CompletionAnalysis<'_>, byte_offset: u32) -> Vec<CompletionItem> {
     let symbols = visible_symbols(analysis, byte_offset);
+    let funcs = completion_funcs(analysis);
     let mut items: Vec<CompletionItem> = symbols
         .into_iter()
         .map(|(name, sym)| CompletionItem {
             label: name,
             kind: completion_kind(sym),
-            detail: None,
+            detail: completion_detail(analysis, &funcs, sym),
             insert_text: None,
             insert_text_is_snippet: false,
             sort_text: None,
@@ -159,6 +162,60 @@ fn scope_completions(analysis: &CompletionAnalysis<'_>, byte_offset: u32) -> Vec
     items.extend(conformance_requirement_completions(analysis, byte_offset));
     items.sort_by(|a, b| a.label.cmp(&b.label));
     items
+}
+
+fn completion_funcs(analysis: &CompletionAnalysis<'_>) -> FxHashMap<Symbol, Func> {
+    let mut finder = CompletionFuncFinder {
+        found: FxHashMap::default(),
+    };
+    if let Some(asts) = analysis.all_asts {
+        for ast in asts.iter().flatten() {
+            for root in &ast.roots {
+                root.drive(&mut finder);
+            }
+        }
+    } else {
+        for root in &analysis.ast.roots {
+            root.drive(&mut finder);
+        }
+    }
+    finder.found
+}
+
+fn completion_detail(
+    analysis: &CompletionAnalysis<'_>,
+    funcs: &FxHashMap<Symbol, Func>,
+    symbol: Symbol,
+) -> Option<String> {
+    let scheme = analysis.types.schemes.get(&symbol)?;
+    let Some(func) = funcs.get(&symbol) else {
+        return Some(scheme.render());
+    };
+    let params: Vec<(String, String)> = func
+        .params
+        .iter()
+        .map(|param| {
+            let mode = param
+                .mode
+                .unwrap_or(crate::node_kinds::parameter::ParamMode::Borrow);
+            (param.name.name_str(), mode.keyword().to_string())
+        })
+        .collect();
+    Some(scheme.render_callable(&func.name.name_str(), &params))
+}
+
+#[derive(Visitor)]
+#[visitor(Func(enter))]
+struct CompletionFuncFinder {
+    found: FxHashMap<Symbol, Func>,
+}
+
+impl CompletionFuncFinder {
+    fn enter_func(&mut self, func: &Func) {
+        if let Ok(symbol) = func.name.symbol() {
+            self.found.entry(symbol).or_insert_with(|| func.clone());
+        }
+    }
 }
 
 fn member_completions(analysis: &CompletionAnalysis<'_>, dot_offset: u32) -> Vec<CompletionItem> {
@@ -965,6 +1022,20 @@ mod tests {
             items.iter().any(|i| i.label == "foo"),
             "expected foo in {items:?}"
         );
+    }
+
+    #[test]
+    fn function_completion_shows_a_source_shaped_inferred_signature() {
+        let code = "// no-core\nfunc id(x) { x }\ni\n";
+        let analyzed = analyze(code);
+        let byte_offset = byte_offset_for(code, "i\n", 0);
+        let completion = completion(&analyzed);
+        let items = super::complete(code, &completion, byte_offset);
+        let id = items
+            .iter()
+            .find(|item| item.label == "id")
+            .expect("id completion");
+        assert_eq!(id.detail.as_deref(), Some("func id<X>(borrow x: X) -> &X"));
     }
 
     // ADR 0042 §6 / ADR 0013: scope completion uses source-position
