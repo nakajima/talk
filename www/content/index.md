@@ -165,7 +165,7 @@ print(rec.greeting("pat"))
 
 ## enums / pattern matching
 
-What about enumerations? You ever enumerate stuff? It's the best!
+What about enumerations? With attached values even?
 
 ```tlk accumulate(enums)
 enum Response {
@@ -181,7 +181,7 @@ You can pattern match on `enum`s. Your `match` expression will be checked for ex
 match response {
     .ok(string) -> string,
     .redirect(message) -> message,
-    .other(code) -> "uh oh"
+    .other(_) -> "uh oh"
 }
 ```
 
@@ -202,7 +202,7 @@ let point = { x: 10, y: 20 }
 
 match point {
 	{ x, y: 20 } -> x,
-	{ x, y } -> y
+	{ y, .. } -> y
 }
 ```
 
@@ -223,8 +223,8 @@ Speaking of bailing early, any two-variant enum can short circuit a function. Th
 
 ```tlk
 // For example
-enum Option {
-	case some(Int), none
+enum Option<T> {
+	case some(T), none
 }
 
 func maybe_increment(x: Option<Int>) -> Option<Int> {

@@ -1175,6 +1175,11 @@ fn run_suppresses_a_unit_result() {
 }
 
 #[test]
+fn run_shows_void() {
+    assert_runs(b"print(())\n", &[], b"void\n");
+}
+
+#[test]
 fn run_executes_an_explicit_entry_function() {
     let source = b"// no-core\n\
         pub func one() -> Int { return 1 }\n\

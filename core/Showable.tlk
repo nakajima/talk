@@ -94,6 +94,10 @@ extend Bool: Showable {
 	}
 }
 
+extend Void: Showable {
+	pub func show() -> String { "void" }
+}
+
 extend String: Showable {
 	pub func show() -> String {
 		self.to_string()
