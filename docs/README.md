@@ -95,6 +95,7 @@ Status vocabulary:
 - [0042 - Symbol visibility](adr/0042-symbol-visibility-and-public-module-interfaces.md)
 - [0043 - Self-hosted source frontend](adr/0043-self-hosted-source-frontend.md)
 - [0048 - One native source frontend and native library artifacts](adr/0048-native-source-frontend-and-library-artifacts.md)
+- [0051 - Invocation-scoped function effects](adr/0051-invocation-scoped-function-effects.md)
 
 ### Historical, superseded, or rejected
 

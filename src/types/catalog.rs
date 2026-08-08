@@ -1036,8 +1036,21 @@ impl TypeCatalog {
                 continue;
             }
             let head = conformance.head;
+            // The declaring catalog and an imported interface can carry
+            // different commitment states for the same row ID. Replacing
+            // that row must not index its ID a second time.
+            let previous_head = self.conformances.get(&id).map(|existing| existing.head);
             self.conformances.insert(id, conformance);
-            self.conformances_by_head.entry(head).or_default().push(id);
+            match previous_head {
+                None => self.conformances_by_head.entry(head).or_default().push(id),
+                Some(previous) if previous != head => {
+                    if let Some(rows) = self.conformances_by_head.get_mut(&previous) {
+                        rows.retain(|existing| *existing != id);
+                    }
+                    self.conformances_by_head.entry(head).or_default().push(id);
+                }
+                Some(_) => {}
+            }
         }
         for (label, owners) in other.member_owners {
             for owner in owners {
@@ -2144,6 +2157,34 @@ mod tests {
         row.protocol = ProtocolRef::bare(Symbol::CheapClone);
         catalog.insert_conformance(ModuleId::Current, row);
         catalog
+    }
+
+    #[test]
+    fn merge_indexes_one_row_when_commitment_states_share_an_id() {
+        let head = Symbol::Struct(StructId::from(1));
+        let mut imported = TypeCatalog::default();
+        let id = imported.insert_conformance(
+            ModuleId::Current,
+            Conformance::new(head, ProtocolRef::bare(Symbol::Showable)),
+        );
+
+        let mut declaring = TypeCatalog::default();
+        let mut committed = Conformance::new(head, ProtocolRef::bare(Symbol::Showable));
+        committed.dictionary = vec![DictionaryEntry::Derived(DerivedRecipe::Show)];
+        assert_eq!(
+            declaring.insert_conformance(ModuleId::Current, committed),
+            id
+        );
+
+        let mut merged = TypeCatalog::default();
+        merged.merge(imported);
+        merged.merge(declaring);
+
+        assert_eq!(merged.conformances_by_head[&head], vec![id]);
+        assert_eq!(
+            merged.conformances[&id].dictionary,
+            vec![DictionaryEntry::Derived(DerivedRecipe::Show)]
+        );
     }
 
     #[test]

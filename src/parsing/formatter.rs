@@ -271,6 +271,56 @@ impl<'a> Formatter<'a> {
         comments.borrow().has_between(start, end)
     }
 
+    fn import_for_root(root: &Node) -> Option<&Import> {
+        let Node::Decl(Decl {
+            kind: DeclKind::Import(import),
+            ..
+        }) = root
+        else {
+            return None;
+        };
+        Some(import)
+    }
+
+    fn collapse_import_run(&self, roots: &[Node]) -> Vec<Import> {
+        let mut collapsed: Vec<Import> = Vec::new();
+
+        for root in roots {
+            let Some(import) = Self::import_for_root(root) else {
+                continue;
+            };
+            let existing = collapsed.iter_mut().find(|candidate| {
+                if candidate.path != import.path {
+                    return false;
+                }
+                matches!(
+                    (&candidate.symbols, &import.symbols),
+                    (ImportedSymbols::Named(_), ImportedSymbols::Named(_))
+                        | (ImportedSymbols::All, ImportedSymbols::All)
+                        | (ImportedSymbols::Glob, ImportedSymbols::Glob)
+                )
+            });
+
+            let Some(existing) = existing else {
+                collapsed.push(import.clone());
+                continue;
+            };
+            if let (ImportedSymbols::Named(existing), ImportedSymbols::Named(additional)) =
+                (&mut existing.symbols, &import.symbols)
+            {
+                for symbol in additional {
+                    if !existing.iter().any(|candidate| {
+                        candidate.name == symbol.name && candidate.alias == symbol.alias
+                    }) {
+                        existing.push(symbol.clone());
+                    }
+                }
+            }
+        }
+
+        collapsed
+    }
+
     fn take_comments_before(&self, pos: u32) -> Vec<Comment> {
         let Some(comments) = &self.comments else {
             return Vec::new();
@@ -338,15 +388,11 @@ impl<'a> Formatter<'a> {
         let mut output = String::new();
         let mut last_line: Option<u32> = None;
         let mut previous_root_was_import = false;
+        let mut root_index = 0;
 
-        for root in roots {
-            let root_is_import = matches!(
-                root,
-                Node::Decl(Decl {
-                    kind: DeclKind::Import(_),
-                    ..
-                })
-            );
+        while root_index < roots.len() {
+            let root = &roots[root_index];
+            let root_is_import = Self::import_for_root(root).is_some();
             let mut force_blank_line_before = previous_root_was_import && !root_is_import;
             let meta = self.get_meta_for_node(root);
             let start_pos = meta
@@ -374,6 +420,53 @@ impl<'a> Formatter<'a> {
                 force_blank_line_before = false;
             }
 
+            if root_is_import {
+                let mut run_end = root_index + 1;
+                let mut run_end_line = end_line;
+                while let Some(candidate) = roots.get(run_end) {
+                    if Self::import_for_root(candidate).is_none() {
+                        break;
+                    }
+                    let candidate_meta = self.get_meta_for_node(candidate);
+                    let candidate_start_line = candidate_meta
+                        .map(|node_meta| node_meta.start.line)
+                        .unwrap_or(run_end_line + 1);
+                    if candidate_start_line > run_end_line + 1 {
+                        break;
+                    }
+                    run_end_line = candidate_meta
+                        .map(|node_meta| node_meta.end.line)
+                        .unwrap_or(candidate_start_line);
+                    run_end += 1;
+                }
+
+                let boundary = roots
+                    .get(run_end)
+                    .and_then(|candidate| self.get_meta_for_node(candidate))
+                    .map(|node_meta| node_meta.start.start)
+                    .unwrap_or(u32::MAX);
+                if run_end > root_index + 1 && !self.has_comments_between(start_pos, boundary) {
+                    let collapsed = self.collapse_import_run(&roots[root_index..run_end]);
+                    let mut output_line = start_line;
+                    for import in collapsed {
+                        Self::push_doc_output(
+                            &mut output,
+                            &mut last_line,
+                            self.format_import(&import),
+                            output_line,
+                            output_line,
+                            false,
+                            width,
+                        );
+                        output_line += 1;
+                    }
+                    last_line = Some(run_end_line);
+                    previous_root_was_import = true;
+                    root_index = run_end;
+                    continue;
+                }
+            }
+
             let mut doc = self.format_node(root);
             if let Some(meta) = meta
                 && let Some(comment) = self.take_inline_comment(meta)
@@ -391,6 +484,7 @@ impl<'a> Formatter<'a> {
                 width,
             );
             previous_root_was_import = root_is_import;
+            root_index += 1;
         }
 
         for comment in self.take_comments_before(u32::MAX) {
@@ -3183,6 +3277,34 @@ mod formatter_tests {
             format_string("use package::foo\n// The first value.\nlet value=1"),
             "use package::foo\n\n// The first value.\nlet value = 1"
         );
+    }
+
+    #[test]
+    fn collapses_duplicate_import_statements() {
+        let input = "use package::foo::{ Foo, Shared }\n\
+use package::bar::{ Bar }\n\
+use package::foo::{ Baz, Shared, Foo as OtherFoo }\n\
+use package::all\n\
+use package::all\n\
+let value=Foo()";
+        let expected = "use package::foo::{ Foo, Shared, Baz, Foo as OtherFoo }\n\
+use package::bar::{ Bar }\n\
+use package::all\n\n\
+let value = Foo()";
+        assert_eq!(format_code(input, 80), expected);
+    }
+
+    #[test]
+    fn preserves_separate_imports_when_they_have_comments() {
+        let input = "use package::foo::{ Foo }\n\
+// Keep this import documented.\n\
+use package::foo::{ Bar }\n\
+let value=Foo()";
+        let expected = "use package::foo::{ Foo }\n\
+// Keep this import documented.\n\
+use package::foo::{ Bar }\n\n\
+let value = Foo()";
+        assert_eq!(format_string(input), expected);
     }
 
     #[test]

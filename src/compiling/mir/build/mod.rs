@@ -508,9 +508,8 @@ fn frame_uses(nodes: &[&Node]) -> FxHashMap<Symbol, usize> {
 /// The closure-environment contract, bind side (mirror of
 /// `capture_env`): the nested frame's prologue reads captured values
 /// back out — cell handles keep cell semantics — then the inherited
-/// witness pairs and conformance dictionaries, then the captured
-/// capabilities. New environment slot kinds are added here and in
-/// `capture_env`, nowhere else.
+/// witness pairs and conformance dictionaries. New environment slot kinds
+/// are added here and in `capture_env`, nowhere else.
 fn bind_env(
     enclosing_locals: &FxHashMap<Symbol, LocalId>,
     enclosing_names: &[String],
@@ -518,7 +517,6 @@ fn bind_env(
     fx: &mut FunctionBuilder,
     captured: &[Symbol],
     inherited: &[(Symbol, (LocalId, LocalId))],
-    effects: &[Symbol],
 ) {
     for (index, symbol) in captured.iter().enumerate() {
         let local = fx.fresh_local();
@@ -576,20 +574,6 @@ fn bind_env(
             fx.param_requirements
                 .insert((*param_symbol, protocol.protocol), locals);
         }
-    }
-    for effect in effects {
-        let clause = fx.fresh_local();
-        fx.push(Inst::EnvGet {
-            dest: clause,
-            index: env_index,
-        });
-        let index_local = fx.fresh_local();
-        fx.push(Inst::EnvGet {
-            dest: index_local,
-            index: env_index + 1,
-        });
-        env_index += 2;
-        fx.capabilities.insert(*effect, (clause, index_local));
     }
     let _ = env_index;
 }
@@ -2581,10 +2565,6 @@ struct FunctionBuilder<'p, 'a> {
     /// Building an abort-unwind cleanup block: exceptional teardown may
     /// drop linear values (the abort IS their consumption).
     in_unwind_cleanup: bool,
-    /// Captured capabilities: per user effect, the creation site's
-    /// handler `(clause, index)` read from this closure's environment
-    /// (Effekt-style lexical capture — ADR 0011 departure (d)).
-    capabilities: FxHashMap<Symbol, (LocalId, LocalId)>,
     /// Inside a handler clause: the local holding the delimiter
     /// continuation. `continue v` resumes (returns from the clause); the
     /// clause's finite value discontinues through this.
@@ -2651,7 +2631,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             celled: rustc_hash::FxHashSet::default(),
             nested_refs: rustc_hash::FxHashSet::default(),
             cell_handles: rustc_hash::FxHashSet::default(),
-            capabilities: FxHashMap::default(),
             moved_globals: rustc_hash::FxHashSet::default(),
             borrow_roots: FxHashMap::default(),
             invalidated_views: rustc_hash::FxHashSet::default(),
@@ -7200,7 +7179,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.produce_temp(dest, &ty);
                 Ok(Operand::Local(dest))
             }
-            ExprKind::Func(func) => self.compile_closure(func, &expr.ty),
+            ExprKind::Func(func) => self.compile_closure(func),
             ExprKind::Clone(source) => {
                 // Typing selected the clone (CHG-09): Copy duplicates the
                 // value; CheapClone adds one reference per owned buffer
@@ -7374,12 +7353,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         }
                     }
                 }
-                // Route through the capability in scope at this perform's
-                // lexical position: the captured creation-site handler
-                // when this frame carries one, dynamic nearest-handler
-                // search otherwise. Either way the clause runs outside its
-                // own handler (CHG-01): the search floor is the handler's
-                // index for the clause call's extent.
+                // Route through the nearest handler in this call's dynamic
+                // extent. The clause runs outside its own handler (CHG-01):
+                // the search floor is the handler's index for the clause
+                // call's extent.
                 let (clause, index) = self.capability(effect);
                 let saved_floor = self.fresh_local();
                 self.push(Inst::GetFloor { dest: saved_floor });
@@ -9713,16 +9690,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// A block used as a function value (a trailing block argument): its
     /// own chunk over `[captures…]`, parameters from the block's argument
     /// list.
-    /// The capability for a user effect at this point: the captured
-    /// creation-site handler when this frame is a closure carrying one
-    /// (Effekt-style lexical capture — Brachthäuser, Schuster &
-    /// Ostermann, OOPSLA 2020; ADR 0011 departure (d)), the dynamic
-    /// nearest handler otherwise. Returns the handler's clause and its
-    /// stack index (the search floor for the clause call's extent).
+    /// Resolve a user effect against the nearest handler in this call's
+    /// dynamic extent. Returns the handler's clause and its stack index
+    /// (the search floor for the clause call's extent).
     fn capability(&mut self, effect: Symbol) -> (LocalId, LocalId) {
-        if let Some(pair) = self.capabilities.get(&effect) {
-            return *pair;
-        }
         let clause = self.fresh_local();
         let cont = self.fresh_local();
         let index = self.fresh_local();
@@ -9735,35 +9706,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         (clause, index)
     }
 
-    /// The effects a function value may perform, from its resolved effect
-    /// row — the effects whose capabilities the closure captures at
-    /// creation. Every declared effect has a handler at any legal capture
-    /// point (host-list effects always: the entry wrapper's fallback is
-    /// the floor of the stack — ADR 0039). Only the compile-time `'unsafe`
-    /// capability is undeclared and carries no slot.
-    fn closure_effects(&mut self, ty: &Ty) -> Vec<Symbol> {
-        let Ty::Func(_, _, row) = self.resolved(ty) else {
-            return Vec::new();
-        };
-        row.effects
-            .iter()
-            .map(|entry| entry.effect)
-            .filter(|effect| self.program_builder.catalog.effects.contains_key(effect))
-            .collect()
-    }
-
     /// The closure-environment contract, build side: captured frame
     /// values first (cell handles travel as handles), then this frame's
-    /// rigid-generic witness pairs and conformance dictionaries in
-    /// sorted order, then one `(clause, index)` capability per user
-    /// effect the closure may perform. `bind_env` is the mirror; the
-    /// two must agree on layout. New environment slot kinds are added
-    /// here and there, nowhere else.
+    /// rigid-generic witness pairs and conformance dictionaries in sorted
+    /// order. Effect handlers are resolved when the closure runs, not
+    /// stored in its environment. `bind_env` is the mirror; the two must
+    /// agree on layout.
     fn capture_env(
         &mut self,
         captured: &[Symbol],
         overrides: &FxHashMap<Symbol, LocalId>,
-        effects: &[Symbol],
     ) -> Result<(Vec<Operand>, WitnessPairs), BackendError> {
         let mut env: Vec<Operand> = captured
             .iter()
@@ -9790,11 +9742,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 env.extend(locals.iter().map(|local| Operand::Local(*local)));
             }
         }
-        for effect in effects {
-            let (clause, index) = self.capability(*effect);
-            env.push(Operand::Local(clause));
-            env.push(Operand::Local(index));
-        }
         Ok((env, inherited))
     }
 
@@ -9819,7 +9766,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// chunk; free locals capture by value into the environment
     /// (handler-extent shared borrows in v1). The chunk's prologue reads
     /// each capture back out of the environment.
-    fn compile_closure(&mut self, func: &Func, ty: &Ty) -> Result<Operand, BackendError> {
+    fn compile_closure(&mut self, func: &Func) -> Result<Operand, BackendError> {
         let body_nodes: Vec<&Node> = func.body.body.iter().collect();
         let captured = self.live_captures(&func.body);
         let (overrides, mut anchored) = if func.captures.is_empty() {
@@ -9849,10 +9796,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         .is_some_and(|ty| self.needs_release(&ty.clone()))
             })
         });
-        // Lexical capability capture: the closure carries its creation
-        // site's handler for each user effect in its row.
-        let effects = self.closure_effects(ty);
-        let (env, inherited) = self.capture_env(&captured, &overrides, &effects)?;
+        // Effect handlers are invocation-scoped: closure creation captures
+        // values and generic evidence only.
+        let (env, inherited) = self.capture_env(&captured, &overrides)?;
 
         // A stored rank-N closure: the checker computed the one
         // concrete assignment its projections agree on and baked it on
@@ -9923,7 +9869,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             &mut fx,
             &captured,
             &inherited,
-            &effects,
         );
         let value = fx.compile_block(&func.body)?;
         let (n_locals, blocks, _return_repr, debug_names) = fx.finish(value)?;

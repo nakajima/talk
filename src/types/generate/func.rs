@@ -462,9 +462,24 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             None => expected_ret.clone(),
         };
 
-        // A nested function cannot resume an enclosing handler.
-        let inner = ctx.enter_function(ret.clone(), expected_eff.clone());
+        // Check the body under its own latent row. Contextual effect
+        // widening must not make closure creation require those effects;
+        // the expected row is only an upper bound supplied to callers.
+        let inferred_eff = EffectRow::open(self.store.fresh_eff(self.level, func.id));
+        let inner = ctx.enter_function(ret.clone(), inferred_eff.clone());
         self.check_block_value_with_reason(&func.body, &ret, result_reason, &inner);
+        self.wanteds.push(Constraint::EffectSubset {
+            inferred: inferred_eff,
+            allowed: expected_eff.clone(),
+            origin: CtOrigin::new(
+                func.id,
+                if expected_eff.tail.is_none() {
+                    CtReason::Effect
+                } else {
+                    CtReason::Apply
+                },
+            ),
+        });
 
         Ty::Func(params, Box::new(ret), expected_eff.clone())
     }

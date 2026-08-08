@@ -133,7 +133,8 @@ field/payload conforms, so the reachable gaps are:
 (:259) has **no teardown counterpart** — `drop_value` (:3378) and
 `retain_value` (:5104) have no closure arm. Env layout is built/bound in one
 pair: `capture_env` (:8712) / `bind_env` (:1042) — captured values, then
-per-rigid witness pairs + dictionaries, then effect capabilities. The Copy
+per-rigid witness pairs + dictionaries. Effects resolve from the dynamic
+handler stack when the closure runs (ADR 0051). The Copy
 gates: `check_captures` (:5247, implicit captures) and `check_capture_list`
 (:5302, explicit modes).
 
@@ -209,20 +210,12 @@ path (entries:325). Demand-compiled readers only inline scalar literals
 | :2058 | call to a name with no compilable body (`demand`) | **LINKER** — name resolved, body absent; structured missing-supplier diagnostic. (Core primitives carry `#_ir` bodies and are unaffected.) |
 | entries:270 | linear global teardown | VALID — requires the §5 whole-program finite-exit analysis (callable summaries → fixed point); invalid programs get the ordinary linearity diagnostic. Genuinely new machinery, unique site |
 
-## G. Ambient core effects (§6) — 1 site
+## G. Ambient core effects (§6) — resolved
 
-**:8546 — VALID.** `install_handler` rejects any handler over a
-`ModuleId::Core` effect. Core performs currently bypass the handler stack
-entirely: `is_io_effect` short-circuit at :6593 lowers straight to `Inst::Io`
-via `compile_io_perform` (:8466), and `closure_effects` filters Core at :8701 —
-the reject exists because a user handler would be silently skipped.
-
-Fix per §6: the runtime host becomes the *outermost fallback handler*. Route
-typed core performs through the normal `FindHandler`/`Inst::Perform` path with a
-bottom-of-stack host clause; remove the exclusions at :8545/:8701 and the :6593
-bypass. Allocator/raw-memory primitives stay unhandleable intrinsics (split any
-effect that conflates the two first). Coupled to mechanism A on the
-perform-lowering path.
+ADR 0039 moved Core behavior into ordinary outer fallback handlers, removing
+the Core bypass and handler rejection. ADR 0051 subsequently removed closure
+capability capture entirely: every function-value perform resolves through the
+same invocation-site `FindHandler` path.
 
 ## H. Inline IR (§7) — 6 sites
 

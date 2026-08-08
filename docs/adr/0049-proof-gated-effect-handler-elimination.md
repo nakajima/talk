@@ -47,10 +47,10 @@ may be considered unused only when no reachable function contains
 This is deliberately stronger and less precise than a dynamic-extent analysis.
 It does not need to solve indirect-call targets: every function body retained
 through a direct call or reachable `MakeClosure` is scanned whether or not that
-body is eventually invoked. A closure that captures an effect capability also
-causes `FindHandler(E)` at its reachable creation site. Recursion, delegation,
-module initialization, and export bodies likewise leave their explicit
-requests in the retained module.
+body is eventually invoked. An effectful closure carries `FindHandler(E)` in
+its body, where invocation-scoped routing resolves it (ADR 0051). Recursion,
+delegation, module initialization, and export bodies likewise leave their
+explicit requests in the retained module.
 
 Failure to establish module-wide absence keeps every handler for that effect.
 The optimizer may miss removable handlers, but it cannot infer purity from a
@@ -136,7 +136,7 @@ The experiment must cover:
 - nested user handlers and same-effect delegation;
 - resumable and abortive clauses;
 - discontinue through cleanup frames;
-- closures that capture effect capabilities;
+- effectful closure bodies with invocation-site handler lookup;
 - closures stored in globals, aggregates, existentials, and cells;
 - direct, recursive, mutually recursive, and indirect calls;
 - module initialization;
@@ -195,8 +195,8 @@ code size would allow core source and compiler policy to drift.
 
 ### Infer absence within one function
 
-Effects can occur through direct calls, closures, recursion, delegation, and
-captured capabilities. The initial implementation instead requires absence
+Effects can occur through direct calls, closures, recursion, and delegation.
+The initial implementation instead requires absence
 from the entire reachable module.
 
 ### Remove capturing clause setup

@@ -296,9 +296,8 @@ fn trailing_block_closures_mutate_captured_locals() {
 
 #[test]
 fn closures_with_ambient_core_effects_run_without_handlers() {
-    // A closure whose effect row mentions core's ambient effects ('alloc
-    // here, via Array operations) must not capture a capability for them:
-    // the runtime is their implicit handler and no explicit one can exist.
+    // A closure whose body uses a core ambient effect ('alloc here, via
+    // Array operations) resolves it from the host handlers when invoked.
     assert_runs(
         b"func run(consume fn: () -> Int) -> Int { fn() }\nprint(run { [2, 3, 1].sort_by { $0 > $1 }[0] })\n",
         &[],
@@ -2184,7 +2183,7 @@ fn assert_corpus_dir(programs: &str, known_failing: &[&str], minimum: usize) {
 /// The reference's user-effects behavior pins (G6 effects cluster),
 /// ported from its VM test suite as corpus programs: deep handlers,
 /// conditional resume/abort, tail/statement/expression performs,
-/// handler locals, effectful closures, lexical capability capture.
+/// handler locals, effectful closures, and invocation-site routing.
 #[test]
 fn reference_effects_cluster_matches_frozen_stdout() {
     assert_corpus_dir("tests/reference/effects", &[], 18);
@@ -3311,12 +3310,18 @@ fn run_balances_temps_when_a_sibling_arm_returns() {
 }
 
 #[test]
-fn run_captures_capabilities_lexically() {
-    // Reference pin: a function value keeps the handlers of its
-    // creation site, not its call site (Effekt-style capabilities —
-    // Brachthäuser, Schuster & Ostermann, OOPSLA 2020; ADR 0011
-    // departure (d)). `f` routes to the first handler (100) even
-    // though a second (200) covers the call.
+fn run_resolves_function_value_effects_at_invocation() {
+    assert_runs(
+        b"effect 'throw<T: Showable>(val: T) -> T\nfunc rescue<T: Showable>(fn: () 'throw -> T) -> T {\n\t#handle 'throw { val in\n\t\tprint(\"caught\")\n\t\t'continue val\n\t}\n\tfn()\n}\nprint(rescue {})\nprint(rescue { 'throw(val: 3) })\n",
+        &[],
+        b"void\ncaught\n3\n",
+    );
+}
+
+#[test]
+fn run_function_values_use_invocation_site_handlers() {
+    // A function value resolves effects where it runs. Both `f()` and the
+    // direct perform route to the second handler covering the call.
     assert_runs(
         b"effect 'boost() -> Int\n\
           func run() -> Int {\n\
@@ -3327,7 +3332,7 @@ fn run_captures_capabilities_lexically() {
           }\n\
           run()\n",
         &[],
-        b"300\n",
+        b"400\n",
     );
 }
 
@@ -3788,9 +3793,8 @@ fn run_ambient_handlers_may_discontinue() {
 
 #[test]
 fn run_function_values_reach_the_fallback_without_a_user_handler() {
-    // A function value with no user handler live at creation captures
-    // the fallback capability — ambient effects follow the same
-    // creation-site capture semantics as handled effects (ADR 0039 §5).
+    // An ambient effect with no nearer user handler reaches the host
+    // fallback active when the function value runs.
     assert_runs(
         b"let f = func() {\n\t'async()\n\t7\n}\nprint(f())\n",
         &[],
@@ -3799,7 +3803,7 @@ fn run_function_values_reach_the_fallback_without_a_user_handler() {
 }
 
 #[test]
-fn run_function_values_capture_ambient_handlers_at_creation() {
+fn run_function_values_use_ambient_handlers_at_invocation() {
     assert_runs(
         b"#handle 'async {\n\tprint(\"captured\")\n\t'continue\n}\nlet f = func() {\n\t'async()\n\t7\n}\nprint(f())\n",
         &[],
@@ -4373,6 +4377,17 @@ fn run_dispatches_overloaded_requirements_through_witness_tables() {
         b"protocol Tagger {\n\tfunc tag(short flag: Bool) -> Int\n\tfunc tag(long count: Int) -> Int\n}\nstruct S {}\nextend S: Tagger {\n\tfunc tag(short flag: Bool) -> Int {\n\t\tif flag { 1 } else { 2 }\n\t}\n\n\tfunc tag(long count: Int) -> Int {\n\t\tcount + 10\n\t}\n}\nfunc generic<T: Tagger>(x: T) -> Int {\n\tx.tag(short: true) + x.tag(long: 5)\n}\nprint(generic(x: S()))\nlet e: any Tagger = S()\nprint(e.tag(short: false) + e.tag(long: 1))\n",
         &[],
         b"16\n13\n",
+    );
+}
+
+#[test]
+fn check_all_dispatches_constrained_generic_effects() {
+    // Declaration-only checking compiles the handler and its generic
+    // requirement calls rigidly. The merged user/core catalogs must index
+    // each committed conformance row once so both the concrete String call
+    // and the effect generic's forwarded dictionary remain selectable.
+    assert_checks(
+        b"effect 'throw<T: Showable>(val: T) -> T\nfunc rescue<T: Showable>(fn: () 'throw -> T) -> T {\n\t#handle 'throw { val in\n\t\tprint(\"oops got an error\")\n\t\tprint(val)\n\t\t'continue val\n\t}\n\tfn()\n}\n",
     );
 }
 

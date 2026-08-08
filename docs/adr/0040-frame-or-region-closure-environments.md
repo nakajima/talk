@@ -138,8 +138,7 @@ that capture or inherited value:
   promotion operation;
 - a shared or exclusive borrowed capture owns nothing and records its source
   lifetime;
-- inherited generic evidence and effect capabilities use their published
-  ownership contracts;
+- inherited generic evidence uses its published ownership contract;
 - a cell slot carries the cell's managed environment handle.
 
 Both frame and region environments own the slots described as owning. The

@@ -2,6 +2,9 @@
 
 Status: superseded by ADR 0031 (2026-07-13)
 
+Function-value creation-site capability capture was later replaced by
+invocation-scoped routing in ADR 0051.
+
 ## Context
 
 Handler routing was decided **lexically at name resolution**: a perform

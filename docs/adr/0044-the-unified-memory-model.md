@@ -472,8 +472,8 @@ ClosureValue
 
 Each closure construction receives an `EnvironmentId`. Its slot facts are
 fixed at construction - the ordered checked capture operations, inherited
-generic evidence and effect capabilities, and the source origins of non-owning
-slots. Its storage is a one-bit latch initialized to `Frame` (`Empty` when
+generic evidence, and the source origins of non-owning slots. Effect handlers
+are resolved at invocation and occupy no environment slot (ADR 0051). Its storage is a one-bit latch initialized to `Frame` (`Empty` when
 there are no slots) and set to `Region` when an owning sink is observed. The
 latch never moves back. `MakeClosure` and environment operations refer to
 `EnvironmentId`, so lowering reads the final latch directly. This is not a
@@ -529,8 +529,8 @@ capture retains once at environment construction; a consuming capture
 transfers ownership into the environment; an owning stored view retains its
 referent according to the checked promotion operation; a shared or exclusive
 borrowed capture owns nothing and records its source lifetime; inherited
-generic evidence and effect capabilities use their published ownership
-contracts; a cell slot carries the cell's managed member handle. Frame and
+generic evidence uses its published ownership contract; a cell slot carries
+the cell's managed member handle. Frame and
 region environments own the same slots the same way; the storage class changes
 where generated teardown runs, never the operation.
 
@@ -845,8 +845,8 @@ used as a fallback representation for safe managed operations.
   required Move, Alias, or Borrow edge exactly once.
 - Heap declarations cannot claim `Copy` or `CheapClone`.
 - Selected buffer clones prove every future detachment can clone the element.
-- Capture operations, inherited evidence, and effect capabilities publish
-  their ownership contracts; borrowed captures publish their source lifetime.
+- Capture operations and inherited evidence publish their ownership contracts;
+  borrowed captures publish their source lifetime.
 - Borrowed views cannot appear in owned fields, globals, or escaping captures.
 - Unsafe/FFI ownership policies and nonescaping callback shape are explicit.
 

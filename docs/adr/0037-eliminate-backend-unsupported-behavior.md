@@ -290,8 +290,9 @@ structural conformance from a runtime type shape or requirement name.
 ## 4. Owning closure environments
 
 Closure environments become type-aware owning runtime values. Each environment
-contains the slots and checked capture operations published by typing, inherited
-generic evidence, and captured effect capabilities.
+contains the slots and checked capture operations published by typing plus
+inherited generic evidence. Effect handlers are invocation-scoped and do not
+occupy environment slots (ADR 0051).
 
 The runtime representation supports:
 

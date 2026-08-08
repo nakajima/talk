@@ -108,6 +108,13 @@ cannot reach *past* an inner same-label handler — with label-scoped
 elimination there is never a live outer occurrence to reach), and
 first-class named instances. Both are orthogonal extensions.
 
+**Function values resolve effects at invocation (ADR 0051).** A closure's
+latent row is a requirement of running its body, not a set of concrete handler
+capabilities captured when the closure is created. Closure environments carry
+values and generic evidence only; each perform searches the current dynamic
+handler stack. Contextual effect widening is operationally inert, and a handler
+around a higher-order callback can discharge the callback's declared effects.
+
 ## Why not the alternatives
 
 - **Koka-exact single-occurrence elimination** (handler fixes one

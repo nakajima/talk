@@ -16,8 +16,8 @@ perform
 
 A clause delegates by performing the same effect again. Because its search
 floor excludes itself, the new perform reaches the next outer handler.
-Function values capture effect capabilities at their creation site, while a
-perform without a captured capability searches the dynamic stack.
+Function values resolve their latent effects from the dynamic stack when they
+are invoked (ADR 0051).
 
 Core effects did not follow this path. The backend recognized `'io`
 specially, dispatched its `IORequest` directly to the host instruction,
@@ -64,12 +64,12 @@ The compiler knows exactly one well-known symbol: `_with_host`.
   `unreachable` surface expression desugars before resolution to an ordinary
   `'panic("reached unreachable")` perform, so it needs no compiler-known
   effect identity.
-- **MIR** treats every declared effect identically: performs use the
-  capability path, closures capture capabilities for every declared effect
-  in their row (a handler always exists at any legal capture point), and
-  `#handle` is legal over any declared effect. Only the undeclared
-  compile-time `'unsafe` capability stays outside the handler stack
-  (`#unsafe` is its mask; the lexical gate is unchanged).
+- **MIR** treats every declared effect identically: performs search the
+  current dynamic handler stack, including performs in function values, and
+  `#handle` is legal over any declared effect. Closure environments carry no
+  handler capabilities (ADR 0051). Only the undeclared compile-time `'unsafe`
+  capability stays outside the handler stack (`#unsafe` is its mask; the
+  lexical gate is unchanged).
 
 Routing order for a host effect is therefore the ordinary order:
 
@@ -78,7 +78,7 @@ nearest user handler -> next outer user handler -> core's fallback clause
 ```
 
 with delegation, substitution, resume, discontinue, unwind cleanup, and
-function-value capture all the existing mechanisms. The resumable fallbacks
+function-value invocation all using the same mechanism. The resumable fallbacks
 always resume. The panic fallback is abortive and terminates the process
 instead. They die with the wrapper frame like any handler; global teardown
 runs outside them, which is sound because deinit hooks are statically barred
@@ -182,6 +182,6 @@ but core's trust in reply counts, which clamping closes at ~5 call sites.
   loop.
 - Black-box coverage in tests/talk_tests.rs: interception with
   perform-counting, delegation to the fallback, nested delegation,
-  discontinue, function-value capture with and without a live handler,
-  module-init performs under a named entry, inert `'alloc` performs, and
+  discontinue, function-value invocation with and without a nearer user
+  handler, module-init performs under a named entry, inert `'alloc` performs, and
   the lying-handler clamp test.

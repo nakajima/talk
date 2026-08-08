@@ -22,8 +22,9 @@ The existing runtime is synchronous:
 - the C backend uses the native C stack;
 - the browser WASM surface calls the VM synchronously;
 - managed-buffer owner counts and region external-root counts are non-atomic;
-- function values capture effect capabilities from their creation site, and a
-  captured handler clause contains a delimiter naming the installing frame.
+- function values resolve effects against the invoking task's dynamic handler
+  stack (ADR 0051); handler clauses themselves contain delimiters naming their
+  installing frames.
 
 Talk's effects are not presently first-class coroutine continuations. A perform
 finds and calls a handler clause; returning from the clause resumes the perform,
@@ -272,18 +273,19 @@ plain loads and stores for operations declared atomic.
 ## Handler boundaries across tasks
 
 A task does not inherit frame-bound dynamic handler installations from the
-worker that created it. Current captured capabilities contain clauses whose
-delimiters name installing frames; moving them would permit a task to abort
-across another task's stack.
+worker that created it. Handler clauses contain delimiters naming installing
+frames; moving an installation would permit a task to abort across another
+task's stack.
 
 A future polled as a task executes under the executor worker's root host
-handlers plus handlers installed by the future's own poll computation. A
-future value is `Send` only if every effectful function value in its retained
-state has a transferable environment and no frame-bound handler capability.
+handlers plus handlers installed by the future's own poll computation.
+Invocation-scoped function effects resolve only against that task-local stack.
+A future value is `Send` when its retained value environment is transferable;
+function values carry no frame-bound handler capability.
 
 Task-local handler inheritance, handler reinstallation, and handler-owner
 routing are separate possible extensions. None is inferred from closure
-creation under the current lexical-capability rule.
+creation.
 
 ## Cancellation and destruction
 
