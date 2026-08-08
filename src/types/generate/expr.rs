@@ -1113,13 +1113,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             expr.id,
         );
         if args.len() != instantiation.argument_types.len() {
-            self.diagnostics.errors.push((
-                TypeError::ArityMismatch {
-                    expected: instantiation.argument_types.len(),
-                    found: args.len(),
-                },
+            self.diagnostics.argument_arity(
                 expr.id,
-            ));
+                format!("Variant '{label}'"),
+                instantiation.argument_types.len(),
+                args.len(),
+            );
         } else {
             for (arg, payload) in args.iter().zip(&instantiation.argument_types) {
                 self.check_expr(&arg.value, payload, CtReason::Apply, ctx);
@@ -1329,11 +1328,16 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         expr.id,
                     );
                 }
-                if let ExprKind::Member(Some(receiver), _, _) = &callee.kind
+                if let ExprKind::Member(Some(receiver), label, _) = &callee.kind
                     && !matches!(receiver.kind, ExprKind::Constructor(..))
                 {
                     if !type_args.is_empty() {
-                        self.unsupported(expr.id, "type arguments on method calls");
+                        self.diagnostics.generic_argument_arity(
+                            expr.id,
+                            format!("Method '{label}'"),
+                            0,
+                            type_args.len(),
+                        );
                     }
                     return self.infer_member_call(expr, callee, args, ctx);
                 }
@@ -1368,10 +1372,16 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 };
                 let callee_ty =
                     self.infer_expr_with_static_member_reason(callee, ctx, callee_reason);
+                let target = match &callee.kind {
+                    ExprKind::Variable(name) => format!("Function '{}'", name.name_str()),
+                    ExprKind::Constructor(name, _) => format!("Type '{}'", name.name_str()),
+                    ExprKind::Member(_, label, _) => format!("Variant '{label}'"),
+                    _ => "Function value".to_string(),
+                };
                 if !type_args.is_empty() {
-                    self.apply_type_args(callee.id, type_args);
+                    self.apply_type_args(callee.id, target.clone(), type_args);
                 }
-                self.finish_call(expr.id, callee_ty, args, ctx)
+                self.finish_call(expr.id, target, callee_ty, args, ctx)
             }
 
             ExprKind::Func(func) => self.infer_func(func, ctx),
@@ -1526,7 +1536,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         );
                 }
                 if type_args.len() > sig.generics.len() {
-                    self.unsupported(expr.id, "more type arguments than the effect declares");
+                    self.diagnostics.generic_argument_arity(
+                        expr.id,
+                        format!("Effect '{symbol}'"),
+                        sig.generics.len(),
+                        type_args.len(),
+                    );
                 }
                 for (type_arg, param) in type_args.iter().zip(&sig.generics) {
                     let annotated = self.lower_generic_arg_for_param(param.symbol, type_arg);
@@ -1570,13 +1585,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         self.check_expr(&arg.value, &instantiate(param), CtReason::Apply, ctx);
                     }
                 } else {
-                    self.diagnostics.errors.push((
-                        TypeError::ArityMismatch {
-                            expected: sig.params.len(),
-                            found: args.len(),
-                        },
+                    self.diagnostics.argument_arity(
                         expr.id,
-                    ));
+                        format!("Effect '{symbol}'"),
+                        sig.params.len(),
+                        args.len(),
+                    );
                 }
                 let tail = self.store.fresh_eff(self.level, expr.id);
                 let entry = EffectEntry {

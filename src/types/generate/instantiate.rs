@@ -241,7 +241,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     /// Explicit call-site type arguments (`_alloc<Element>(capacity)`)
     /// equate positionally with the instantiation recorded at the callee
     /// (scheme params list declared generics first, in order).
-    pub(super) fn apply_type_args(&mut self, callee_node: NodeID, type_args: &[GenericArg]) {
+    pub(super) fn apply_type_args(
+        &mut self,
+        callee_node: NodeID,
+        target: String,
+        type_args: &[GenericArg],
+    ) {
         let recorded: Vec<(Symbol, Ty)> = self
             .artifacts
             .instantiations
@@ -252,13 +257,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         // error — but only when an instantiation was recorded (builtins
         // and trusted splices manage their own type arguments).
         if !recorded.is_empty() && type_args.len() > recorded.len() {
-            self.diagnostics.errors.push((
-                TypeError::ArityMismatch {
-                    expected: recorded.len(),
-                    found: type_args.len(),
-                },
+            self.diagnostics.generic_argument_arity(
                 callee_node,
-            ));
+                target,
+                recorded.len(),
+                type_args.len(),
+            );
         }
         for (type_arg, (param, target)) in type_args.iter().zip(recorded) {
             let ty = self.lower_generic_arg_for_param(param, type_arg);

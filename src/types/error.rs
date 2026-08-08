@@ -50,7 +50,17 @@ pub enum TypeError {
         found: String,
         reason: CtReason,
     },
-    ArityMismatch {
+    ArgumentArityMismatch {
+        target: String,
+        expected: usize,
+        found: usize,
+    },
+    FunctionParameterArityMismatch {
+        expected: usize,
+        found: usize,
+    },
+    GenericArgumentArityMismatch {
+        target: String,
         expected: usize,
         found: usize,
     },
@@ -339,7 +349,9 @@ impl TypeError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::Mismatch { .. } => "type.mismatch",
-            Self::ArityMismatch { .. } => "type.arity-mismatch",
+            Self::ArgumentArityMismatch { .. } => "type.argument-arity-mismatch",
+            Self::FunctionParameterArityMismatch { .. } => "type.function-parameter-arity-mismatch",
+            Self::GenericArgumentArityMismatch { .. } => "type.generic-argument-arity-mismatch",
             Self::ArgumentLabelMismatch { .. } => "type.argument-label-mismatch",
             Self::DuplicateCallable { .. } => "type.duplicate-callable",
             Self::IntegerLiteralOutOfRange { .. } => "type.integer-literal-out-of-range",
@@ -494,10 +506,40 @@ impl Display for TypeError {
                 let messages: Vec<String> = mismatches.iter().map(LabelMismatch::message).collect();
                 write!(f, "{}", messages.join("; "))
             }
-            TypeError::ArityMismatch { expected, found } => {
+            TypeError::ArgumentArityMismatch {
+                target,
+                expected,
+                found,
+            } => {
+                let noun = if *expected == 1 {
+                    "argument"
+                } else {
+                    "arguments"
+                };
+                let verb = if *found == 1 { "was" } else { "were" };
                 write!(
                     f,
-                    "Wrong number of arguments: expected {expected}, found {found}"
+                    "{target} expects {expected} {noun}, but {found} {verb} provided"
+                )
+            }
+            TypeError::FunctionParameterArityMismatch { expected, found } => write!(
+                f,
+                "Function types have different parameter counts: expected {expected}, found {found}"
+            ),
+            TypeError::GenericArgumentArityMismatch {
+                target,
+                expected,
+                found,
+            } => {
+                let noun = if *expected == 1 {
+                    "argument"
+                } else {
+                    "arguments"
+                };
+                let verb = if *found == 1 { "was" } else { "were" };
+                write!(
+                    f,
+                    "{target} expects {expected} generic {noun}, but {found} {verb} provided"
                 )
             }
             TypeError::IntegerLiteralOutOfRange { literal } => write!(

@@ -857,13 +857,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let (instantiation, local_params) =
             self.instantiate_variant_pattern(variant, substitution, pattern.id);
         if fields.len() != instantiation.argument_types.len() {
-            self.diagnostics.errors.push((
-                TypeError::ArityMismatch {
-                    expected: instantiation.argument_types.len(),
-                    found: fields.len(),
-                },
+            self.diagnostics.argument_arity(
                 pattern.id,
-            ));
+                format!("Variant '{variant_name}'"),
+                instantiation.argument_types.len(),
+                fields.len(),
+            );
             return PatternRefinement::default();
         }
         let mut refinement = PatternRefinement {

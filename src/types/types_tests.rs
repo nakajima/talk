@@ -2782,12 +2782,10 @@ pub mod tests {
         let t = check(
             "// no-core\nprotocol P {}\nstruct Weird<A = Int, B> { let a: A\n\tlet b: B }\nextend Weird<Bool>: P {}",
         );
-        let errors = type_errors(&t);
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("arity") || e.contains("argument")),
-            "omitting a non-defaulted suffix parameter must be an arity error, got {errors:?}"
+        assert_eq!(
+            type_errors(&t),
+            ["Type 'Weird' expects 2 generic arguments, but 1 was provided"],
+            "omitting a non-defaulted suffix must name the affected type"
         );
     }
 
@@ -2796,12 +2794,10 @@ pub mod tests {
         let t = check(
             "// no-core\nprotocol P {}\nstruct Pair<A, B> { let a: A\n\tlet b: B }\nextend<T> Pair<T>: P {}",
         );
-        let errors = type_errors(&t);
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("arity") || e.contains("argument")),
-            "underapplied head must be an arity error, got {errors:?}"
+        assert_eq!(
+            type_errors(&t),
+            ["Type 'Pair' expects 2 generic arguments, but 1 was provided"],
+            "an underapplied head must name the affected type"
         );
     }
 
@@ -2810,12 +2806,10 @@ pub mod tests {
         let t = check(
             "// no-core\nprotocol P {}\nstruct Pair<A, B> { let a: A\n\tlet b: B }\nextend Pair<Int, Bool, Int>: P {}",
         );
-        let errors = type_errors(&t);
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("arity") || e.contains("argument")),
-            "overapplied head must be an arity error, got {errors:?}"
+        assert_eq!(
+            type_errors(&t),
+            ["Type 'Pair' expects 2 generic arguments, but 3 were provided"],
+            "an overapplied head must name the affected type"
         );
     }
 
@@ -3388,11 +3382,10 @@ pub mod tests {
             "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nfunc id<T>(consume x: T) -> T { x }\nlet y: Opt<Int> = id(x: .some(1, 2))",
         );
         let errors = type_errors(&t);
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("Wrong number of arguments")),
-            "expected arity mismatch error, got {errors:?}"
+        assert_eq!(
+            errors,
+            ["Variant 'some' expects 1 argument, but 2 were provided"],
+            "expected a contextual variant arity error"
         );
     }
 
@@ -8031,11 +8024,10 @@ mod nested_types {
             "// no-core\nenum Res<T> {\n\tenum A {\n\t\tcase one(T)\n\t}\n}\nlet x: Res<Int>.A<Int> = Res.A.one(1)",
         );
         let errors = type_errors(&t);
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("expected 0, found 1")),
-            "expected an own-params arity error, got {errors:?}"
+        assert_eq!(
+            errors,
+            ["Type 'Res.A' expects 0 generic arguments, but 1 was provided"],
+            "expected an own-params arity error"
         );
     }
 
@@ -8059,6 +8051,22 @@ mod nested_types {
             "// no-core\nprotocol P {}\nextend Int: P {}\nenum Res<T> where T: P {\n\tenum A {\n\t\tcase one(T)\n\t}\n}\nlet good: Res<Int>.A = Res.A.one(1)",
         );
         assert_clean(&t);
+    }
+
+    #[test]
+    fn nominal_annotations_reject_over_arity_at_the_annotation() {
+        let t = check(
+            "// no-core\nenum Maybe {\n\tcase some(Int)\n\tcase none\n}\nfunc increment(x: Maybe<Int>) -> Maybe<Int> {\n\tlet value = x?\n\treturn .some(value + 1)\n}",
+        );
+        let errors = type_errors(&t);
+        assert_eq!(
+            errors,
+            [
+                "Type 'Maybe' expects 0 generic arguments, but 1 was provided",
+                "Type 'Maybe' expects 0 generic arguments, but 1 was provided",
+            ],
+            "expected one contextual arity error per malformed annotation"
+        );
     }
 
     // ----- Explicit base type args in expression position ----------------
@@ -8104,11 +8112,10 @@ mod nested_types {
             "// no-core\nenum Opt<T> {\n\tcase some(T)\n\tcase none\n}\nlet x = Opt<Int, Bool>.some(1)",
         );
         let errors = type_errors(&t);
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("expected 1, found 2")),
-            "expected an arity error, got {errors:?}"
+        assert_eq!(
+            errors,
+            ["Type 'Opt' expects 1 generic argument, but 2 were provided"],
+            "expected a contextual generic arity error"
         );
     }
 
@@ -8170,11 +8177,10 @@ mod nested_types {
             "// no-core\nenum Res<T> {\n\tenum A<U> {\n\t\tcase pair(T, U)\n\t}\n}\nlet x = Res<Int>.A<Bool, Int>.pair(1, true)",
         );
         let errors = type_errors(&t);
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("expected 1, found 2")),
-            "expected a per-segment arity error, got {errors:?}"
+        assert_eq!(
+            errors,
+            ["Type 'Res.A' expects 1 generic argument, but 2 were provided"],
+            "expected a contextual per-segment arity error"
         );
     }
 
@@ -8379,10 +8385,19 @@ mod nested_types {
     fn arity_failures_suppress_label_cascades() {
         let t = check("func id(x: Int) -> Int {\n\tx\n}\nid(1, 2)");
         let errors = type_errors(&t);
-        assert!(errors.iter().any(|e| e.contains("arguments")), "{errors:?}");
-        assert!(
-            !errors.iter().any(|e| e.contains("argument label")),
-            "label errors must not cascade after arity errors: {errors:?}"
+        assert_eq!(
+            errors,
+            ["Function 'id' expects 1 argument, but 2 were provided"],
+            "label errors must not cascade after contextual arity errors"
+        );
+    }
+
+    #[test]
+    fn method_arity_errors_name_the_method() {
+        let t = check("struct S {\n\tfunc f(x: Int) -> Int { x }\n}\nS().f()");
+        assert_eq!(
+            type_errors(&t),
+            ["Method 'f' expects 1 argument, but 0 were provided"]
         );
     }
 

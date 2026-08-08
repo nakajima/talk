@@ -321,13 +321,34 @@ impl<'s> Solver<'s> {
 
             (Ty::Func(p1, r1, e1), Ty::Func(p2, r2, e2)) => {
                 if p1.len() != p2.len() {
-                    self.errors.push((
-                        TypeError::ArityMismatch {
+                    let error = match self.member_resolutions.get(&origin.node) {
+                        Some(MemberResolution::Direct(method)) => {
+                            TypeError::ArgumentArityMismatch {
+                                target: format!("Method '{method}'"),
+                                expected: p1.len(),
+                                found: p2.len(),
+                            }
+                        }
+                        Some(MemberResolution::ViaConformance { witness, .. }) => {
+                            TypeError::ArgumentArityMismatch {
+                                target: format!("Method '{witness}'"),
+                                expected: p1.len(),
+                                found: p2.len(),
+                            }
+                        }
+                        Some(MemberResolution::ViaRequirement { requirement, .. }) => {
+                            TypeError::ArgumentArityMismatch {
+                                target: format!("Method '{requirement}'"),
+                                expected: p1.len(),
+                                found: p2.len(),
+                            }
+                        }
+                        None => TypeError::FunctionParameterArityMismatch {
                             expected: p1.len(),
                             found: p2.len(),
                         },
-                        origin.node,
-                    ));
+                    };
+                    self.errors.push((error, origin.node));
                     return true;
                 }
                 // `Apply` auto-borrows the supplied argument to its parameter, but only at

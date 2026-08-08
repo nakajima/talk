@@ -1697,13 +1697,12 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 .get(provided..)
                 .is_some_and(|rest| rest.iter().all(|param| param.default.is_some()));
             if !omitted_suffix_defaulted {
-                self.diagnostics.errors.push((
-                    TypeError::ArityMismatch {
-                        expected: declared.len(),
-                        found: provided,
-                    },
+                self.diagnostics.generic_argument_arity(
                     head_application.id,
-                ));
+                    format!("Type '{head}'"),
+                    declared.len(),
+                    provided,
+                );
                 return None;
             }
             self.lower_type_application(head_application)

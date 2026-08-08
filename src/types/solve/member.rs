@@ -1035,7 +1035,8 @@ impl<'s> Solver<'s> {
         ));
         if payload.len() != instantiation.argument_types.len() {
             self.errors.push((
-                TypeError::ArityMismatch {
+                TypeError::ArgumentArityMismatch {
+                    target: format!("Variant '{label}'"),
                     expected: instantiation.argument_types.len(),
                     found: payload.len(),
                 },

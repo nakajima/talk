@@ -9,17 +9,19 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     pub(super) fn finish_call(
         &mut self,
         node: NodeID,
+        target: String,
         callee_ty: Ty,
         args: &[CallArg],
         ctx: &Ctx,
     ) -> Ty {
-        self.finish_call_with_result_origin(node, node, callee_ty, args, ctx)
+        self.finish_call_with_result_origin(node, node, target, callee_ty, args, ctx)
     }
 
     fn finish_call_with_result_origin(
         &mut self,
         node: NodeID,
         result_origin: NodeID,
+        target: String,
         callee_ty: Ty,
         args: &[CallArg],
         ctx: &Ctx,
@@ -36,13 +38,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         match callee_shallow {
             Ty::Func(params, ret, eff) => {
                 if params.len() != arg_count {
-                    self.diagnostics.errors.push((
-                        TypeError::ArityMismatch {
-                            expected: params.len(),
-                            found: arg_count,
-                        },
-                        node,
-                    ));
+                    self.diagnostics
+                        .argument_arity(node, target, params.len(), arg_count);
                     return Ty::Error;
                 }
                 for (arg, param) in args.iter().zip(&params) {
@@ -67,7 +64,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 let ret = Ty::Var(self.store.fresh_ty(self.level, result_origin));
                 let callee_effects = EffectRow::open(self.store.fresh_eff(self.level, node));
                 let expected = Ty::Func(arg_tys, Box::new(ret.clone()), callee_effects.clone());
-                self.emit_eq(callee_ty, expected, node, CtReason::Apply);
+                self.emit_eq(callee_ty, expected, result_origin, CtReason::Apply);
                 self.wanteds.push(Constraint::EffectSubset {
                     inferred: callee_effects,
                     allowed: ctx.eff.clone(),
@@ -110,8 +107,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 .map(crate::types::callables::WrittenSlot::of)
                 .collect(),
         );
-        let result =
-            self.finish_call_with_result_origin(expr.id, callee.id, member.clone(), args, ctx);
+        let result = self.finish_call_with_result_origin(
+            expr.id,
+            callee.id,
+            format!("Method '{label}'"),
+            member.clone(),
+            args,
+            ctx,
+        );
         self.wanteds.push(Constraint::HasMember {
             receiver: receiver_ty,
             label: label.clone(),
@@ -326,13 +329,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     }
                 }
                 if params.len() != arg_count + 1 {
-                    self.diagnostics.errors.push((
-                        TypeError::ArityMismatch {
-                            expected: params.len().saturating_sub(1),
-                            found: arg_count,
-                        },
+                    self.diagnostics.argument_arity(
                         expr.id,
-                    ));
+                        format!("Type '{symbol}'"),
+                        params.len().saturating_sub(1),
+                        arg_count,
+                    );
                     return Ty::Error;
                 }
                 self.emit_immediate_argument_eq(
@@ -439,6 +441,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             .get(&symbol)
             .map(|info| info.params.clone())
             .unwrap_or_default();
+        if type_args.len() > protocol_params.len() {
+            self.diagnostics.generic_argument_arity(
+                expr.id,
+                format!("Protocol '{symbol}'"),
+                protocol_params.len(),
+                type_args.len(),
+            );
+        }
         for ((type_arg, target), param) in
             type_args.iter().zip(&owner_ref.args).zip(&protocol_params)
         {
@@ -478,13 +488,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         };
         let arg_count = args.len();
         if params.len() != arg_count {
-            self.diagnostics.errors.push((
-                TypeError::ArityMismatch {
-                    expected: params.len(),
-                    found: arg_count,
-                },
+            self.diagnostics.argument_arity(
                 expr.id,
-            ));
+                format!("Protocol '{symbol}'"),
+                params.len(),
+                arg_count,
+            );
             return Ty::Error;
         }
         for (arg, param) in args.iter().zip(&params) {
@@ -516,7 +525,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         ctx: &Ctx,
     ) -> Ty {
         if !type_args.is_empty() {
-            self.unsupported(expr.id, "type arguments on a type-parameter construction");
+            self.diagnostics.generic_argument_arity(
+                expr.id,
+                format!("Type parameter '{symbol}'"),
+                0,
+                type_args.len(),
+            );
             return Ty::Error;
         }
         let bounds = self
@@ -568,13 +582,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             return Ty::Error;
         };
         if params.len() != args.len() {
-            self.diagnostics.errors.push((
-                TypeError::ArityMismatch {
-                    expected: params.len(),
-                    found: args.len(),
-                },
+            self.diagnostics.argument_arity(
                 expr.id,
-            ));
+                format!("Type parameter '{symbol}'"),
+                params.len(),
+                args.len(),
+            );
             return Ty::Error;
         }
         for (arg, param) in args.iter().zip(&params) {
@@ -979,13 +992,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 continue;
             }
             if seg_args.len() > own {
-                self.diagnostics.errors.push((
-                    TypeError::ArityMismatch {
-                        expected: own,
-                        found: seg_args.len(),
-                    },
+                self.diagnostics.generic_argument_arity(
                     node,
-                ));
+                    format!("Type '{seg_symbol}'"),
+                    own,
+                    seg_args.len(),
+                );
                 continue;
             }
             for (position, arg) in seg_args.iter().enumerate() {

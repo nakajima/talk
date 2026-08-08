@@ -254,7 +254,11 @@ fn actions_for_diagnostic(
             AnalysisDiagnosticKind::Parsing(error) => actions.extend(parser_quick_fixes(
                 workspace, text, uri, file_id, error, diagnostic, diag_range,
             )),
-            AnalysisDiagnosticKind::Types(TypeError::ArityMismatch { expected, found }) => {
+            AnalysisDiagnosticKind::Types(TypeError::ArgumentArityMismatch {
+                expected,
+                found,
+                ..
+            }) => {
                 actions.extend(arity_mismatch_quick_fixes(&site, *expected, *found));
             }
             AnalysisDiagnosticKind::Types(TypeError::ArgumentLabelMismatch {

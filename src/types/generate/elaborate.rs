@@ -221,37 +221,34 @@ impl<'e, 'c> Elaborator<'e, 'c> {
         match child {
             Symbol::TypeAlias(_) => {
                 if !member_generics.is_empty() {
-                    self.diagnostics.errors.push((
-                        TypeError::ArityMismatch {
-                            expected: 0,
-                            found: member_generics.len(),
-                        },
+                    self.diagnostics.generic_argument_arity(
                         node,
-                    ));
+                        format!("Type '{child}'"),
+                        0,
+                        member_generics.len(),
+                    );
                 }
                 self.lower_type_alias(child, node, Some((owner, args)))
             }
             Symbol::AssociatedType(_) => {
                 if !member_generics.is_empty() {
-                    self.diagnostics.errors.push((
-                        TypeError::ArityMismatch {
-                            expected: 0,
-                            found: member_generics.len(),
-                        },
+                    self.diagnostics.generic_argument_arity(
                         node,
-                    ));
+                        format!("Associated type '{child}'"),
+                        0,
+                        member_generics.len(),
+                    );
                 }
                 Ty::Param(child)
             }
             Symbol::TypeParameter(_) => {
                 if !member_generics.is_empty() {
-                    self.diagnostics.errors.push((
-                        TypeError::ArityMismatch {
-                            expected: 0,
-                            found: member_generics.len(),
-                        },
+                    self.diagnostics.generic_argument_arity(
                         node,
-                    ));
+                        format!("Type parameter '{child}'"),
+                        0,
+                        member_generics.len(),
+                    );
                 }
                 nominal_params(self.catalog, owner)
                     .iter()
@@ -269,13 +266,12 @@ impl<'e, 'c> Elaborator<'e, 'c> {
                         .len()
                         .saturating_sub(owner_len);
                     if member_generics.len() > own_count {
-                        self.diagnostics.errors.push((
-                            TypeError::ArityMismatch {
-                                expected: own_count,
-                                found: member_generics.len(),
-                            },
+                        self.diagnostics.generic_argument_arity(
                             node,
-                        ));
+                            format!("Type '{child}'"),
+                            own_count,
+                            member_generics.len(),
+                        );
                         return Ty::Error;
                     }
                     let mut combined = args;
@@ -380,13 +376,12 @@ impl<'e, 'c> Elaborator<'e, 'c> {
         };
         if matches!(symbol, Symbol::TypeAlias(_)) {
             if !generics.is_empty() {
-                self.diagnostics.errors.push((
-                    TypeError::ArityMismatch {
-                        expected: 0,
-                        found: generics.len(),
-                    },
+                self.diagnostics.generic_argument_arity(
                     node,
-                ));
+                    format!("Type '{symbol}'"),
+                    0,
+                    generics.len(),
+                );
             }
             return self.lower_type_alias(symbol, node, None);
         }
@@ -395,6 +390,20 @@ impl<'e, 'c> Elaborator<'e, 'c> {
         // params (explicit generics fill only its own trailing slots).
         let mut args: Vec<Ty> = self.captured_context_args(symbol).unwrap_or_default();
         let own_offset = args.len();
+        let own_count = nominal_params(self.catalog, symbol)
+            .len()
+            .saturating_sub(own_offset);
+        let generics = if generics.len() > own_count {
+            self.diagnostics.generic_argument_arity(
+                node,
+                format!("Type '{symbol}'"),
+                own_count,
+                generics.len(),
+            );
+            &generics[..own_count]
+        } else {
+            generics
+        };
         args.extend(self.lower_generic_args_from(symbol, generics, own_offset));
         self.pad_default_args(symbol, &mut args, node);
         match symbol {
@@ -884,13 +893,12 @@ impl<'e, 'c> Elaborator<'e, 'c> {
             return Ty::Error;
         };
         if args.len() != protocol_info.params.len() {
-            self.diagnostics.errors.push((
-                TypeError::ArityMismatch {
-                    expected: protocol_info.params.len(),
-                    found: args.len(),
-                },
+            self.diagnostics.generic_argument_arity(
                 node,
-            ));
+                format!("Protocol '{protocol}'"),
+                protocol_info.params.len(),
+                args.len(),
+            );
             return Ty::Error;
         }
 

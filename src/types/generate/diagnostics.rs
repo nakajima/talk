@@ -13,6 +13,46 @@ impl DiagnosticSink {
             .push((TypeError::Unsupported(what.to_string()), node));
     }
 
+    pub(super) fn argument_arity(
+        &mut self,
+        node: NodeID,
+        target: String,
+        expected: usize,
+        found: usize,
+    ) {
+        let error = (
+            TypeError::ArgumentArityMismatch {
+                target,
+                expected,
+                found,
+            },
+            node,
+        );
+        if !self.errors.contains(&error) {
+            self.errors.push(error);
+        }
+    }
+
+    pub(super) fn generic_argument_arity(
+        &mut self,
+        node: NodeID,
+        target: String,
+        expected: usize,
+        found: usize,
+    ) {
+        let error = (
+            TypeError::GenericArgumentArityMismatch {
+                target,
+                expected,
+                found,
+            },
+            node,
+        );
+        if !self.errors.contains(&error) {
+            self.errors.push(error);
+        }
+    }
+
     pub(super) fn into_diagnostics(
         self,
         synthetic_origins: &FxHashMap<NodeID, NodeID>,

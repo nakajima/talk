@@ -319,13 +319,12 @@ macro_rules! impl_bounds_for {
                     return Some((ProtocolRef::bare(protocol), generics.to_vec()));
                 }
                 if generics.len() > param_count {
-                    self.diagnostics.errors.push((
-                        TypeError::ArityMismatch {
-                            expected: param_count,
-                            found: generics.len(),
-                        },
+                    self.diagnostics.generic_argument_arity(
                         annotation.id,
-                    ));
+                        format!("Protocol '{protocol}'"),
+                        param_count,
+                        generics.len(),
+                    );
                     return Some((ProtocolRef::bare(protocol), vec![]));
                 }
 
@@ -370,13 +369,12 @@ macro_rules! impl_bounds_for {
                         }
                         None => {
                             if !reported_missing_default {
-                                self.diagnostics.errors.push((
-                                    TypeError::ArityMismatch {
-                                        expected: param_count,
-                                        found: provided,
-                                    },
+                                self.diagnostics.generic_argument_arity(
                                     annotation.id,
-                                ));
+                                    format!("Protocol '{protocol}'"),
+                                    param_count,
+                                    provided,
+                                );
                                 reported_missing_default = true;
                             }
                             args.push(Ty::Error);
@@ -568,13 +566,12 @@ macro_rules! impl_bounds_for {
 
                 let assoc_symbols = self.catalog.declared_associated_types_in_ref(&protocol);
                 if assoc_args.len() != assoc_symbols.len() {
-                    self.diagnostics.errors.push((
-                        TypeError::ArityMismatch {
-                            expected: assoc_symbols.len(),
-                            found: assoc_args.len(),
-                        },
+                    self.diagnostics.argument_arity(
                         protocol_annotation.id,
-                    ));
+                        format!("Protocol '{}'", protocol.protocol),
+                        assoc_symbols.len(),
+                        assoc_args.len(),
+                    );
                     return predicates;
                 }
                 for ((_, owner, assoc), arg) in assoc_symbols.into_iter().zip(assoc_args) {

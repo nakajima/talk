@@ -144,7 +144,13 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.artifacts
                     .node_types
                     .insert(iter_callee_id, iter_member.clone());
-                let iterator_ty = self.finish_call(iter_call_id, iter_member.clone(), &[], ctx);
+                let iterator_ty = self.finish_call(
+                    iter_call_id,
+                    format!("Method '{iter_label}'"),
+                    iter_member.clone(),
+                    &[],
+                    ctx,
+                );
                 self.artifacts
                     .node_types
                     .insert(iter_call_id, iterator_ty.clone());
@@ -162,7 +168,13 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.artifacts
                     .node_types
                     .insert(next_callee_id, next_member.clone());
-                let next_result_ty = self.finish_call(next_call_id, next_member.clone(), &[], ctx);
+                let next_result_ty = self.finish_call(
+                    next_call_id,
+                    "Method 'next'".to_string(),
+                    next_member.clone(),
+                    &[],
+                    ctx,
+                );
                 self.artifacts
                     .node_types
                     .insert(next_call_id, next_result_ty.clone());
@@ -222,6 +234,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                             .insert(mut_store_callee_id, store_member.clone());
                         let store_result = self.finish_call(
                             mut_store_call_id,
+                            "Method '_store_current'".to_string(),
                             store_member.clone(),
                             std::slice::from_ref(&arg),
                             ctx,
@@ -302,13 +315,12 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 // A handler block either ignores every payload (no
                 // arguments) or names all of them.
                 if !body.args.is_empty() && body.args.len() != params.len() {
-                    self.diagnostics.errors.push((
-                        TypeError::ArityMismatch {
-                            expected: params.len(),
-                            found: body.args.len(),
-                        },
+                    self.diagnostics.argument_arity(
                         stmt.id,
-                    ));
+                        format!("Handler for effect '{}'", effect_name.name_str()),
+                        params.len(),
+                        body.args.len(),
+                    );
                 }
                 for (arg, param) in body.args.iter().zip(&params) {
                     if let Ok(symbol) = arg.name.symbol() {
