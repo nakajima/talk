@@ -9,7 +9,7 @@ func check() -> Int {
 	server.get(path: "/d", handler: func() -> String { "ddd" })
 	server.get(path: "/e", handler: func() -> String { "eee" })
 	let wire = server.handle(raw_request: "GET /d HTTP/1.1")
-	match wire.find(needle: "ddd") {
+	match wire.utf8().find_bytes("ddd") {
 		.some(i) -> i,
 		.none -> 0 - 1
 	}

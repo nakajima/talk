@@ -38,6 +38,7 @@ fn emit_compiler_content_stamp() {
     use sha2::Digest as _;
 
     const STAMP_DIRS: &[&str] = &[
+        "core",
         "src/common",
         "src/parsing",
         "src/types",
@@ -64,7 +65,9 @@ fn emit_compiler_content_stamp() {
             let path = entry.path();
             if path.is_dir() {
                 collect(&path, skip, out);
-            } else if path.extension().is_some_and(|ext| ext == "rs")
+            } else if path
+                .extension()
+                .is_some_and(|ext| ext == "rs" || ext == "tlk")
                 && !skip.iter().any(|skip| path.starts_with(skip))
             {
                 out.push(path);

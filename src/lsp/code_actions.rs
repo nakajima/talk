@@ -2485,7 +2485,7 @@ fn non_exhaustive_match_quick_fixes(
         .iter()
         .map(|pattern| format!("{pattern} -> {{}}"))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join(",\n");
     let Some((insert_offset, insert_text)) = insertion_before_closing_brace(text, expr.span, &arms)
     else {
         return vec![];
@@ -2494,6 +2494,24 @@ fn non_exhaustive_match_quick_fixes(
     else {
         return vec![];
     };
+    let mut edits = vec![TextEdit::new(range, insert_text)];
+    let crate::node_kinds::expr::ExprKind::Match(_, existing_arms) = &expr.kind else {
+        return vec![];
+    };
+    if let Some(last_arm) = existing_arms.last() {
+        let separator_offset = last_arm.span.end as usize;
+        let Some(after_arm) = text.get(separator_offset..insert_offset) else {
+            return vec![];
+        };
+        if !after_arm.trim_start().starts_with(',') {
+            let Some(range) =
+                byte_span_to_range_utf16(text, separator_offset as u32, separator_offset as u32)
+            else {
+                return vec![];
+            };
+            edits.push(TextEdit::new(range, ",".to_string()));
+        }
+    }
     let title = if patterns.len() == 1 {
         format!("Add missing match arm '{}'", patterns[0])
     } else {
@@ -2503,7 +2521,7 @@ fn non_exhaustive_match_quick_fixes(
     vec![quick_fix_action(
         uri,
         title,
-        vec![TextEdit::new(range, insert_text)],
+        edits,
         diagnostic,
         diag_range,
         Some(true),
@@ -2624,7 +2642,11 @@ fn missing_patterns_for_match(
     }
     let arms: Vec<&crate::node_kinds::pattern::Pattern> =
         arms.iter().map(|arm| &arm.pattern).collect();
-    Some(crate::types::exhaustiveness::check_match(&workspace.types.catalog, &ty, &arms).missing)
+    Some(crate::types::exhaustiveness::all_missing_patterns(
+        &workspace.types.catalog,
+        &ty,
+        &arms,
+    ))
 }
 
 fn insertion_before_closing_brace(

@@ -778,12 +778,22 @@ impl<'s> Solver<'s> {
                                         .callable_contracts
                                         .get(&row.symbol)
                                         .is_some_and(|contract| {
-                                            matches!(
+                                            let role_matches = matches!(
                                                 contract.role,
                                                 crate::types::callables::CallableRole::Method {
                                                     is_static: false
                                                 }
-                                            )
+                                            );
+                                            let labels_match = self
+                                                .member_call_slots
+                                                .get(&origin.node)
+                                                .is_none_or(|slots| {
+                                                    crate::types::callables::labels_admit(
+                                                        &contract.name.labels,
+                                                        slots,
+                                                    )
+                                                });
+                                            role_matches && labels_match
                                         })
                                 })
                                 .filter(|row| self.member_accessible(row.symbol, origin))
@@ -1131,10 +1141,20 @@ impl<'s> Solver<'s> {
                     .callable_contracts
                     .get(&row.symbol)
                     .is_some_and(|contract| {
-                        matches!(
+                        let role_matches = matches!(
                             contract.role,
                             crate::types::callables::CallableRole::Method { is_static: true }
-                        )
+                        );
+                        let labels_match =
+                            self.member_call_slots
+                                .get(&origin.node)
+                                .is_none_or(|slots| {
+                                    crate::types::callables::labels_admit(
+                                        &contract.name.labels,
+                                        slots,
+                                    )
+                                });
+                        role_matches && labels_match
                     })
             })
             .cloned()

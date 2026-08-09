@@ -571,7 +571,7 @@ pub mod tests {
             ),
             (
                 "types::types_string_find",
-                "\"hello\".find(needle: \"ll\"); \"hello\".find_from(needle: \"l\", start: 3)",
+                "\"hello\".first_range(of: \"ll\"); \"hello\".utf8().find_bytes_from(\"l\", start: 3)",
                 true,
                 true,
             ),
@@ -2729,6 +2729,16 @@ pub mod tests {
     fn disjoint_inherent_extensions_coexist() {
         let t = check(
             "// no-core\nstruct Box<Element> { let value: Element }\nextend Box<Int> { func get() -> Int { 1 } }\nextend Box<Bool> { func get() -> Int { 2 } }\nlet a = Box(value: 1).get()\nlet b = Box(value: true).get()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "a"), "Int");
+        assert_eq!(ty_of(&t, "b"), "Int");
+    }
+
+    #[test]
+    fn overlapping_inherent_rows_allow_distinct_callable_labels() {
+        let t = check(
+            "// no-core\nstruct Box {}\nextend Box { func read(int value: Int) -> Int { value }\nfunc read(bool value: Bool) -> Int { if value { 1 } else { 0 } } }\nlet a = Box().read(int: 2)\nlet b = Box().read(bool: true)",
         );
         assert_clean(&t);
         assert_eq!(ty_of(&t, "a"), "Int");

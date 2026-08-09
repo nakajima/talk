@@ -165,6 +165,8 @@ pub enum IrScalarOp {
     ByteCmp(IrCmp),
     /// Only equality and inequality — validated at the perform site.
     BoolCmp(IrCmp),
+    /// Allocation identity for opaque snapshot-bound indices.
+    PtrCmp(IrCmp),
     FloatToIntTrunc,
     IntToFloat,
     ByteToInt,

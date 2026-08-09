@@ -58,6 +58,10 @@ pub func _ptr_add(ptr: RawPtr, offset: Int) 'alloc -> RawPtr {
 	#_ir(ptr, offset) { %? = add RawPtr $0 $1 }
 }
 
+pub func _same_allocation(lhs: RawPtr, rhs: RawPtr) -> Bool {
+	#_ir(lhs, rhs) { %? = cmp RawPtr $0 == $1 }
+}
+
 // Whether this allocation has exactly one owner (refcount 1). Static data
 // is never unique: it cannot be freed, so callers must copy before writing.
 pub func _is_unique(ptr: RawPtr) 'alloc -> Bool {

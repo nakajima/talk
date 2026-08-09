@@ -743,7 +743,8 @@ impl Lowering<'_> {
                         ScalarOp::IntCmp(kind)
                         | ScalarOp::FloatCmp(kind)
                         | ScalarOp::ByteCmp(kind)
-                        | ScalarOp::BoolCmp(kind),
+                        | ScalarOp::BoolCmp(kind)
+                        | ScalarOp::PtrCmp(kind),
                         Some(b),
                     ) => {
                         let b = self.rk(*b);

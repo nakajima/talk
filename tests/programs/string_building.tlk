@@ -1,12 +1,23 @@
 func line(consume word: String, n: Int) -> String {
-	let out = word
+	let out = StringBuilder(capacity: word.utf8_count() + n)
+	out.append(string: word)
 	let i = 0
 	loop i < n {
-		out = out + "!"
+		out.append(string: "!")
 		i = i + 1
 	}
-	out
+	out.finish()
+}
+
+func foreign_index_is_rejected() -> Bool {
+	let left = "same".to_string()
+	let right = "same".to_string()
+	match right.character(at: left.start_index()) {
+		.some(_) -> false,
+		.none -> true
+	}
 }
 
 print(line(word: "hey", n: 3))
 print(line(word: "ok", n: 1))
+print(foreign_index_is_rejected())

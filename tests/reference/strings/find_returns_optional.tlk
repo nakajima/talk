@@ -1,8 +1,8 @@
-match "hello world".find(needle: "world") {
+match "hello world".utf8().find_bytes("world") {
 	.some(i) -> print_raw(i.show()),
 	.none -> print_raw("none")
 }
-match "hello".find(needle: "zzz") {
+match "hello".utf8().find_bytes("zzz") {
 	.some(i) -> print_raw(i.show()),
 	.none -> print_raw("none")
 }

@@ -79,7 +79,7 @@ pub struct HttpServer 'heap {
 
 	func extract_method(raw_request: String) -> Substring {
 		let bytes: UTF8View = raw_request.utf8()
-		match raw_request.find(needle: " ") {
+		match bytes.find_bytes(" ") {
 			.some(first_space) -> bytes.slice(start: 0, byte_count: first_space),
 			.none -> "".as_substring()
 		}
@@ -87,7 +87,7 @@ pub struct HttpServer 'heap {
 
 	func extract_path(raw_request: String) -> Substring {
 		let bytes: UTF8View = raw_request.utf8()
-		match raw_request.find(needle: " ") {
+		match bytes.find_bytes(" ") {
 			.some(first_space) -> {
 				let rest_start: Int = first_space + 1
 				let rest_len: Int = raw_request.byte_count - rest_start
@@ -95,7 +95,7 @@ pub struct HttpServer 'heap {
 
 				let rest: Substring = bytes.slice(start: rest_start, byte_count: rest_len)
 				let rest_bytes: UTF8View = rest.utf8()
-				match rest.find(needle: " ") {
+				match rest_bytes.find_bytes(" ") {
 					.some(second_space) -> rest_bytes.slice(start: 0, byte_count: second_space),
 					.none -> rest
 				}
@@ -163,7 +163,11 @@ pub struct HttpServer 'heap {
 				}
 
 				let n = _io_clamp(count: n, capacity: max_request_size)
-				let raw_request = String(base: ByteStorage(base: buf), byte_count: n, capacity: max_request_size)
+				let raw_request = String(
+					base: ByteStorage(base: buf),
+					byte_count: n,
+					capacity: max_request_size
+				)
 				let wire = self.handle(raw_request: raw_request)
 				_io_write(fd: client_fd, buf: wire.storage.base, count: wire.byte_count)
 				_io_close(fd: client_fd)

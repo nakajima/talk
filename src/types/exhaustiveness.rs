@@ -38,6 +38,24 @@ const WITNESS_CAP: usize = 3;
 /// Check one `match`: `scrutinee` is the solved (zonked) type being
 /// matched, `arms` the arm patterns in source order.
 pub fn check_match(catalog: &TypeCatalog, scrutinee: &Ty, arms: &[&Pattern]) -> MatchReport {
+    check_match_with_witness_cap(catalog, scrutinee, arms, WITNESS_CAP)
+}
+
+/// Return every pattern needed to make one `match` exhaustive.
+pub fn all_missing_patterns(
+    catalog: &TypeCatalog,
+    scrutinee: &Ty,
+    arms: &[&Pattern],
+) -> Vec<String> {
+    check_match_with_witness_cap(catalog, scrutinee, arms, usize::MAX).missing
+}
+
+fn check_match_with_witness_cap(
+    catalog: &TypeCatalog,
+    scrutinee: &Ty,
+    arms: &[&Pattern],
+    witness_cap: usize,
+) -> MatchReport {
     let coverage = Coverage { catalog };
     let rows: Vec<Vec<Pat>> = arms
         .iter()
@@ -54,7 +72,7 @@ pub fn check_match(catalog: &TypeCatalog, scrutinee: &Ty, arms: &[&Pattern]) -> 
     }
 
     let missing = coverage
-        .useful(&rows, &tys, &[Pat::Wild], WITNESS_CAP)
+        .useful(&rows, &tys, &[Pat::Wild], witness_cap)
         .iter()
         .filter_map(|witness| witness.first().map(render))
         .collect();

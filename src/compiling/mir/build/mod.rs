@@ -10585,6 +10585,7 @@ fn scalar_op(op: crate::types::output::IrScalarOp) -> ScalarOp {
         I::FloatCmp(kind) => ScalarOp::FloatCmp(cmp(kind)),
         I::ByteCmp(kind) => ScalarOp::ByteCmp(cmp(kind)),
         I::BoolCmp(kind) => ScalarOp::BoolCmp(cmp(kind)),
+        I::PtrCmp(kind) => ScalarOp::PtrCmp(cmp(kind)),
         I::FloatToIntTrunc => ScalarOp::FloatToIntTrunc,
         I::IntToFloat => ScalarOp::IntToFloat,
         I::ByteToInt => ScalarOp::ByteToInt,

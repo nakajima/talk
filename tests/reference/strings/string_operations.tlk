@@ -2,15 +2,15 @@ print("hello" == "hello")
 print("hello" == "world")
 print("hello".utf8().slice(start: 1, byte_count: 3).to_string())
 print("hello".as_substring().utf8().slice(start: 1, byte_count: 3).to_string())
-match "hello world".find(needle: "world") {
+match "hello world".utf8().find_bytes("world") {
 	.some(i) -> print(i),
 	.none -> print(0 - 1)
 }
-match "hello world".find(needle: "missing") {
+match "hello world".utf8().find_bytes("missing") {
 	.some(i) -> print(i),
 	.none -> print(0 - 1)
 }
-match "banana".find_from(needle: "na", start: 3) {
+match "banana".utf8().find_bytes_from("na", start: 3) {
 	.some(i) -> print(i),
 	.none -> print(0 - 1)
 }
@@ -27,17 +27,31 @@ print(owned.ends_with(needle: "llo"))
 print(borrowed.ends_with(needle: "llo"))
 
 let builder = StringBuilder(capacity: 1)
-builder.append_string("hé")
-builder.append_substring("llo".as_substring())
+builder.append(string: "hé")
+builder.append(substring: "llo".as_substring())
 print(builder.finish())
 
 let reusable = StringBuilder()
 reusable.reserve_capacity(64)
-reusable.append_string("discard")
+reusable.append(string: "discard")
 reusable.clear()
 reusable.append_line("hello")
-reusable.append_string("world")
+reusable.append(string: "world")
 print(reusable.finish())
+
+let growing = StringBuilder()
+let growth_index = 0
+loop growth_index < 1000 {
+	growing.append(string: "é")
+	growth_index = growth_index + 1
+}
+print(growing.finish().utf8_count())
+
+func abandon_builder() -> Void {
+	let abandoned = StringBuilder(capacity: 2)
+	abandoned.append(string: "temporary")
+}
+abandon_builder()
 
 for character in "é" {
 	print(character + "clair")

@@ -1574,6 +1574,25 @@ mod tests {
     }
 
     #[test]
+    fn add_missing_match_arms_adds_every_unhandled_case() {
+        let source = "enum Direction { case north, east, south, west, center }\nlet direction = Direction.north\nlet n = match direction { .north -> 1 }\n";
+        let rewritten = type_action_rewrite(source, "Add missing match arms");
+
+        for pattern in [".east", ".south", ".west", ".center"] {
+            assert!(
+                rewritten.contains(&format!("{pattern} -> {{}}")),
+                "missing generated arm {pattern}: {rewritten}"
+            );
+        }
+        assert!(
+            action_titles(&rewritten, bare_workspace)
+                .iter()
+                .all(|title| !title.starts_with("Add missing match arm")),
+            "generated arms did not make the match exhaustive: {rewritten}"
+        );
+    }
+
+    #[test]
     fn arity_code_actions_add_and_remove_value_arguments() {
         let missing = "func add(a: Int, b: Int) -> Int { a }\nlet n = add(1)\n";
         assert_eq!(

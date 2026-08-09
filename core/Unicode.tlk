@@ -18,6 +18,7 @@ use package::Optional::{ Optional }
 use package::Iterable::{ Iterable, Iterator }
 use package::Showable::{ Showable }
 use package::UnicodeData::{ _CC_ALPHABETIC, _CC_ALPHANUMERIC, _CC_NUMERIC, _CC_OTHER, _CC_WHITESPACE, _GC_CONTROL, _GC_CR, _GC_EXTEND, _GC_EXTEND_INCB_EXTEND, _GC_EXTEND_INCB_LINKER, _GC_EXT_PICT, _GC_HANGUL_L, _GC_HANGUL_LV, _GC_HANGUL_LVT, _GC_HANGUL_T, _GC_HANGUL_V, _GC_INCB_CONSONANT, _GC_LF, _GC_OTHER, _GC_PREPEND, _GC_REGIONAL_INDICATOR, _GC_SPACINGMARK, _GC_ZWJ, _character_class_table, _gcb_table }
+use package::TextUnicodeData::{ _canonical_decomposition_index, _canonical_decomposition_payload, _casefold_index, _casefold_payload, _combining_class_table, _compatibility_decomposition_index, _compatibility_decomposition_payload, _composition_table, _lowercase_index, _lowercase_payload, _text_property_table, _titlecase_index, _titlecase_payload, _uppercase_index, _uppercase_payload, _word_break_table }
 use package::Ownership::{ CheapClone }
 
 // talk has no bitwise operators; UTF-8's masks and shifts are powers of
@@ -114,6 +115,67 @@ func _entry_value(storage: ByteStorage, index: Int) -> Int {
 	((v0 * 128 + v1) * 128 + v2) * 128 + v3
 }
 
+func _septet_value(storage: ByteStorage, start: Int, width: Int) -> Int {
+	let value = 0
+	let i = 0
+	loop i < width {
+		value = value * 128 + storage.get(start + i)._toInt()
+		i = i + 1
+	}
+	value
+}
+
+func _boundary_property(table: String, scalar: Int, width: Int, radix: Int) -> Int {
+	let entry_count = table.byte_count / width
+	let lo = 0
+	let hi = entry_count - 1
+	loop lo < hi {
+		let mid = (lo + hi + 1) / 2
+		let encoded = _septet_value(
+			storage: table.storage,
+			start: mid * width,
+			width: width
+		)
+		if scalar < encoded / radix {
+			hi = mid - 1
+		} else {
+			lo = mid
+		}
+	}
+	let encoded = _septet_value(
+		storage: table.storage,
+		start: lo * width,
+		width: width
+	)
+	encoded - (encoded / radix) * radix
+}
+
+func _mapping(index: String, payload: String, scalar: Int) -> Substring? {
+	let width = 7
+	let count = index.byte_count / width
+	let lo = 0
+	let hi = count - 1
+	loop lo <= hi {
+		let mid = (lo + hi) / 2
+		let base = mid * width
+		let candidate = _septet_value(storage: index.storage, start: base, width: 3)
+		if scalar < candidate {
+			hi = mid - 1
+		} else {
+			if scalar > candidate {
+				lo = mid + 1
+			} else {
+				let offset = _septet_value(storage: index.storage, start: base + 3, width: 3)
+				let length = index.storage.get(base + 6)._toInt()
+				return .some(
+					Substring(storage: payload.storage, start: offset, byte_count: length)
+				)
+			}
+		}
+	}
+	.none
+}
+
 // The scalar's grapheme-cluster-break category (a _GC_* constant), via
 // binary search over the generated boundary list. O(log n) with ~12
 // probes; ASCII short-circuits.
@@ -139,6 +201,10 @@ pub func _grapheme_category(scalar: Int) -> Int {
 	}
 	let v: Int = _entry_value(storage: table.storage, index: lo)
 	v - (v / 32) * 32
+}
+
+pub func scalar_is_extended_pictographic(scalar: Int) -> Bool {
+	_grapheme_category(scalar: scalar) == _GC_EXT_PICT
 }
 
 func _packed_scalar(packed: Int) -> Int {
@@ -197,6 +263,148 @@ pub func scalar_is_ascii_hexdigit(scalar: Int) -> Bool {
 	if scalar_is_ascii_digit(scalar: scalar) { return true }
 	if 64 < scalar && scalar < 71 { return true }
 	96 < scalar && scalar < 103
+}
+
+func _has_property(scalar: Int, bit: Int) -> Bool {
+	let flags = _boundary_property(
+		table: _text_property_table(),
+		scalar: scalar,
+		width: 5,
+		radix: 4096
+	)
+	(flags / bit - (flags / (bit * 2)) * 2) == 1
+}
+
+pub func scalar_is_lowercase(scalar: Int) -> Bool {
+	_has_property(scalar: scalar, bit: 1)
+}
+pub func scalar_is_uppercase(scalar: Int) -> Bool {
+	_has_property(scalar: scalar, bit: 2)
+}
+pub func scalar_is_titlecase(scalar: Int) -> Bool {
+	_has_property(scalar: scalar, bit: 4)
+}
+pub func scalar_is_decimal(scalar: Int) -> Bool {
+	_has_property(scalar: scalar, bit: 8)
+}
+pub func scalar_is_digit(scalar: Int) -> Bool {
+	_has_property(scalar: scalar, bit: 16)
+}
+pub func scalar_is_punctuation(scalar: Int) -> Bool {
+	_has_property(scalar: scalar, bit: 32)
+}
+pub func scalar_is_symbol(scalar: Int) -> Bool {
+	_has_property(scalar: scalar, bit: 64)
+}
+pub func scalar_is_control(scalar: Int) -> Bool {
+	_has_property(scalar: scalar, bit: 128)
+}
+pub func scalar_is_printable(scalar: Int) -> Bool {
+	_has_property(scalar: scalar, bit: 256)
+}
+pub func scalar_is_cased(scalar: Int) -> Bool {
+	_has_property(scalar: scalar, bit: 512)
+}
+pub func scalar_is_case_ignorable(scalar: Int) -> Bool {
+	_has_property(scalar: scalar, bit: 1024)
+}
+
+pub let _WB_OTHER: Int = 0
+pub let _WB_CR: Int = 1
+pub let _WB_LF: Int = 2
+pub let _WB_NEWLINE: Int = 3
+pub let _WB_EXTEND: Int = 4
+pub let _WB_ZWJ: Int = 5
+pub let _WB_REGIONAL_INDICATOR: Int = 6
+pub let _WB_FORMAT: Int = 7
+pub let _WB_KATAKANA: Int = 8
+pub let _WB_HEBREW_LETTER: Int = 9
+pub let _WB_ALETTER: Int = 10
+pub let _WB_SINGLE_QUOTE: Int = 11
+pub let _WB_DOUBLE_QUOTE: Int = 12
+pub let _WB_MIDNUMLET: Int = 13
+pub let _WB_MIDLETTER: Int = 14
+pub let _WB_MIDNUM: Int = 15
+pub let _WB_NUMERIC: Int = 16
+pub let _WB_EXTENDNUMLET: Int = 17
+pub let _WB_WSEGSPACE: Int = 18
+pub let _WB_EXTENDED_PICTOGRAPHIC: Int = 19
+
+pub func _word_break_category(scalar: Int) -> Int {
+	_boundary_property(
+		table: _word_break_table(),
+		scalar: scalar,
+		width: 4,
+		radix: 32
+	)
+}
+
+// kind: 0 lowercase, 1 uppercase, 2 titlecase, 3 case folding.
+pub func _case_mapping(scalar: Int, kind: Int) -> Substring? {
+	if kind == 0 { return _mapping(
+		index: _lowercase_index(),
+		payload: _lowercase_payload(),
+		scalar: scalar
+	) }
+	if kind == 1 { return _mapping(
+		index: _uppercase_index(),
+		payload: _uppercase_payload(),
+		scalar: scalar
+	) }
+	if kind == 2 { return _mapping(
+		index: _titlecase_index(),
+		payload: _titlecase_payload(),
+		scalar: scalar
+	) }
+	_mapping(index: _casefold_index(), payload: _casefold_payload(), scalar: scalar)
+}
+
+pub func _decomposition(scalar: Int, compatibility: Bool) -> Substring? {
+	if compatibility {
+		_mapping(
+			index: _compatibility_decomposition_index(),
+			payload: _compatibility_decomposition_payload(),
+			scalar: scalar
+		)
+	} else {
+		_mapping(
+			index: _canonical_decomposition_index(),
+			payload: _canonical_decomposition_payload(),
+			scalar: scalar
+		)
+	}
+}
+
+pub func _combining_class(scalar: Int) -> Int {
+	_boundary_property(
+		table: _combining_class_table(),
+		scalar: scalar,
+		width: 5,
+		radix: 256
+	)
+}
+
+pub func _compose_pair(starter: Int, combining: Int) -> Int? {
+	let table = _composition_table()
+	let width = 9
+	let lo = 0
+	let hi = table.byte_count / width - 1
+	loop lo <= hi {
+		let mid = (lo + hi) / 2
+		let base = mid * width
+		let left = _septet_value(storage: table.storage, start: base, width: 3)
+		let right = _septet_value(storage: table.storage, start: base + 3, width: 3)
+		if starter < left || (starter == left && combining < right) {
+			hi = mid - 1
+		} else {
+			if starter > left || (starter == left && combining > right) {
+				lo = mid + 1
+			} else {
+				return .some(_septet_value(storage: table.storage, start: base + 6, width: 3))
+			}
+		}
+	}
+	.none
 }
 
 // Whether `cat` extends the current cluster under GB9 (Extend and ZWJ,
@@ -378,6 +586,89 @@ pub struct Character {
 
 	pub func is_ascii_hexdigit() -> Bool {
 		scalar_is_ascii_hexdigit(scalar: self.first_scalar())
+	}
+
+	pub func is_ascii() -> Bool {
+		self.byte_count == 1 && self.first_scalar() < 128
+	}
+
+	pub func is_ascii_alphabetic() -> Bool {
+		let scalar = self.first_scalar()
+		(64 < scalar && scalar < 91) || (96 < scalar && scalar < 123)
+	}
+
+	pub func is_ascii_alphanumeric() -> Bool {
+		self.is_ascii_alphabetic() || self.is_ascii_digit()
+	}
+
+	pub func is_ascii_whitespace() -> Bool {
+		let scalar = self.first_scalar()
+		scalar == 9 || scalar == 10 || scalar == 11 || scalar == 12 || scalar == 13 || scalar == 32
+	}
+
+	pub func is_lowercase() -> Bool {
+		scalar_is_lowercase(scalar: self.first_scalar())
+	}
+
+	pub func is_uppercase() -> Bool {
+		scalar_is_uppercase(scalar: self.first_scalar())
+	}
+
+	pub func is_titlecase() -> Bool {
+		scalar_is_titlecase(scalar: self.first_scalar())
+	}
+
+	pub func is_decimal() -> Bool {
+		scalar_is_decimal(scalar: self.first_scalar())
+	}
+
+	pub func is_digit() -> Bool {
+		scalar_is_digit(scalar: self.first_scalar())
+	}
+
+	pub func is_punctuation() -> Bool {
+		scalar_is_punctuation(scalar: self.first_scalar())
+	}
+
+	pub func is_symbol() -> Bool {
+		scalar_is_symbol(scalar: self.first_scalar())
+	}
+
+	pub func is_control() -> Bool {
+		scalar_is_control(scalar: self.first_scalar())
+	}
+
+	pub func is_printable() -> Bool {
+		scalar_is_printable(scalar: self.first_scalar())
+	}
+
+	pub func is_identifier_start() -> Bool {
+		let scalar = self.first_scalar()
+		self.is_ascii_alphabetic() || scalar == 95
+	}
+
+	pub func is_identifier_continue() -> Bool {
+		self.is_identifier_start() || self.is_alphanumeric()
+	}
+
+	pub func scalar_count() -> Int {
+		let count = 0
+		for _ in self.scalars() {
+			count = count + 1
+		}
+		count
+	}
+
+	pub func is_single_scalar() -> Bool {
+		self.scalar_count() == 1
+	}
+
+	pub func scalars() -> ScalarIterator {
+		ScalarIterator(
+			storage: self.storage,
+			offset: self.start,
+			end: self.start + self.byte_count
+		)
 	}
 }
 

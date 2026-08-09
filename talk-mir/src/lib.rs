@@ -116,6 +116,7 @@ pub enum ScalarOp {
     FloatCmp(CmpKind),
     ByteCmp(CmpKind),
     BoolCmp(CmpKind),
+    PtrCmp(CmpKind),
     FloatToIntTrunc,
     IntToFloat,
     ByteToInt,

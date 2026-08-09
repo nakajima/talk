@@ -2322,9 +2322,10 @@ fn scalar(op: ScalarOp, a: Operand, b: Option<Operand>, frame: &Frame) -> Result
         ScalarOp::IntNot => "talk_not",
         // Int, Bool, and Byte comparisons all read the same payload word;
         // byte arithmetic is what the spike leaves out, not byte equality.
-        ScalarOp::IntCmp(kind) | ScalarOp::BoolCmp(kind) | ScalarOp::ByteCmp(kind) => {
-            comparison(kind)
-        }
+        ScalarOp::IntCmp(kind)
+        | ScalarOp::BoolCmp(kind)
+        | ScalarOp::ByteCmp(kind)
+        | ScalarOp::PtrCmp(kind) => comparison(kind),
         ScalarOp::FloatAdd => "talk_float_add",
         ScalarOp::FloatSub => "talk_float_sub",
         ScalarOp::FloatMul => "talk_float_mul",

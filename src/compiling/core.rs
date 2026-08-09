@@ -47,6 +47,7 @@ pub const CORE_SOURCE_NAMES: &[&str] = &[
     "String.tlk",
     "Memory.tlk",
     "UnicodeData.tlk",
+    "TextUnicodeData.tlk",
     "Unicode.tlk",
     "Array.tlk",
     "InlineArray.tlk",
@@ -57,6 +58,7 @@ pub const CORE_SOURCE_NAMES: &[&str] = &[
     "Range.tlk",
     "Host.tlk",
     "StringBuilder.tlk",
+    "Text.tlk",
 ];
 
 /// All core source strings, in a fixed order.
@@ -72,6 +74,10 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
         (
             "UnicodeData.tlk",
             include_str!("../../core/UnicodeData.tlk"),
+        ),
+        (
+            "TextUnicodeData.tlk",
+            include_str!("../../core/TextUnicodeData.tlk"),
         ),
         ("Unicode.tlk", include_str!("../../core/Unicode.tlk")),
         ("Array.tlk", include_str!("../../core/Array.tlk")),
@@ -89,6 +95,7 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
             "StringBuilder.tlk",
             include_str!("../../core/StringBuilder.tlk"),
         ),
+        ("Text.tlk", include_str!("../../core/Text.tlk")),
     ]
 }
 

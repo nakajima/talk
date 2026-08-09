@@ -42,19 +42,38 @@ extend Int {
 extend Int: Showable {
 	pub func show() -> String {
 		if self == 0 { return "0" }
-		let n = self
-		if self < 0 { n = -self }
-		let result = ""
-		loop n > 0 {
-			let digit = n - (n / 10) * 10
-			result = _digit(d: digit) + result
-			n = n / 10
-		}
-		if self < 0 {
-			"-" + result
+		// Keep the magnitude negative so the minimum Int never overflows.
+		let negative = self < 0
+		let n = if negative {
+			self
 		} else {
-			result
+			0 - self
 		}
+		let digits = 0
+		let probe = n
+		loop probe < 0 {
+			digits = digits + 1
+			probe = probe / 10
+		}
+		let builder = StringBuilder(capacity: digits + if negative {
+				1
+			} else {
+				0
+			})
+		if negative { builder.append(string: "-") }
+		let divisor = 0 - 1
+		let remaining = digits - 1
+		loop remaining > 0 {
+			divisor = divisor * 10
+			remaining = remaining - 1
+		}
+		loop divisor < 0 {
+			let digit = n / divisor
+			builder.append(string: _digit(d: digit))
+			n = n - digit * divisor
+			divisor = divisor / 10
+		}
+		builder.finish()
 	}
 }
 
@@ -75,13 +94,17 @@ extend Float: Showable {
 			frac = frac * 10.0
 			let d = frac._trunc()
 			frac = frac._frac()
-			frac_str.append_string(_digit(d: d))
+			frac_str.append(string: _digit(d: d))
 			i = i + 1
 			if frac < 0.0000000000001 {
 				break
 			}
 		}
-		return int_str + "." + frac_str.finish()
+		let result = StringBuilder(capacity: int_str.byte_count + 1 + 15)
+		result.append(string: int_str)
+		result.append(string: ".")
+		result.append(string: frac_str.finish())
+		return result.finish()
 	}
 }
 

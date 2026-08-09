@@ -2667,6 +2667,11 @@ fn compare(a: OperandValue<'_>, b: OperandValue<'_>, op: CmpOp) -> Result<bool, 
             Ne => Ok(x != y),
             _ => Err("vm: ordering comparison on bools".into()),
         },
+        (OperandValue::Ptr(x), OperandValue::Ptr(y)) => match op {
+            Eq => Ok(x == y),
+            Ne => Ok(x != y),
+            _ => Err("vm: ordering comparison on pointers".into()),
+        },
         _ => Err(format!("vm: comparison on {a:?} and {b:?}")),
     }
 }

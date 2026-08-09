@@ -291,7 +291,7 @@ struct MaterializedTokens {
 }
 
 struct SyntaxBuilder {
-	let source: String
+	let source: StringBuilder
 	let tokens: [Token]
 	let identifiers: [MaterializedIdentifier]
 }
@@ -349,9 +349,9 @@ func grouped_splice(category: SyntaxCategory) -> Bool {
 }
 
 func append_delimiter(mut builder: SyntaxBuilder, kind: TokenKind, spelling: String) -> Void {
-	let start = builder.source.utf8().count()
-	builder.source = builder.source + spelling
-	let end = builder.source.utf8().count()
+	let start = builder.source.utf8_count()
+	builder.source.append(string: spelling)
+	let end = builder.source.utf8_count()
 	builder.tokens.push(Token(kind: kind, span: start..<end, lexeme: start..<end))
 }
 
@@ -359,10 +359,10 @@ func append_raw(mut builder: SyntaxBuilder, raw: &RawSyntax, group_splices: Bool
 	for piece in raw.pieces {
 		match piece {
 			.token(token) -> {
-				builder.source = builder.source + token.leading
-				let start = builder.source.utf8().count()
-				builder.source = builder.source + token.spelling
-				let end = builder.source.utf8().count()
+				builder.source.append(string: token.leading)
+				let start = builder.source.utf8_count()
+				builder.source.append(string: token.spelling)
+				let end = builder.source.utf8_count()
 				let lexeme = (start + token.lexeme_start)..<(start + token.lexeme_end)
 				builder.tokens.push(Token(kind: token.kind, span: start..<end, lexeme: lexeme))
 				if identifier_token(kind: token.kind) {
@@ -379,7 +379,7 @@ func append_raw(mut builder: SyntaxBuilder, raw: &RawSyntax, group_splices: Bool
 				}
 			},
 			.splice(leading, nested) -> {
-				builder.source = builder.source + leading
+				builder.source.append(string: leading)
 				if nested.count == 1 {
 					let grouped = group_splices && grouped_splice(category: raw.category) && nested[0].group_when_spliced
 					if grouped { append_delimiter(builder: builder, kind: .left_paren, spelling: "(") }
@@ -389,14 +389,15 @@ func append_raw(mut builder: SyntaxBuilder, raw: &RawSyntax, group_splices: Bool
 			}
 		}
 	}
-	builder.source = builder.source + raw.trailing
+	builder.source.append(string: raw.trailing)
 }
 
 func materialize(raw: &RawSyntax, group_splices: Bool) -> MaterializedTokens {
-	let builder = SyntaxBuilder(source: "", tokens: [], identifiers: [])
+	let builder = SyntaxBuilder(source: StringBuilder(), tokens: [], identifiers: [])
 	append_raw(builder: builder, raw: raw, group_splices: group_splices)
-	let end = builder.source.utf8().count()
-	MaterializedTokens(source: builder.source, input: TokenRange(tokens: builder.tokens, span: 0..<end), identifiers: builder.identifiers)
+	let end = builder.source.utf8_count()
+	let source = builder.source.finish()
+	MaterializedTokens(source: source, input: TokenRange(tokens: builder.tokens, span: 0..<end), identifiers: builder.identifiers)
 }
 
 func syntax_failure(failure: Fail, fallback: Range<Int>) -> SyntaxFailure {
@@ -638,18 +639,20 @@ pub func build_match_expr(consume subject: Syntax<Expr>, consume patterns: [Synt
 // strings. The generated token points back to the source syntax that caused
 // the literal so diagnostics retain useful provenance.
 pub func string_literal_expr(value: String, source_id: Int, source_span: Range<Int>, context: &QuoteContext) -> Syntax<Expr> {
-	let spelling = "\""
+	let spelling_builder = StringBuilder(capacity: value.utf8_count() + 2)
+	spelling_builder.append(string: "\"")
 	for character in value {
-		spelling = spelling + match character {
+		spelling_builder.append(string: match character {
 			'\\' -> "\\\\",
 			'\"' -> "\\\"",
 			'\n' -> "\\n",
 			'\r' -> "\\r",
 			'\t' -> "\\t",
 			_ -> character.to_string()
-		}
+		})
 	}
-	spelling = spelling + "\""
+	spelling_builder.append(string: "\"")
+	let spelling = spelling_builder.finish()
 	let token = SyntaxToken(
 		kind: .string_literal,
 		leading: "",

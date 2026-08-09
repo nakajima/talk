@@ -1014,7 +1014,10 @@ impl Emitter {
                     result.clone(),
                 )
             }
-            ScalarOp::IntCmp(kind) | ScalarOp::ByteCmp(kind) | ScalarOp::BoolCmp(kind) => {
+            ScalarOp::IntCmp(kind)
+            | ScalarOp::ByteCmp(kind)
+            | ScalarOp::BoolCmp(kind)
+            | ScalarOp::PtrCmp(kind) => {
                 let bit = self.fresh("cmp");
                 let _ = writeln!(
                     out,

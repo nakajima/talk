@@ -8,8 +8,72 @@ use package::Array::{ Array }
 use package::Operators::{ Add, Comparable, Equatable, Subtract }
 use package::Memory::{ ByteStorage, _alloc, _copy, _ptr_add, _store }
 use package::Ownership::{ Borrowed, CheapClone }
-use package::Optional::{ Optional }
+use package::Result::{ Result }
 use package::Iterable::{ IndexIterable }
+
+pub struct UTF8Error {
+	pub let offset: Int
+}
+
+extend UTF8Error: Equatable<UTF8Error> {
+	pub func equals(_ rhs: UTF8Error) -> Bool {
+		self.offset == rhs.offset
+	}
+}
+
+func _copy_byte_array(bytes: [Byte]) -> String {
+	let count = bytes.count
+	let base: RawPtr = _alloc<Byte>(count: count)
+	let i = 0
+	loop i < count {
+		_store<Byte>(ptr: _ptr_add(ptr: base, offset: i), value: bytes.get(i))
+		i = i + 1
+	}
+	String(base: ByteStorage(base: base), byte_count: count, capacity: count)
+}
+
+func _valid_utf8_values(b0: Int, b1: Int, b2: Int, b3: Int, remaining: Int) -> Int {
+	if b0 < 128 { return 1 }
+	if b0 < 194 { return 0 - 1 }
+	if b0 < 224 {
+		if remaining < 2 || b1 < 128 || b1 > 191 { return 0 - 1 }
+		return 2
+	}
+	if b0 < 240 {
+		if remaining < 2 { return 0 - 1 }
+		let lo = if b0 == 224 {
+			160
+		} else {
+			128
+		}
+		let hi = if b0 == 237 {
+			159
+		} else {
+			191
+		}
+		if b1 < lo || b1 > hi { return 0 - 1 }
+		if remaining < 3 || b2 < 128 || b2 > 191 { return 0 - 2 }
+		return 3
+	}
+	if b0 < 245 {
+		if remaining < 2 { return 0 - 1 }
+		let lo = if b0 == 240 {
+			144
+		} else {
+			128
+		}
+		let hi = if b0 == 244 {
+			143
+		} else {
+			191
+		}
+		if b1 < lo || b1 > hi { return 0 - 1 }
+		if remaining < 3 || b2 < 128 || b2 > 191 { return 0 - 2 }
+		if remaining < 4 || b3 < 128 || b3 > 191 { return 0 - 3 }
+		return 4
+	}
+	0 - 1
+}
 
 pub struct String {
 	pub let storage: ByteStorage
@@ -47,6 +111,100 @@ pub struct String {
 		}
 		String(base: ByteStorage(base: base), byte_count: count, capacity: count)
 	}
+
+	pub static func decoding_utf8(_ bytes: [Byte]) -> Result<String, UTF8Error> {
+		let output: [Byte] = []
+		let i = 0
+		loop i < bytes.count {
+			let remaining = bytes.count - i
+			let b0 = bytes.get(i)._toInt()
+			let b1 = if remaining > 1 {
+				bytes.get(i + 1)._toInt()
+			} else {
+				0 - 1
+			}
+			let b2 = if remaining > 2 {
+				bytes.get(i + 2)._toInt()
+			} else {
+				0 - 1
+			}
+			let b3 = if remaining > 3 {
+				bytes.get(i + 3)._toInt()
+			} else {
+				0 - 1
+			}
+			let size = _valid_utf8_values(
+				b0: b0,
+				b1: b1,
+				b2: b2,
+				b3: b3,
+				remaining: remaining
+			)
+			if size < 1 { return .error(UTF8Error(offset: i)) }
+			let j = 0
+			loop j < size {
+				output.push(bytes.get(i + j))
+				j = j + 1
+			}
+			i = i + size
+		}
+		.ok(_copy_byte_array(bytes: output))
+	}
+
+	pub static func decoding_utf8_lossy(_ bytes: [Byte]) -> String {
+		let output: [Byte] = []
+		let i = 0
+		loop i < bytes.count {
+			let remaining = bytes.count - i
+			let b0 = bytes.get(i)._toInt()
+			let b1 = if remaining > 1 {
+				bytes.get(i + 1)._toInt()
+			} else {
+				0 - 1
+			}
+			let b2 = if remaining > 2 {
+				bytes.get(i + 2)._toInt()
+			} else {
+				0 - 1
+			}
+			let b3 = if remaining > 3 {
+				bytes.get(i + 3)._toInt()
+			} else {
+				0 - 1
+			}
+			let size = _valid_utf8_values(
+				b0: b0,
+				b1: b1,
+				b2: b2,
+				b3: b3,
+				remaining: remaining
+			)
+			if size > 0 {
+				let j = 0
+				loop j < size {
+					output.push(bytes.get(i + j))
+					j = j + 1
+				}
+				i = i + size
+			} else {
+				output.push(239._toByte())
+				output.push(191._toByte())
+				output.push(189._toByte())
+				i = i + (0 - size)
+			}
+		}
+		_copy_byte_array(bytes: output)
+	}
+
+	pub func encoded_utf8() -> [Byte] {
+		let result: [Byte] = []
+		let i = 0
+		loop i < self.byte_count {
+			result.push(self.storage.get(i))
+			i = i + 1
+		}
+		result
+	}
 }
 
 pub struct Substring {
@@ -63,6 +221,7 @@ pub struct Substring {
 }
 
 extend Substring: Borrowed {}
+extend Substring: CheapClone {}
 
 extend String: CheapClone {}
 
@@ -95,22 +254,6 @@ pub protocol StringMethods {
 	func as_substring() -> Substring
 	func utf8() -> UTF8View
 
-	func find(needle: String) -> Int? {
-		self.as_substring()._find_from(needle: needle, start: 0)
-	}
-
-	func find_from(needle: String, start: Int) -> Int? {
-		self.as_substring()._find_from(needle: needle, start: start)
-	}
-
-	func starts_with(needle: String) -> Bool {
-		self.as_substring()._starts_with(needle: needle)
-	}
-
-	func ends_with(needle: String) -> Bool {
-		self.as_substring()._ends_with(needle: needle)
-	}
-
 	func is_empty() -> Bool {
 		self.as_substring().byte_count == 0
 	}
@@ -128,25 +271,6 @@ extend String: StringMethods {
 	pub func utf8() -> UTF8View {
 		UTF8View(storage: self.storage, start: 0, byte_count: self.byte_count)
 	}
-
-	pub func find(needle: String) -> Int? {
-		self.as_substring()._find_from(needle: needle, start: 0)
-	}
-
-	pub func find_from(needle: String, start: Int) -> Int? {
-		self.as_substring()._find_from(needle: needle, start: start)
-	}
-
-	pub func starts_with(needle: String) -> Bool {
-		self.as_substring()._starts_with(needle: needle)
-	}
-
-	pub func ends_with(needle: String) -> Bool {
-		self.as_substring()._ends_with(needle: needle)
-	}
-
-	pub func is_empty() -> Bool { self.byte_count == 0 }
-	pub func utf8_count() -> Int { self.byte_count }
 }
 
 extend Substring: StringMethods {
@@ -157,64 +281,9 @@ extend Substring: StringMethods {
 	pub func utf8() -> UTF8View {
 		UTF8View(storage: self.storage, start: self.start, byte_count: self.byte_count)
 	}
-
-	pub func find(needle: String) -> Int? {
-		self._find_from(needle: needle, start: 0)
-	}
-
-	pub func find_from(needle: String, start: Int) -> Int? {
-		self._find_from(needle: needle, start: start)
-	}
-
-	pub func starts_with(needle: String) -> Bool {
-		self._starts_with(needle: needle)
-	}
-
-	pub func ends_with(needle: String) -> Bool {
-		self._ends_with(needle: needle)
-	}
-
-	pub func is_empty() -> Bool { self.byte_count == 0 }
-	pub func utf8_count() -> Int { self.byte_count }
 }
 
 extend Substring {
-	// The found offset is a UTF-8 byte offset, valid as `utf8().slice`
-	// input. This compatibility search remains byte-oriented; new
-	// character-shaped search belongs on the boundary-safe index API.
-	func _find_from(needle: String, start: Int) -> Int? {
-		if start < 0 { return Optional.none }
-		if self.byte_count < start { return Optional.none }
-		if needle.byte_count == 0 { return Optional.some(start) }
-		if self.byte_count < needle.byte_count { return Optional.none }
-
-		let last: Int = self.byte_count - needle.byte_count
-		let i: Int = start
-		loop {
-			if last < i { break }
-			let window: Substring = self.utf8().slice(
-				start: i,
-				byte_count: needle.byte_count
-			)
-			if window.equals_string(needle) { return Optional.some(i) }
-			i = i + 1
-		}
-		Optional.none
-	}
-
-	func _starts_with(needle: String) -> Bool {
-		if self.byte_count < needle.byte_count { return false }
-		self.utf8().slice(start: 0, byte_count: needle.byte_count).equals_string(needle)
-	}
-
-	func _ends_with(needle: String) -> Bool {
-		if self.byte_count < needle.byte_count { return false }
-		self.utf8().slice(
-			start: self.byte_count - needle.byte_count,
-			byte_count: needle.byte_count
-		).equals_string(needle)
-	}
-
 	pub func to_string() -> String {
 		let base: RawPtr = _alloc<Byte>(count: self.byte_count)
 		let source: RawPtr = _ptr_add(ptr: self.storage.base, offset: self.start)
@@ -239,7 +308,6 @@ extend Substring {
 		}
 		true
 	}
-
 }
 
 extend Substring: Equatable<Substring> {

@@ -2315,8 +2315,23 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     params: params.clone(),
                     self_args: self_args.clone(),
                 };
-                // Disjoint instance rows may define the same label; overlapping
-                // rows are rejected — there is no priority relation (ADR 0036).
+                // Disjoint instance rows may define the same base name. Rows
+                // with different callable-label contracts are overloads, not
+                // conflicting definitions (ADR 0041); only the same callable
+                // identity participates in the ADR 0036 overlap check.
+                let callable_name = self
+                    .catalog
+                    .callable_contracts
+                    .get(method)
+                    .map(|contract| contract.name.clone());
+                let same_callable_symbols: FxHashSet<Symbol> = self
+                    .catalog
+                    .callable_contracts
+                    .iter()
+                    .filter_map(|(symbol, contract)| {
+                        (Some(&contract.name) == callable_name.as_ref()).then_some(*symbol)
+                    })
+                    .collect();
                 let rows = self
                     .catalog
                     .extend_members
@@ -2325,10 +2340,11 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     .entry(label.clone())
                     .or_default();
                 let overlaps = rows.iter().any(|existing| {
-                    crate::types::catalog::inherent_rows_overlap(
-                        &existing.self_args,
-                        &member.self_args,
-                    )
+                    same_callable_symbols.contains(&existing.symbol)
+                        && crate::types::catalog::inherent_rows_overlap(
+                            &existing.self_args,
+                            &member.self_args,
+                        )
                 });
                 if overlaps {
                     self.diagnostics.errors.push((

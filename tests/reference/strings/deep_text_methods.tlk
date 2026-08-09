@@ -1,0 +1,149 @@
+func character(_ text: String) -> Character {
+	match text.first() {
+		.some(value) -> value,
+		.none -> unreachable
+	}
+}
+
+func print_optional_character(_ value: Character?) -> Void {
+	match value {
+		.some(character) -> print(character),
+		.none -> print("none")
+	}
+}
+
+func print_optional_range(_ text: String, _ value: StringRange?) -> Void {
+	match value {
+		.some(range) -> print(text.slice(range).to_string()),
+		.none -> print("none")
+	}
+}
+
+func shared<T: StringMethods>(_ text: T) -> Void {
+	print(text.is_empty())
+	print_optional_character(text.first())
+	print_optional_character(text.last())
+	print(text.scalar_count())
+	print(text.utf8_count())
+	print(text.prefix(2).to_string())
+	print(text.suffix(2).to_string())
+	print(text.contains(text: "é"))
+	print(text.trimmed().to_string())
+}
+
+func exercise() -> Void {
+	let owned = "  café🙂  "
+	shared(owned)
+	shared(owned.as_substring())
+
+	let indexed = "aé🙂z"
+	let start = indexed.start_index()
+	let second = indexed.index(start, offset_by: 1).or { unreachable }
+	let fourth = indexed.index(second, offset_by: 2).or { unreachable }
+	print(indexed.distance(from: second, to: fourth))
+	print_optional_character(indexed.character(at: second))
+	print(indexed.slice(StringRange(start: second, end: fourth)).to_string())
+	print_optional_range(indexed, indexed.first_range(of: "é🙂"))
+	print_optional_range(indexed, indexed.last_range(of: "é🙂"))
+	print(indexed.ranges(of: "").count)
+	print("banana".occurrences(of: "ana"))
+	print("flower".common_prefix(with: "flow").to_string())
+	print("ending".common_suffix(with: "ring").to_string())
+
+	let separate_a = "same".to_string()
+	let separate_b = "same".to_string()
+	print_optional_character(separate_b.character(at: separate_a.start_index()))
+
+	let fields = "a--b--".split(
+		separator: "--",
+		maximum_splits: 10,
+		omitting_empty: false
+	)
+	print(fields.count)
+	for field in fields {
+		print(field.to_string())
+	}
+	match "key=value".partition(separator: "=") {
+		.some(parts) -> print(
+			parts.0.to_string() + ":" + parts.1.to_string() + ":" + parts.2.to_string()
+		),
+		.none -> print("none")
+	}
+	print("one\r\ntwo\nthree".lines().count)
+	let words = "can't stop 3.14 東京".words()
+	print(words.count)
+	for word in words {
+		print(word.to_string())
+	}
+	print("  a\t b  ".split_whitespace().count)
+	print("..hello..".trimmed(CharacterSet(characters: ".")).to_string())
+	print(",".join(strings: ["a", "b", "c"]))
+
+	print("banana".replacing("na", with: "X"))
+	print("ab".replacing("", with: "."))
+	print("ab".repeated(3))
+	print("a🙂b".reversed())
+	print("a1b2".filter { value in value.is_alphabetic() })
+	print("x".padded_start(to: 3, with: character(".")))
+	print("x".centered(to: 4, with: character(".")))
+	print("a\tb".expanding_tabs(tab_width: 4))
+
+	print("ASCII".is_ascii())
+	print(" \u{2003}".is_whitespace())
+	print("λ中".is_alphabetic())
+	print("١Ⅷ".is_numeric())
+	print("١2".is_decimal())
+	print("abc_2".is_identifier())
+	print("λabc".is_identifier())
+	print(character("—").is_punctuation())
+	print(character("€").is_symbol())
+	print(character("ǅ").is_titlecase())
+	print(character("²").is_digit())
+	match parse("-42", using: 0) {
+		.some(value) -> print(value),
+		.none -> print(0)
+	}
+	match parse("true", using: false) {
+		.some(value) -> print(value),
+		.none -> print(false)
+	}
+
+	print("Straße".uppercase())
+	print("Straße".casefolded())
+	print("ΟΣ".lowercase())
+	print("hello WORLD".titlecase())
+	print("élan".capitalized())
+	print("e\u{301}".normalized_nfc())
+	print("é".normalized_nfd().utf8_count())
+	print("ﬁ".normalized_nfkc())
+	print("①".normalized_nfkd())
+	print("é".is_normalized_nfc())
+	print("e\u{301}".is_normalized_nfd())
+	print(character("ß").uppercase())
+
+	let encoded = "hé".encoded_utf8()
+	match String.decoding_utf8(encoded) {
+		.ok(value) -> print(value),
+		.error(_) -> print("invalid")
+	}
+	let invalid: [Byte] = [240._toByte(), 159._toByte()]
+	match String.decoding_utf8(invalid) {
+		.ok(_) -> print("valid"),
+		.error(error) -> print(error.offset)
+	}
+	print(String.decoding_utf8_lossy(invalid))
+
+	let builder = StringBuilder()
+	builder.append(character: character("é"))
+	builder.append(substring: "clair".as_substring())
+	print(builder.finish())
+
+	let cursor = TextCursor(text: "abc")
+	let mark = cursor.mark()
+	print_optional_character(cursor.peek())
+	print_optional_character(cursor.advance())
+	print(cursor.slice(from: mark).to_string())
+	print(cursor.consume(text: "bc"))
+	print(cursor.is_at_end())
+}
+exercise()

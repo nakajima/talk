@@ -1,0 +1,2102 @@
+// no-core
+// Deep, grapheme-safe text algorithms shared by String and Substring.
+// Character-shaped methods only mint and consume opaque StringIndex values;
+// byte offsets remain confined to UTF8View and compatibility search.
+use package::Array::{ Array }
+use package::Host::{ panic }
+use package::Iterable::{ Iterable }
+use package::Memory::{ ByteStorage, _same_allocation }
+use package::Optional::{ Optional }
+use package::Operators::{ Add, Comparable, Divide, Equatable, Multiply, Subtract }
+use package::Ownership::{ Borrowed, CheapClone }
+use package::Result::{ Result }
+use package::String::{ String, StringMethods, Substring, UTF8View }
+use package::StringBuilder::{ StringBuilder }
+use package::Unicode::{ Character, _WB_ALETTER, _WB_CR, _WB_DOUBLE_QUOTE, _WB_EXTEND, _WB_EXTENDED_PICTOGRAPHIC, _WB_EXTENDNUMLET, _WB_FORMAT, _WB_HEBREW_LETTER, _WB_KATAKANA, _WB_LF, _WB_MIDLETTER, _WB_MIDNUM, _WB_MIDNUMLET, _WB_NEWLINE, _WB_NUMERIC, _WB_REGIONAL_INDICATOR, _WB_SINGLE_QUOTE, _WB_WSEGSPACE, _WB_ZWJ, _case_mapping, _combining_class, _compose_pair, _decomposition, _next_boundary, _utf8_decode, _word_break_category, scalar_is_alphanumeric, scalar_is_case_ignorable, scalar_is_cased, scalar_is_extended_pictographic }
+
+pub struct StringIndex {
+	let storage: ByteStorage
+	let lower: Int
+	let upper: Int
+	let offset: Int
+}
+
+extend StringIndex: Borrowed {}
+extend StringIndex: CheapClone {}
+
+extend StringIndex: Equatable<StringIndex> {
+	pub func equals(_ rhs: StringIndex) -> Bool {
+		_same_allocation(lhs: self.storage.base, rhs: rhs.storage.base) && self.lower == rhs.lower && self.upper == rhs.upper && self.offset == rhs.offset
+	}
+}
+
+pub struct StringRange {
+	pub let start: StringIndex
+	pub let end: StringIndex
+}
+
+extend StringRange: Borrowed {}
+extend StringRange: CheapClone {}
+
+func _fingerprint(view: Substring) -> Int {
+	let hash = 17
+	let i = 0
+	loop i < view.byte_count {
+		hash = hash * 257 + view.storage.get(view.start + i)._toInt()
+		hash = hash - (hash / 2147483647) * 2147483647
+		i = i + 1
+	}
+	hash
+}
+
+func _index(view: Substring, offset: Int) -> StringIndex {
+	StringIndex(
+		storage: view.storage,
+		lower: view.start,
+		upper: view.start + view.byte_count,
+		offset: offset
+	)
+}
+
+func _belongs(index: StringIndex, view: Substring) -> Bool {
+	_same_allocation(lhs: index.storage.base, rhs: view.storage.base) && index.lower == view.start && index.upper == view.start + view.byte_count && index.offset >= index.lower && index.offset <= index.upper
+}
+
+func _range_belongs(range: StringRange, view: Substring) -> Bool {
+	_belongs(index: range.start, view: view) && _belongs(
+		index: range.end,
+		view: view
+	) && range.start.offset <= range.end.offset
+}
+
+func _slice_absolute(view: Substring, start: Int, end: Int) -> Substring {
+	Substring(storage: view.storage, start: start, byte_count: end - start)
+}
+
+func _boundary_before(view: Substring, offset: Int) -> Int? {
+	if offset <= view.start { return .none }
+	let scan = view.start
+	let previous = view.start
+	let end = view.start + view.byte_count
+	loop scan < end && scan < offset {
+		previous = scan
+		scan = _next_boundary(storage: view.storage, offset: scan, end: end)
+	}
+	if scan == offset {
+		.some(previous)
+	} else {
+		.none
+	}
+}
+
+func _is_boundary(view: Substring, offset: Int) -> Bool {
+	if offset == view.start || offset == view.start + view.byte_count { return true }
+	if offset < view.start || offset > view.start + view.byte_count { return false }
+	let scan = view.start
+	let end = view.start + view.byte_count
+	loop scan < offset { scan = _next_boundary(
+		storage: view.storage,
+		offset: scan,
+		end: end
+	) }
+	scan == offset
+}
+
+func _matches(view: Substring, needle: String, offset: Int) -> Bool {
+	let end = offset + needle.byte_count
+	if offset < view.start || end > view.start + view.byte_count { return false }
+	if _is_boundary(view: view, offset: offset) == false || _is_boundary(
+		view: view,
+		offset: end
+	) == false { return false }
+	let i = 0
+	loop i < needle.byte_count {
+		if view.storage.get(offset + i) != needle.storage.get(i) { return false }
+		i = i + 1
+	}
+	true
+}
+
+func _character_at(view: Substring, offset: Int) -> Character? {
+	let end = view.start + view.byte_count
+	if offset < view.start || offset >= end || _is_boundary(
+		view: view,
+		offset: offset
+	) == false { return .none }
+	let boundary = _next_boundary(storage: view.storage, offset: offset, end: end)
+	return Optional.some(
+		Character(storage: view.storage, start: offset, byte_count: boundary - offset)
+	)
+}
+
+extend StringMethods {
+	// State and boundary-safe access. Grapheme traversal is O(n); slicing a
+	// validated range is O(1).
+	pub func first() -> Character? {
+		let view = self.as_substring()
+		_character_at(view: view, offset: view.start)
+	}
+
+	pub func last() -> Character? {
+		let view = self.as_substring()
+		match _boundary_before(view: view, offset: view.start + view.byte_count) {
+			.some(offset) -> _character_at(view: view, offset: offset),
+			.none -> .none
+		}
+	}
+
+	pub func scalar_count() -> Int {
+		let count = 0
+		for _ in self.as_substring().scalars() {
+			count = count + 1
+		}
+		count
+	}
+
+	pub func start_index() -> StringIndex {
+		let view = self.as_substring()
+		_index(view: view, offset: view.start)
+	}
+
+	pub func end_index() -> StringIndex {
+		let view = self.as_substring()
+		_index(view: view, offset: view.start + view.byte_count)
+	}
+
+	pub func index(after index: StringIndex) -> StringIndex? {
+		let view = self.as_substring()
+		if _belongs(index: index, view: view) == false || index.offset >= index.upper { return .none }
+		.some(
+			_index(
+				view: view,
+				offset: _next_boundary(
+					storage: view.storage,
+					offset: index.offset,
+					end: index.upper
+				)
+			)
+		)
+	}
+
+	pub func index(before index: StringIndex) -> StringIndex? {
+		let view = self.as_substring()
+		if _belongs(index: index, view: view) == false { return .none }
+		match _boundary_before(view: view, offset: index.offset) {
+			.some(offset) -> .some(_index(view: view, offset: offset)),
+			.none -> .none
+		}
+	}
+
+	pub func index(_ index: StringIndex, offset_by distance: Int) -> StringIndex? {
+		let current = index
+		let remaining = distance
+		if remaining >= 0 {
+			loop remaining > 0 {
+				match self.index(after: current) {
+					.some(next) -> current = next,
+					.none -> return .none
+				}
+				remaining = remaining - 1
+			}
+		} else {
+			loop remaining < 0 {
+				match self.index(before: current) {
+					.some(previous) -> current = previous,
+					.none -> return .none
+				}
+				remaining = remaining + 1
+			}
+		}
+		.some(current)
+	}
+
+	pub func distance(from start: StringIndex, to end: StringIndex) -> Int {
+		let view = self.as_substring()
+		if _belongs(index: start, view: view) == false || _belongs(
+			index: end,
+			view: view
+		) == false { 'panic(message: "string index belongs to another snapshot") }
+		if start.offset == end.offset { return 0 }
+		if start.offset < end.offset {
+			let count = 0
+			let scan = start.offset
+			loop scan < end.offset {
+				scan = _next_boundary(
+					storage: view.storage,
+					offset: scan,
+					end: view.start + view.byte_count
+				)
+				count = count + 1
+			}
+			if scan != end.offset { 'panic(
+				message: "string index is not a grapheme boundary"
+			) }
+			return count
+		}
+		0 - self.distance(from: end, to: start)
+	}
+
+	pub func character(at index: StringIndex) -> Character? {
+		let view = self.as_substring()
+		if _belongs(index: index, view: view) == false { return .none }
+		_character_at(view: view, offset: index.offset)
+	}
+
+	pub func slice(_ range: StringRange) -> Substring {
+		let view = self.as_substring()
+		if _range_belongs(range: range, view: view) == false { 'panic(
+			message: "string range belongs to another snapshot"
+		) }
+		_slice_absolute(view: view, start: range.start.offset, end: range.end.offset)
+	}
+
+	// Prefixes, suffixes, and borrowed slices. Negative counts clamp to zero;
+	// oversized counts clamp to the whole view.
+	pub func prefix(_ count: Int) -> Substring {
+		let view = self.as_substring()
+		if count <= 0 { return _slice_absolute(
+			view: view,
+			start: view.start,
+			end: view.start
+		) }
+		let scan = view.start
+		let traversed = 0
+		let end = view.start + view.byte_count
+		loop scan < end && traversed < count {
+			scan = _next_boundary(storage: view.storage, offset: scan, end: end)
+			traversed = traversed + 1
+		}
+		_slice_absolute(view: view, start: view.start, end: scan)
+	}
+
+	pub func suffix(_ count: Int) -> Substring {
+		let view = self.as_substring()
+		if count <= 0 {
+			let end = view.start + view.byte_count
+			return _slice_absolute(view: view, start: end, end: end)
+		}
+		let total = view.count()
+		if count >= total { return view }
+		self.drop_first(total - count)
+	}
+
+	pub func drop_first() -> Substring {
+		self.drop_first(1)
+	}
+
+	pub func drop_first(_ count: Int) -> Substring {
+		let view = self.as_substring()
+		if count <= 0 { return view }
+		let scan = view.start
+		let traversed = 0
+		let end = view.start + view.byte_count
+		loop scan < end && traversed < count {
+			scan = _next_boundary(storage: view.storage, offset: scan, end: end)
+			traversed = traversed + 1
+		}
+		_slice_absolute(view: view, start: scan, end: end)
+	}
+
+	pub func drop_last() -> Substring {
+		self.drop_last(1)
+	}
+
+	pub func drop_last(_ count: Int) -> Substring {
+		let view = self.as_substring()
+		if count <= 0 { return view }
+		let total = view.count()
+		self.prefix(total - count)
+	}
+
+	pub func prefix(while predicate: (Character) -> Bool) -> Substring {
+		let view = self.as_substring()
+		let scan = view.start
+		let end = view.start + view.byte_count
+		loop scan < end {
+			let next = _next_boundary(storage: view.storage, offset: scan, end: end)
+			let character = Character(
+				storage: view.storage,
+				start: scan,
+				byte_count: next - scan
+			)
+			if predicate(character) == false {
+				break
+			}
+			scan = next
+		}
+		_slice_absolute(view: view, start: view.start, end: scan)
+	}
+
+	pub func drop(while predicate: (Character) -> Bool) -> Substring {
+		let head = self.prefix(while: predicate)
+		let view = self.as_substring()
+		_slice_absolute(
+			view: view,
+			start: view.start + head.byte_count,
+			end: view.start + view.byte_count
+		)
+	}
+
+	pub func starts_with_character(_ value: Character) -> Bool {
+		match self.first() {
+			.some(first) -> first == value,
+			.none -> false
+		}
+	}
+
+	pub func starts_with_text(_ value: String) -> Bool {
+		let view = self.as_substring()
+		_matches(view: view, needle: value, offset: view.start)
+	}
+
+	pub func ends_with_character(_ value: Character) -> Bool {
+		match self.last() {
+			.some(last) -> last == value,
+			.none -> false
+		}
+	}
+
+	pub func ends_with_text(_ value: String) -> Bool {
+		let view = self.as_substring()
+		_matches(
+			view: view,
+			needle: value,
+			offset: view.start + view.byte_count - value.byte_count
+		)
+	}
+
+	pub func stripping_prefix(_ prefix: String) -> Substring? {
+		if self.starts_with_text(prefix) {
+			.some(
+				self.as_substring().utf8().slice(
+					start: prefix.byte_count,
+					byte_count: self.utf8_count() - prefix.byte_count
+				)
+			)
+		} else {
+			.none
+		}
+	}
+
+	pub func stripping_suffix(_ suffix: String) -> Substring? {
+		if self.ends_with_text(suffix) {
+			.some(
+				self.as_substring().utf8().slice(
+					start: 0,
+					byte_count: self.utf8_count() - suffix.byte_count
+				)
+			)
+		} else {
+			.none
+		}
+	}
+
+	pub func removing_prefix(_ prefix: String) -> String {
+		match self.stripping_prefix(prefix) {
+			.some(rest) -> rest.to_string(),
+			.none -> self.as_substring().to_string()
+		}
+	}
+
+	pub func removing_suffix(_ suffix: String) -> String {
+		match self.stripping_suffix(suffix) {
+			.some(rest) -> rest.to_string(),
+			.none -> self.as_substring().to_string()
+		}
+	}
+
+	// Grapheme-safe search. Substring matches are leftmost and non-overlapping;
+	// an empty needle matches every grapheme boundary, including end.
+	pub func contains(character value: Character) -> Bool {
+		match self.first_index(of: value) {
+			.some(_) -> true,
+			.none -> false
+		}
+	}
+
+	pub func contains(text value: String) -> Bool {
+		match self.first_range(of: value) {
+			.some(_) -> true,
+			.none -> false
+		}
+	}
+
+	pub func contains(where predicate: (Character) -> Bool) -> Bool {
+		match self.first_index(where: predicate) {
+			.some(_) -> true,
+			.none -> false
+		}
+	}
+
+	pub func first_index(of value: Character) -> StringIndex? {
+		let view = self.as_substring()
+		let scan = view.start
+		let end = view.start + view.byte_count
+		loop scan < end {
+			let next = _next_boundary(storage: view.storage, offset: scan, end: end)
+			let candidate = Character(
+				storage: view.storage,
+				start: scan,
+				byte_count: next - scan
+			)
+			if candidate == value { return .some(_index(view: view, offset: scan)) }
+			scan = next
+		}
+		.none
+	}
+
+	pub func first_range(of value: String) -> StringRange? {
+		let view = self.as_substring()
+		let scan = view.start
+		let end = view.start + view.byte_count
+		if value.byte_count == 0 {
+			let at = _index(view: view, offset: scan)
+			return .some(StringRange(start: at, end: at))
+		}
+		loop scan < end {
+			if _matches(view: view, needle: value, offset: scan) { return .some(
+				StringRange(
+					start: _index(view: view, offset: scan),
+					end: _index(view: view, offset: scan + value.byte_count)
+				)
+			) }
+			scan = _next_boundary(storage: view.storage, offset: scan, end: end)
+		}
+		.none
+	}
+
+	pub func first_index(where predicate: (Character) -> Bool) -> StringIndex? {
+		let view = self.as_substring()
+		let scan = view.start
+		let end = view.start + view.byte_count
+		loop scan < end {
+			let next = _next_boundary(storage: view.storage, offset: scan, end: end)
+			if predicate(
+				Character(storage: view.storage, start: scan, byte_count: next - scan)
+			) { return .some(_index(view: view, offset: scan)) }
+			scan = next
+		}
+		.none
+	}
+
+	pub func last_index(of value: Character) -> StringIndex? {
+		let found: StringIndex? = .none
+		let view = self.as_substring()
+		let scan = view.start
+		let end = view.start + view.byte_count
+		loop scan < end {
+			let next = _next_boundary(storage: view.storage, offset: scan, end: end)
+			let candidate = Character(
+				storage: view.storage,
+				start: scan,
+				byte_count: next - scan
+			)
+			if candidate == value { found = .some(_index(view: view, offset: scan)) }
+			scan = next
+		}
+		found
+	}
+
+	pub func last_range(of value: String) -> StringRange? {
+		let found: StringRange? = .none
+		let view = self.as_substring()
+		let scan = view.start
+		let end = view.start + view.byte_count
+		if value.byte_count == 0 {
+			let at = _index(view: view, offset: end)
+			return .some(StringRange(start: at, end: at))
+		}
+		loop scan < end {
+			if _matches(view: view, needle: value, offset: scan) { found = .some(
+				StringRange(
+					start: _index(view: view, offset: scan),
+					end: _index(view: view, offset: scan + value.byte_count)
+				)
+			) }
+			scan = _next_boundary(storage: view.storage, offset: scan, end: end)
+		}
+		found
+	}
+
+	pub func last_index(where predicate: (Character) -> Bool) -> StringIndex? {
+		let found: StringIndex? = .none
+		let view = self.as_substring()
+		let scan = view.start
+		let end = view.start + view.byte_count
+		loop scan < end {
+			let next = _next_boundary(storage: view.storage, offset: scan, end: end)
+			if predicate(
+				Character(storage: view.storage, start: scan, byte_count: next - scan)
+			) { found = .some(_index(view: view, offset: scan)) }
+			scan = next
+		}
+		found
+	}
+
+	pub func ranges(of value: String) -> [StringRange] {
+		let result: [StringRange] = []
+		let view = self.as_substring()
+		let scan = view.start
+		let end = view.start + view.byte_count
+		if value.byte_count == 0 {
+			loop {
+				let at = _index(view: view, offset: scan)
+				result.push(StringRange(start: at, end: at))
+				if scan == end {
+					break
+				}
+				scan = _next_boundary(storage: view.storage, offset: scan, end: end)
+			}
+			return result
+		}
+		loop scan < end {
+			if _matches(view: view, needle: value, offset: scan) {
+				result.push(
+					StringRange(
+						start: _index(view: view, offset: scan),
+						end: _index(view: view, offset: scan + value.byte_count)
+					)
+				)
+				scan = scan + value.byte_count
+			} else {
+				scan = _next_boundary(storage: view.storage, offset: scan, end: end)
+			}
+		}
+		result
+	}
+
+	pub func occurrences(of value: String) -> Int {
+		let view = self.as_substring()
+		let scan = view.start
+		let end = view.start + view.byte_count
+		let count = 0
+		if value.byte_count == 0 { return view.count() + 1 }
+		loop scan < end {
+			if _matches(view: view, needle: value, offset: scan) {
+				count = count + 1
+				scan = scan + value.byte_count
+			} else {
+				scan = _next_boundary(storage: view.storage, offset: scan, end: end)
+			}
+		}
+		count
+	}
+
+	pub func common_prefix(with other: String) -> Substring {
+		let view = self.as_substring()
+		let left = view.start
+		let right = 0
+		let left_end = view.start + view.byte_count
+		loop left < left_end && right < other.byte_count {
+			let left_next = _next_boundary(
+				storage: view.storage,
+				offset: left,
+				end: left_end
+			)
+			let right_next = _next_boundary(
+				storage: other.storage,
+				offset: right,
+				end: other.byte_count
+			)
+			let a = Character(
+				storage: view.storage,
+				start: left,
+				byte_count: left_next - left
+			)
+			let b = Character(
+				storage: other.storage,
+				start: right,
+				byte_count: right_next - right
+			)
+			if a != b {
+				break
+			}
+			left = left_next
+			right = right_next
+		}
+		_slice_absolute(view: view, start: view.start, end: left)
+	}
+
+	pub func common_suffix(with other: String) -> Substring {
+		let view = self.as_substring()
+		let left = view.start + view.byte_count
+		let right_view = other.as_substring()
+		let right = other.byte_count
+		loop left > view.start && right > 0 {
+			let left_previous = match _boundary_before(view: view, offset: left) {
+				.some(value) -> value,
+				.none -> {
+					break
+				}
+			}
+			let right_previous = match _boundary_before(view: right_view, offset: right) {
+				.some(value) -> value,
+				.none -> {
+					break
+				}
+			}
+			let a = Character(
+				storage: view.storage,
+				start: left_previous,
+				byte_count: left - left_previous
+			)
+			let b = Character(
+				storage: other.storage,
+				start: right_previous,
+				byte_count: right - right_previous
+			)
+			if a != b {
+				break
+			}
+			left = left_previous
+			right = right_previous
+		}
+		_slice_absolute(view: view, start: left, end: view.start + view.byte_count)
+	}
+}
+
+// Public overload adapters stay concrete because protocol extensions cannot
+// currently publish overloaded members. Their algorithms remain shared above.
+extend String {
+	pub func starts_with(character value: Character) -> Bool {
+		self.starts_with_character(value)
+	}
+	pub func starts_with(text value: String) -> Bool {
+		self.starts_with_text(value)
+	}
+	pub func starts_with(needle value: String) -> Bool {
+		self.starts_with_text(value)
+	}
+	pub func ends_with(character value: Character) -> Bool {
+		self.ends_with_character(value)
+	}
+	pub func ends_with(text value: String) -> Bool {
+		self.ends_with_text(value)
+	}
+	pub func ends_with(needle value: String) -> Bool {
+		self.ends_with_text(value)
+	}
+	pub func split(character value: Character) -> [Substring] {
+		self.split_character(value)
+	}
+	pub func split(separator value: String) -> [Substring] {
+		self.split_text(value)
+	}
+	pub func split(where_separator predicate: (Character) -> Bool) -> [Substring] {
+		self.split_where_separator(predicate)
+	}
+	pub func split(separator value: String, maximum_splits: Int, omitting_empty: Bool) -> [Substring] {
+		self.split_text(
+			value,
+			maximum_splits: maximum_splits,
+			omitting_empty: omitting_empty
+		)
+	}
+	pub func split_once(character value: Character) -> (Substring, Substring)? {
+		self.split_once_character(value)
+	}
+	pub func split_once(separator value: String) -> (Substring, Substring)? {
+		self.split_once_text(value)
+	}
+	pub func replacing(_ range: StringRange, with replacement: String) -> String {
+		self.replacing_range(range, with: replacement)
+	}
+}
+
+extend Substring {
+	pub func starts_with(character value: Character) -> Bool {
+		self.starts_with_character(value)
+	}
+	pub func starts_with(text value: String) -> Bool {
+		self.starts_with_text(value)
+	}
+	pub func starts_with(needle value: String) -> Bool {
+		self.starts_with_text(value)
+	}
+	pub func ends_with(character value: Character) -> Bool {
+		self.ends_with_character(value)
+	}
+	pub func ends_with(text value: String) -> Bool {
+		self.ends_with_text(value)
+	}
+	pub func ends_with(needle value: String) -> Bool {
+		self.ends_with_text(value)
+	}
+	pub func split(character value: Character) -> [Substring] {
+		self.split_character(value)
+	}
+	pub func split(separator value: String) -> [Substring] {
+		self.split_text(value)
+	}
+	pub func split(where_separator predicate: (Character) -> Bool) -> [Substring] {
+		self.split_where_separator(predicate)
+	}
+	pub func split(separator value: String, maximum_splits: Int, omitting_empty: Bool) -> [Substring] {
+		self.split_text(
+			value,
+			maximum_splits: maximum_splits,
+			omitting_empty: omitting_empty
+		)
+	}
+	pub func split_once(character value: Character) -> (Substring, Substring)? {
+		self.split_once_character(value)
+	}
+	pub func split_once(separator value: String) -> (Substring, Substring)? {
+		self.split_once_text(value)
+	}
+	pub func replacing(_ range: StringRange, with replacement: String) -> String {
+		self.replacing_range(range, with: replacement)
+	}
+}
+
+// CharacterSet keeps reusable policies local without exposing representation.
+pub struct CharacterSet {
+	let kind: Int
+	let members: String
+
+	pub init(characters: String) {
+		self.kind = 0
+		self.members = characters
+	}
+
+	init(kind: Int, members: String) {
+		self.kind = kind
+		self.members = members
+	}
+
+	pub static func whitespace() -> CharacterSet {
+		CharacterSet(kind: 1, members: "")
+	}
+	pub static func newlines() -> CharacterSet {
+		CharacterSet(kind: 2, members: "")
+	}
+	pub static func alphanumerics() -> CharacterSet {
+		CharacterSet(kind: 3, members: "")
+	}
+	pub static func punctuation() -> CharacterSet {
+		CharacterSet(kind: 4, members: "")
+	}
+
+	pub func contains(_ character: Character) -> Bool {
+		if self.kind == 1 { return character.is_whitespace() }
+		if self.kind == 2 {
+			let scalar = character.first_scalar()
+			return scalar == 10 || scalar == 13 || scalar == 133 || scalar == 8232 || scalar == 8233
+		}
+		if self.kind == 3 { return character.is_alphanumeric() }
+		if self.kind == 4 { return character.is_punctuation() }
+		self.members.contains(character: character)
+	}
+}
+
+extend CharacterSet: CheapClone {}
+
+func _is_whitespace_character(character: Character) -> Bool {
+	character.is_whitespace()
+}
+
+func _wb_ignored(category: Int) -> Bool {
+	category == _WB_EXTEND || category == _WB_FORMAT || category == _WB_ZWJ
+}
+
+func _wb_ah(category: Int) -> Bool {
+	category == _WB_ALETTER || category == _WB_HEBREW_LETTER
+}
+
+func _wb_mid_letter(category: Int) -> Bool {
+	category == _WB_MIDLETTER || category == _WB_MIDNUMLET || category == _WB_SINGLE_QUOTE
+}
+
+func _wb_mid_number(category: Int) -> Bool {
+	category == _WB_MIDNUM || category == _WB_MIDNUMLET || category == _WB_SINGLE_QUOTE
+}
+
+func _wb_previous(categories: [Int], before: Int) -> Int {
+	let index = before - 1
+	loop index >= 0 && _wb_ignored(category: categories.get(index)) { index = index - 1 }
+	index
+}
+
+func _wb_next(categories: [Int], from: Int) -> Int {
+	let index = from
+	loop index < categories.count && _wb_ignored(category: categories.get(index)) { index = index + 1 }
+	index
+}
+
+func _word_break(scalars: [Int], categories: [Int], index: Int) -> Bool {
+	let immediate_left = categories.get(index - 1)
+	let immediate_right = categories.get(index)
+	if immediate_left == _WB_CR && immediate_right == _WB_LF { return false }
+	if immediate_left == _WB_CR || immediate_left == _WB_LF || immediate_left == _WB_NEWLINE { return true }
+	if immediate_right == _WB_CR || immediate_right == _WB_LF || immediate_right == _WB_NEWLINE { return true }
+	if immediate_left == _WB_WSEGSPACE && immediate_right == _WB_WSEGSPACE { return false }
+	if _wb_ignored(category: immediate_right) { return false }
+	if immediate_left == _WB_ZWJ && scalar_is_extended_pictographic(
+		scalar: scalars.get(index)
+	) { return false }
+
+	let left_index = _wb_previous(categories: categories, before: index)
+	if left_index < 0 { return true }
+	let left = categories.get(left_index)
+	let right = immediate_right
+	if left == _WB_ZWJ && scalar_is_extended_pictographic(
+		scalar: scalars.get(index)
+	) { return false }
+	if _wb_ah(category: left) && _wb_ah(category: right) { return false }
+	if _wb_ah(category: left) && _wb_mid_letter(category: right) {
+		let next = _wb_next(categories: categories, from: index + 1)
+		if next < categories.count && _wb_ah(category: categories.get(next)) { return false }
+	}
+	if _wb_mid_letter(category: left) && _wb_ah(category: right) {
+		let previous = _wb_previous(categories: categories, before: left_index)
+		if previous >= 0 && _wb_ah(category: categories.get(previous)) { return false }
+	}
+	if left == _WB_HEBREW_LETTER && right == _WB_SINGLE_QUOTE { return false }
+	if left == _WB_HEBREW_LETTER && right == _WB_DOUBLE_QUOTE {
+		let next = _wb_next(categories: categories, from: index + 1)
+		if next < categories.count && categories.get(next) == _WB_HEBREW_LETTER { return false }
+	}
+	if left == _WB_DOUBLE_QUOTE && right == _WB_HEBREW_LETTER {
+		let previous = _wb_previous(categories: categories, before: left_index)
+		if previous >= 0 && categories.get(previous) == _WB_HEBREW_LETTER { return false }
+	}
+	if left == _WB_NUMERIC && right == _WB_NUMERIC { return false }
+	if _wb_ah(category: left) && right == _WB_NUMERIC { return false }
+	if left == _WB_NUMERIC && _wb_ah(category: right) { return false }
+	if left == _WB_NUMERIC && _wb_mid_number(category: right) {
+		let next = _wb_next(categories: categories, from: index + 1)
+		if next < categories.count && categories.get(next) == _WB_NUMERIC { return false }
+	}
+	if _wb_mid_number(category: left) && right == _WB_NUMERIC {
+		let previous = _wb_previous(categories: categories, before: left_index)
+		if previous >= 0 && categories.get(previous) == _WB_NUMERIC { return false }
+	}
+	if left == _WB_KATAKANA && right == _WB_KATAKANA { return false }
+	let left_word = _wb_ah(category: left) || left == _WB_NUMERIC || left == _WB_KATAKANA || left == _WB_EXTENDNUMLET
+	if left_word && right == _WB_EXTENDNUMLET { return false }
+	let right_word = _wb_ah(category: right) || right == _WB_NUMERIC || right == _WB_KATAKANA
+	if left == _WB_EXTENDNUMLET && right_word { return false }
+	if left == _WB_REGIONAL_INDICATOR && right == _WB_REGIONAL_INDICATOR {
+		let run = 0
+		let scan = left_index
+		loop scan >= 0 {
+			if categories.get(scan) == _WB_REGIONAL_INDICATOR {
+				run = run + 1
+				scan = _wb_previous(categories: categories, before: scan)
+			} else {
+				break
+			}
+		}
+		if run - (run / 2) * 2 == 1 { return false }
+	}
+	true
+}
+
+func _segment_is_word(scalars: [Int], start: Int, end: Int) -> Bool {
+	let i = start
+	loop i < end {
+		if scalar_is_alphanumeric(scalar: scalars.get(i)) { return true }
+		i = i + 1
+	}
+	false
+}
+
+func _unicode_words(view: Substring) -> [Substring] {
+	let result: [Substring] = []
+	let scalars: [Int] = []
+	let categories: [Int] = []
+	let offsets: [Int] = []
+	let scan = view.start
+	let end = view.start + view.byte_count
+	loop scan < end {
+		offsets.push(scan)
+		let packed = _utf8_decode(storage: view.storage, offset: scan, end: end)
+		let scalar = packed / 8
+		let size = packed - (packed / 8) * 8
+		scalars.push(scalar)
+		categories.push(_word_break_category(scalar: scalar))
+		scan = scan + size
+	}
+	offsets.push(end)
+	let segment_start = 0
+	let i = 1
+	loop i < scalars.count {
+		if _word_break(scalars: scalars, categories: categories, index: i) {
+			if _segment_is_word(scalars: scalars, start: segment_start, end: i) { result.push(
+				_slice_absolute(
+					view: view,
+					start: offsets.get(segment_start),
+					end: offsets.get(i)
+				)
+			) }
+			segment_start = i
+		}
+		i = i + 1
+	}
+	if _segment_is_word(scalars: scalars, start: segment_start, end: scalars.count) { result.push(
+		_slice_absolute(view: view, start: offsets.get(segment_start), end: end)
+	) }
+	result
+}
+
+func _split_text(view: Substring, separator: String, maximum_splits: Int, omitting_empty: Bool) -> [Substring] {
+	let result: [Substring] = []
+	let field_start = view.start
+	let scan = view.start
+	let end = view.start + view.byte_count
+	let splits = 0
+	if separator.byte_count == 0 {
+		loop scan < end && (maximum_splits < 0 || splits < maximum_splits) {
+			let next = _next_boundary(storage: view.storage, offset: scan, end: end)
+			let field = _slice_absolute(view: view, start: scan, end: next)
+			if omitting_empty == false || field.byte_count > 0 { result.push(field) }
+			scan = next
+			splits = splits + 1
+		}
+		if scan < end { result.push(_slice_absolute(view: view, start: scan, end: end)) }
+		return result
+	}
+	loop scan < end && (maximum_splits < 0 || splits < maximum_splits) {
+		if _matches(view: view, needle: separator, offset: scan) {
+			let field = _slice_absolute(view: view, start: field_start, end: scan)
+			if omitting_empty == false || field.byte_count > 0 { result.push(field) }
+			scan = scan + separator.byte_count
+			field_start = scan
+			splits = splits + 1
+		} else {
+			scan = _next_boundary(storage: view.storage, offset: scan, end: end)
+		}
+	}
+	let tail = _slice_absolute(view: view, start: field_start, end: end)
+	if omitting_empty == false || tail.byte_count > 0 { result.push(tail) }
+	result
+}
+
+extend StringMethods {
+	pub func split_character(_ value: Character) -> [Substring] {
+		let result: [Substring] = []
+		let view = self.as_substring()
+		let field_start = view.start
+		let scan = view.start
+		let end = view.start + view.byte_count
+		loop scan < end {
+			let next = _next_boundary(storage: view.storage, offset: scan, end: end)
+			let character = Character(
+				storage: view.storage,
+				start: scan,
+				byte_count: next - scan
+			)
+			if character == value {
+				if field_start < scan { result.push(
+					_slice_absolute(view: view, start: field_start, end: scan)
+				) }
+				field_start = next
+			}
+			scan = next
+		}
+		if field_start < end { result.push(
+			_slice_absolute(view: view, start: field_start, end: end)
+		) }
+		result
+	}
+
+	pub func split_text(_ value: String) -> [Substring] {
+		_split_text(
+			view: self.as_substring(),
+			separator: value,
+			maximum_splits: 0 - 1,
+			omitting_empty: true
+		)
+	}
+
+	pub func split_where_separator(_ predicate: (Character) -> Bool) -> [Substring] {
+		let result: [Substring] = []
+		let view = self.as_substring()
+		let field_start = view.start
+		let scan = view.start
+		let end = view.start + view.byte_count
+		loop scan < end {
+			let next = _next_boundary(storage: view.storage, offset: scan, end: end)
+			let character = Character(
+				storage: view.storage,
+				start: scan,
+				byte_count: next - scan
+			)
+			if predicate(character) {
+				if field_start < scan { result.push(
+					_slice_absolute(view: view, start: field_start, end: scan)
+				) }
+				field_start = next
+			}
+			scan = next
+		}
+		if field_start < end { result.push(
+			_slice_absolute(view: view, start: field_start, end: end)
+		) }
+		result
+	}
+
+	pub func split_text(_ value: String, maximum_splits: Int, omitting_empty: Bool) -> [Substring] {
+		_split_text(
+			view: self.as_substring(),
+			separator: value,
+			maximum_splits: maximum_splits,
+			omitting_empty: omitting_empty
+		)
+	}
+
+	pub func split_once_character(_ value: Character) -> (Substring, Substring)? {
+		let view = self.as_substring()
+		match self.first_index(of: value) {
+			.some(index) -> {
+				let next = _next_boundary(
+					storage: view.storage,
+					offset: index.offset,
+					end: view.start + view.byte_count
+				)
+				Optional.some(
+					(_slice_absolute(view: view, start: view.start, end: index.offset),
+					_slice_absolute(view: view, start: next, end: view.start + view.byte_count))
+				)
+			},
+			.none -> Optional.none
+		}
+	}
+
+	pub func split_once_text(_ value: String) -> (Substring, Substring)? {
+		let view = self.as_substring()
+		match self.first_range(of: value) {
+			.some(range) -> Optional.some(
+				(_slice_absolute(view: view, start: view.start, end: range.start.offset),
+				_slice_absolute(
+					view: view,
+					start: range.end.offset,
+					end: view.start + view.byte_count
+				))
+			),
+			.none -> Optional.none
+		}
+	}
+
+	pub func split_once_from_end(separator value: String) -> (Substring, Substring)? {
+		let view = self.as_substring()
+		match self.last_range(of: value) {
+			.some(range) -> Optional.some(
+				(_slice_absolute(view: view, start: view.start, end: range.start.offset),
+				_slice_absolute(
+					view: view,
+					start: range.end.offset,
+					end: view.start + view.byte_count
+				))
+			),
+			.none -> Optional.none
+		}
+	}
+
+	pub func partition(separator value: String) -> (Substring, Substring, Substring)? {
+		let view = self.as_substring()
+		match self.first_range(of: value) {
+			.some(range) -> Optional.some(
+				(_slice_absolute(view: view, start: view.start, end: range.start.offset),
+				_slice_absolute(view: view, start: range.start.offset, end: range.end.offset),
+				_slice_absolute(
+					view: view,
+					start: range.end.offset,
+					end: view.start + view.byte_count
+				))
+			),
+			.none -> Optional.none
+		}
+	}
+
+	pub func partition_from_end(separator value: String) -> (Substring, Substring, Substring)? {
+		let view = self.as_substring()
+		match self.last_range(of: value) {
+			.some(range) -> Optional.some(
+				(_slice_absolute(view: view, start: view.start, end: range.start.offset),
+				_slice_absolute(view: view, start: range.start.offset, end: range.end.offset),
+				_slice_absolute(
+					view: view,
+					start: range.end.offset,
+					end: view.start + view.byte_count
+				))
+			),
+			.none -> Optional.none
+		}
+	}
+
+	pub func lines() -> [Substring] {
+		self.lines(keeping_terminators: false)
+	}
+
+	// Recognizes LF, CRLF, CR, NEL, LINE SEPARATOR, and PARAGRAPH SEPARATOR.
+	pub func lines(keeping_terminators keep: Bool) -> [Substring] {
+		let result: [Substring] = []
+		let view = self.as_substring()
+		let line_start = view.start
+		let scan = view.start
+		let end = view.start + view.byte_count
+		loop scan < end {
+			let next = _next_boundary(storage: view.storage, offset: scan, end: end)
+			let character = Character(
+				storage: view.storage,
+				start: scan,
+				byte_count: next - scan
+			)
+			let scalar = character.first_scalar()
+			let newline = scalar == 10 || scalar == 13 || scalar == 133 || scalar == 8232 || scalar == 8233
+			if newline {
+				let line_end = if keep {
+					next
+				} else {
+					scan
+				}
+				result.push(_slice_absolute(view: view, start: line_start, end: line_end))
+				line_start = next
+			}
+			scan = next
+		}
+		if line_start < end { result.push(
+			_slice_absolute(view: view, start: line_start, end: end)
+		) }
+		result
+	}
+
+	// Unicode word boundaries follow UAX #29; punctuation-only and whitespace
+	// segments are omitted from the returned word views.
+	pub func words() -> [Substring] {
+		_unicode_words(view: self.as_substring())
+	}
+
+	pub func split_whitespace() -> [Substring] {
+		self.split_where_separator(_is_whitespace_character)
+	}
+
+	pub func trimmed() -> Substring {
+		self.trimmed(where: _is_whitespace_character)
+	}
+
+	pub func trimmed_start() -> Substring {
+		self.trimmed_start(where: _is_whitespace_character)
+	}
+
+	pub func trimmed_end() -> Substring {
+		self.trimmed_end(where: _is_whitespace_character)
+	}
+
+	pub func trimmed(_ characters: CharacterSet) -> Substring {
+		self.trimmed_start(characters).trimmed_end(characters)
+	}
+
+	pub func trimmed_start(_ characters: CharacterSet) -> Substring {
+		let view = self.as_substring()
+		let scan = view.start
+		let end = view.start + view.byte_count
+		loop scan < end {
+			let next = _next_boundary(storage: view.storage, offset: scan, end: end)
+			let character = Character(
+				storage: view.storage,
+				start: scan,
+				byte_count: next - scan
+			)
+			if characters.contains(character) == false {
+				break
+			}
+			scan = next
+		}
+		_slice_absolute(view: view, start: scan, end: end)
+	}
+
+	pub func trimmed_end(_ characters: CharacterSet) -> Substring {
+		let view = self.as_substring()
+		let scan = view.start
+		let end = view.start + view.byte_count
+		let last_kept_end = view.start
+		loop scan < end {
+			let next = _next_boundary(storage: view.storage, offset: scan, end: end)
+			let character = Character(
+				storage: view.storage,
+				start: scan,
+				byte_count: next - scan
+			)
+			if characters.contains(character) == false { last_kept_end = next }
+			scan = next
+		}
+		_slice_absolute(view: view, start: view.start, end: last_kept_end)
+	}
+
+	pub func trimmed(where predicate: (Character) -> Bool) -> Substring {
+		self.trimmed_start(where: predicate).trimmed_end(where: predicate)
+	}
+
+	pub func trimmed_start(where predicate: (Character) -> Bool) -> Substring {
+		self.drop(while: predicate)
+	}
+
+	pub func trimmed_end(where predicate: (Character) -> Bool) -> Substring {
+		let view = self.as_substring()
+		let scan = view.start
+		let end = view.start + view.byte_count
+		let last_kept_end = view.start
+		loop scan < end {
+			let next = _next_boundary(storage: view.storage, offset: scan, end: end)
+			let character = Character(
+				storage: view.storage,
+				start: scan,
+				byte_count: next - scan
+			)
+			if predicate(character) == false { last_kept_end = next }
+			scan = next
+		}
+		_slice_absolute(view: view, start: view.start, end: last_kept_end)
+	}
+
+	pub func join(strings values: [String]) -> String {
+		let capacity = 0
+		let i = 0
+		loop i < values.count {
+			capacity = capacity + values.get(i).byte_count
+			if i > 0 { capacity = capacity + self.utf8_count() }
+			i = i + 1
+		}
+		let builder = StringBuilder(capacity: capacity)
+		i = 0
+		loop i < values.count {
+			if i > 0 { builder.append(substring: self.as_substring()) }
+			builder.append(string: values.get(i))
+			i = i + 1
+		}
+		builder.finish()
+	}
+
+	pub func join(substrings values: [Substring]) -> String {
+		let capacity = 0
+		let i = 0
+		loop i < values.count {
+			capacity = capacity + values.get(i).byte_count
+			if i > 0 { capacity = capacity + self.utf8_count() }
+			i = i + 1
+		}
+		let builder = StringBuilder(capacity: capacity)
+		i = 0
+		loop i < values.count {
+			if i > 0 { builder.append(substring: self.as_substring()) }
+			builder.append(substring: values.get(i))
+			i = i + 1
+		}
+		builder.finish()
+	}
+}
+
+extend StringMethods {
+	// Whole-string predicates use vacuous truth only for ASCII and printable.
+	// The lexical identifier rule matches Talk's lexer: ASCII letter or `_`
+	// first, then Unicode alphanumeric characters or `_`.
+	pub func is_ascii() -> Bool {
+		for character in self.as_substring() {
+			if character.is_ascii() == false { return false }
+		}
+		true
+	}
+
+	pub func is_whitespace() -> Bool {
+		if self.is_empty() { return false }
+		for character in self.as_substring() {
+			if character.is_whitespace() == false { return false }
+		}
+		true
+	}
+
+	pub func is_alphabetic() -> Bool {
+		if self.is_empty() { return false }
+		for character in self.as_substring() {
+			if character.is_alphabetic() == false { return false }
+		}
+		true
+	}
+
+	pub func is_numeric() -> Bool {
+		if self.is_empty() { return false }
+		for character in self.as_substring() {
+			if character.is_numeric() == false { return false }
+		}
+		true
+	}
+
+	pub func is_alphanumeric() -> Bool {
+		if self.is_empty() { return false }
+		for character in self.as_substring() {
+			if character.is_alphanumeric() == false { return false }
+		}
+		true
+	}
+
+	pub func is_decimal() -> Bool {
+		if self.is_empty() { return false }
+		for character in self.as_substring() {
+			if character.is_decimal() == false { return false }
+		}
+		true
+	}
+
+	pub func is_lowercase() -> Bool {
+		let saw_cased = false
+		for character in self.as_substring() {
+			if character.is_uppercase() || character.is_titlecase() { return false }
+			if character.is_lowercase() { saw_cased = true }
+		}
+		saw_cased
+	}
+
+	pub func is_uppercase() -> Bool {
+		let saw_cased = false
+		for character in self.as_substring() {
+			if character.is_lowercase() || character.is_titlecase() { return false }
+			if character.is_uppercase() { saw_cased = true }
+		}
+		saw_cased
+	}
+
+	pub func is_titlecase() -> Bool {
+		let saw_cased = false
+		for scalar in self.as_substring().scalars() {
+			if scalar_is_cased(scalar: scalar) { saw_cased = true }
+		}
+		if saw_cased == false { return false }
+		self.as_substring().equals_string(self.titlecase())
+	}
+
+	pub func is_printable() -> Bool {
+		for character in self.as_substring() {
+			if character.is_printable() == false { return false }
+		}
+		true
+	}
+
+	pub func is_identifier() -> Bool {
+		let first = true
+		for character in self.as_substring() {
+			if first {
+				if character.is_identifier_start() == false { return false }
+				first = false
+			} else {
+				if character.is_identifier_continue() == false { return false }
+			}
+		}
+		first == false
+	}
+
+	// Owned transformations use exactly one growable builder.
+	pub func replacing(_ target: String, with replacement: String) -> String {
+		let view = self.as_substring()
+		let matches = self.ranges(of: target)
+		let builder = StringBuilder(capacity: view.byte_count)
+		let copied = view.start
+		for range in matches {
+			builder.append(
+				substring: _slice_absolute(view: view, start: copied, end: range.start.offset)
+			)
+			builder.append(string: replacement)
+			copied = range.end.offset
+		}
+		builder.append(
+			substring: _slice_absolute(
+				view: view,
+				start: copied,
+				end: view.start + view.byte_count
+			)
+		)
+		builder.finish()
+	}
+
+	pub func replacing_first(_ target: String, with replacement: String) -> String {
+		match self.first_range(of: target) {
+			.some(range) -> self.replacing_range(range, with: replacement),
+			.none -> self.as_substring().to_string()
+		}
+	}
+
+	pub func replacing_range(_ range: StringRange, with replacement: String) -> String {
+		let view = self.as_substring()
+		if _range_belongs(range: range, view: view) == false { 'panic(
+			message: "string range belongs to another snapshot"
+		) }
+		let builder = StringBuilder(
+			capacity: view.byte_count - (range.end.offset - range.start.offset) + replacement.byte_count
+		)
+		builder.append(
+			substring: _slice_absolute(
+				view: view,
+				start: view.start,
+				end: range.start.offset
+			)
+		)
+		builder.append(string: replacement)
+		builder.append(
+			substring: _slice_absolute(
+				view: view,
+				start: range.end.offset,
+				end: view.start + view.byte_count
+			)
+		)
+		builder.finish()
+	}
+
+	pub func removing(_ target: String) -> String {
+		self.replacing(target, with: "")
+	}
+
+	pub func removing(where predicate: (Character) -> Bool) -> String {
+		let builder = StringBuilder(capacity: self.utf8_count())
+		for character in self.as_substring() {
+			if predicate(character) == false { builder.append(character: character) }
+		}
+		builder.finish()
+	}
+
+	pub func repeated(_ count: Int) -> String {
+		if count <= 0 { return "" }
+		let view = self.as_substring()
+		let builder = StringBuilder(capacity: view.byte_count * count)
+		let i = 0
+		loop i < count {
+			builder.append(substring: view)
+			i = i + 1
+		}
+		builder.finish()
+	}
+
+	pub func reversed() -> String {
+		let offsets: [Int] = []
+		let view = self.as_substring()
+		let scan = view.start
+		let end = view.start + view.byte_count
+		loop scan < end {
+			offsets.push(scan)
+			scan = _next_boundary(storage: view.storage, offset: scan, end: end)
+		}
+		let builder = StringBuilder(capacity: view.byte_count)
+		let i = offsets.count - 1
+		loop i >= 0 {
+			let start = offsets.get(i)
+			let next = _next_boundary(storage: view.storage, offset: start, end: end)
+			builder.append(substring: _slice_absolute(view: view, start: start, end: next))
+			i = i - 1
+		}
+		builder.finish()
+	}
+
+	pub func map(_ transform: (Character) -> Character) -> String {
+		let builder = StringBuilder(capacity: self.utf8_count())
+		for character in self.as_substring() {
+			builder.append(character: transform(character))
+		}
+		builder.finish()
+	}
+
+	pub func flat_map(_ transform: (Character) -> String) -> String {
+		let builder = StringBuilder(capacity: self.utf8_count())
+		for character in self.as_substring() {
+			builder.append(string: transform(character))
+		}
+		builder.finish()
+	}
+
+	pub func filter(_ predicate: (Character) -> Bool) -> String {
+		let builder = StringBuilder(capacity: self.utf8_count())
+		for character in self.as_substring() {
+			if predicate(character) { builder.append(character: character) }
+		}
+		builder.finish()
+	}
+
+	pub func padded_start(to length: Int, with fill: Character) -> String {
+		let needed = length - self.as_substring().count()
+		if needed <= 0 { return self.as_substring().to_string() }
+		let builder = StringBuilder(
+			capacity: self.utf8_count() + needed * fill.utf8_count()
+		)
+		let i = 0
+		loop i < needed {
+			builder.append(character: fill)
+			i = i + 1
+		}
+		builder.append(substring: self.as_substring())
+		builder.finish()
+	}
+
+	pub func padded_end(to length: Int, with fill: Character) -> String {
+		let needed = length - self.as_substring().count()
+		if needed <= 0 { return self.as_substring().to_string() }
+		let builder = StringBuilder(
+			capacity: self.utf8_count() + needed * fill.utf8_count()
+		)
+		builder.append(substring: self.as_substring())
+		let i = 0
+		loop i < needed {
+			builder.append(character: fill)
+			i = i + 1
+		}
+		builder.finish()
+	}
+
+	// Odd padding puts the extra fill at the end.
+	pub func centered(to length: Int, with fill: Character) -> String {
+		let needed = length - self.as_substring().count()
+		if needed <= 0 { return self.as_substring().to_string() }
+		let left = needed / 2
+		let right = needed - left
+		let builder = StringBuilder(
+			capacity: self.utf8_count() + needed * fill.utf8_count()
+		)
+		let i = 0
+		loop i < left {
+			builder.append(character: fill)
+			i = i + 1
+		}
+		builder.append(substring: self.as_substring())
+		i = 0
+		loop i < right {
+			builder.append(character: fill)
+			i = i + 1
+		}
+		builder.finish()
+	}
+
+	pub func expanding_tabs(tab_width: Int) -> String {
+		let builder = StringBuilder(capacity: self.utf8_count())
+		let column = 0
+		for character in self.as_substring() {
+			let scalar = character.first_scalar()
+			if scalar == 9 {
+				if tab_width > 0 {
+					let spaces = tab_width - (column - (column / tab_width) * tab_width)
+					let i = 0
+					loop i < spaces {
+						builder.append(string: " ")
+						i = i + 1
+					}
+					column = column + spaces
+				}
+			} else {
+				builder.append(character: character)
+				if scalar == 10 || scalar == 13 || scalar == 133 || scalar == 8232 || scalar == 8233 {
+					column = 0
+				} else {
+					column = column + 1
+				}
+			}
+		}
+		builder.finish()
+	}
+}
+
+func _append_case(mut builder: StringBuilder, scalar: Int, kind: Int) -> Void {
+	match _case_mapping(scalar: scalar, kind: kind) {
+		.some(mapping) -> builder.append(substring: mapping),
+		.none -> builder.append_scalar(scalar)
+	}
+}
+
+func _cased_before(scalars: [Int], index: Int) -> Bool {
+	let scan = index - 1
+	loop scan >= 0 && scalar_is_case_ignorable(scalar: scalars.get(scan)) { scan = scan - 1 }
+	scan >= 0 && scalar_is_cased(scalar: scalars.get(scan))
+}
+
+func _cased_after(scalars: [Int], index: Int) -> Bool {
+	let scan = index + 1
+	loop scan < scalars.count && scalar_is_case_ignorable(scalar: scalars.get(scan)) { scan = scan + 1 }
+	scan < scalars.count && scalar_is_cased(scalar: scalars.get(scan))
+}
+
+func _case_text(view: Substring, kind: Int) -> String {
+	let scalars: [Int] = []
+	for scalar in view.scalars() {
+		scalars.push(scalar)
+	}
+	let builder = StringBuilder(capacity: view.byte_count)
+	let i = 0
+	loop i < scalars.count {
+		let scalar = scalars.get(i)
+		// Default Unicode lowercasing uses final sigma after a cased scalar
+		// when no later cased scalar occurs across Case_Ignorable scalars.
+		if kind == 0 && scalar == 931 && _cased_before(scalars: scalars, index: i) && _cased_after(
+			scalars: scalars,
+			index: i
+		) == false {
+			builder.append_scalar(962)
+		} else {
+			_append_case(builder: builder, scalar: scalar, kind: kind)
+		}
+		i = i + 1
+	}
+	builder.finish()
+}
+
+extend StringMethods {
+	pub func lowercase() -> String {
+		_case_text(view: self.as_substring(), kind: 0)
+	}
+	pub func uppercase() -> String {
+		_case_text(view: self.as_substring(), kind: 1)
+	}
+	pub func casefolded() -> String {
+		_case_text(view: self.as_substring(), kind: 3)
+	}
+
+	pub func titlecase() -> String {
+		let view = self.as_substring()
+		let words = _unicode_words(view: view)
+		let builder = StringBuilder(capacity: self.utf8_count())
+		let copied = view.start
+		for word in words {
+			builder.append(
+				substring: _slice_absolute(view: view, start: copied, end: word.start)
+			)
+			let saw_cased = false
+			for scalar in word.scalars() {
+				if scalar_is_cased(scalar: scalar) {
+					_append_case(builder: builder, scalar: scalar, kind: if saw_cased {
+							0
+						} else {
+							2
+						})
+					saw_cased = true
+				} else {
+					builder.append_scalar(scalar)
+				}
+			}
+			copied = word.start + word.byte_count
+		}
+		builder.append(
+			substring: _slice_absolute(
+				view: view,
+				start: copied,
+				end: view.start + view.byte_count
+			)
+		)
+		builder.finish()
+	}
+
+	pub func capitalized() -> String {
+		let builder = StringBuilder(capacity: self.utf8_count())
+		let changed = false
+		for character in self.as_substring() {
+			if changed == false && (character.is_lowercase() || character.is_uppercase() || character.is_titlecase()) {
+				for scalar in character.scalars() {
+					_append_case(builder: builder, scalar: scalar, kind: 2)
+				}
+				changed = true
+			} else {
+				builder.append(character: character)
+			}
+		}
+		builder.finish()
+	}
+}
+
+extend Character {
+	pub func lowercase() -> String {
+		self.as_substring().lowercase()
+	}
+	pub func uppercase() -> String {
+		self.as_substring().uppercase()
+	}
+	pub func titlecase() -> String {
+		self.as_substring().titlecase()
+	}
+}
+
+func _decompose_scalar(mut output: [Int], scalar: Int, compatibility: Bool) -> Void {
+	// Hangul syllables decompose algorithmically (UAX #15 section 3.12).
+	let s_index = scalar - 44032
+	if s_index >= 0 && s_index < 11172 {
+		let l = 4352 + s_index / 588
+		let v = 4449 + (s_index - (s_index / 588) * 588) / 28
+		let t = s_index - (s_index / 28) * 28
+		output.push(l)
+		output.push(v)
+		if t > 0 { output.push(4519 + t) }
+		return ()
+	}
+	match _decomposition(scalar: scalar, compatibility: compatibility) {
+		.some(mapping) -> for component in mapping.scalars() {
+			_decompose_scalar(
+				output: output,
+				scalar: component,
+				compatibility: compatibility
+			)
+		},
+		.none -> output.push(scalar)
+	}
+}
+
+func _decomposed_scalars(view: Substring, compatibility: Bool) -> [Int] {
+	let output: [Int] = []
+	for scalar in view.scalars() {
+		_decompose_scalar(output: output, scalar: scalar, compatibility: compatibility)
+	}
+	// Canonical ordering is a stable insertion sort within each starter run.
+	let i = 1
+	loop i < output.count {
+		let j = i
+		let current_class = _combining_class(scalar: output.get(j))
+		loop j > 0 && current_class > 0 {
+			let previous_class = _combining_class(scalar: output.get(j - 1))
+			if previous_class == 0 || previous_class <= current_class {
+				break
+			}
+			output.swap(i: j - 1, j: j)
+			j = j - 1
+		}
+		i = i + 1
+	}
+	output
+}
+
+func _hangul_composition(starter: Int, next: Int) -> Int? {
+	let l_index = starter - 4352
+	if l_index >= 0 && l_index < 19 {
+		let v_index = next - 4449
+		if v_index >= 0 && v_index < 21 { return .some(
+			44032 + (l_index * 21 + v_index) * 28
+		) }
+	}
+	let s_index = starter - 44032
+	if s_index >= 0 && s_index < 11172 && s_index - (s_index / 28) * 28 == 0 {
+		let t_index = next - 4519
+		if t_index > 0 && t_index < 28 { return .some(starter + t_index) }
+	}
+	.none
+}
+
+func _composition(starter: Int, next: Int) -> Int? {
+	match _hangul_composition(starter: starter, next: next) {
+		.some(value) -> .some(value),
+		.none -> _compose_pair(starter: starter, combining: next)
+	}
+}
+
+func _composed_scalars(decomposed: [Int]) -> [Int] {
+	if decomposed.count == 0 { return [] }
+	let output: [Int] = []
+	output.push(decomposed.get(0))
+	let starter_position = 0
+	let starter = decomposed.get(0)
+	let previous_class = 0
+	let i = 1
+	loop i < decomposed.count {
+		let scalar = decomposed.get(i)
+		let current_class = _combining_class(scalar: scalar)
+		let composite = _composition(starter: starter, next: scalar)
+		let can_compose = previous_class == 0 || previous_class < current_class
+		match composite {
+			.some(value) -> {
+				if can_compose {
+					output.set(index: starter_position, value: value)
+					starter = value
+				} else {
+					output.push(scalar)
+					previous_class = current_class
+				}
+			},
+			.none -> {
+				if current_class == 0 {
+					starter_position = output.count
+					starter = scalar
+				}
+				output.push(scalar)
+				previous_class = current_class
+			}
+		}
+		i = i + 1
+	}
+	output
+}
+
+func _scalars_to_string(scalars: [Int]) -> String {
+	let builder = StringBuilder()
+	for scalar in scalars {
+		builder.append_scalar(scalar)
+	}
+	builder.finish()
+}
+
+func _normalize(view: Substring, compatibility: Bool, compose: Bool) -> String {
+	let decomposed = _decomposed_scalars(view: view, compatibility: compatibility)
+	if compose {
+		_scalars_to_string(scalars: _composed_scalars(decomposed: decomposed))
+	} else {
+		_scalars_to_string(scalars: decomposed)
+	}
+}
+
+extend StringMethods {
+	pub func normalized_nfc() -> String {
+		_normalize(view: self.as_substring(), compatibility: false, compose: true)
+	}
+	pub func normalized_nfd() -> String {
+		_normalize(view: self.as_substring(), compatibility: false, compose: false)
+	}
+	pub func normalized_nfkc() -> String {
+		_normalize(view: self.as_substring(), compatibility: true, compose: true)
+	}
+	pub func normalized_nfkd() -> String {
+		_normalize(view: self.as_substring(), compatibility: true, compose: false)
+	}
+
+	pub func is_normalized_nfc() -> Bool {
+		self.as_substring().equals_string(self.normalized_nfc())
+	}
+	pub func is_normalized_nfd() -> Bool {
+		self.as_substring().equals_string(self.normalized_nfd())
+	}
+	pub func is_normalized_nfkc() -> Bool {
+		self.as_substring().equals_string(self.normalized_nfkc())
+	}
+	pub func is_normalized_nfkd() -> Bool {
+		self.as_substring().equals_string(self.normalized_nfkd())
+	}
+}
+
+// Byte-lexicographic ordering and byte hashing deliberately match equality.
+extend String: Comparable<String> {
+	pub func gt(_ rhs: String) -> Bool {
+		let limit = if self.byte_count < rhs.byte_count {
+			self.byte_count
+		} else {
+			rhs.byte_count
+		}
+		let i = 0
+		loop i < limit {
+			let left = self.storage.get(i)
+			let right = rhs.storage.get(i)
+			if left != right { return left > right }
+			i = i + 1
+		}
+		self.byte_count > rhs.byte_count
+	}
+}
+
+extend Substring: Comparable<Substring> {
+	pub func gt(_ rhs: Substring) -> Bool {
+		let limit = if self.byte_count < rhs.byte_count {
+			self.byte_count
+		} else {
+			rhs.byte_count
+		}
+		let i = 0
+		loop i < limit {
+			let left = self.storage.get(self.start + i)
+			let right = rhs.storage.get(rhs.start + i)
+			if left != right { return left > right }
+			i = i + 1
+		}
+		self.byte_count > rhs.byte_count
+	}
+}
+
+pub protocol Hashable {
+	func hash_value() -> Int
+}
+
+func _text_hash(view: Substring) -> Int {
+	_fingerprint(view: view)
+}
+
+extend String: Hashable {
+	pub func hash_value() -> Int {
+		_text_hash(view: self.as_substring())
+	}
+}
+
+extend Substring: Hashable {
+	pub func hash_value() -> Int {
+		_text_hash(view: self)
+	}
+}
+
+pub protocol FromString {
+	func from_string(_ text: String) -> Self?
+}
+
+pub func parse<T: FromString>(_ text: String, using exemplar: T) -> T? {
+	exemplar.from_string(text)
+}
+
+extend String: FromString {
+	pub func from_string(_ text: String) -> String? {
+		.some(text)
+	}
+}
+
+extend Bool: FromString {
+	pub func from_string(_ text: String) -> Bool? {
+		if text == "true" { return .some(true) }
+		if text == "false" { return .some(false) }
+		.none
+	}
+}
+
+extend Int: FromString {
+	pub func from_string(_ text: String) -> Int? {
+		let view = text.utf8()
+		if view.byte_count == 0 { return .none }
+		let negative = view.at(index: 0)._toInt() == 45
+		let i = if negative {
+			1
+		} else {
+			0
+		}
+		if i == view.byte_count { return .none }
+		let value = 0
+		loop i < view.byte_count {
+			let byte = view.at(index: i)._toInt()
+			if byte < 48 || byte > 57 { return .none }
+			value = value * 10 + byte - 48
+			i = i + 1
+		}
+		if negative {
+			.some(0 - value)
+		} else {
+			.some(value)
+		}
+	}
+}
+
+// Explicit byte search stays on UTF8View. Results are byte offsets relative
+// to the view and may be used directly with UTF8View.slice.
+extend UTF8View {
+	pub func find_bytes(_ needle: String) -> Int? {
+		self.find_bytes_from(needle, start: 0)
+	}
+
+	pub func find_bytes_from(_ needle: String, start: Int) -> Int? {
+		if start < 0 || start > self.byte_count { return .none }
+		if needle.byte_count == 0 { return .some(start) }
+		if needle.byte_count > self.byte_count - start { return .none }
+		let i = start
+		let last = self.byte_count - needle.byte_count
+		loop i <= last {
+			let j = 0
+			let same = true
+			loop j < needle.byte_count {
+				if self.storage.get(self.start + i + j) != needle.storage.get(j) {
+					same = false
+					break
+				}
+				j = j + 1
+			}
+			if same { return .some(i) }
+			i = i + 1
+		}
+		.none
+	}
+}
+
+// Parser-facing cursor: lookahead, marks, restoration, and source slices all
+// share StringIndex validation and preserve the source snapshot.
+pub struct TextCursor {
+	let source: Substring
+	let position: StringIndex
+
+	pub init(text: String) {
+		self.source = text.as_substring()
+		self.position = self.source.start_index()
+	}
+
+	pub init(substring: Substring) {
+		self.source = substring
+		self.position = substring.start_index()
+	}
+
+	pub func is_at_end() -> Bool {
+		self.position == self.source.end_index()
+	}
+	pub func mark() -> StringIndex {
+		self.position
+	}
+	pub func peek() -> Character? {
+		self.source.character(at: self.position)
+	}
+	pub func remaining() -> Substring {
+		self.source.slice(
+			StringRange(start: self.position, end: self.source.end_index())
+		)
+	}
+
+	pub mut func advance() -> Character? {
+		match self.peek() {
+			.some(character) -> {
+				if let .some(next) = self.source.index(after: self.position) {
+					self.position = next
+				}
+				.some(character)
+			},
+			.none -> .none
+		}
+	}
+
+	pub mut func restore(to mark: StringIndex) -> Bool {
+		match self.source.character(at: mark) {
+			.some(_) -> {
+				self.position = mark
+				true
+			},
+			.none -> {
+				if mark == self.source.end_index() {
+					self.position = mark
+					true
+				} else {
+					false
+				}
+			}
+		}
+	}
+
+	pub func slice(from mark: StringIndex) -> Substring {
+		self.source.slice(StringRange(start: mark, end: self.position))
+	}
+
+	pub mut func consume(while predicate: (Character) -> Bool) -> Substring {
+		let start = self.position
+		loop {
+			match self.peek() {
+				.some(character) -> {
+					if predicate(character) == false {
+						break
+					}
+					self.advance()
+				},
+				.none -> {
+					break
+				}
+			}
+		}
+		self.source.slice(StringRange(start: start, end: self.position))
+	}
+
+	pub mut func consume(text: String) -> Bool {
+		let remaining = self.remaining()
+		if remaining.starts_with_text(text) == false { return false }
+		match remaining.first_range(of: text) {
+			.some(range) -> {
+				let moved = self.source.index(
+					self.position,
+					offset_by: remaining.slice(range).count()
+				)
+				match moved {
+					.some(next) -> {
+						self.position = next
+						true
+					},
+					.none -> false
+				}
+			},
+			.none -> false
+		}
+	}
+}
+
+extend TextCursor: CheapClone {}

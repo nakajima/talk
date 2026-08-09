@@ -1751,6 +1751,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     Some(Symbol::Bool) if matches!(kind, IrCmp::Eq | IrCmp::Ne) => {
                         Op::BoolCmp(kind)
                     }
+                    Some(Symbol::RawPtr) if matches!(kind, IrCmp::Eq | IrCmp::Ne) => {
+                        Op::PtrCmp(kind)
+                    }
                     _ => {
                         self.unsupported(
                             node,
