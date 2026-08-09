@@ -145,7 +145,20 @@ pub enum Constraint {
         member: Ty,
         origin: CtOrigin,
     },
-    /// A leading-dot variant use (`.some(1)`) in inference position: the
+    /// A leading-dot expression member (`.some(1)`, `.make()`) whose
+    /// implicit type receiver arrives through context. Enum cases and static
+    /// functions share this expression lookup; patterns retain HasVariant so
+    /// a static function can never become a pattern constructor.
+    HasTypeMember {
+        receiver: Ty,
+        label: Label,
+        payload: Vec<(Label, Ty)>,
+        ctor: Option<Ty>,
+        allowed_effects: Option<EffectRow>,
+        member_node: NodeID,
+        origin: CtOrigin,
+    },
+    /// A leading-dot variant use (`.some(1)`) in a pattern: the
     /// enum arrives through unification rather than the checking mode, so
     /// resolution defers until `enum_ty`'s head is known — the same
     /// discipline as `HasMember`. `payload` carries each written argument's

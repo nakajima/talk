@@ -323,8 +323,12 @@ pub enum TypeError {
         ty: String,
         effect: String,
     },
-    /// A leading-dot variant use whose enum was never determined by
-    /// context — nothing to resolve `.label` against.
+    /// A leading-dot expression whose implicit type receiver was never
+    /// determined by context.
+    UnresolvedTypeMember {
+        label: String,
+    },
+    /// A leading-dot pattern whose enum was never determined by context.
     UnresolvedVariant {
         label: String,
     },
@@ -417,6 +421,7 @@ impl TypeError {
             Self::LinearConformance { .. } => "type.linear-conformance",
             Self::HeapConformance { .. } => "type.heap-conformance",
             Self::DeinitEffectRow { .. } => "type.deinit-effect-row",
+            Self::UnresolvedTypeMember { .. } => "type.unresolved-type-member",
             Self::UnresolvedVariant { .. } => "type.unresolved-variant",
             Self::InvalidEarlyPropagation { .. } => "type.invalid-early-propagation",
             Self::InvalidForceUnwrap { .. } => "type.invalid-force-unwrap",
@@ -900,6 +905,12 @@ impl Display for TypeError {
                 write!(
                     f,
                     "`{ty}`'s Deinit hook performs '{effect}: deinit runs from drop glue, which passes no effect capabilities — handle the effect inside the body"
+                )
+            }
+            TypeError::UnresolvedTypeMember { label } => {
+                write!(
+                    f,
+                    "Cannot infer the type for '.{label}'; add a type annotation"
                 )
             }
             TypeError::UnresolvedVariant { label } => {

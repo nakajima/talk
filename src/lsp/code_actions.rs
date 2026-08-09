@@ -294,7 +294,9 @@ fn actions_for_diagnostic(
             AnalysisDiagnosticKind::Types(TypeError::UnknownMember { label, .. }) => {
                 actions.extend(unknown_member_quick_fixes(&site, label));
             }
-            AnalysisDiagnosticKind::Types(TypeError::UnresolvedVariant { label }) => {
+            AnalysisDiagnosticKind::Types(
+                TypeError::UnresolvedTypeMember { label } | TypeError::UnresolvedVariant { label },
+            ) => {
                 actions.extend(unresolved_variant_quick_fixes(
                     workspace, text, uri, file_id, label, diagnostic, diag_range,
                 ));

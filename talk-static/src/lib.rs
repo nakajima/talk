@@ -42,7 +42,7 @@ impl Runtime {
                 return 1;
             }
         };
-        let mut io = talk_vm::io::StdioIO;
+        let mut io = talk_vm::io::StdioIO::default();
         match talk_vm::interp::run(&module, &mut io) {
             Ok(Value::Void) => 0,
             Ok(value) => {

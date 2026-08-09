@@ -3479,6 +3479,49 @@ fn run_package_entry_flag_selects_the_named_function() {
 }
 
 #[test]
+fn run_package_path_forwards_arguments_after_double_dash() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("talk-run-args-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).expect("package dirs");
+    std::fs::write(
+        dir.join("package.tlk"),
+        "Package(\n\tname: \"argpkg\",\n\tversion: \"0.1.0\",\n\tbuilds: [.bin(named: \"main\", from: \"src/main.tlk\")],\n\tdependencies: []\n)\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        dir.join("src/main.tlk"),
+        "use os::{ OS }\nlet arguments = OS.argc()\nprint(arguments[0])\nprint(arguments[1])\n",
+    )
+    .expect("main");
+    let install = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .arg("install")
+        .arg("--offline")
+        .current_dir(&dir)
+        .output()
+        .expect("talk install");
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    let run = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["run", ".", "--", "tests/fixtures/basic"])
+        .current_dir(&dir)
+        .output()
+        .expect("talk run");
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(run.stdout, b".\ntests/fixtures/basic\n");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn check_reads_stdin_once_for_both_passes() {
     // The ownership pass re-compiles from the text the frontend pass
     // already read: stdin can only be consumed once, so a rejected

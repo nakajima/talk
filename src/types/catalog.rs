@@ -96,6 +96,9 @@ pub struct Enum {
     /// Instance method name → method symbol (methods on enums dispatch
     /// exactly like struct methods).
     pub methods: IndexMap<String, Vec<Symbol>>,
+    /// Static method name → method symbol.
+    #[serde(default)]
+    pub statics: IndexMap<String, Vec<Symbol>>,
     /// Well-formedness predicates over `params` for every application of
     /// this nominal.
     pub predicates: Vec<Predicate>,
@@ -1718,7 +1721,13 @@ impl TypeCatalog {
         }
         for info in self.enums.values() {
             let params: Vec<Symbol> = info.params.iter().map(|param| param.symbol).collect();
-            for symbol in info.methods.values().flatten().copied() {
+            for symbol in info
+                .methods
+                .values()
+                .chain(info.statics.values())
+                .flatten()
+                .copied()
+            {
                 owners.insert(
                     symbol,
                     OwnerBinding::Nominal {

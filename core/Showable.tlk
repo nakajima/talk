@@ -1,5 +1,6 @@
 // no-core
 use package::String::{ String }
+use package::StringBuilder::{ StringBuilder }
 use package::Operators::{ Add, Subtract, Multiply, Divide, Comparable, Equatable, Negatable }
 
 pub protocol Showable {
@@ -68,19 +69,19 @@ extend Float: Showable {
 		let int_str = int_part.show()
 		let frac = self._frac()
 		if frac < 0.0000000000001 { return int_str + ".0" }
-		let frac_str = ""
+		let frac_str = StringBuilder(capacity: 15)
 		let i = 0
 		loop i < 15 {
 			frac = frac * 10.0
 			let d = frac._trunc()
 			frac = frac._frac()
-			frac_str = frac_str + _digit(d: d)
+			frac_str.append_string(_digit(d: d))
 			i = i + 1
 			if frac < 0.0000000000001 {
 				break
 			}
 		}
-		return int_str + "." + frac_str
+		return int_str + "." + frac_str.finish()
 	}
 }
 

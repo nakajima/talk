@@ -89,6 +89,26 @@ impl PatternRefinement {
                 member: member.substitute(&tys, &effs, &rows),
                 origin,
             },
+            Constraint::HasTypeMember {
+                receiver,
+                label,
+                payload,
+                ctor,
+                allowed_effects,
+                member_node,
+                origin,
+            } => Constraint::HasTypeMember {
+                receiver: receiver.substitute(&tys, &effs, &rows),
+                label,
+                payload: payload
+                    .into_iter()
+                    .map(|(label, ty)| (label, ty.substitute(&tys, &effs, &rows)))
+                    .collect(),
+                ctor: ctor.map(|ty| ty.substitute(&tys, &effs, &rows)),
+                allowed_effects,
+                member_node,
+                origin,
+            },
             Constraint::HasVariant {
                 enum_ty,
                 label,

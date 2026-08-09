@@ -146,33 +146,111 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         }
 
         match &expr.kind {
-            // Leading-dot variant construction (`.sleep(ms)`, `.none`)
-            // resolves through the expected enum — checking mode is what
-            // makes the head known (bidirectional payoff).
+            // The expected type is the implicit receiver for a leading-dot
+            // expression. A known nominal resolves immediately; an unknown
+            // head defers through the shared enum-case/static-function path.
             ExprKind::Member(None, label, _) => {
-                if self.check_leading_dot(expr, label, None, expected, ctx, None) {
-                    return;
+                if let Ty::Nominal(symbol, _) = self.store.shallow(expected) {
+                    match self.resolve_type_member(symbol, &[], label, expr.id, reason) {
+                        Some(found) => {
+                            self.emit_eq(expected.clone(), found, expr.id, reason);
+                            self.artifacts.node_types.insert(expr.id, expected.clone());
+                        }
+                        None => {
+                            self.wanteds.push(Constraint::HasTypeMember {
+                                receiver: expected.clone(),
+                                label: label.clone(),
+                                payload: vec![],
+                                ctor: None,
+                                allowed_effects: None,
+                                member_node: expr.id,
+                                origin: CtOrigin::new(expr.id, reason),
+                            });
+                            self.artifacts.node_types.insert(expr.id, expected.clone());
+                        }
+                    }
+                } else {
+                    let found = self.infer_expr(expr, ctx);
+                    self.check_inferred_against_expected(expr.id, expected, found, reason);
                 }
-                let ty = self.infer_expr(expr, ctx);
-                self.check_inferred_against_expected(expr.id, expected, ty, reason);
             }
-            ExprKind::Call { callee, args, .. }
-                if matches!(callee.kind, ExprKind::Member(None, _, _)) =>
-            {
-                if let ExprKind::Member(None, label, _) = &callee.kind
-                    && self.check_leading_dot(
-                        expr,
-                        label,
-                        Some(args),
-                        expected,
-                        ctx,
-                        Some(callee.id),
-                    )
-                {
-                    return;
+            ExprKind::Call {
+                callee,
+                type_args,
+                args,
+                ..
+            } if matches!(callee.kind, ExprKind::Member(None, ..)) => {
+                if let Ty::Nominal(symbol, _) = self.store.shallow(expected) {
+                    let ExprKind::Member(None, label, _) = &callee.kind else {
+                        unreachable!("guarded above")
+                    };
+                    self.artifacts.member_call_slots.insert(
+                        callee.id,
+                        args.iter()
+                            .map(crate::types::callables::WrittenSlot::of)
+                            .collect(),
+                    );
+                    if let Some(variant) = self
+                        .catalog
+                        .enums
+                        .get(&symbol)
+                        .and_then(|info| info.variants.get(&label.to_string()))
+                        .cloned()
+                    {
+                        self.validate_variant_payload_labels(
+                            &label.to_string(),
+                            &variant,
+                            &args.iter().map(|arg| arg.label.clone()).collect::<Vec<_>>(),
+                            expr.id,
+                        );
+                    }
+                    match self.resolve_type_member(symbol, &[], label, callee.id, reason) {
+                        Some(member) => {
+                            self.artifacts.node_types.insert(callee.id, member.clone());
+                            let result = self.finish_call(
+                                expr.id,
+                                format!("Type member '{label}'"),
+                                member,
+                                args,
+                                ctx,
+                            );
+                            self.emit_eq(expected.clone(), result, expr.id, reason);
+                            if !type_args.is_empty() {
+                                self.apply_type_args(
+                                    callee.id,
+                                    format!("Type member '{label}'"),
+                                    type_args,
+                                );
+                            }
+                            self.artifacts.node_types.insert(expr.id, expected.clone());
+                        }
+                        None => {
+                            let payload: Vec<(Label, Ty)> = args
+                                .iter()
+                                .map(|arg| (arg.label.clone(), self.infer_expr(&arg.value, ctx)))
+                                .collect();
+                            let ctor = Ty::Var(self.store.fresh_ty(self.level, callee.id));
+                            self.artifacts.node_types.insert(callee.id, ctor.clone());
+                            for (index, (arg, (_, arg_ty))) in args.iter().zip(&payload).enumerate()
+                            {
+                                self.note_indexed_marker(arg, &ctor, index, args.len(), arg_ty);
+                            }
+                            self.wanteds.push(Constraint::HasTypeMember {
+                                receiver: expected.clone(),
+                                label: label.clone(),
+                                payload,
+                                ctor: Some(ctor),
+                                allowed_effects: Some(ctx.eff.clone()),
+                                member_node: callee.id,
+                                origin: CtOrigin::new(expr.id, reason),
+                            });
+                            self.artifacts.node_types.insert(expr.id, expected.clone());
+                        }
+                    }
+                } else {
+                    let found = self.infer_expr(expr, ctx);
+                    self.check_inferred_against_expected(expr.id, expected, found, reason);
                 }
-                let ty = self.infer_expr(expr, ctx);
-                self.check_inferred_against_expected(expr.id, expected, ty, reason);
             }
             ExprKind::LiteralArray(items) => {
                 if let Ty::Nominal(symbol, args) = self.store.shallow(expected) {
@@ -1051,83 +1129,6 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         result
     }
 
-    /// Try to resolve `.variant`/`.variant(args)` against an expected enum
-    /// type. Returns false when the expected head is not (yet) a known enum.
-    pub(super) fn check_leading_dot(
-        &mut self,
-        expr: &Expr,
-        label: &Label,
-        args: Option<&[CallArg]>,
-        expected: &Ty,
-        ctx: &Ctx,
-        // When the leading dot is the callee of a call (`.write(fd, buf)`), the id
-        // of that callee node, so it gets the variant's constructor type (the call
-        // checker resolves it structurally and never types it otherwise).
-        callee_id: Option<NodeID>,
-    ) -> bool {
-        let Ty::Nominal(symbol, enum_args) = self.store.shallow(expected) else {
-            return false;
-        };
-        let Some(info) = self.catalog.enums.get(&symbol).cloned() else {
-            return false;
-        };
-        let Some(variant) = info.variants.get(&label.to_string()).cloned() else {
-            self.diagnostics.errors.push((
-                TypeError::UnknownMember {
-                    receiver: self.store.render(expected),
-                    label: label.to_string(),
-                },
-                expr.id,
-            ));
-            self.artifacts.node_types.insert(expr.id, Ty::Error);
-            return true;
-        };
-        self.artifacts
-            .member_resolutions
-            .insert(expr.id, MemberResolution::Direct(variant.symbol));
-        let substitution = param_subst(&info.params, &enum_args);
-        let instantiation = self.instantiate_variant(&variant, substitution, expr.id);
-        if let Some(callee_id) = callee_id {
-            self.artifacts.node_types.insert(
-                callee_id,
-                Ty::Func(
-                    instantiation.argument_types.clone(),
-                    Box::new(instantiation.result_type.clone()),
-                    EffectRow::pure(),
-                ),
-            );
-        }
-        self.record_variant_instantiation(expr.id, &instantiation);
-        self.emit_variant_predicates(&instantiation, expr.id);
-        self.emit_eq(
-            expected.clone(),
-            instantiation.result_type.clone(),
-            expr.id,
-            CtReason::Apply,
-        );
-        let args = args.unwrap_or(&[]);
-        self.validate_variant_payload_labels(
-            &label.to_string(),
-            &variant,
-            &args.iter().map(|arg| arg.label.clone()).collect::<Vec<_>>(),
-            expr.id,
-        );
-        if args.len() != instantiation.argument_types.len() {
-            self.diagnostics.argument_arity(
-                expr.id,
-                format!("Variant '{label}'"),
-                instantiation.argument_types.len(),
-                args.len(),
-            );
-        } else {
-            for (arg, payload) in args.iter().zip(&instantiation.argument_types) {
-                self.check_expr(&arg.value, payload, CtReason::Apply, ctx);
-            }
-        }
-        self.artifacts.node_types.insert(expr.id, expected.clone());
-        true
-    }
-
     pub(super) fn validate_variant_payload_labels(
         &mut self,
         variant_name: &str,
@@ -1341,13 +1342,11 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     }
                     return self.infer_member_call(expr, callee, args, ctx);
                 }
-                // A leading-dot construction whose enum is not yet known:
-                // infer the payload, hand the resolution to the solver. The
-                // callee node gets a variable unified with the constructor's
-                // function type on discharge.
-                if let ExprKind::Member(None, label, _) = &callee.kind
-                    && type_args.is_empty()
-                {
+                // A leading-dot call gets its implicit type receiver from
+                // the call result. Ordinary call inference owns arguments,
+                // effects, and ownership markers; type-member lookup later
+                // chooses an enum constructor or static function.
+                if let ExprKind::Member(None, label, _) = &callee.kind {
                     let payload: Vec<(Label, Ty)> = args
                         .iter()
                         .map(|arg| (arg.label.clone(), self.infer_expr(&arg.value, ctx)))
@@ -1355,13 +1354,25 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     let result = Ty::Var(self.store.fresh_ty(self.level, expr.id));
                     let ctor = Ty::Var(self.store.fresh_ty(self.level, callee.id));
                     self.artifacts.node_types.insert(callee.id, ctor.clone());
-                    self.wanteds.push(Constraint::HasVariant {
-                        enum_ty: result.clone(),
+                    for (index, (arg, (_, arg_ty))) in args.iter().zip(&payload).enumerate() {
+                        self.note_indexed_marker(arg, &ctor, index, args.len(), arg_ty);
+                    }
+                    self.wanteds.push(Constraint::HasTypeMember {
+                        receiver: result.clone(),
                         label: label.clone(),
                         payload,
                         ctor: Some(ctor),
+                        allowed_effects: Some(ctx.eff.clone()),
+                        member_node: callee.id,
                         origin: CtOrigin::new(expr.id, CtReason::Apply),
                     });
+                    if !type_args.is_empty() {
+                        self.apply_type_args(
+                            callee.id,
+                            format!("Type member '{label}'"),
+                            type_args,
+                        );
+                    }
                     return result;
                 }
                 let callee_reason = match desugared_operator {
@@ -1434,16 +1445,18 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 });
                 member
             }
-            // A leading dot in inference position: the enum arrives through
-            // unification, not the checking mode, so resolution defers to
-            // the solver (the same discipline as `HasMember`).
+            // A bare leading dot is both the contextual type receiver and
+            // the selected member value. Payload-less enum cases satisfy
+            // that equality; static properties can join this path later.
             ExprKind::Member(None, label, _) => {
                 let result = Ty::Var(self.store.fresh_ty(self.level, expr.id));
-                self.wanteds.push(Constraint::HasVariant {
-                    enum_ty: result.clone(),
+                self.wanteds.push(Constraint::HasTypeMember {
+                    receiver: result.clone(),
                     label: label.clone(),
                     payload: vec![],
                     ctor: None,
+                    allowed_effects: None,
+                    member_node: expr.id,
                     origin: CtOrigin::new(expr.id, CtReason::Apply),
                 });
                 result

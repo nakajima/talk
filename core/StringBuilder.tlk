@@ -1,0 +1,77 @@
+// no-core
+// Unique growable UTF-8 construction. Appending is amortized O(total bytes),
+// and finish transfers the allocation into an immutable String without copying.
+use package::String::{ String, Substring }
+use package::Memory::{ ByteStorage, _byte_storage, _copy, _ptr_add }
+use package::Operators::{ Add, Comparable, Equatable, Multiply }
+
+pub struct StringBuilder {
+	let storage: ByteStorage
+	let byte_count: Int
+	let capacity: Int
+
+	pub init() {
+		self.storage = _byte_storage(capacity: 0)
+		self.byte_count = 0
+		self.capacity = 0
+	}
+
+	pub init(capacity: Int) {
+		let initial_capacity: Int = if capacity < 0 { 0 } else { capacity }
+		self.storage = _byte_storage(capacity: initial_capacity)
+		self.byte_count = 0
+		self.capacity = initial_capacity
+	}
+
+	pub mut func reserve_capacity(_ capacity: Int) -> Void {
+		if capacity <= self.capacity { return () }
+		let fresh: ByteStorage = _byte_storage(capacity: capacity)
+		_copy(from: self.storage.base, to: fresh.base, length: self.byte_count)
+		self.storage = fresh
+		self.capacity = capacity
+	}
+
+	mut func ensure_capacity(_ required: Int) -> Void {
+		if required <= self.capacity { return () }
+		let grown: Int = if self.capacity == 0 { 8 } else { self.capacity * 2 }
+		let next: Int = if grown < required { required } else { grown }
+		self.reserve_capacity(next)
+	}
+
+	mut func append_view(_ view: Substring) -> Void {
+		if view.byte_count == 0 { return () }
+		let required: Int = self.byte_count + view.byte_count
+		self.ensure_capacity(required)
+		let source: RawPtr = _ptr_add(ptr: view.storage.base, offset: view.start)
+		let destination: RawPtr = _ptr_add(ptr: self.storage.base, offset: self.byte_count)
+		_copy(from: source, to: destination, length: view.byte_count)
+		self.byte_count = required
+	}
+
+	pub mut func append_string(_ value: String) -> Void {
+		self.append_view(value.as_substring())
+	}
+
+	pub mut func append_substring(_ value: Substring) -> Void {
+		self.append_view(value)
+	}
+
+	pub mut func append_line(_ string: String) -> Void {
+		self.append_view(string.as_substring())
+		self.append_view("\n".as_substring())
+	}
+
+	pub mut func clear() -> Void {
+		self.byte_count = 0
+	}
+
+	pub consuming func finish() -> String {
+		let storage = self.storage
+		let byte_count = self.byte_count
+		let capacity = self.capacity
+		self.storage = _byte_storage(capacity: 0)
+		self.byte_count = 0
+		self.capacity = 0
+		String(base: storage, byte_count: byte_count, capacity: capacity)
+	}
+}

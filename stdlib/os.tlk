@@ -9,7 +9,11 @@ pub struct OS {
 			if copied < 0 { return Optional.none }
 
 			let copied = _io_clamp(count: copied, capacity: len)
-			Optional.some(String(base: buf, byte_count: copied, capacity: copied))
+			Optional.some(String(
+				base: ByteStorage(base: buf),
+				byte_count: copied,
+				capacity: copied
+			))
 		}
 	}
 
@@ -27,7 +31,11 @@ pub struct OS {
 			if copied < 0 { return Optional.none }
 
 			let copied = _io_clamp(count: copied, capacity: len)
-			Optional.some(String(base: buf, byte_count: copied, capacity: copied))
+			Optional.some(String(
+				base: ByteStorage(base: buf),
+				byte_count: copied,
+				capacity: copied
+			))
 		}
 	}
 
@@ -44,7 +52,11 @@ pub struct OS {
 				let copied = _io_clamp(count: _io_arg_copy(index: i, buf: buf), capacity: len)
 				result.storage.set(
 					index: i,
-					value: String(base: buf, byte_count: copied, capacity: copied)
+					value: String(
+						base: ByteStorage(base: buf),
+						byte_count: copied,
+						capacity: copied
+					)
 				)
 				i = i + 1
 			}

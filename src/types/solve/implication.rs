@@ -75,6 +75,7 @@ impl<'s> Solver<'s> {
             | Constraint::PreferEq(_, _, origin)
             | Constraint::Conforms { origin, .. }
             | Constraint::HasMember { origin, .. }
+            | Constraint::HasTypeMember { origin, .. }
             | Constraint::HasVariant { origin, .. }
             | Constraint::ApplyBorrow { origin, .. }
             | Constraint::CoerceOwned { origin, .. }
@@ -138,6 +139,28 @@ impl<'s> Solver<'s> {
             } => self
                 .ty_mentions_params(receiver, params)
                 .or_else(|| self.ty_mentions_params(member, params)),
+            Constraint::HasTypeMember {
+                receiver,
+                payload,
+                ctor,
+                allowed_effects,
+                ..
+            } => self
+                .ty_mentions_params(receiver, params)
+                .or_else(|| {
+                    payload
+                        .iter()
+                        .find_map(|(_, ty)| self.ty_mentions_params(ty, params))
+                })
+                .or_else(|| {
+                    ctor.as_ref()
+                        .and_then(|ty| self.ty_mentions_params(ty, params))
+                })
+                .or_else(|| {
+                    allowed_effects
+                        .as_ref()
+                        .and_then(|effects| self.eff_mentions_params(effects, params))
+                }),
             Constraint::HasVariant {
                 enum_ty,
                 payload,

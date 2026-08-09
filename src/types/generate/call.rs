@@ -716,7 +716,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     /// [`Self::note_copy_marker`] through a still-unresolved callee: the
     /// parameter slot is found post-solve by indexing the callee's
     /// function type.
-    fn note_indexed_marker(
+    pub(super) fn note_indexed_marker(
         &mut self,
         arg: &CallArg,
         callee: &Ty,
@@ -803,8 +803,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     ) -> Option<Ty> {
         let label_str = label.to_string();
 
-        if let Some(info) = self.catalog.enums.get(&symbol).cloned() {
-            let variant = info.variants.get(&label_str)?.clone();
+        if let Some(info) = self.catalog.enums.get(&symbol).cloned()
+            && let Some(variant) = info.variants.get(&label_str).cloned()
+        {
             let theta: Vec<Ty> = info
                 .params
                 .iter()
@@ -885,8 +886,19 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             return Some(signature);
         }
 
-        if let Some(info) = self.catalog.structs.get(&symbol).cloned()
-            && let Some(set) = info.statics.get(&label_str)
+        let static_info = self
+            .catalog
+            .structs
+            .get(&symbol)
+            .map(|info| (info.params.clone(), info.statics.clone()))
+            .or_else(|| {
+                self.catalog
+                    .enums
+                    .get(&symbol)
+                    .map(|info| (info.params.clone(), info.statics.clone()))
+            });
+        if let Some((params, statics)) = static_info
+            && let Some(set) = statics.get(&label_str)
         {
             // Inaccessible overloads never participate in selection
             // (ADR 0042).
@@ -910,16 +922,15 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 return None;
             }
             if let Some(method) = self.select_static_overload(&accessible, &label_str, node) {
-                let theta: Vec<Ty> = info
-                    .params
+                let theta: Vec<Ty> = params
                     .iter()
                     .map(|_| Ty::Var(self.store.fresh_ty(self.level, node)))
                     .collect();
-                self.pin_head_args(symbol, head_segments, &[], &info.params, &theta, node);
-                if !info.params.is_empty() {
-                    self.record_instantiation(node, &info.params, &theta);
+                self.pin_head_args(symbol, head_segments, &[], &params, &theta, node);
+                if !params.is_empty() {
+                    self.record_instantiation(node, &params, &theta);
                 }
-                let substitution = param_subst(&info.params, &theta);
+                let substitution = param_subst(&params, &theta);
                 let signature = self.lookup_symbol_ty(method, node).substitute(
                     &substitution,
                     &Default::default(),

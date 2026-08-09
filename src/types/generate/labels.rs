@@ -116,9 +116,12 @@ impl<'a> TypecheckSession<'a> {
                     ExprKind::Member(Some(receiver), ..) => CalleeShape::Member {
                         type_receiver: Self::is_type_receiver(receiver),
                     },
-                    // Leading-dot variant sugar: payload labels have their
-                    // own declaration-backed checking.
-                    ExprKind::Member(None, ..) => CalleeShape::Skip,
+                    // Leading-dot expressions resolve through a contextual
+                    // type receiver. Enum payloads keep their specialized
+                    // validation; static functions use callable contracts.
+                    ExprKind::Member(None, ..) => CalleeShape::Member {
+                        type_receiver: true,
+                    },
                     ExprKind::Constructor(..) => CalleeShape::Member {
                         type_receiver: true,
                     },

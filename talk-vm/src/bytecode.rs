@@ -2717,7 +2717,7 @@ mod tests {
 
         let encoded = module.encode_bytecode().unwrap();
         let decoded = Module::decode_bytecode(&encoded).unwrap();
-        let mut io = crate::io::StdioIO;
+        let mut io = crate::io::StdioIO::default();
         let err = crate::interp::run(&decoded, &mut io).unwrap_err();
         assert!(err.contains("expected 1 arguments, got 2"));
     }

@@ -83,6 +83,9 @@ async fn main() {
             /// Use only locally installed package sources.
             #[arg(long)]
             offline: bool,
+            /// Arguments passed to the program after `--`.
+            #[arg(last = true, value_name = "ARG")]
+            arguments: Vec<String>,
         },
         /// Discover and execute `.test.tlk` Talk tests.
         Test {
@@ -536,23 +539,28 @@ async fn main() {
             entry,
             bin,
             offline,
+            arguments,
         } => {
             use talk::compiling::driver::{Driver, DriverConfig};
 
-            if *offline
-                && (filenames.is_empty()
-                    && !talk::compiling::package::PackageProject::exists_at(std::path::Path::new(
-                        ".",
-                    )))
+            let package_root = if filenames.is_empty()
+                && talk::compiling::package::PackageProject::exists_at(std::path::Path::new("."))
             {
+                Some(std::path::PathBuf::from("."))
+            } else if let [path] = filenames.as_slice()
+                && talk::compiling::package::PackageProject::exists_at(std::path::Path::new(path))
+            {
+                Some(std::path::PathBuf::from(path))
+            } else {
+                None
+            };
+            if *offline && package_root.is_none() {
                 eprintln!("error: --offline requires package execution");
                 std::process::exit(1);
             }
-            if filenames.is_empty()
-                && talk::compiling::package::PackageProject::exists_at(std::path::Path::new("."))
-            {
+            if let Some(package_root) = package_root {
                 let project = match talk::compiling::package::PackageProject::open_at(
-                    std::path::PathBuf::from("."),
+                    package_root.clone(),
                     *offline,
                 ) {
                     Ok(project) => project,
@@ -569,7 +577,14 @@ async fn main() {
                             std::process::exit(1);
                         }
                     };
-                let mut io = talk_vm::io::StdioIO;
+                let argv0 = filenames
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| package_root.to_string_lossy().into_owned());
+                let mut program_arguments = Vec::with_capacity(arguments.len() + 1);
+                program_arguments.push(argv0);
+                program_arguments.extend(arguments.iter().cloned());
+                let mut io = talk_vm::io::StdioIO::with_args(program_arguments);
                 match executable.run(&mut io) {
                     Ok(Some(rendered)) => println!("{rendered}"),
                     Ok(None) => {}
@@ -612,7 +627,14 @@ async fn main() {
                     std::process::exit(1);
                 }
             };
-            let mut io = talk_vm::io::StdioIO;
+            let argv0 = filenames
+                .first()
+                .cloned()
+                .unwrap_or_else(|| STDIN_NAME.to_string());
+            let mut program_arguments = Vec::with_capacity(arguments.len() + 1);
+            program_arguments.push(argv0);
+            program_arguments.extend(arguments.iter().cloned());
+            let mut io = talk_vm::io::StdioIO::with_args(program_arguments);
             match module.run(&mut io) {
                 Ok(Some(rendered)) => println!("{rendered}"),
                 Ok(None) => {}
@@ -951,7 +973,7 @@ async fn main() {
                     std::process::exit(1);
                 }
             };
-            let mut io = talk_vm::io::StdioIO;
+            let mut io = talk_vm::io::StdioIO::default();
             match talk_bytecode::run_image(&bytes, &mut io) {
                 Ok(Some(rendered)) => println!("{rendered}"),
                 Ok(None) => {}
@@ -1061,93 +1083,248 @@ const STDIN_NAME: &str = "<stdin>";
 #[cfg(feature = "cli")]
 const LLM_REFERENCE: &str = r#"# Talk language reference for LLMs
 
-Talk is a statically typed, Swift-flavored language with local type inference, generics, protocols, algebraic effects, and value-semantics aggregates. This build compiles and executes programs through a register-bytecode backend, with ownership checking (implicit sharing: consumes retain when a value has later uses; exclusivity, linearity, and the intrinsic `'unsafe` effect remain static errors). Files normally use `.tlk`; core library files live in `core/` and are implicitly imported unless a file starts with `// no-core`.
+Talk is a statically typed, Swift-flavored language with local type inference, generics, protocols, algebraic effects, hygienic macros, and value-semantics aggregates. Normal source files use `.tlk`. Core files under `core/` are implicitly imported unless the first line is `// no-core`.
 
 ## CLI
 
-    talk run [--entry NAME] files   compile and execute (or the current package's binary; --bin selects one, --offline skips fetches)
-    talk test [paths]               discover and run `.test.tlk` tests
-    talk build files -o FILE        compile to a bytecode image
-    talk run-image FILE             validate and execute a bytecode image
-    talk check [--json] [files]     typecheck, ownership-check, print diagnostics (no files inside a package: check the package workspace)
-    talk bytecode files             render compiled bytecode
-    talk mir [--no-opt] files       render optimized or raw MIR
-    talk new / install / update     package management
-    talk repl                       interactive type queries and completion
-    talk format [file]              format source from file or stdin
-    talk hover file --line N --column N | --byte-offset N | --node-id ID
-    talk html / talk parse          development views
-    talk lsp --stdio                language server
-    talk setup nvim                 install Neovim runtime support files
-    talk completions SHELL          shell completion script
-    talk llm                        print this reference
+    talk run [--entry NAME] [--bin NAME] [--offline] [files-or-package] [-- args...]
+        compile and execute source or a package binary; arguments after `--` are returned by `OS.argc()`
+    talk test [--json] [--filter NAME] [paths]
+        discover `tests/**/*.test.tlk` and `src/**/*.test.tlk`, or run selected paths
+    talk check [--json] [files]
+        typecheck and ownership-check; with no files in a package, check its manifest-scoped workspace
+    talk build files -o FILE [--entry NAME]
+        build a bytecode image; `--native` drives the C backend and compiler (`--cc`, `--target`, `--cflag`, `--keep-c`)
+    talk run-image FILE
+        validate and execute a bytecode image
+    talk bytecode [--entry NAME] files
+        render register bytecode
+    talk mir [--entry NAME] [--no-opt] [--debug] files
+        render optimized or raw MIR, optionally with source annotations
+    talk c [--entry NAME] files
+        emit C; repeated `--export` plus `--header`/`--manifest` emits a host-callable library
+    talk bootstrap [DIR] [-o FILE] [--export NAME] [--allow-effect EFFECT] [--check]
+        build or verify a fixed-point service artifact; no DIR targets the self-hosted frontend
+    talk fix-labels [--core DIR | --each] files
+        rewrite call sites to match declared argument labels
+    talk new NAME / talk install / talk update [packages]
+        create and resolve packages (`--offline` is available for install/update)
+    talk repl
+        interactive declarations, type queries, completion, and smart indentation
+    talk format [--width N] [file]
+        format a file or stdin
+    talk parse [file] / talk html [file]
+        development parse-tree and highlighted-HTML views
+    talk hover [file] --line N --column N | --byte-offset N | --node-id ID
+        query the type and callable signature at a source position
+    talk lsp --stdio
+        run the language server
+    talk setup nvim / talk completions SHELL / talk llm
+        install Neovim files, generate completions, or print this reference
 
-## Lexical and module basics
+Use `talk COMMAND --help` for the complete option set. `-` denotes stdin where a command accepts a source file.
 
-Comments are `//` line comments. Identifiers are ordinary words; type names are conventionally upper camel case. Statements are separated by newlines; semicolons are accepted but conventionally omitted. Blocks are `{ ... }`. Top-level declarations may be prefixed with `pub` to export them. Imports are explicit: `use package::path::{ Foo, bar }`, `use package::path::{ Foo as LocalFoo }`, `use package::path`, or dependency imports such as `use dependency::{ Foo }` / `use dependency`.
+## Files, modules, and packages
 
-## Declarations
+Comments are `//` line comments. Statements are newline-separated; semicolons are accepted but normally omitted. Blocks use `{ ... }`. Declarations are file-private unless prefixed with `pub`; members may also be public. Local `let` bindings are sequential and may shadow. Function declarations are item-like and can be referenced throughout their block.
 
-    pub let name: Type = expr
-    func f<T>(x: T, y: Int) -> Result { body }
+Imports select public symbols, aliases, whole modules, or recursive source globs:
+
+    use package::models::{ User, load as load_user }
+    use package::models
+    use package::models::*
+    use self::child::{ value }
+    use super::shared::{ Thing }
+    use dependency::{ API }
+
+`package::` is rooted at the current package's source root; `self::` and `super::` are relative. A dependency name starts an external-package import. `use path` imports the module's public surface. `use path::*` additionally walks source submodules recursively. A package uses `package.tlk`, `package.lock`, `src/`, and optional `tests/`; `talk run` and `talk check` locate the enclosing package automatically.
+
+Test files use the test prelude, commonly:
+
+    test "name" {
+        assert(actual == expected)
+    }
+
+## Declarations, labels, and receivers
+
+    pub let answer: Int = 42
+
+    func transform<T>(_ value: T, with count: Int) -> T where T: Copy {
+        value
+    }
+
     struct Point {
-        let x: Int
-        let y: Int
+        pub let x: Int
+        pub let y: Int
         init(x: Int, y: Int) { self.x = x; self.y = y; self }
-    }
-    enum Optional<T> { case some(T) case none }
-    protocol P { associated Element func next() -> Element? }
-    extend Type: P { typealias Element = Int func next() -> Int? { ... } }
-    extend Type { func method() -> R { ... } static func make() -> Type { ... } }
-    typealias Name = Type
-    effect 'name(payload: Type) -> ReturnType
-
-Function result annotations are optional when inferable, and so are effect payload type annotations (`effect 'oops(error) -> Never`). `init` bodies assign `self.field` and return `self`. Methods have implicit `self`; do not declare a self parameter. Receiver modes: plain `func` reads a shared value, `mut func` may update `self` and writes the receiver back at the call site, `consuming func` takes ownership. Parameters take ownership with the `consume` modifier: `func eat(consume xs: Array<Int>)`. `static func` is called on the type/protocol namespace.
-
-## Expressions and control flow
-
-Literals: integers, floats, strings, `true`, `false`, arrays `[a, b]`, records `{ field: expr, other: expr }`, closures `func(x: Int) -> Int { x + 1 }`. A bare inferred parameter is positional (`func f(x)` is called as `f(1)`); writing a colon opts into its label (`func f(x:)` or `func f(x: Int)` is called as `f(x: 1)`). Use `_ x: Int` for a typed positional parameter. Constructors look like calls: `Point(x: 1, y: 2)`, enum cases may be qualified or inferred: `Optional<Int>.some(1)` or `.some(1)`. Field/member access is `value.field` and `value.method(args)`. Generic arguments may be explicit: `id<Int>(1)`. Arguments are always passed plainly — `&x` is not expression syntax; a parameter's `&T`/`&mut T` type alone makes the call site a borrow.
-
-Bindings and mutation: `let x = expr`; assignment is `x = expr` or `self.field = expr`. `let` variables are mutable by assignment in current Talk. Type ascription is `let x: Type = expr`.
-
-Blocks are expressions. `if cond { a } else { b }` is an expression; branches must agree. `if let .some(x) = expr { ... }` matches a pattern. Commas form left-to-right, short-circuiting condition lists and later clauses can use earlier pattern bindings: `if let .some(x) = expr, x.is_valid() { ... }`. `let .some(x) = expr else { ... }` binds `x` after the statement and evaluates the `else` block when the pattern misses. `loop { ... }` loops forever until `break`; `loop condition { ... }` is while-like. `break`, `continue`, and `return expr` are supported. `for x in iterable { ... }` uses the iterable/iterator protocols.
-
-Pattern matching:
-
-    match expr {
-        .caseName(payload) -> result,
-        .none -> other,
-        0 -> zero,
-        _ -> fallback
+        func magnitude() -> Int { x * x + y * y }
+        mut func reset() -> Void { self.x = 0 }
+        consuming func take_x() -> Int { self.x }
+        static func origin() -> Point { Point(x: 0, y: 0) }
     }
 
-Patterns can bind enum payloads. GADT-style enum cases may refine the result type, e.g. `case int(Int) -> Expr<Int>`.
+    enum Optional<T> {
+        case some(T)
+        case none
+    }
 
-Trailing block syntax passes a final closure argument: `f { body }` is `f(func() { body })`.
+    protocol IteratorLike {
+        associated Element
+        mut func next() -> Element?
+    }
 
-## Types
+    extend<T> Box<T>: IteratorLike where T: Copy {
+        typealias Element = T
+        mut func next() -> T? { ... }
+    }
 
-Builtin scalar/value types include `Int`, `Float`, `Bool`, `Byte`, `RawPtr`, `Void`/`()`, and `Never`. Core nominal types include `String`, `Substring`, `Array<T>`, `InlineArray<T, N>`, and `Optional<T>`; `[T]` spells a dynamic Array, `[T; N]` spells an exact-size InlineArray, and `T?` is syntax for optional. Structural record types are written `{ field: Type }` and match record literals and patterns. Function types are `(A, B) -> R`; effectful functions write effects before the arrow, e.g. `(A) 'io -> R` or `func read() 'io -> Int`. Borrow types use `&T` and exclusive borrows use `&mut T`. Protocol existential types use `any P`; associated type constraints use `any P<Element = Int>` (only protocols whose requirements keep `Self` in receiver position can form existentials — core `Iterator` cannot). Protocol composition uses `&` in where clauses: `where T: A & B`, with multiple predicates chained by `&&`; inline bounds take a single protocol.
+    typealias Pair = (Int, Int)
+    effect 'ask<T>(value: T) -> T
 
-Generics are written with angle brackets: `func id<T>(x: T) -> T`. Simple bounds use `T: Protocol`; associated types use `associated Name` in protocols and `typealias Name = Type` in conforming extensions. Protocol requirements can include funcs, mut/consuming funcs, static funcs, associated types, and defaults in extensions.
+Structs get a memberwise initializer when no custom `init` is declared. An initializer assigns `self.field` and returns `self`. Methods have implicit `self`; do not declare a self parameter. Plain methods share the receiver, `mut func` can write it back, `consuming func` takes it, and `static func` is called on the type or protocol namespace. Protocols may inherit protocols, require `init`, methods, static methods, and associated types, and supply default bodies. Extensions may add methods, bind generics with `extend<T> Head<T>`, and declare conformances.
 
-## Operators and builtins
+Argument labels are part of a named function or method's callable signature:
 
-Common operators are library-backed or builtin-resolved: arithmetic `+ - * /`, comparison `== != < <= > >=`, bitwise `& | ^ ~ << >>`, boolean values, string concatenation via `+`, member calls, and casts/ascriptions using `as` for protocol existentials where supported. Bitwise shifts mask the amount to the operand width. On a two-variant enum, postfix `?` extracts the first variant or returns the second from the enclosing function; postfix `!` extracts the first variant or evaluates `unreachable`, performing `'panic`. `print(x)` prints Showable-ish values; `sleep(ms)` and I/O live in core effects. The core library defines protocols such as `Showable`, `Add`, `Equatable`, `BitwiseAnd`, `ShiftLeft`, `Iterable`, `Iterator`, `From`, `Into`, `Borrowed`, and `Owner`.
+    func positional(x) { x }             // call as positional(1)
+    func labeled(x:) { x }               // call as labeled(x: 1)
+    func typed(x: Int) { x }             // call as typed(x: 1)
+    func renamed(with value: Int) { value } // call as renamed(with: 1)
+    func bare(_ value: Int) { value }     // call as bare(1)
 
-Low-level trusted IR escapes use `#_ir(args...) { ... }` and appear mainly in core. Operations include integer/float math, bitwise operations, comparisons, `alloc`, `load`, `store`, `gep`, `copy`, and I/O shims. Outside core, `_ir` requires the intrinsic `'unsafe` effect; acknowledge and discharge it with a lexical `#unsafe { ... }` block.
+A bare inferred parameter is positional. A colon opts into a same-name label; typed parameters are labeled unless `_` omits the label. Call arguments never use `&`; the declared parameter mode determines borrowing. Plain parameters are shared borrows by default, `borrow` spells that explicitly, `mut` is exclusive/inout, `consume` transfers ownership to the callee, and `consume mut` is owned and locally mutable. A `mut` call argument names a writable place, for example `bump(value: mut n)`; ordinary and consuming arguments are passed without a marker.
+
+## Expressions, literals, and calls
+
+Literals include integers, floats, strings, characters (`'x'`), `true`, `false`, arrays `[a, b]`, tuples `(a, b)`, unit `()`, and structural records. Records support spread:
+
+    let point = { x: 1, y: 2 }
+    let moved = { x: 3, ...point }
+
+Arrays support subscript syntax `items[index]`. Ranges use `lower..upper` (closed) and `lower..<upper` (half-open). Constructors are calls: `Point(x: 1, y: 2)`. Enum cases may be qualified or inferred: `Optional<Int>.some(1)` or `.some(1)`. Labeled enum payloads use the labels in construction and patterns. Member access is `value.field`, tuple access is `value.0`, and methods are `value.method(args)`. Generic arguments may be explicit on functions, types, effects, and case references.
+
+Closures have `func` and block forms:
+
+    func(x: Int) -> Int { x + 1 }
+    { x in x + 1 }
+    { $0 + 1 }
+
+Trailing-block syntax passes a final closure argument: `items.map { $0 + 1 }`. Blocks are expressions and return their final expression. `let` bindings are mutable by assignment: `let x = 1; x = 2`. Type ascription is `let x: Int = 1`. Assignment also targets fields, tuple projections, and supported subscripts/places.
+
+Common operators include arithmetic `+ - * /`, comparisons `== != < <= > >=`, Boolean `! && ||`, bitwise `& | ^ ~ << >>`, ranges `.. ..<`, postfix propagation `?`, postfix force unwrap `!`, and `as`. Arithmetic and comparison operators resolve through core protocols. String `+` concatenates. Shift amounts are masked to the operand width.
+
+On any two-variant enum, `value?` extracts the first variant or returns the second variant from the enclosing function. `value!` extracts the first variant or evaluates `unreachable`, which performs Core's `'panic` effect. `as` performs supported ascriptions/conversions, including packing protocol existentials.
+
+## Control flow and patterns
+
+`if condition { ... } else { ... }` is an expression when both branches agree in type; statement `if` may omit `else`, and `else if` chains are supported. Conditions may mix Boolean and pattern clauses separated by commas. They run left to right, short-circuit, and expose earlier bindings to later clauses:
+
+    if let .some(user) = lookup(), user.is_valid() {
+        use_user(user)
+    }
+
+`let pattern = value else { ... }` binds after the statement and runs the `else` block if the pattern misses. `loop { ... }` is infinite and `loop condition { ... }` is while-like. `break`, `continue`, and `return value` are supported. `for x in iterable` uses `Iterable`/`Iterator`; `for x in consume xs` consumes the source, while `for x in mut xs` iterates with writeback.
+
+`match` is exhaustive and is itself an expression:
+
+    match value {
+        .some(x) -> x,
+        .none -> 0
+    }
+
+Patterns include integer, float, Boolean, character, and string literals; bindings and `_`; tuples; enum variants; records; structs; and alternatives with `|`:
+
+    match token {
+        "if" | "else" -> 1,
+        _ -> 0
+    }
+
+    match point {
+        Point { x, y: 0, .. } -> x,
+        Point { x, y } -> x + y
+    }
+
+Record patterns use `{ x, y: pattern, .. }`. Enum cases may have labeled payload patterns. GADT-style cases can refine the enum result, for example `case int(Int) -> Expr<Int>`.
+
+## Types, generics, and protocols
+
+Builtin scalar/value types include `Int`, `Float`, `Bool`, `Byte`, `RawPtr`, `Void`/`()`, and `Never`. Core nominal types include `Character`, `String`, `Substring`, `Array<T>`, `InlineArray<T, N>`, `Optional<T>`, `Result<S, F>`, and range types. `[T]` is `Array<T>`, `[T; N]` is exact-size `InlineArray<T, N>`, and `T?` is optional. Tuples use `(A, B)` and structural records use `{ field: Type }`. Nested/module types use paths such as `graph::Node` and `Array<Int>.Iterator`.
+
+Function types are `(A, B) -> R`. Parameter ownership can appear in them, for example `(mut [Byte], consume String) -> Void`. Effect rows precede the arrow: `(A) 'io -> R`, `(A) '[io, panic] -> R`, or pure `(A) '[] -> R`. A rank-N/quantified function type is `<T, U: Bound>(T, U) -> T`.
+
+Borrow types are `&T`; exclusive borrows are `&mut T`; `*T` is uniquely owned. Protocol existentials are `any P`, with associated bindings written `any P<Element = Int>`. Only object-safe protocols whose requirements keep `Self` in receiver position form existentials. `Self` names the implementing type.
+
+Type generics use angle brackets. Bounds may appear inline or in `where`; associated-type equality and static constraints use `==`, `<`, and `<=`. Separate where predicates use `&&`, and protocol composition within one predicate uses `&`:
+
+    func first<T>(xs: T) -> Int
+        where T: Iterable & Copy && T.Element == Int
+    { ... }
+
+Static value generics are declared with `static`, are part of type identity, and accept restricted compile-time expressions:
+
+    struct Buffer<Element, static N: Int> { ... }
+    func narrow<static N: Int>(x: Int) -> Int where N < 8 { x }
+    let bytes: [Byte; 32] = ...
+    let matrix: Matrix<N + 1, (M) * 2> = ...
+
+Generic parameters and protocols may have defaults, such as `protocol Eq<RHS = Self>`. Associated types use `associated Name` (optionally with a bound/where clause) and conforming extensions normally provide `typealias Name = Type`.
 
 ## Effects
 
-Effects are named with a leading tick: `effect 'throws(error: String) -> Never`. Calling an effect is expression syntax: `'throws("bad")`. Effect rows appear on functions before `->`: `func f() 'throws -> ()`. Handlers use `#handle 'effect { payload in body }` for abortive handling; when the effect return type is not `Never`, `'continue expr` inside the handler resumes at the perform site with that value (loop `continue` is separate and takes no value). The `unreachable` expression performs Core's public abortive `'panic` effect and has type `Never`. `#handle 'panic { message in ... }` may intercept it; otherwise Core reports the message and terminates the process.
+Effects are declarations and calls whose names begin with a tick:
 
-## Memory and value model
+    effect 'ask<T>(value: T) -> T
+    let answer = 'ask(value: 42)
 
-Source-level structs, enums, arrays, strings, records, and function values have value semantics. `&T` and `&mut T` express borrow permissions, `consuming` expresses ownership transfer, and marker protocols like `Owner`/`Borrowed` describe library-level ownership roles. The backend enforces ownership with implicit sharing: a consume of a value with later uses retains automatically, snapshots preserve live views across owner mutation, and only exclusivity violations, linear-value misuse, borrow escapes (returning or globally storing a view of frame-owned data), and ungated `unsafe` constructs are static errors.
+A function with no written row infers an open row. A single closed effect is `'io`; a closed list is `'[io, panic]`; `'[]` is explicitly pure; `'[io, ..]` includes `io` while leaving the row open. Generic effect instantiations are tracked independently, and one handler for a label covers every instantiation in its extent.
+
+A handler statement installs a dynamically scoped handler for the subsequent portion of its block and calls made there:
+
+    #handle 'ask { value in
+        'continue value
+    }
+    let answer = 'ask(value: 42)
+
+`'continue expression` resumes at the perform site when the effect has a non-`Never` return. A handler path that does not continue aborts the handled computation. The nearest same-label handler wins. Function values carry latent effect requirements but resolve handlers at invocation time rather than capturing the handler active when the closure was created.
+
+`unreachable` performs Core's public abortive `effect 'panic(message: String) -> Never`. It may be intercepted with `#handle 'panic`; the outer Core host fallback prints an unhandled panic and terminates. Core also uses host effects including `io`, `alloc`, and `async`.
+
+## Hygienic macros
+
+A file-local declarative macro is a balanced token template with `$` parameters:
+
+    macro choose($condition, $yes, $no) {
+        if $condition { $yes } else { $no }
+    }
+
+    let result = @choose(flag, 1, 2)
+
+Rules may overload by arity. Templates are hygienic: template-written binders and free names use definition-site context, while spliced syntax keeps use-site context. Repeating `$value` repeats evaluation; normal type, effect, ownership, and exhaustiveness checking applies after expansion.
+
+The same `@name(...)` form can expand in expression, root/block item, nominal-member, pattern, and type positions; the invocation position selects the grammar used to parse the expansion. A caller-provided identifier spliced into binder position intentionally exposes a generated declaration. `@assert(condition)` is compiler-provided and preserves the condition's source text in its failure message.
+
+Packages may export deterministic procedural expression macros compiled from `*.macro.tlk` services. Imported procedural macros receive one balanced `(...)`, `[...]`, or `{...}` input tree; for example the bundled `html` stdlib module uses `@html { ... }`. Macro services use typed syntax values and `quote { ... }`, run under fixed budgets, and cannot use inline IR or `#unsafe`.
+
+## Memory, ownership, and declaration grades
+
+Ordinary structs, enums, arrays, strings, tuples, records, and functions have value semantics. Aggregates use reference counting and copy-on-write storage where appropriate. Assignment creates a value snapshot; mutation does not change existing shared views.
+
+Plain parameters and methods borrow by default. `consume` is a callee ownership contract: if a shareable caller value has later uses, the compiler retains it automatically; the final use can move. Returning, capturing, or storing a view generally retains the referent so the escaped value owns its snapshot. A bare borrow return rooted in a frame-owned local is rejected because ownership cannot travel in that `&T` representation.
+
+`struct Name 'linear` and `enum Name 'linear` declare values that must be consumed exactly once on every finite path and cannot be implicitly copied or dropped. `struct Name 'heap`/`enum Name 'heap` use aliased, region-allocated reference semantics; recursive nominal layouts require heap indirection. `*T` is a statically unique value. Marker protocols such as `Copy`, `CheapClone`, `Borrowed`, `Owner`, and `Deinit` express library ownership roles; payload-free enums are `Copy` automatically.
+
+Static ownership errors are limited to real invariants: overlapping access involving a live `&mut` loan, duplication/drop misuse of linear or unique values, declaration well-formedness (including invalid borrowed fields or parameter modes), unsupported heap placement, definite initialization, and use of unsafe operations outside an unsafe boundary.
+
+Low-level core code uses `#_ir(args...) { ... }`. The trusted IR includes scalar math and comparison, allocation/free, load/store/take, retain/copy/swap, pointer offset, inline-array access, conversions, and host I/O. Outside Core, raw-pointer operations and `_ir` perform the intrinsic `'unsafe` effect; a lexical `#unsafe { ... }` acknowledges and discharges it without installing a runtime handler.
+
+## Core library
+
+Frequently used protocols include `Showable`, `Add`, `Equatable`, `Comparable`, bitwise/shift protocols, `Iterable`, `Iterator`, `From`, `Into`, `Copy`, `CheapClone`, `Borrowed`, `Owner`, and `Deinit`. `print(value)` renders supported values. Arrays provide copy-on-write mutation and iterator adapters. Strings are UTF-8; `String`/`Substring` iterate extended grapheme-cluster `Character` values, while `.scalars()` and `.utf8()` provide lower-level views. `Result` uses `.ok`/`.error`; `Optional` uses `.some`/`.none`.
 
 ## Compiler model
 
-Pipeline: parse -> name resolution/imports -> OutsideIn-style type checking with qualified predicates, protocols, associated types, existentials, and GADT refinements -> TypedProgram -> register MIR with ownership checking and drop elaboration -> register bytecode executed by the runtime VM (the static C runtime and the Wasm embedding host the same VM). Useful inspection commands are `talk check`, `talk hover`, and `talk mir`.
+Pipeline: self-hosted parse -> collect and expand macros -> desugar -> resolve modules/names -> OutsideIn-style type checking with qualified predicates, protocols, associated types, existentials, static values, row-polymorphic effects, and GADT refinements -> typed program -> register MIR -> ownership checking and drop elaboration -> optimization/register allocation -> register bytecode.
+
+The default runtime validates and executes bytecode in the register VM. The static C runtime and Wasm embedding host the same VM. The ahead-of-time C backend and external LLVM backend consume the compiler's finalized public MIR; `talk build --native` uses C. Useful inspection surfaces are `talk check`, `talk hover`, `talk bytecode`, and `talk mir --debug`.
 "#;
 
 #[cfg(feature = "cli")]

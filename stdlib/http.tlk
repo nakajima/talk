@@ -163,7 +163,7 @@ pub struct HttpServer 'heap {
 				}
 
 				let n = _io_clamp(count: n, capacity: max_request_size)
-				let raw_request = String(base: buf, byte_count: n, capacity: max_request_size)
+				let raw_request = String(base: ByteStorage(base: buf), byte_count: n, capacity: max_request_size)
 				let wire = self.handle(raw_request: raw_request)
 				_io_write(fd: client_fd, buf: wire.storage.base, count: wire.byte_count)
 				_io_close(fd: client_fd)

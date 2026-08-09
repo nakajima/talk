@@ -71,7 +71,7 @@ pub struct Directory {
 					break
 				}
 
-				let name = String(base: name_buf, byte_count: copied, capacity: copied)
+				let name = String(base: ByteStorage(base: name_buf), byte_count: copied, capacity: copied)
 				let entry_path = self.path.appending(component: name)
 				let kind = _io_dir_entry_kind(path: path_buf, index: i)
 

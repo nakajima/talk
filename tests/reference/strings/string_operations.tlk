@@ -14,3 +14,31 @@ match "banana".find_from(needle: "na", start: 3) {
 	.some(i) -> print(i),
 	.none -> print(0 - 1)
 }
+
+let owned = "héllo"
+let borrowed = owned.as_substring()
+print(owned.is_empty())
+print(borrowed.is_empty())
+print(owned.utf8_count())
+print(borrowed.utf8_count())
+print(owned.starts_with(needle: "hé"))
+print(borrowed.starts_with(needle: "hé"))
+print(owned.ends_with(needle: "llo"))
+print(borrowed.ends_with(needle: "llo"))
+
+let builder = StringBuilder(capacity: 1)
+builder.append_string("hé")
+builder.append_substring("llo".as_substring())
+print(builder.finish())
+
+let reusable = StringBuilder()
+reusable.reserve_capacity(64)
+reusable.append_string("discard")
+reusable.clear()
+reusable.append_line("hello")
+reusable.append_string("world")
+print(reusable.finish())
+
+for character in "é" {
+	print(character + "clair")
+}

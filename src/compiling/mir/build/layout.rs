@@ -756,6 +756,7 @@ mod tests {
             params,
             variants: IndexMap::new(),
             methods: IndexMap::new(),
+            statics: IndexMap::new(),
             predicates: Vec::new(),
         };
         for (index, (name, payloads)) in variants.iter().enumerate() {

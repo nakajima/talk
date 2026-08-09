@@ -348,6 +348,14 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     };
                     self.diagnostics.errors.push(diagnostic);
                 }
+                Constraint::HasTypeMember { label, origin, .. } => {
+                    self.diagnostics.errors.push((
+                        TypeError::UnresolvedTypeMember {
+                            label: label.to_string(),
+                        },
+                        origin.node,
+                    ));
+                }
                 Constraint::HasVariant { label, origin, .. } => {
                     self.diagnostics.errors.push((
                         TypeError::UnresolvedVariant {
@@ -721,12 +729,12 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                 | Constraint::HandleEffect { .. }
                 | Constraint::ApplyBorrow { .. }
                 | Constraint::CoerceOwned { .. } => self.deferred.push(residual),
-                // A leading-dot use whose enum this group never determined:
-                // a later group (or the final solve's error) owns it. It
-                // never qualifies a scheme — lowering needs one concrete
-                // variant per node, so "polymorphic over enums with this
-                // variant" is deliberately not a thing.
-                Constraint::HasVariant { .. } => self.deferred.push(residual),
+                // Leading-dot lookup never qualifies a scheme: lowering
+                // needs one concrete type member or pattern variant per node.
+                // A later group (or the final solve's error) owns it.
+                Constraint::HasTypeMember { .. } | Constraint::HasVariant { .. } => {
+                    self.deferred.push(residual)
+                }
                 _ => {}
             }
         }

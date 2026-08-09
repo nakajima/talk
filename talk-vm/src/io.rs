@@ -105,8 +105,17 @@ const EPERM: i64 = -1;
 
 /// Host stdio and POSIX syscalls (fd 1 = stdout, fd 2 = stderr; other
 /// descriptors go straight to the OS).
-#[derive(Default)]
-pub struct StdioIO;
+pub struct StdioIO {
+    arguments: Vec<std::ffi::OsString>,
+}
+
+impl Default for StdioIO {
+    fn default() -> Self {
+        Self {
+            arguments: std::env::args_os().collect(),
+        }
+    }
+}
 
 #[derive(Clone)]
 struct DirectoryEntryInfo {
@@ -115,6 +124,12 @@ struct DirectoryEntryInfo {
 }
 
 impl StdioIO {
+    pub fn with_args(arguments: Vec<String>) -> Self {
+        Self {
+            arguments: arguments.into_iter().map(Into::into).collect(),
+        }
+    }
+
     fn io_error(error: std::io::Error) -> i64 {
         error.raw_os_error().map_or(EIO, |code| -(code as i64))
     }
@@ -437,14 +452,14 @@ impl IO for StdioIO {
     }
 
     fn argc(&mut self) -> i64 {
-        std::env::args_os().count() as i64
+        self.arguments.len() as i64
     }
 
     fn arg_len(&mut self, index: i64) -> i64 {
         if index < 0 {
             return EINVAL;
         }
-        match std::env::args_os().nth(index as usize) {
+        match self.arguments.get(index as usize) {
             Some(arg) => arg.to_string_lossy().len() as i64,
             None => ENOENT,
         }
@@ -454,7 +469,7 @@ impl IO for StdioIO {
         if index < 0 {
             return EINVAL;
         }
-        match std::env::args_os().nth(index as usize) {
+        match self.arguments.get(index as usize) {
             Some(arg) => {
                 let bytes = arg.to_string_lossy();
                 let bytes = bytes.as_bytes();

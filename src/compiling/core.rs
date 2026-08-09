@@ -56,6 +56,7 @@ pub const CORE_SOURCE_NAMES: &[&str] = &[
     "Showable.tlk",
     "Range.tlk",
     "Host.tlk",
+    "StringBuilder.tlk",
 ];
 
 /// All core source strings, in a fixed order.
@@ -84,6 +85,10 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
         ("Showable.tlk", include_str!("../../core/Showable.tlk")),
         ("Range.tlk", include_str!("../../core/Range.tlk")),
         ("Host.tlk", include_str!("../../core/Host.tlk")),
+        (
+            "StringBuilder.tlk",
+            include_str!("../../core/StringBuilder.tlk"),
+        ),
     ]
 }
 

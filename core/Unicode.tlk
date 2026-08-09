@@ -409,7 +409,7 @@ extend Character: Showable {
 
 extend Character: Add<String> {
 	pub func add(_ rhs: String) -> String {
-		"hi"
+		self.as_substring() + rhs
 	}
 }
 

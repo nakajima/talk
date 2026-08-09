@@ -43,7 +43,7 @@ pub struct TcpStream {
 				count: _io_read(fd: self.fd, buf: buf, count: max),
 				capacity: max
 			)
-			String(base: buf, byte_count: n, capacity: max)
+			String(base: ByteStorage(base: buf), byte_count: n, capacity: max)
 		}
 	}
 

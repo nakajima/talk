@@ -448,6 +448,14 @@ fn add_type_member_items(
                 Some(variant.constructor_scheme.render()),
             );
         }
+        for (label, set) in &info.statics {
+            for method in set {
+                if !viewer.member_accessible(types, *method) {
+                    continue;
+                }
+                add_symbol_member_item(types, label, *method, &info.params, &[], false, items);
+            }
+        }
     }
 
     if let Some(info) = types.catalog.structs.get(&symbol) {

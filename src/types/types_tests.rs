@@ -3391,6 +3391,98 @@ pub mod tests {
     }
 
     #[test]
+    fn leading_dot_resolves_static_function_from_context() {
+        let t = check(
+            "// no-core\nstruct Point {\n\tlet x: Int\n\tstatic func origin() -> Point { Point(x: 0) }\n}\nlet point: Point = .origin()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "point"), "Point");
+    }
+
+    #[test]
+    fn leading_dot_static_function_resolves_after_generic_inference() {
+        let t = check(
+            "// no-core\nstruct Point {\n\tlet x: Int\n\tstatic func origin() -> Point { Point(x: 0) }\n}\nfunc id<T>(consume value: T) -> T { value }\nlet point: Point = id(value: .origin())",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "point"), "Point");
+    }
+
+    #[test]
+    fn leading_dot_static_overloads_select_by_labels() {
+        let t = check(
+            "// no-core\nstruct Value {\n\tlet n: Int\n\tstatic func make(integer value: Int) -> Value { Value(n: value) }\n\tstatic func make(boolean value: Bool) -> Value { Value(n: 0) }\n}\nlet value: Value = .make(integer: 1)",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "value"), "Value");
+    }
+
+    #[test]
+    fn leading_dot_static_function_uses_contextual_generic_arguments() {
+        let t = check(
+            "// no-core\nstruct Box<T> {\n\tlet value: T\n\tstatic func identity(consume box: Box<T>) -> Box<T> { box }\n}\nlet box: Box<Int> = .identity(box: Box(value: 1))",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "box"), "Box<Int>");
+    }
+
+    #[test]
+    fn leading_dot_resolves_static_function_on_enum() {
+        let t = check(
+            "// no-core\nenum Choice {\n\tcase first\n\tstatic func preferred() -> Choice { Choice.first }\n}\nlet choice: Choice = .preferred()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "choice"), "Choice");
+    }
+
+    #[test]
+    fn leading_dot_resolves_static_function_from_extension() {
+        let t = check(
+            "// no-core\nstruct Point {\n\tlet x: Int\n}\nextend Point {\n\tstatic func origin() -> Point { Point(x: 0) }\n}\nlet point: Point = .origin()",
+        );
+        assert_clean(&t);
+        assert_eq!(ty_of(&t, "point"), "Point");
+    }
+
+    #[test]
+    fn static_extension_function_is_not_an_instance_member() {
+        let t = check(
+            "// no-core\nstruct Point {\n\tlet x: Int\n}\nextend Point {\n\tstatic func origin() -> Point { Point(x: 0) }\n}\nlet point = Point(x: 1)\npoint.origin()",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("origin")),
+            "expected unknown instance member, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn leading_dot_static_function_must_return_contextual_type() {
+        let t = check(
+            "// no-core\nstruct Value {\n\tstatic func count() -> Int { 1 }\n}\nlet value: Value = .count()",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("Value") && error.contains("Int")),
+            "expected contextual result mismatch, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn leading_dot_pattern_does_not_resolve_static_function() {
+        let t = check(
+            "// no-core\nenum Choice {\n\tcase first\n\tstatic func preferred() -> Choice { Choice.first }\n}\nmatch Choice.first {\n\t.preferred -> 1,\n\t.first -> 2\n}",
+        );
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|error| error.contains("preferred")),
+            "expected unknown pattern variant, got {errors:?}"
+        );
+    }
+
+    #[test]
     fn leading_dot_without_context_errors() {
         // Nothing ever determines the enum: the program is ambiguous.
         let t = check("// no-core\nenum Color {\n\tcase red\n\tcase green\n}\nlet x = .red");

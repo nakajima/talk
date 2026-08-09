@@ -16,8 +16,8 @@ pub struct String {
 	pub let byte_count: Int
 	pub let capacity: Int
 
-	pub init(base: RawPtr, byte_count: Int, capacity: Int) {
-		self.storage = ByteStorage(base: base)
+	pub init(base: ByteStorage, byte_count: Int, capacity: Int) {
+		self.storage = base
 		self.byte_count = byte_count
 		self.capacity = capacity
 		self
@@ -26,7 +26,11 @@ pub struct String {
 	pub func to_string() -> String {
 		let base: RawPtr = _alloc<Byte>(count: self.byte_count)
 		_copy(from: self.storage.base, to: base, length: self.byte_count)
-		String(base: base, byte_count: self.byte_count, capacity: self.byte_count)
+		String(
+			base: ByteStorage(base: base),
+			byte_count: self.byte_count,
+			capacity: self.byte_count
+		)
 	}
 
 	// The bytes are copied into a fresh buffer, so byte-level string
@@ -41,7 +45,7 @@ pub struct String {
 			_store<Byte>(ptr: ptr, value: bytes.get(i))
 			i = i + 1
 		}
-		String(base: base, byte_count: count, capacity: count)
+		String(base: ByteStorage(base: base), byte_count: count, capacity: count)
 	}
 }
 
@@ -90,10 +94,30 @@ extend UTF8View: Borrowed {}
 pub protocol StringMethods {
 	func as_substring() -> Substring
 	func utf8() -> UTF8View
-	func find(needle: String) -> Int?
-	func find_from(needle: String, start: Int) -> Int?
-	func starts_with(needle: String) -> Bool
-	func ends_with(needle: String) -> Bool
+
+	func find(needle: String) -> Int? {
+		self.as_substring()._find_from(needle: needle, start: 0)
+	}
+
+	func find_from(needle: String, start: Int) -> Int? {
+		self.as_substring()._find_from(needle: needle, start: start)
+	}
+
+	func starts_with(needle: String) -> Bool {
+		self.as_substring()._starts_with(needle: needle)
+	}
+
+	func ends_with(needle: String) -> Bool {
+		self.as_substring()._ends_with(needle: needle)
+	}
+
+	func is_empty() -> Bool {
+		self.as_substring().byte_count == 0
+	}
+
+	func utf8_count() -> Int {
+		self.as_substring().byte_count
+	}
 }
 
 extend String: StringMethods {
@@ -106,35 +130,59 @@ extend String: StringMethods {
 	}
 
 	pub func find(needle: String) -> Int? {
-		self.as_substring().find(needle: needle)
+		self.as_substring()._find_from(needle: needle, start: 0)
 	}
 
 	pub func find_from(needle: String, start: Int) -> Int? {
-		self.as_substring().find_from(needle: needle, start: start)
+		self.as_substring()._find_from(needle: needle, start: start)
 	}
 
 	pub func starts_with(needle: String) -> Bool {
-		self.as_substring().starts_with(needle: needle)
+		self.as_substring()._starts_with(needle: needle)
 	}
 
 	pub func ends_with(needle: String) -> Bool {
-		self.as_substring().ends_with(needle: needle)
+		self.as_substring()._ends_with(needle: needle)
 	}
+
+	pub func is_empty() -> Bool { self.byte_count == 0 }
+	pub func utf8_count() -> Int { self.byte_count }
 }
 
-extend Substring {
+extend Substring: StringMethods {
+	pub func as_substring() -> Substring {
+		self
+	}
+
 	pub func utf8() -> UTF8View {
 		UTF8View(storage: self.storage, start: self.start, byte_count: self.byte_count)
 	}
 
 	pub func find(needle: String) -> Int? {
-		self.find_from(needle: needle, start: 0)
+		self._find_from(needle: needle, start: 0)
 	}
 
-	// The found offset is a UTF-8 byte offset, valid as `utf8().slice`
-	// input. Byte-wise search is exact for UTF-8: a needle can only
-	// match at character boundaries of itself.
 	pub func find_from(needle: String, start: Int) -> Int? {
+		self._find_from(needle: needle, start: start)
+	}
+
+	pub func starts_with(needle: String) -> Bool {
+		self._starts_with(needle: needle)
+	}
+
+	pub func ends_with(needle: String) -> Bool {
+		self._ends_with(needle: needle)
+	}
+
+	pub func is_empty() -> Bool { self.byte_count == 0 }
+	pub func utf8_count() -> Int { self.byte_count }
+}
+
+extend Substring {
+	// The found offset is a UTF-8 byte offset, valid as `utf8().slice`
+	// input. This compatibility search remains byte-oriented; new
+	// character-shaped search belongs on the boundary-safe index API.
+	func _find_from(needle: String, start: Int) -> Int? {
 		if start < 0 { return Optional.none }
 		if self.byte_count < start { return Optional.none }
 		if needle.byte_count == 0 { return Optional.some(start) }
@@ -143,9 +191,7 @@ extend Substring {
 		let last: Int = self.byte_count - needle.byte_count
 		let i: Int = start
 		loop {
-			if last < i {
-				break
-			}
+			if last < i { break }
 			let window: Substring = self.utf8().slice(
 				start: i,
 				byte_count: needle.byte_count
@@ -156,11 +202,28 @@ extend Substring {
 		Optional.none
 	}
 
+	func _starts_with(needle: String) -> Bool {
+		if self.byte_count < needle.byte_count { return false }
+		self.utf8().slice(start: 0, byte_count: needle.byte_count).equals_string(needle)
+	}
+
+	func _ends_with(needle: String) -> Bool {
+		if self.byte_count < needle.byte_count { return false }
+		self.utf8().slice(
+			start: self.byte_count - needle.byte_count,
+			byte_count: needle.byte_count
+		).equals_string(needle)
+	}
+
 	pub func to_string() -> String {
 		let base: RawPtr = _alloc<Byte>(count: self.byte_count)
 		let source: RawPtr = _ptr_add(ptr: self.storage.base, offset: self.start)
 		_copy(from: source, to: base, length: self.byte_count)
-		String(base: base, byte_count: self.byte_count, capacity: self.byte_count)
+		String(
+			base: ByteStorage(base: base),
+			byte_count: self.byte_count,
+			capacity: self.byte_count
+		)
 	}
 
 	pub func equals_string(_ rhs: String) -> Bool {
@@ -177,37 +240,6 @@ extend Substring {
 		true
 	}
 
-	pub func starts_with(needle: String) -> Bool {
-		if needle.count() > self.count() { return false }
-		let chars = self.iter()
-		let needle_chars = needle.iter()
-
-		for needle_char in needle_chars {
-			if let .some(char) = chars.next() {
-				if char != needle_char { return false }
-			} else {
-				return false
-			}
-		}
-
-		true
-	}
-
-	pub func ends_with(needle: String) -> Bool {
-		if needle.count() > self.count() { return false }
-		let chars = self.iter().skip(count: self.count() - needle.count())
-		let needle_chars = needle.iter()
-
-		for char in chars {
-			if let .some(needle_char) = needle_chars.next() {
-				if needle_char != char { return false }
-			} else {
-				return false
-			}
-		}
-
-		true
-	}
 }
 
 extend Substring: Equatable<Substring> {
@@ -239,7 +271,7 @@ extend String: Add<String> {
 
 		let rhsDest: RawPtr = _ptr_add(ptr: newBase, offset: selfLen)
 		_copy(from: rhs.storage.base, to: rhsDest, length: rhsLen)
-		String(base: newBase, byte_count: newLen, capacity: newLen)
+		String(base: ByteStorage(base: newBase), byte_count: newLen, capacity: newLen)
 	}
 }
 

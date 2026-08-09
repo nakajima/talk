@@ -243,6 +243,28 @@ impl<'s> Solver<'s> {
                             stuck.push(unsolved);
                         }
                     }
+                    Constraint::HasTypeMember {
+                        receiver,
+                        label,
+                        payload,
+                        ctor,
+                        allowed_effects,
+                        member_node,
+                        origin,
+                    } => {
+                        if let Some(unsolved) = self.try_type_member(
+                            receiver,
+                            label,
+                            payload,
+                            ctor,
+                            allowed_effects,
+                            member_node,
+                            origin,
+                            &mut queue,
+                        ) {
+                            stuck.push(unsolved);
+                        }
+                    }
                     Constraint::HasVariant {
                         enum_ty,
                         label,
@@ -431,6 +453,10 @@ impl<'s> Solver<'s> {
                         member,
                         origin,
                     });
+                }
+                type_member @ Constraint::HasTypeMember { .. } => {
+                    // The contextual result may be fixed by a later group.
+                    residual.push(type_member);
                 }
                 Constraint::PatternView {
                     scrutinee,
@@ -757,6 +783,10 @@ impl<'s> Solver<'s> {
                     tys.extend(ctor.clone());
                 }
                 Constraint::HasMember { member, .. } => tys.push(member.clone()),
+                Constraint::HasTypeMember { payload, ctor, .. } => {
+                    tys.extend(payload.iter().map(|(_, ty)| ty.clone()));
+                    tys.extend(ctor.clone());
+                }
                 _ => {}
             }
         }
@@ -914,6 +944,25 @@ impl<'s> Solver<'s> {
                 let receiver = self.store.render(receiver);
                 let member = self.store.render(member);
                 format!("{receiver} has member `{label}` of type {member}")
+            }
+            Constraint::HasTypeMember {
+                receiver,
+                label,
+                payload,
+                ctor,
+                ..
+            } => {
+                let receiver = self.store.render(receiver);
+                let payload = payload
+                    .iter()
+                    .map(|(_, ty)| self.store.render(ty))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let ctor = ctor
+                    .as_ref()
+                    .map(|ty| format!(" with constructor {}", self.store.render(ty)))
+                    .unwrap_or_default();
+                format!("{receiver} has type member `.{label}({payload})`{ctor}")
             }
             Constraint::HasVariant {
                 enum_ty,

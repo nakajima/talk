@@ -957,17 +957,20 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                             this.register_enum_variant(&mut info, symbol, generics, member, &result)
                         }
                         DeclKind::Method {
-                            func,
-                            is_static: false,
-                            ..
+                            func, is_static, ..
                         } => {
                             if let Ok(method) = func.name.symbol() {
                                 let full_name = crate::types::callables::CallableName::from_params(
                                     func.name.name_str(),
                                     &func.params,
-                                    true,
+                                    !*is_static,
                                 );
-                                let set = info.methods.entry(func.name.name_str()).or_default();
+                                let table = if *is_static {
+                                    &mut info.statics
+                                } else {
+                                    &mut info.methods
+                                };
+                                let set = table.entry(func.name.name_str()).or_default();
                                 if set.iter().any(|existing| {
                                     this.catalog
                                         .callable_contracts
@@ -987,9 +990,9 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                                     method,
                                     &func.name.name_str(),
                                     &func.params,
-                                    true,
+                                    !*is_static,
                                     crate::types::callables::CallableRole::Method {
-                                        is_static: false,
+                                        is_static: *is_static,
                                     },
                                 );
                             }
