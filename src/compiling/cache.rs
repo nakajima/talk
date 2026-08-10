@@ -13,7 +13,10 @@ use std::path::{Path, PathBuf};
 /// The serialization format version: folded into every key, so a
 /// payload layout change invalidates by construction. Bump it when the
 /// persisted product shapes or the key scheme change.
-pub const FORMAT_VERSION: u64 = 1;
+// 2: ADR 0053 — module images carry uncarved fact slices (private
+// declarations included; amendments to foreign entities travel; derived
+// indexes stripped).
+pub const FORMAT_VERSION: u64 = 2;
 
 /// How many stamped versions of one stem to retain. Compiler builds
 /// coexist across checkouts; older stamps are cleaned on store.

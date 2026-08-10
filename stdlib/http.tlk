@@ -24,10 +24,6 @@ pub struct Response {
 	}
 }
 
-extend Response: Into<Response> {
-	pub consuming func into() -> Response { self }
-}
-
 extend String: Into<Response> {
 	pub consuming func into() -> Response {
 		Response(status: 200, body: self)

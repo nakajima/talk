@@ -430,6 +430,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .derived_equality(payload_ty, protocol, span)?,
                 Vec::new(),
             ),
+            DictionaryEntry::Derived(DerivedRecipe::Identity) => (
+                self.program_builder.derived_identity(payload_ty, span)?,
+                Vec::new(),
+            ),
             DictionaryEntry::Implementation {
                 symbol,
                 writeback_width,

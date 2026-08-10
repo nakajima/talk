@@ -99,15 +99,6 @@ func exercise() -> Void {
 	print(character("€").is_symbol())
 	print(character("ǅ").is_titlecase())
 	print(character("²").is_digit())
-	match parse("-42", using: 0) {
-		.some(value) -> print(value),
-		.none -> print(0)
-	}
-	match parse("true", using: false) {
-		.some(value) -> print(value),
-		.none -> print(false)
-	}
-
 	print("Straße".uppercase())
 	print("Straße".casefolded())
 	print("ΟΣ".lowercase())

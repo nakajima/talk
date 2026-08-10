@@ -31,6 +31,7 @@ impl<'s> Solver<'s> {
         strict_labels: bool,
     ) -> MemberDispatch {
         let mut candidates: Vec<(ProtocolRef, ProtocolRef, Requirement)> = vec![];
+        let shallow_receiver = self.store.shallow(lookup_receiver);
         for protocol in protocols {
             for (owner, requirement) in self.catalog.requirement_overloads_in_ref(protocol, label) {
                 // Two protocols inheriting one base share its requirement —
@@ -39,6 +40,16 @@ impl<'s> Solver<'s> {
                     .iter()
                     .any(|(_, _, r)| r.symbol == requirement.symbol)
                 {
+                    continue;
+                }
+                // A constrained extension member whose context provably
+                // excludes this receiver never claims the label; a later
+                // provider (an inherent member) may serve instead.
+                if self.catalog.requirement_context_excludes(
+                    &shallow_receiver,
+                    &owner,
+                    &requirement,
+                ) {
                     continue;
                 }
                 candidates.push((protocol.clone(), owner, requirement));
@@ -673,12 +684,57 @@ impl<'s> Solver<'s> {
                 if self.catalog.conformances_by_head.contains_key(&symbol)
                     && !self.slots_prefer_inherent(symbol, &label_str, origin)
                 {
-                    let mut protocols = self
-                        .catalog
-                        .conformances_for_head(symbol)
-                        .map(|(_, row)| row.protocol.clone())
-                        .collect::<Vec<_>>();
-                    protocols.dedup();
+                    // One offered application per protocol symbol. A row may
+                    // commit its declared arguments only when it is the sole
+                    // possible supplier; once several rows could serve
+                    // (`Into<Self>` synthesized next to a declared
+                    // `Into<Response>`, or a protocol-head row like
+                    // `Iterator: Into<[Element]>`), the arguments stay fresh
+                    // variables and the Conforms constraint selects the row —
+                    // committing here would be a guess, not a forced move.
+                    let mut grouped: Vec<(Symbol, Option<ProtocolRef>)> = Vec::new();
+                    for (_, row) in self.catalog.conformances_for_head(symbol) {
+                        match grouped
+                            .iter_mut()
+                            .find(|(protocol, _)| *protocol == row.protocol.protocol)
+                        {
+                            Some((_, committed)) => *committed = None,
+                            None => {
+                                let contested = self.catalog.conformances.values().any(|other| {
+                                    matches!(other.head, Symbol::Protocol(_))
+                                        && other.protocol.protocol == row.protocol.protocol
+                                });
+                                grouped.push((
+                                    row.protocol.protocol,
+                                    (!contested).then(|| row.protocol.clone()),
+                                ));
+                            }
+                        }
+                    }
+                    let protocols: Vec<ProtocolRef> = grouped
+                        .into_iter()
+                        .map(|(protocol, committed)| {
+                            committed.unwrap_or_else(|| {
+                                let args = self
+                                    .catalog
+                                    .protocols
+                                    .get(&protocol)
+                                    .map(|info| {
+                                        info.params
+                                            .iter()
+                                            .map(|_| {
+                                                Ty::Var(
+                                                    self.store
+                                                        .fresh_ty(self.level, origin.node),
+                                                )
+                                            })
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                ProtocolRef { protocol, args }
+                            })
+                        })
+                        .collect();
                     match self.dispatch_member_through(
                         &protocols,
                         Some(symbol),
@@ -1798,6 +1854,15 @@ impl<'s> Solver<'s> {
             protocol: protocol.clone(),
             origin,
         });
+        // A constrained extension member's availability context is
+        // demanded from the caller (like a conformance row's context),
+        // instantiated against this use's receiver and protocol
+        // arguments. Head-argument equations pin the offered protocol
+        // args here (`extend Into<Int>` forces Target == Int).
+        for predicate in &requirement.context {
+            let predicate = predicate.substitute(&tys, &effs, &Default::default());
+            queue.push(predicate.into_constraint(origin));
+        }
         // Publish the target-side θ on the node (Swift model: the IR
         // carries the resolution): a concrete witness needs its
         // conformance row's rigid params bound against the receiver head;
@@ -1828,7 +1893,14 @@ impl<'s> Solver<'s> {
                 MemberResolution::ViaConformance {
                     row,
                     protocol: protocol.clone(),
-                    witness,
+                    // An unwitnessed defaulted slot executes its default
+                    // body — which lives under its own symbol when the
+                    // default was supplied out of line.
+                    witness: if witness == requirement.symbol {
+                        requirement.default_symbol.unwrap_or(witness)
+                    } else {
+                        witness
+                    },
                     substitution,
                 }
             }

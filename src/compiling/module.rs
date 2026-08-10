@@ -166,7 +166,11 @@ pub struct ModuleEnvironment {
     registry: Rc<RefCell<ModuleRegistry>>,
     modules_by_name: FxHashMap<String, ModuleId>,
     modules_by_local: FxHashMap<ModuleId, StableModuleId>,
-    modules: FxHashMap<StableModuleId, Arc<Module>>,
+    /// Insertion-ordered (import order is compile order): every fold over
+    /// the environment — Phase-0 catalog seeding today, one-table
+    /// insertion under ADR 0053 — must be deterministic, and hash order
+    /// is not.
+    modules: indexmap::IndexMap<StableModuleId, Arc<Module>>,
 }
 
 impl ModuleEnvironment {
@@ -272,8 +276,8 @@ impl ModuleEnvironment {
 }
 
 /// The type-system payload a compiled module carries: finished schemes for
-/// its binders and its slice of the type catalog (nominals, protocols,
-/// conformances, effects). The importing checker merges these in Phase 0.
+/// its binders and its fact slice of the type catalog (ADR 0053). An
+/// importing compilation inserts the slice into its one shared table.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ModuleTypes {
     pub schemes: FxHashMap<Symbol, crate::types::ty::Scheme>,

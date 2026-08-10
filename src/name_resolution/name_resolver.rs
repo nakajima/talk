@@ -77,6 +77,10 @@ pub enum NameResolverError {
         existing: Symbol,
         imported: Symbol,
     },
+    /// `extend<T: P> T` — the extension head is one of the extension's
+    /// own binders. Talk spells a blanket extension as a protocol
+    /// extension, so point at the equivalent form.
+    BinderExtensionHead { binder: String, bounds: Vec<String> },
 }
 
 impl Error for NameResolverError {}
@@ -119,6 +123,18 @@ impl Display for NameResolverError {
                     "'{member}' cannot be public because its owner '{owner}' is not public"
                 )
             }
+            Self::BinderExtensionHead { binder, bounds } => match bounds.as_slice() {
+                [protocol] => write!(
+                    f,
+                    "an extension head must name a type or protocol, not the binder '{binder}'; \
+                     extend the protocol instead: `extend {protocol} where ...`"
+                ),
+                _ => write!(
+                    f,
+                    "an extension head must name a type or protocol, not the binder '{binder}'; \
+                     extend one of its bound protocols instead"
+                ),
+            },
             Self::ImportCollision { name, .. } => {
                 write!(
                     f,

@@ -514,6 +514,7 @@ pub enum GeneratedMir {
     RetainGlue,
     DerivedShow,
     DerivedEquality,
+    DerivedIdentity,
     RequirementForwarder,
     EnumConstructor,
 }
@@ -535,6 +536,7 @@ impl GeneratedMir {
             Self::RetainGlue => "type-specific value retain",
             Self::DerivedShow => "derived Showable implementation",
             Self::DerivedEquality => "derived Equatable implementation",
+            Self::DerivedIdentity => "derived reflexive Into implementation",
             Self::RequirementForwarder => "protocol requirement witness forwarding",
             Self::EnumConstructor => "first-class enum constructor",
         }

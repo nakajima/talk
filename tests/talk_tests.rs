@@ -278,6 +278,361 @@ fn disjoint_inherent_extensions_dispatch_per_application() {
 }
 
 #[test]
+fn protocol_extension_head_arguments_are_rejected() {
+    // Associated types are not positional arguments (the protocol has no
+    // input parameters): the argument must diagnose, never silently drop.
+    let output = check_source(
+        b"extend Iterator<Int> {\n\tconsuming func join(_ separator: String) -> String { separator }\n}\n",
+    );
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("expects 0 generic arguments"),
+        "diagnostics should reject the head argument: {stdout}"
+    );
+
+    // A protocol with input parameters takes head arguments as equations
+    // (`extend Into<Int>` binds Target == Int), so the arity must match
+    // the declared parameters exactly — over-application diagnoses.
+    let output = check_source(b"extend Into<Int, String> {\n\tfunc from_int() -> Int { 1 }\n}\n");
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("generic argument"),
+        "diagnostics should reject the extra head argument: {stdout}"
+    );
+}
+
+#[test]
+fn protocol_extension_overloads_of_declared_requirement_bases() {
+    // An extension may overload a declared requirement's base: the
+    // conformer witnesses the declared overload, the extension overload
+    // stays defaulted (no spurious MissingWitness), and written labels
+    // select between them at call sites (ADR 0041).
+    assert_runs(
+        b"protocol P {\n\tfunc f() -> Int\n\tfunc g() -> Int\n}\n\
+          extend P {\n\tfunc f(x: Int) -> Int { x + self.f() }\n}\n\
+          struct A {}\n\
+          extend A: P {\n\tfunc f() -> Int { 1 }\n\tfunc g() -> Int { 2 }\n}\n\
+          print(A().f())\nprint(A().f(x: 41))\nprint(A().g())\n",
+        &[],
+        b"1\n42\n2\n",
+    );
+
+    // Redeclaring a member that already has a default body stays a
+    // conflict — two bodies for one member.
+    let output = check_source(
+        b"protocol P {\n\tfunc f() -> Int { 2 }\n}\n\
+          extend P {\n\tfunc f() -> Int { 1 }\n}\n",
+    );
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("redeclaring an existing protocol member"),
+        "expected the redeclaration rejection: {stdout}"
+    );
+}
+
+#[test]
+fn inherent_members_win_over_protocol_extension_members() {
+    // A concrete type's own member beats a protocol-extension member of
+    // the same shape (Swift's rule): the extension's `to_text` via
+    // Into<String> must not shadow W's inherent one — especially since
+    // every type has a reflexive Into row.
+    assert_runs(
+        b"extend Into<String> {\n\tconsuming func to_text() -> String { self.into() }\n}\n\
+          struct W {}\n\
+          extend W {\n\tfunc to_text() -> String { \"inherent\" }\n}\n\
+          print(W().to_text())\n",
+        &[],
+        b"inherent\n",
+    );
+}
+
+#[test]
+fn check_mode_compiles_constrained_extension_bodies_rigidly() {
+    // `talk check` compiles every body once, rigidly — extension members
+    // of imported protocols included. Their frames carry Self's (and the
+    // where-clause params') conformance dictionaries; this used to die
+    // because the catalog merge clobbered the importer's amended
+    // requirement tables and bounds with the exporter's originals.
+    let output = check_source(
+        b"extend Into<String> {\n\tconsuming func to_text() -> String { self.into() }\n}\n\
+          extend Iterator where Element: Into<String> {\n\
+          \tconsuming func join2(_ separator: String) -> String {\n\
+          \t\tlet res = \"\"\n\
+          \t\tfor part in self.into_iter() {\n\
+          \t\t\tif res != \"\" { res = res + separator }\n\
+          \t\t\tres = res + part.into()\n\
+          \t\t}\n\
+          \t\tres\n\
+          \t}\n\
+          }\n\
+          struct Word {}\n\
+          extend Word: Into<String> {\n\tconsuming func into() -> String { \"word\" }\n}\n\
+          print(Word().to_text())\n",
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "check should be clean:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn imported_protocol_extension_members_dispatch_on_rigid_receivers() {
+    // An extension member of an IMPORTED protocol (core's Into) has no
+    // slot in the exporter's witness table; deferred dispatch on a rigid
+    // bounded receiver must reach its default body directly.
+    assert_runs(
+        b"extend Into<String> {\n\tconsuming func to_text() -> String { self.into() }\n}\n\
+          struct Word {}\n\
+          extend Word: Into<String> {\n\tconsuming func into() -> String { \"word\" }\n}\n\
+          func shout<T: Into<String>>(consume value: T) -> String {\n\tvalue.to_text() + \"!\"\n}\n\
+          print(shout(value: Word()))\n",
+        &[],
+        b"word!\n",
+    );
+}
+
+#[test]
+fn protocol_refinements_are_givens_in_extension_bodies() {
+    // `IntoIterator` ties its assoc types (`IntoIter.Element == Element`);
+    // a constrained extension body iterating `self.into_iter()` types its
+    // elements as `IntoIter.Element` and must discharge bounds through
+    // that refinement — the protocol's own predicates are body givens.
+    assert_runs(
+        b"extend IntoIterator where Element: Into<String> {\n\
+          \tconsuming func join2(_ separator: String) -> String {\n\
+          \t\tlet res = \"\"\n\
+          \t\tfor elem in self.into_iter() {\n\
+          \t\t\tif res != \"\" { res = res + separator }\n\
+          \t\t\tres = res + elem.into()\n\
+          \t\t}\n\
+          \t\tres\n\
+          \t}\n\
+          }\n\
+          struct Word {}\n\
+          extend Word: Into<String> {\n\tconsuming func into() -> String { \"word\" }\n}\n\
+          let words: [Word] = [Word(), Word()]\n\
+          print(words.join2(\"-\"))\n",
+        &[],
+        b"word-word\n",
+    );
+}
+
+#[test]
+fn check_mode_compiles_generic_conformance_witnesses() {
+    // A witness on a generic conformance row (`extend<U, T: Iterator>
+    // Map<T, U>: Iterable`) binds the ROW's rigid params in its body —
+    // returning borrowed `self` retains a generic value, which needs
+    // those params' witnesses bound in the check-all frame. Row
+    // witnesses had no callable-owner binding at all.
+    let output = check_source(
+        b"extend<U, T: Iterator> Map<T, U>: Iterable {\n\
+          \tfunc iter() -> Self { self }\n\
+          }\n\
+          print(\"ok\")\n",
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "check should be clean:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn binder_extension_heads_point_at_the_protocol_spelling() {
+    // `extend<T: P> T` is Rust blanket-impl syntax; Talk spells it as a
+    // protocol extension, and the diagnostic should say so.
+    let output = check_source(
+        b"extend<T: Iterator> T {\n\tfunc noop() -> Int { 0 }\n}\n",
+    );
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("extend the protocol instead: `extend Iterator where ...`"),
+        "expected the blanket-extension guidance: {stdout}"
+    );
+}
+
+#[test]
+fn declared_reflexive_conformance_overrides_the_synthesized_twin() {
+    // ADR 0053 stage 5 (eviction visibility): a module declaring
+    // `W: Into<W>` by hand evicts the synthesized identity twin, and its
+    // body — not the identity recipe — serves every dispatch.
+    assert_runs(
+        b"struct W {\n\tlet tag: Int\n}\n\
+          extend W: Into<W> {\n\tconsuming func into() -> W { W(tag: self.tag + 1) }\n}\n\
+          let bumped: W = W(tag: 1).into()\n\
+          print(bumped.tag)\n",
+        &[],
+        b"2\n",
+    );
+}
+
+#[test]
+fn reflexive_into_identity_transfers_ownership() {
+    // `elem.into()` where Element = String dispatches the Derived
+    // Identity glue: the receiver passes THROUGH the callee, so the
+    // caller's frame must stop owning it — double ownership double-frees
+    // heap-built strings at teardown.
+    assert_runs(
+        b"struct Word {}\n\
+          extend Word: CheapClone {}\n\
+          extend Word: Into<String> {\n\tconsuming func into() -> String { \"w\" + \"!\" }\n}\n\
+          extend<Element: Into<String>> Array<Element> {\n\
+          \tconsuming func join2(_ separator: String) -> String {\n\
+          \t\tlet res = \"\"\n\
+          \t\tfor elem in self.into_iter() {\n\
+          \t\t\tif res != \"\" { res = res + separator }\n\
+          \t\t\tres = res + elem.into()\n\
+          \t\t}\n\
+          \t\tres\n\
+          \t}\n\
+          }\n\
+          let words: [Word] = [Word(), Word()]\n\
+          print(words.map { w in w.clone().into() }.to_array().join2(\"-\"))\n",
+        &[],
+        b"w!-w!\n",
+    );
+}
+
+#[test]
+fn missing_conversions_diagnose_at_typing_not_in_the_backend() {
+    // A concrete receiver stuck on variable protocol arguments
+    // (`E: Into<?t>`) is still an obligation: the generalization pass
+    // used to drop it on the floor, letting conformance-free `.into()`
+    // calls typecheck and die in MIR.
+    let output = check_source(
+        b"enum E {\n\tcase a\n}\nfunc main() {\n\tlet s: String = E.a.into()\n\tprint(s)\n}\n",
+    );
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("E does not conform to Into<String>"),
+        "expected a typing-time conformance diagnostic: {stdout}"
+    );
+}
+
+#[test]
+fn stuck_into_targets_default_to_the_unique_declared_conversion() {
+    // `Word().into()` in Showable position pins nothing: both the
+    // declared Into<String> row and the synthesized reflexive
+    // Into<Word> row satisfy every constraint. A synthesized row never
+    // wins a defaulting tie — the unique declared conversion commits.
+    assert_runs(
+        b"struct Word {}\n\
+          extend Word: Into<String> {\n\tconsuming func into() -> String { \"word\" }\n}\n\
+          print(Word().into())\n",
+        &[],
+        b"word\n",
+    );
+}
+
+#[test]
+fn protocol_extension_supplies_out_of_line_default_bodies() {
+    // The Swift idiom: declare the requirement in the protocol body,
+    // supply its default in an extension. A conformer may omit the
+    // member (the default serves, concretely and through witness
+    // tables) or witness it to override.
+    assert_runs(
+        b"protocol P {\n\tfunc f() -> Int\n\tfunc g() -> Int\n}\n\
+          extend P {\n\tfunc g() -> Int { self.f() * 10 }\n}\n\
+          struct A {}\n\
+          extend A: P {\n\tfunc f() -> Int { 3 }\n}\n\
+          struct B {}\n\
+          extend B: P {\n\tfunc f() -> Int { 1 }\n\tfunc g() -> Int { 7 }\n}\n\
+          func tenfold<T: P>(_ value: T) -> Int {\n\tvalue.g()\n}\n\
+          print(A().g())\nprint(B().g())\nprint(tenfold(A()))\nprint(tenfold(B()))\n",
+        &[],
+        b"30\n7\n30\n7\n",
+    );
+}
+
+#[test]
+fn constrained_protocol_extension_members_gate_at_call_sites() {
+    // The extension's context must be demanded from the caller at typing:
+    // Int is not Into<String>, so join2 is unavailable on an iterator of
+    // Ints — a conformance diagnostic, never a backend failure.
+    let output = check_source(
+        b"extend Iterator where Element: Into<String> {\n\
+          \tconsuming func join2(_ separator: String) -> String {\n\
+          \t\tlet res = \"\"\n\
+          \t\tfor part in self.into_iter() {\n\
+          \t\t\tif res != \"\" { res = res + separator }\n\
+          \t\t\tres = res + part.into()\n\
+          \t\t}\n\
+          \t\tres\n\
+          \t}\n\
+          }\n\
+          struct NumberSource {\n\tlet n: Int\n}\n\
+          extend NumberSource: Iterator {\n\
+          \tmut func next() -> Int? {\n\
+          \t\tif self.n > 0 {\n\t\t\tself.n = self.n - 1\n\t\t\treturn .some(self.n)\n\t\t}\n\
+          \t\treturn .none\n\
+          \t}\n\
+          }\n\
+          print(NumberSource(n: 3).join2(\"-\"))\n",
+    );
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("conform") && !stdout.contains("not supported yet"),
+        "expected a typing-time conformance diagnostic, not a backend refusal: {stdout}"
+    );
+
+    // A head-argument equation gates the same way: Word is Into<String>,
+    // not Into<Int>, so an Into<Int> extension member is unavailable.
+    let output = check_source(
+        b"extend Into<Int> {\n\
+          \tconsuming func doubled() -> Int { self.into() * 2 }\n\
+          }\n\
+          struct Word {}\n\
+          extend Word: Into<String> {\n\
+          \tconsuming func into() -> String { \"word\" }\n\
+          }\n\
+          print(Word().doubled())\n",
+    );
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("conform") && !stdout.contains("not supported yet"),
+        "expected a typing-time conformance diagnostic, not a backend refusal: {stdout}"
+    );
+}
+
+#[test]
+fn protocol_head_conformances_require_the_head_protocol() {
+    // `extend Iterator: Into<[Element]>` (core) must not supply evidence
+    // for a receiver that is not an Iterator: selecting it anyway commits
+    // the extension's witness with a non-conforming Self and dies in the
+    // backend. The failure has to be an ordinary conformance error.
+    let output = check_source(b"let n: Int = 5\nlet xs: [Int] = n.into()\nprint(xs.count)\n");
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("conform") || stderr.contains("conform"),
+        "expected a conformance diagnostic, got stdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn constrained_protocol_extension_where_clause_over_associated_type() {
+    // The extension's where clause binds the protocol's associated type:
+    // the default is available exactly where the bound holds. Bare
+    // `Element` names the associated type, same-module or imported.
+    assert_runs(
+        b"protocol It {\n\tassociated E\n\tfunc head() -> E\n}\nextend It where Self.E: Into<String> {\n\tconsuming func shout() -> String {\n\t\tself.head().into()\n\t}\n}\nstruct S {}\nextend S: Into<String> {\n\tconsuming func into() -> String { \"s\" }\n}\nstruct Box {}\nextend Box: It {\n\tfunc head() -> S { S() }\n}\nprint(Box().shout())\n",
+        &[],
+        b"s\n",
+    );
+}
+
+#[test]
 fn trailing_block_closures_mutate_captured_locals() {
     // Assignment conversion (celled captures) must see a trailing block as
     // a nested frame, exactly like an explicit `func` expression.
@@ -2201,7 +2556,7 @@ fn reference_strings_cluster_matches_frozen_stdout() {
 /// borrow/consume/mut iteration modes (F6 verification).
 #[test]
 fn reference_collections_cluster_matches_frozen_stdout() {
-    assert_corpus_dir("tests/reference/collections", &[], 35);
+    assert_corpus_dir("tests/reference/collections", &[], 38);
 }
 
 /// G6 drop-once/leak-balance cluster: the reference's ownership
@@ -2551,6 +2906,7 @@ fn check_command_checks_the_package_workspace() {
     let root = dir.join("root");
     std::fs::create_dir_all(dependency.join("src")).expect("dependency src");
     std::fs::create_dir_all(root.join("src")).expect("root src");
+    std::fs::create_dir_all(root.join("tests")).expect("root tests");
     std::fs::write(
         dependency.join("package.tlk"),
         "Package(name: \"check-dependency\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
@@ -2582,6 +2938,11 @@ fn check_command_checks_the_package_workspace() {
         "use package::util::{ double }\n\ntest(\"double\") {\n\tassert(double(n: 21) == 42)\n}\n",
     )
     .expect("test source");
+    std::fs::write(
+        root.join("tests/external.test.tlk"),
+        "use package::util::{ double }\n\ntest(\"external double\") {\n\tassert(double(n: 21) == 42)\n}\n",
+    )
+    .expect("external test source");
 
     let talk = || {
         let mut command = Command::new(env!("CARGO_BIN_EXE_talk"));
@@ -2616,6 +2977,42 @@ fn check_command_checks_the_package_workspace() {
         String::from_utf8_lossy(&check.stdout),
         String::from_utf8_lossy(&check.stderr)
     );
+
+    // An explicit package test keeps package:: anchored at src/, even
+    // when checked by absolute path from outside the package.
+    let explicit_test = talk()
+        .arg(root.join("tests/external.test.tlk"))
+        .current_dir(&dir)
+        .output()
+        .expect("explicit package test check");
+    assert!(
+        explicit_test.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&explicit_test.stdout),
+        String::from_utf8_lossy(&explicit_test.stderr)
+    );
+
+    // Bare package checks include the conventional tests/ directory.
+    std::fs::write(
+        root.join("tests/external.test.tlk"),
+        "test(\"broken external\") {\n\tassert(1 == \"x\")\n}\n",
+    )
+    .expect("break external test");
+    let broken_test = talk()
+        .current_dir(&root)
+        .output()
+        .expect("broken test check");
+    assert!(!broken_test.status.success());
+    assert!(
+        String::from_utf8_lossy(&broken_test.stdout).contains("external.test.tlk"),
+        "{}",
+        String::from_utf8_lossy(&broken_test.stdout)
+    );
+    std::fs::write(
+        root.join("tests/external.test.tlk"),
+        "use package::util::{ double }\n\ntest(\"external double\") {\n\tassert(double(n: 21) == 42)\n}\n",
+    )
+    .expect("restore external test");
 
     // The trigger walks up: src/ is inside the package.
     let from_src = talk()

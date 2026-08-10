@@ -5,12 +5,13 @@ use std::path::{Path, PathBuf};
 use ignore::WalkBuilder;
 
 /// The `.tlk` files that make up the program rooted at `root`. A
-/// package manifest scopes the program: only the manifest and files
-/// under its build targets' source directories compile together, the
-/// same set `talk test` and `talk run` use. Stray .tlk files elsewhere
-/// under the folder (scratch, stale copies) are not part of the
-/// program, and their diagnostics must not gate the real ones.
+/// package manifest scopes the program: the manifest, files under its
+/// build targets' source directories, and package tests compile together.
+/// Stray .tlk files elsewhere under the folder (scratch, stale copies)
+/// are not part of the program, and their diagnostics must not gate the
+/// real ones.
 pub fn workspace_source_files(root: &Path) -> Vec<PathBuf> {
+    let tests_root = root.join("tests");
     let source_roots: Option<Vec<PathBuf>> = crate::compiling::package::PackageManifest::read(root)
         .ok()
         .map(|manifest| {
@@ -27,9 +28,10 @@ pub fn workspace_source_files(root: &Path) -> Vec<PathBuf> {
         });
     let in_scope = |path: &Path| match &source_roots {
         Some(roots) => {
-            path.parent() == Some(root)
-                && path.file_name().and_then(|n| n.to_str()) == Some("package.tlk")
+            (path.parent() == Some(root)
+                && path.file_name().and_then(|n| n.to_str()) == Some("package.tlk"))
                 || roots.iter().any(|src| path.starts_with(src))
+                || path.starts_with(&tests_root)
         }
         None => true,
     };

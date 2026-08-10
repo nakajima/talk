@@ -831,6 +831,16 @@ fn file_stamp_version(path: &PathBuf) -> i32 {
 fn analysis_root_for_uri(state: &ServerState, uri: &Url) -> Option<PathBuf> {
     let path = uri.to_file_path().ok();
 
+    // A package is the analysis boundary even when the client advertises
+    // one of its subdirectories or a broader multi-project workspace.
+    // In particular, tests/ must retain the manifest's src/ anchor.
+    if let Some(package_root) = path
+        .as_ref()
+        .and_then(crate::compiling::package::PackageProject::enclosing_root)
+    {
+        return Some(package_root);
+    }
+
     if state.workspace_roots.is_empty()
         && let Some(path) = path.as_ref()
     {
@@ -914,11 +924,8 @@ fn load_package_context(
 }
 
 fn tlk_files_under_root(root: &PathBuf) -> Vec<PathBuf> {
-    // A package manifest scopes the program: only the manifest and files
-    // under its build targets' source directories compile together, the
-    // same set `talk test` and `talk run` use. Stray .tlk files elsewhere
-    // under the folder (scratch, stale copies) are not part of the
-    // program, and their diagnostics must not gate the real ones.
+    // A package manifest scopes the workspace to its targets and tests.
+    // Stray .tlk files elsewhere stay out of diagnostics.
     crate::cli::package::workspace_source_files(root)
 }
 
@@ -1247,13 +1254,20 @@ mod tests {
         // cannot gate the real program's MIR diagnostics.
         let root = std::env::temp_dir().join(format!("talk-lsp-scope-{}", std::process::id()));
         let src = root.join("src");
+        let tests = root.join("tests");
         std::fs::create_dir_all(&src).expect("temp source dir");
+        std::fs::create_dir_all(&tests).expect("temp tests dir");
         std::fs::write(
             root.join("package.tlk"),
             "Package(\n\tname: \"p\",\n\tversion: \"0.1.0\",\n\tbuilds: [.lib(from: \"src/lib.tlk\")],\n\tdependencies: []\n)\n",
         )
         .expect("manifest");
         std::fs::write(src.join("lib.tlk"), "let x = 1\n").expect("lib");
+        std::fs::write(
+            tests.join("lib.test.tlk"),
+            "test(\"lib\") { assert(true) }\n",
+        )
+        .expect("test");
         std::fs::write(root.join("stale.tlk"), "use package::nope::{ Gone }\n").expect("stale");
         let files = super::tlk_files_under_root(&root);
         let names: Vec<&str> = files
@@ -1261,6 +1275,7 @@ mod tests {
             .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
             .collect();
         assert!(names.contains(&"lib.tlk"), "{names:?}");
+        assert!(names.contains(&"lib.test.tlk"), "{names:?}");
         assert!(names.contains(&"package.tlk"), "{names:?}");
         assert!(!names.contains(&"stale.tlk"), "{names:?}");
         std::fs::remove_dir_all(&root).ok();
@@ -3368,6 +3383,7 @@ func foo() 'fizz -> Int {
     fn package_workspace_anchors_imports_at_manifest_source_root() {
         let root = temp_root("package_anchor");
         std::fs::create_dir_all(root.join("src/documentables")).expect("create source dirs");
+        std::fs::create_dir_all(root.join("tests")).expect("create tests dir");
         std::fs::write(
             root.join("package.tlk"),
             "Package(\n    name: \"demo\",\n    version: \"0.1.0\",\n    builds: [.bin(named: \"main\", from: \"src/main.tlk\")],\n    dependencies: []\n)\n",
@@ -3384,8 +3400,15 @@ func foo() 'fizz -> Int {
             "pub struct Property {}\n",
         )
         .expect("write property");
-        let uri = Url::from_file_path(root.join("src/main.tlk")).expect("main uri");
-        let mut state = state_with_roots(vec![root.clone()]);
+        std::fs::write(
+            root.join("tests/property.test.tlk"),
+            "use package::documentables::property::{ Property }\n\ntest(\"property\") {\n\tlet value = Property()\n}\n",
+        )
+        .expect("write package test");
+        let uri = Url::from_file_path(root.join("tests/property.test.tlk")).expect("test uri");
+        // Some clients advertise the test directory itself as the workspace.
+        // The enclosing package still owns analysis and module resolution.
+        let mut state = state_with_roots(vec![root.join("tests")]);
 
         let workspace = super::workspace_analysis(&mut state, &uri).expect("workspace");
         assert_eq!(

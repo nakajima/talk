@@ -316,6 +316,34 @@ impl<'a> DeclDeclarer<'a> {
         }
     }
 
+    /// Member type names an extension body sees unqualified when the
+    /// extend head is a protocol: locally declared child types, or —
+    /// for an imported protocol, whose resolver phase this module does
+    /// not replay — the defining module's catalog.
+    fn protocol_extension_member_types(
+        &self,
+        sym: Symbol,
+    ) -> Option<indexmap::IndexMap<crate::label::Label, Symbol>> {
+        if let Some(children) = self.resolver.phase.child_types.get(&sym) {
+            return Some(children.clone());
+        }
+        let module = self.resolver.modules.get_module(sym.module_id()?)?;
+        let info = module.types.catalog.protocols.get(&sym)?;
+        Some(
+            info.assoc
+                .iter()
+                .map(|(name, symbol)| (crate::label::Label::Named(name.clone()), *symbol))
+                .chain(info.params.iter().filter_map(|param| {
+                    // Input parameters (`Into<Target>`) are in scope like
+                    // the protocol body's own generics; their source names
+                    // travel in the module's symbol-name table.
+                    let name = module.symbol_names.get(&param.symbol)?;
+                    Some((crate::label::Label::Named(name.clone()), param.symbol))
+                }))
+                .collect(),
+        )
+    }
+
     fn enter_nominal(
         &mut self,
         id: NodeID,
@@ -378,16 +406,16 @@ impl<'a> DeclDeclarer<'a> {
         // A protocol extension body sees the protocol's member type names
         // (associated types, typealiases) unqualified, like the protocol
         // body itself.
-        if is_extend && matches!(sym, Symbol::Protocol(_)) {
-            let children = self.resolver.phase.child_types.get(&sym).cloned();
-            if let Some(children) = children {
-                let scope = self
-                    .resolver
-                    .current_scope_mut()
-                    .expect("didn't get current scope");
-                for (label, child) in children {
-                    scope.types.insert(label.to_string(), child);
-                }
+        if is_extend
+            && matches!(sym, Symbol::Protocol(_))
+            && let Some(children) = self.protocol_extension_member_types(sym)
+        {
+            let scope = self
+                .resolver
+                .current_scope_mut()
+                .expect("didn't get current scope");
+            for (label, child) in children {
+                scope.types.insert(label.to_string(), child);
             }
         }
 
@@ -419,8 +447,30 @@ impl<'a> DeclDeclarer<'a> {
         let sym = match name.symbol() {
             Ok(sym) => sym,
             Err(_) => {
-                self.resolver
-                    .diagnostic(id, NameResolverError::Unresolved(name.clone()));
+                // `extend<T: P> T` — a blanket extension over a binder.
+                // Talk spells that as a protocol extension; say so
+                // instead of reporting an unresolved name.
+                let binder_head = binders
+                    .iter()
+                    .find(|binder| binder.name.name_str() == name.name_str());
+                let error = match binder_head {
+                    Some(binder) => NameResolverError::BinderExtensionHead {
+                        binder: binder.name.name_str(),
+                        bounds: binder
+                            .conformances
+                            .iter()
+                            .filter_map(|conformance| match &conformance.kind {
+                                crate::node_kinds::type_annotation::TypeAnnotationKind::Nominal {
+                                    name,
+                                    ..
+                                } => Some(name.name_str()),
+                                _ => None,
+                            })
+                            .collect(),
+                    },
+                    None => NameResolverError::Unresolved(name.clone()),
+                };
+                self.resolver.diagnostic(id, error);
                 Symbol::Synthesized(
                     self.resolver
                         .symbols
@@ -439,7 +489,7 @@ impl<'a> DeclDeclarer<'a> {
             .insert("Self".into(), sym);
 
         if matches!(sym, Symbol::Protocol(_))
-            && let Some(children) = self.resolver.phase.child_types.get(&sym).cloned()
+            && let Some(children) = self.protocol_extension_member_types(sym)
         {
             let scope = self
                 .resolver

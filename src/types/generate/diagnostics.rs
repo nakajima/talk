@@ -9,8 +9,10 @@ pub(super) struct DiagnosticSink {
 
 impl DiagnosticSink {
     pub(super) fn unsupported(&mut self, node: NodeID, what: &str) {
-        self.errors
-            .push((TypeError::Unsupported(what.to_string()), node));
+        let error = (TypeError::Unsupported(what.to_string()), node);
+        if !self.errors.contains(&error) {
+            self.errors.push(error);
+        }
     }
 
     pub(super) fn argument_arity(

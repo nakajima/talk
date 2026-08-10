@@ -217,76 +217,36 @@ pub mod tests {
     // semantic closure, not unrelated private payload — but private
     // suppliers referenced by public contracts stay.
     #[test]
-    fn module_interface_omits_unrelated_private_payload() {
+    fn module_slice_carries_private_facts_and_retroactive_rows() {
         use crate::compiling::module::{ModuleEnvironment, ModuleId};
+        // ADR 0053: export is selection, not surgery. The slice ships the
+        // module's own facts whole — private types included (privacy is
+        // the accessibility checks' job) — and its retroactive rows on
+        // foreign heads (the class of fact carving used to drop).
         let module = compile_library(
-            "Trimmed",
+            "Sliced",
             ModuleId::External(11),
-            "struct Unrelated {\n\tlet n: Int\n}\nfunc helper() -> Int { 1 }\nstruct Supplier {}\npub struct Open {\n\tlet supplier: Supplier\n\n\tinit() {\n\t\tself.supplier = Supplier()\n\t\tself\n\t}\n\n\tpub static func make() -> Open {\n\t\tOpen()\n\t}\n}",
+            "struct Unrelated {\n\tlet n: Int\n}\npub struct Open {}\npub protocol Tag {\n\tfunc tag() -> Int\n}\nextend Int: Tag {\n\tpub func tag() -> Int { 1 }\n}",
             ModuleEnvironment::default(),
         );
-
-        let named = |name: &str| {
-            module
-                .symbol_names
-                .iter()
-                .find(|(_, n)| n.as_str() == name)
-                .map(|(&symbol, _)| symbol)
-        };
-        // Exported and reachable declarations are in the interface.
-        let open = named("Open").expect("Open exported");
-        assert!(module.types.catalog.structs.contains_key(&open));
+        let catalog = &module.types.catalog;
         assert!(
-            module
-                .types
-                .schemes
-                .contains_key(&named("make").expect("make exported"))
+            catalog
+                .structs
+                .keys()
+                .any(|symbol| symbol.module_id() == Some(ModuleId::External(11))),
+            "own structs travel"
         );
-        // Unrelated private declarations are not.
-        assert_eq!(named("Unrelated"), None, "private struct leaked");
-        assert_eq!(named("helper"), None, "private helper leaked");
-        // A private field type referenced by a public nominal stays as
-        // a supplier: layout and teardown facts cross the seam.
-        let supplier = named("Supplier").expect("supplier info travels");
-        assert!(module.types.catalog.structs.contains_key(&supplier));
-    }
-
-    // ADR 0042 §1: a conformance is exported only when its COMPLETE
-    // conclusion — head, protocol arguments, context, associated
-    // bindings — is publicly nameable. A private type in the instance
-    // head keeps the row file-private.
-    #[test]
-    fn module_interface_omits_conformances_with_private_conclusions() {
-        use crate::compiling::module::{ModuleEnvironment, ModuleId};
-        let module = compile_library(
-            "RowTrim",
-            ModuleId::External(12),
-            "struct Secret {}\npub struct Box<T> {}\npub protocol Marker {}\nextend Box<Secret>: Marker {}\nextend Box<Int>: Marker {}",
-            ModuleEnvironment::default(),
-        );
-
-        let marker = module
-            .symbol_names
-            .iter()
-            .find(|(_, n)| n.as_str() == "Marker")
-            .map(|(&s, _)| s)
-            .expect("Marker exported");
-        let rows: Vec<_> = module
-            .types
-            .catalog
-            .conformances
-            .values()
-            .filter(|row| row.protocol.protocol == marker)
-            .collect();
-        assert_eq!(
-            rows.len(),
-            1,
-            "only the publicly-nameable conclusion may export: {rows:?}"
-        );
-        // Secret never enters the interface through the omitted row.
         assert!(
-            !module.symbol_names.values().any(|n| n == "Secret"),
-            "private conclusion symbol leaked into the interface"
+            catalog
+                .conformances
+                .keys()
+                .all(|id| id.module_id == ModuleId::External(11)),
+            "rows are keyed by their declarer"
+        );
+        assert!(
+            catalog.conformances.values().all(|row| !row.synthesized),
+            "synthesized rows never travel"
         );
     }
 
@@ -4981,9 +4941,27 @@ pub mod tests {
     }
 
     #[test]
-    fn protocol_extension_redeclaring_requirement_is_unsupported() {
+    fn protocol_extension_supplies_an_out_of_line_default() {
+        // A bodyless declared requirement takes an extension member with
+        // the same full name as its default body (the Swift idiom); the
+        // requirement is defaulted afterward, under its declared symbol.
         let t = check(
             "// no-core\nprotocol P {\n\tfunc base() -> Int\n}\nextend P {\n\tfunc base() -> Int { 1 }\n}",
+        );
+        assert_clean(&t);
+        let catalog = &t.phase.program.types().catalog;
+        let (_, info) = catalog.protocols.iter().next().expect("P collected");
+        let requirement = &info.requirements["base"][0];
+        assert!(requirement.has_default);
+        assert!(requirement.default_symbol.is_some());
+        assert_ne!(requirement.default_symbol, Some(requirement.symbol));
+    }
+
+    #[test]
+    fn protocol_extension_redeclaring_a_defaulted_member_errors() {
+        // Two bodies for one member is a genuine conflict.
+        let t = check(
+            "// no-core\nprotocol P {\n\tfunc base() -> Int { 2 }\n}\nextend P {\n\tfunc base() -> Int { 1 }\n}",
         );
         let errors = type_errors(&t);
         assert_eq!(errors.len(), 1, "{errors:?}");
@@ -5760,6 +5738,7 @@ mod with_core {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            catalog: Default::default(),
             parser: None,
         };
         let driver_b = Driver::new(
@@ -5832,6 +5811,7 @@ mod with_core {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            catalog: Default::default(),
             parser: None,
         };
         let typed = Driver::new(
@@ -5880,6 +5860,7 @@ mod with_core {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            catalog: Default::default(),
             parser: None,
         };
         let driver_b = Driver::new(
@@ -5935,6 +5916,7 @@ mod with_core {
             module_name: "B".to_string(),
             parse_mode: crate::compiling::driver::ParseMode::Strict,
             parser: None,
+            catalog: Default::default(),
             preserve_comments: false,
             workspace_root: None,
             source_root: None,
@@ -5981,6 +5963,7 @@ mod with_core {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            catalog: Default::default(),
             parser: None,
         };
         let driver_b = Driver::new(
@@ -7276,6 +7259,7 @@ func width<static N: Int>() -> Int { N }",
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            catalog: Default::default(),
             parser: None,
         };
         let driver_b = Driver::new(
@@ -8805,6 +8789,7 @@ mod nested_types {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            catalog: Default::default(),
             parser: None,
         };
         let driver_b = Driver::new(
@@ -8849,6 +8834,7 @@ mod nested_types {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            catalog: Default::default(),
             parser: None,
         };
         let driver_b = Driver::new(vec![Source::from("use A::{ fizz }\nlet f = fizz")], config);
@@ -8908,6 +8894,7 @@ mod nested_types {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            catalog: Default::default(),
             parser: None,
         };
         let driver_b = Driver::new(
@@ -9144,6 +9131,7 @@ mod declared_struct_field_tests {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            catalog: Default::default(),
             parser: None,
         };
         let driver_b = Driver::new(

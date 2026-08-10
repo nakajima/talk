@@ -2101,6 +2101,9 @@ type DependencyLibraries = Vec<(
 pub struct PackageCompileContext {
     pub modules: ModuleEnvironment,
     pub libraries: DependencyLibraries,
+    /// ADR 0053: the package graph's one fact table; workspace compiles
+    /// continue in it.
+    pub catalog: Rc<std::cell::RefCell<crate::compiling::driver::SharedCatalog>>,
     pub workspace_root: PathBuf,
     pub source_root: PathBuf,
 }
@@ -2148,7 +2151,7 @@ impl PackageProject {
     /// `talk check` compiles every workspace source against this, so
     /// its diagnostics match what `talk run` and `talk test` accept.
     pub fn package_compile_context(&self) -> Result<PackageCompileContext, PackageError> {
-        let (modules, libraries) = self.dependency_compile_inputs()?;
+        let (modules, libraries, shared) = self.dependency_compile_inputs()?;
         let source_root =
             self.root
                 .join("src")
@@ -2163,6 +2166,7 @@ impl PackageProject {
         Ok(PackageCompileContext {
             modules,
             libraries,
+            catalog: shared,
             workspace_root: self.root.clone(),
             source_root,
         })
@@ -2175,7 +2179,7 @@ impl PackageProject {
                 "selected target is not a binary".into(),
             ));
         };
-        let (environment, libraries) = self.dependency_compile_inputs()?;
+        let (environment, libraries, shared) = self.dependency_compile_inputs()?;
         let source = self.manifest.source_path(&self.root, from)?;
         let workspace_root =
             self.root
@@ -2190,6 +2194,7 @@ impl PackageProject {
                 })?;
         let mut config = DriverConfig::new(format!("{} binary", self.manifest.name));
         config.modules = Rc::new(environment);
+        config.catalog = shared;
         config.workspace_root = Some(workspace_root.clone());
         config.source_root = Some(workspace_root);
         config.libraries = libraries;
@@ -2282,9 +2287,10 @@ impl PackageProject {
             });
             (roots, source_root)
         };
-        let (environment, libraries) = self.dependency_compile_inputs()?;
+        let (environment, libraries, shared) = self.dependency_compile_inputs()?;
         let mut config = DriverConfig::new(format!("{} tests", self.manifest.name));
         config.modules = Rc::new(environment);
+        config.catalog = shared;
         config.workspace_root = Some(self.root.clone());
         config.source_root = source_root;
         config.libraries = libraries;
@@ -2303,8 +2309,20 @@ impl PackageProject {
     /// source root and never re-parsed, ride along precompiled.
     fn dependency_compile_inputs(
         &self,
-    ) -> Result<(ModuleEnvironment, DependencyLibraries), PackageError> {
-        let graph = self.compile_graph()?;
+    ) -> Result<
+        (
+            ModuleEnvironment,
+            DependencyLibraries,
+            Rc<std::cell::RefCell<crate::compiling::driver::SharedCatalog>>,
+        ),
+        PackageError,
+    > {
+        // ADR 0053: one fact table for the whole package graph — every
+        // dependency library compiles into it, in lock order, and the
+        // root binary/test compile continues in the same table.
+        let shared: Rc<std::cell::RefCell<crate::compiling::driver::SharedCatalog>> =
+            Default::default();
+        let graph = self.compile_graph(&shared)?;
         let environment = self.environment_for(
             &graph.base,
             &self.lock.root_dependencies,
@@ -2315,10 +2333,13 @@ impl PackageProject {
             .values()
             .map(|library| (library.module_id, library.typed.clone()))
             .collect();
-        Ok((environment, libraries))
+        Ok((environment, libraries, shared))
     }
 
-    fn compile_graph(&self) -> Result<CompiledGraph, PackageError> {
+    fn compile_graph(
+        &self,
+        shared: &Rc<std::cell::RefCell<crate::compiling::driver::SharedCatalog>>,
+    ) -> Result<CompiledGraph, PackageError> {
         let base = Self::base_environment();
         // One session id per package, reserved in the shared registry
         // before its module compiles; `import_compiled` binds the
@@ -2347,7 +2368,7 @@ impl PackageProject {
                 PackageError::Compile(format!("missing module id for package {}", package.name))
             })?;
             let compiled =
-                self.compile_library(&manifest, root, library, module_id, environment)?;
+                self.compile_library(&manifest, root, library, module_id, environment, shared)?;
             dependencies.insert(package.id.clone(), compiled);
         }
         // The root package's own sources always re-parse into the binary
@@ -2363,6 +2384,7 @@ impl PackageProject {
         library: &str,
         module_id: ModuleId,
         environment: ModuleEnvironment,
+        shared: &Rc<std::cell::RefCell<crate::compiling::driver::SharedCatalog>>,
     ) -> Result<CompiledLibrary, PackageError> {
         let source = manifest.source_path(root, library)?;
         let workspace_root =
@@ -2379,6 +2401,7 @@ impl PackageProject {
         config.module_id = module_id;
         config.mode = CompilationMode::Library;
         config.modules = Rc::new(environment);
+        config.catalog = shared.clone();
         config.workspace_root = Some(workspace_root.clone());
         config.source_root = Some(workspace_root);
         let driver = Driver::new_bare(vec![Source::from(source)], config);

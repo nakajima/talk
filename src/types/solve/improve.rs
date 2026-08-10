@@ -45,6 +45,80 @@ impl<'s> Solver<'s> {
                 improved = true;
                 continue;
             }
+            // The dual improvement: a concrete receiver whose protocol
+            // ARGUMENTS are still variable (`word.into()` in a position
+            // that pins nothing) commits to the one DECLARED row that can
+            // satisfy the goal — a synthesized row (the reflexive Into)
+            // never wins a defaulting tie against a declared conversion.
+            // Rows whose matched arguments still carry patterns cannot
+            // pin anything and disqualify nothing.
+            if self.defaulting
+                && let Constraint::Conforms {
+                    ty,
+                    protocol,
+                    origin,
+                } = &constraint
+                && protocol
+                    .args
+                    .iter()
+                    .any(|arg| matches!(self.store.shallow(arg), Ty::Var(_)))
+                && let Ty::Nominal(head, head_args) = self.store.shallow(ty)
+            {
+                let target = ProtocolRef {
+                    protocol: protocol.protocol,
+                    args: protocol
+                        .args
+                        .iter()
+                        .map(|arg| self.store.shallow(arg))
+                        .collect(),
+                };
+                let committed: Option<Vec<Ty>> = {
+                    let candidates = self.catalog.matching_conformances(head, &head_args, &target);
+                    let mut declared = candidates
+                        .iter()
+                        .filter(|matched| !matched.conformance.synthesized);
+                    match (declared.next(), declared.next()) {
+                        (Some(only), None) => {
+                            let args: Vec<Ty> = only
+                                .conformance
+                                .protocol
+                                .args
+                                .iter()
+                                .map(|arg| {
+                                    arg.substitute(
+                                        &only.substitution,
+                                        &Default::default(),
+                                        &Default::default(),
+                                    )
+                                })
+                                .collect();
+                            let closed = !args.iter().any(|arg| {
+                                let mut open = false;
+                                let _ = arg.try_visit(
+                                    &mut |ty: &Ty| -> std::ops::ControlFlow<()> {
+                                        if matches!(ty, Ty::Param(_) | Ty::Var(_)) {
+                                            open = true;
+                                            return std::ops::ControlFlow::Break(());
+                                        }
+                                        std::ops::ControlFlow::Continue(())
+                                    },
+                                );
+                                open
+                            });
+                            closed.then_some(args)
+                        }
+                        _ => None,
+                    }
+                };
+                if let Some(row_args) = committed {
+                    for (arg, row_arg) in protocol.args.iter().zip(row_args) {
+                        queue.push(Constraint::Eq(arg.clone(), row_arg, *origin));
+                    }
+                    queue.push(constraint);
+                    improved = true;
+                    continue;
+                }
+            }
             let Constraint::HasMember {
                 receiver,
                 label,

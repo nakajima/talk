@@ -348,8 +348,19 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         }
 
         // The requirement's declared predicates are givens for the body
-        // (they are already over Self = the protocol's own param).
-        let givens = req_scheme.map(|s| s.predicates).unwrap_or_default();
+        // (they are already over Self = the protocol's own param), and so
+        // are the protocol's own refinements (`associated IntoIter:
+        // Iterator where IntoIter.Element == Element`) — they hold for
+        // Self in every default body, and equation givens are what let a
+        // nested projection discharge against a where-clause bound.
+        let mut givens = req_scheme.map(|s| s.predicates).unwrap_or_default();
+        if let Some(info) = self.catalog.protocols.get(&protocol) {
+            for predicate in &info.predicates {
+                if !givens.contains(predicate) {
+                    givens.push(predicate.clone());
+                }
+            }
+        }
         if !givens.is_empty() {
             let wanteds = self.wanteds.split_off(wanted_start);
             if !wanteds.is_empty() {

@@ -456,7 +456,9 @@ impl<'a> TypecheckSession<'a> {
                         // dereferences the committed dictionary entry.
                         let witness = match selected.conformance.witnesses.get(&key).copied() {
                             Some(witness) => witness,
-                            None if candidate.has_default => requirement,
+                            None if candidate.has_default => {
+                                candidate.default_symbol.unwrap_or(requirement)
+                            }
                             None => return None,
                         };
                         let mut substitution = selected.evidence_substitution();
@@ -505,10 +507,14 @@ impl<'a> TypecheckSession<'a> {
         // is the single authority for what the catalog carries); the
         // normalization context is a pre-bake snapshot, since projection
         // reduction consults the catalog being rewritten.
-        let mut catalog = std::mem::take(&mut self.catalog);
-        let normalize_ctx = catalog.clone();
+        // In place, not by take: the catalog is on its way to being the
+        // compilation's one shared table (ADR 0053), which a module's
+        // finalize must not steal. Re-baking an imported entry is
+        // idempotent (already var-free; sanitize is stable), so the walk
+        // needs no ownership filter.
+        let normalize_ctx = self.catalog.clone();
         let store = &mut self.store;
-        catalog.for_each_embedded_mut(&mut |owner, item| match item {
+        self.catalog.for_each_embedded_mut(&mut |owner, item| match item {
             crate::types::catalog::EmbeddedTypes::Ty(ty) => {
                 *ty = final_ty(store, &normalize_ctx, ty).sanitize_for_export(owner);
             }
@@ -529,7 +535,8 @@ impl<'a> TypecheckSession<'a> {
         // placeholder. Default-body normalization collapses that projection
         // to the associated param, but axiom contexts must keep the projection
         // so use-site substitution ties target args back to the receiver.
-        let protocol_head_assoc: FxHashMap<Symbol, Vec<(ProtocolRef, Symbol)>> = catalog
+        let protocol_head_assoc: FxHashMap<Symbol, Vec<(ProtocolRef, Symbol)>> = self
+            .catalog
             .protocols
             .iter()
             .map(|(protocol, info)| {
@@ -546,7 +553,7 @@ impl<'a> TypecheckSession<'a> {
                 (*protocol, assocs)
             })
             .collect();
-        for conformance in catalog.conformances.values_mut() {
+        for conformance in self.catalog.conformances.values_mut() {
             let head = conformance.head;
             let Some(assocs) = protocol_head_assoc.get(&head) else {
                 continue;
@@ -561,7 +568,6 @@ impl<'a> TypecheckSession<'a> {
                 }
             }
         }
-        self.catalog = catalog;
         let mut existential_packs = FxHashMap::default();
         for (node, pack) in std::mem::take(&mut self.artifacts.existential_packs) {
             let existential = self.final_ty(&pack.existential);

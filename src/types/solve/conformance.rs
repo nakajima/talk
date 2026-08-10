@@ -155,7 +155,7 @@ impl<'s> Solver<'s> {
                         None
                     }
                     [] => self.not_conforming(&ty, protocol, origin),
-                    many if args.iter().any(Ty::has_unification_vars) => {
+                    _ if args.iter().any(Ty::has_unification_vars) => {
                         return Some(Constraint::Conforms {
                             ty,
                             protocol,

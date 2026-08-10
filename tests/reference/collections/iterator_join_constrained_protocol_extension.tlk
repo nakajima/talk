@@ -1,0 +1,42 @@
+extend Iterator where Element: Into<String> {
+	consuming func join(_ separator: String) -> String {
+		let res = ""
+		for part in self.into_iter() {
+			if res != "" {
+				res = res + separator
+			}
+			res = res + part.into()
+		}
+		res
+	}
+
+	mut func first() -> Element {
+		loop {
+			if let .some(x) = self.next() { return x }
+		}
+	}
+}
+
+struct Word {}
+extend Word: Into<String> {
+	consuming func into() -> String { "word" }
+}
+struct Countdown {
+	let n: Int
+}
+extend Countdown: Iterator {
+	mut func next() -> Word? {
+		if self.n > 0 {
+			self.n = self.n - 1
+			return .some(Word())
+		}
+		return .none
+	}
+}
+print(Countdown(n: 3).join("-"))
+let countdown = Countdown(n: 1)
+// The target type selects among Into conformances (Word: Into<String>
+// declared, Word: Into<Word> reflexive); a bare `.into()` in Showable
+// position would be ambiguous.
+let sound: String = countdown.first().into()
+print(sound)

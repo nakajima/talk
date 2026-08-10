@@ -1,0 +1,54 @@
+extend Into where Target == Int {
+	consuming func doubled() -> Int {
+		self.into() * 2
+	}
+}
+
+extend Into<String> {
+	consuming func shouted() -> String {
+		self.into() + "!"
+	}
+}
+
+extend<T> Into<[T]> {
+	consuming func first_converted() -> T? {
+		let items: [T] = self.into()
+		for item in consume items {
+			return .some(item)
+		}
+		.none
+	}
+}
+
+struct Score {}
+extend Score: Into<Int> {
+	consuming func into() -> Int { 21 }
+}
+
+struct Word {}
+extend Word: Into<String> {
+	consuming func into() -> String { "word" }
+}
+
+struct Countdown {
+	let n: Int
+}
+extend Countdown: Iterator {
+	mut func next() -> Word? {
+		if self.n > 0 {
+			self.n = self.n - 1
+			return .some(Word())
+		}
+		return .none
+	}
+}
+
+print(Score().doubled())
+print(Word().shouted())
+// The result annotation pins the extension binder (T = Word), which in
+// turn selects Countdown's protocol-head row `Iterator: Into<[Element]>`.
+let first: Word? = Countdown(n: 2).first_converted()
+match first {
+	.some(word) -> print(word.shouted()),
+	.none -> print("empty")
+}

@@ -646,6 +646,22 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             match &residual {
                 Constraint::Conforms { ty, protocol, .. } => {
                     let Ty::Var(v) = self.store.shallow(ty) else {
+                        // A CONCRETE receiver stuck on variable protocol
+                        // arguments (`E: Into<?t>` from a freshened
+                        // member dispatch) is still an obligation: float
+                        // it to the final solve — dropping it here let
+                        // conformance-free calls typecheck and die in
+                        // the backend. Rigid receivers stay dropped: their
+                        // obligations are entailed by the scheme's own
+                        // predicates (this scope's givens), and re-solving
+                        // them outside that scope loses the givens.
+                        let mut head = self.store.shallow(ty);
+                        while let Ty::Borrow(_, inner) = head {
+                            head = self.store.shallow(&inner);
+                        }
+                        if matches!(head, Ty::Nominal(..) | Ty::Any { .. }) {
+                            self.deferred.push(residual);
+                        }
                         continue;
                     };
                     let root = self.store.find(v.0);

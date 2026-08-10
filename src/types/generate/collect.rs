@@ -362,6 +362,12 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             } = &decl.kind
                 && let Ok(head) = head_annotation.symbol()
             {
+                // A protocol-default extension claims no conformance; its
+                // head arguments are equations handled by
+                // `register_protocol_extension`, not an instance pattern.
+                if conformances.is_empty() && self.catalog.protocols.contains_key(&head) {
+                    continue;
+                }
                 // Instance binders (including ADR 0035 static params) are
                 // registered before the ordinary head annotation lowers.
                 self.register_generic_bounds(binders);
@@ -1395,6 +1401,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         Some(Requirement {
             symbol,
             has_default,
+            context: vec![],
+            default_symbol: None,
             writeback_width,
             mut_receiver,
         })
@@ -1496,6 +1504,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         Some(Requirement {
             symbol,
             has_default: true,
+            context: vec![],
+            default_symbol: None,
             writeback_width,
             mut_receiver,
         })
@@ -1565,6 +1575,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
     ) {
         let DeclKind::Extend {
             binders,
+            head,
             conformances,
             where_clause,
             body,
@@ -1577,12 +1588,17 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             self.unsupported(decl.id, "declaring conformances on a protocol extension");
             return;
         }
-        if !binders.is_empty() {
-            self.unsupported(decl.id, "generic protocol extensions");
-            return;
-        }
         self.self_types.push(Ty::Param(protocol));
-        self.in_declaration_context(None, &[], where_clause.as_ref(), |this, context| {
+        self.in_declaration_context(None, binders, where_clause.as_ref(), |this, context| {
+            // Head arguments are equations over the protocol's input
+            // parameters; they join the extension's availability context
+            // exactly like written where-clause predicates.
+            let equations = this.protocol_extension_head_equations(protocol, head);
+            for equation in equations {
+                if !context.predicates.contains(&equation) {
+                    context.predicates.push(equation);
+                }
+            }
             for member in &body.decls {
                 let DeclKind::Method { func, .. } = &member.kind else {
                     this.unsupported(member.id, decl_kind_name(&member.kind));
@@ -1594,31 +1610,77 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     &func.params,
                     true,
                 );
-                if this.catalog.protocols.get(&protocol).is_some_and(|info| {
-                    info.requirements.get(&label).is_some_and(|set| {
-                        set.iter().any(|existing| {
-                            this.catalog
-                                .callable_contracts
-                                .get(&existing.symbol)
-                                .is_some_and(|contract| contract.name == full_name)
-                        })
+                let declared = this.catalog.protocols.get(&protocol).and_then(|info| {
+                    info.requirements.get(&label).and_then(|set| {
+                        set.iter()
+                            .find(|existing| {
+                                this.catalog
+                                    .callable_contracts
+                                    .get(&existing.symbol)
+                                    .is_some_and(|contract| contract.name == full_name)
+                            })
+                            .map(|existing| (existing.symbol, existing.has_default))
                     })
-                }) {
-                    this.unsupported(
-                        member.id,
-                        "redeclaring an existing protocol member in a protocol extension",
-                    );
+                });
+                if let Some((requirement_symbol, has_default)) = declared {
+                    // A bodyless declared requirement takes this member as
+                    // its out-of-line default (the Swift idiom); a member
+                    // that already has a body is a genuine redeclaration.
+                    if has_default {
+                        this.unsupported(
+                            member.id,
+                            "redeclaring an existing protocol member in a protocol extension",
+                        );
+                        continue;
+                    }
+                    let Ok(default_symbol) = func.name.symbol() else {
+                        continue;
+                    };
+                    if let Some(info) = this.catalog.protocols.get_mut(&protocol)
+                        && let Some(existing) = info
+                            .requirements
+                            .get_mut(&label)
+                            .and_then(|set| {
+                                set.iter_mut()
+                                    .find(|existing| existing.symbol == requirement_symbol)
+                            })
+                    {
+                        existing.has_default = true;
+                        existing.default_symbol = Some(default_symbol);
+                    }
+                    // The requirement's scheme is the one signature
+                    // carrier; the body's own symbol shares it so the
+                    // backend can compile the body it points at.
+                    if let Some(scheme) = this.schemes.get(&requirement_symbol).cloned() {
+                        this.schemes.insert(default_symbol, scheme);
+                    }
+                    protocol_defaults.push((protocol, requirement_symbol, func));
                     continue;
                 }
-                let Some(requirement) = this.lower_default_requirement(func) else {
+                let Some(mut requirement) = this.lower_default_requirement(func) else {
                     continue;
                 };
                 // The extension-level where clause joins the requirement's
-                // scheme context (the scheme is the signature carrier).
+                // scheme context (the scheme is the signature carrier), and
+                // is recorded as the member's availability context — use
+                // sites must discharge it.
+                requirement.context = context.predicates.clone();
                 if let Some(scheme) = this.schemes.get_mut(&requirement.symbol) {
                     for predicate in &context.predicates {
                         if !scheme.predicates.contains(predicate) {
                             scheme.predicates.push(predicate.clone());
+                        }
+                    }
+                    // Extension binders (`extend<T> Into<[T]>`) quantify
+                    // the member like its own generics: freshened per use,
+                    // rigid in the body.
+                    for param in &context.params {
+                        if !scheme
+                            .params
+                            .iter()
+                            .any(|existing| existing.symbol == param.symbol)
+                        {
+                            scheme.params.push(param.clone());
                         }
                     }
                 }
@@ -1668,6 +1730,72 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         self.catalog.effects.insert(symbol, sig);
     }
 
+    /// Extension-head arguments on a protocol: associated types are not
+    /// positional arguments (docs/protocol-arguments-vs-associated-types),
+    /// and argument patterns over a protocol's own parameters are not
+    /// supported yet — never silently dropped.
+    fn check_protocol_extension_head_args(&mut self, protocol: Symbol, head: &TypeApplication) {
+        let provided = head.args.len();
+        if provided == 0 {
+            return;
+        }
+        let declared = self
+            .catalog
+            .protocols
+            .get(&protocol)
+            .map(|info| info.params.len())
+            .unwrap_or(0);
+        if declared == 0 {
+            self.diagnostics.generic_argument_arity(
+                head.id,
+                format!("Type '{protocol}'"),
+                declared,
+                provided,
+            );
+        } else {
+            self.unsupported(head.id, "protocol extension heads with arguments");
+        }
+    }
+
+    /// Head arguments on a protocol extension are equations over the
+    /// protocol's input parameters: `extend Into<Int>` is `extend Into
+    /// where Target == Int` (Swift SE-0346's sugar, over real input
+    /// parameters). Associated types are not positional arguments, so a
+    /// parameterless protocol's head arguments stay an arity error.
+    fn protocol_extension_head_equations(
+        &mut self,
+        protocol: Symbol,
+        head: &TypeApplication,
+    ) -> Vec<Predicate> {
+        let provided = head.args.len();
+        if provided == 0 {
+            return vec![];
+        }
+        let params = self
+            .catalog
+            .protocols
+            .get(&protocol)
+            .map(|info| info.params.clone())
+            .unwrap_or_default();
+        if provided != params.len() {
+            self.diagnostics.generic_argument_arity(
+                head.id,
+                format!("Type '{protocol}'"),
+                params.len(),
+                provided,
+            );
+            return vec![];
+        }
+        head.args
+            .iter()
+            .enumerate()
+            .map(|(index, arg)| {
+                let ty = self.lower_protocol_generic_arg(&params, index, arg);
+                Predicate::TypeEq(Ty::Param(params[index].symbol), ty)
+            })
+            .collect()
+    }
+
     /// Lower an extension target as an instance pattern. Explicit arguments
     /// use ordinary annotation elaboration; a completely bare generic nominal
     /// denotes its full rigid parameter pattern. Effect-row arguments are not
@@ -1678,6 +1806,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
     ) -> Option<(Symbol, Ty, Vec<Ty>)> {
         let head = head_application.symbol().ok()?;
         if self.catalog.protocols.contains_key(&head) {
+            self.check_protocol_extension_head_args(head, head_application);
             return Some((head, Ty::Param(head), vec![]));
         }
         // A bare generic nominal is the implicit full pattern (ADR 0036):
@@ -2098,6 +2227,14 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                             self.infer_assoc_bindings(&requirement, func, conformance);
                         }
                         (None, true) => {
+                            // Same-base members that witness OTHER
+                            // overloads leave a defaulted requirement
+                            // defaulted (an extension overload of a
+                            // declared base): only an undefaulted
+                            // requirement is missing.
+                            if requirement.has_default {
+                                continue;
+                            }
                             let required = self
                                 .catalog
                                 .callable_contracts

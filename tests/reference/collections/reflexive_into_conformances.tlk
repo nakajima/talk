@@ -1,0 +1,28 @@
+func stringify<T: Into<String>>(consume value: T) -> String {
+	value.into()
+}
+
+struct Word {}
+extend Word: Into<String> {
+	consuming func into() -> String { "word" }
+}
+struct Countdown {
+	let n: Int
+}
+extend Countdown: Iterator {
+	mut func next() -> Word? {
+		if self.n > 0 {
+			self.n = self.n - 1
+			return .some(Word())
+		}
+		return .none
+	}
+}
+
+let n: Int = 42
+let m: Int = n.into()
+print(m)
+print(stringify(value: "plain"))
+print(stringify(value: Word()))
+let words: [Word] = Countdown(n: 2).into()
+print(words.count)

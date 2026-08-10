@@ -116,6 +116,20 @@ pub struct Enum {
 pub struct Requirement {
     pub symbol: Symbol,
     pub has_default: bool,
+    /// A constrained protocol extension's context (its where clause and
+    /// head-argument equations). Like a conformance row's `context`,
+    /// these are discharged as new wanteds at every use site — the
+    /// member is available exactly where they hold. The requirement's
+    /// own scheme predicates, by contrast, are only its body's givens.
+    #[serde(default)]
+    pub context: Vec<Predicate>,
+    /// An out-of-line default body (`extend P { func f() ... }` against
+    /// a bodyless declared `f`): the extension func's own symbol. In-body
+    /// defaults ARE the requirement symbol, so this stays `None` there;
+    /// everything that materializes the default implementation uses
+    /// `default_symbol.unwrap_or(symbol)`.
+    #[serde(default)]
+    pub default_symbol: Option<Symbol>,
     /// Exclusive-borrow parameter count of the declared signature
     /// (receiver included). The declaration fixes the writeback shape
     /// every implementation must follow: each such parameter comes back
@@ -153,6 +167,8 @@ pub enum DerivedRecipe {
     Show,
     /// Component-wise equality.
     Equality,
+    /// Reflexive `T: Into<T>`: `into` returns its receiver unchanged.
+    Identity,
 }
 
 /// One committed dictionary entry (ADR 0038): how a conformance
@@ -290,10 +306,10 @@ pub struct Conformance {
     #[serde(default)]
     pub dictionary: Vec<DictionaryEntry>,
     /// Materialized by `synthesize_derived_conformances` rather than
-    /// declared. Compile-local: stripped from module exports (each
-    /// downstream compile re-synthesizes against its own merged view),
-    /// and evicted whenever a declared row for the same head and
-    /// protocol arrives (retroactive extends win).
+    /// declared. A per-table derivation (ADR 0053): never travels in a
+    /// slice — every table mints its own — and evicted whenever a
+    /// declared row for the same head and protocol arrives (retroactive
+    /// extends win).
     #[serde(default)]
     pub synthesized: bool,
 }
@@ -1024,71 +1040,90 @@ impl TypeCatalog {
 
     /// Merge an imported module's catalog (Phase 0 of checking: the
     /// environment a group solves against).
-    pub fn merge(&mut self, other: TypeCatalog) {
-        self.structs.extend(other.structs);
-        self.enums.extend(other.enums);
-        self.protocols.extend(other.protocols);
-        // Rows are numbered per declaring module, so counters never
-        // interact across catalogs.
-        for (id, conformance) in other.conformances {
-            if self
-                .conformances
-                .values()
-                .any(|existing| existing == &conformance)
-            {
+    /// Insert one module's fact slice into the compilation's shared table
+    /// (ADR 0053). Slices are own-filtered at export, so inserts are
+    /// disjoint by construction: plain extends, no dedup, no recommit.
+    /// (`merge`, below, is the copy-reconciliation this replaces; it dies
+    /// with its last caller.)
+    pub fn insert_slice(&mut self, other: &TypeCatalog) {
+        self.structs
+            .extend(other.structs.iter().map(|(k, v)| (*k, v.clone())));
+        self.enums
+            .extend(other.enums.iter().map(|(k, v)| (*k, v.clone())));
+        for (symbol, info) in &other.protocols {
+            match self.protocols.entry(*symbol) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(info.clone());
+                }
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    // A foreign-protocol stub carries the slicing module's
+                    // amendment requirements; append them after the
+                    // exporter's (slot-prefix rule).
+                    let existing = entry.get_mut();
+                    for (label, set) in &info.requirements {
+                        let target = existing.requirements.entry(label.clone()).or_default();
+                        for requirement in set {
+                            if !target.iter().any(|r| r.symbol == requirement.symbol) {
+                                target.push(requirement.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for (id, conformance) in &other.conformances {
+            // Synthesized rows are per-table derivations (reflexive Into,
+            // derived Show/Equatable): the receiving table mints its own;
+            // importing another table's copies would duplicate them.
+            if conformance.synthesized || self.conformances.contains_key(id) {
                 continue;
             }
-            let head = conformance.head;
-            // The declaring catalog and an imported interface can carry
-            // different commitment states for the same row ID. Replacing
-            // that row must not index its ID a second time.
-            let previous_head = self.conformances.get(&id).map(|existing| existing.head);
-            self.conformances.insert(id, conformance);
-            match previous_head {
-                None => self.conformances_by_head.entry(head).or_default().push(id),
-                Some(previous) if previous != head => {
-                    if let Some(rows) = self.conformances_by_head.get_mut(&previous) {
-                        rows.retain(|existing| *existing != id);
-                    }
-                    self.conformances_by_head.entry(head).or_default().push(id);
-                }
-                Some(_) => {}
-            }
+            self.conformances.insert(*id, conformance.clone());
+            self.conformances_by_head
+                .entry(conformance.head)
+                .or_default()
+                .push(*id);
         }
-        for (label, owners) in other.member_owners {
+        for (label, owners) in &other.member_owners {
             for owner in owners {
-                self.add_owner(&label, owner);
+                self.add_owner(label, owner.clone());
             }
         }
-        self.param_bounds.extend(other.param_bounds);
-        self.static_params.extend(other.static_params);
-        for (head, members) in other.extend_members {
-            let ours = self.extend_members.entry(head).or_default();
+        for (param, bounds) in &other.param_bounds {
+            let target = self.param_bounds.entry(*param).or_default();
+            for bound in bounds {
+                if !target.contains(bound) {
+                    target.push(bound.clone());
+                }
+            }
+        }
+        self.static_params
+            .extend(other.static_params.iter().map(|(k, v)| (*k, v.clone())));
+        for (head, members) in &other.extend_members {
+            let ours = self.extend_members.entry(*head).or_default();
             for (label, rows) in members {
-                let target = ours.entry(label).or_default();
+                let target = ours.entry(label.clone()).or_default();
                 for row in rows {
-                    // The same declaration reaches a consumer through
-                    // several import paths (core re-exported by every
-                    // module); one row per member symbol. DISTINCT
-                    // declarations from sibling modules stay separate and
-                    // surface as use-site ambiguity when they overlap.
                     if !target.iter().any(|existing| existing.symbol == row.symbol) {
-                        target.push(row);
+                        target.push(row.clone());
                     }
                 }
             }
         }
-        self.callable_contracts.extend(other.callable_contracts);
-        self.effects.extend(other.effects);
-        self.type_aliases.extend(other.type_aliases);
-        self.member_visibility.extend(other.member_visibility);
-        // Row ids shift across the value-dedup above; the committed
-        // Deinit index is derived, so rebuild it from the merged rows.
-        self.commit_deinit_rows();
-        // Rows can arrive before their protocol's info was in reach;
-        // recommit dictionaries over the merged view (idempotent).
-        self.commit_dictionaries();
-        self.commit_callable_owners();
+        self.callable_contracts
+            .extend(other.callable_contracts.iter().map(|(k, v)| (*k, v.clone())));
+        self.effects
+            .extend(other.effects.iter().map(|(k, v)| (*k, v.clone())));
+        self.type_aliases
+            .extend(other.type_aliases.iter().map(|(k, v)| (*k, v.clone())));
+        self.member_visibility
+            .extend(other.member_visibility.iter().map(|(k, v)| (*k, v.clone())));
+        self.nominal_owners
+            .extend(other.nominal_owners.iter().map(|(k, v)| (*k, *v)));
+        self.deinit_rows
+            .extend(other.deinit_rows.iter().map(|(k, v)| (*k, v.clone())));
+        self.callable_owners
+            .extend(other.callable_owners.iter().map(|(k, v)| (*k, v.clone())));
     }
 
     /// Publish member accessibility from the resolver's declaration
@@ -1225,7 +1260,19 @@ impl TypeCatalog {
             let stale: Vec<ConformanceId> = self
                 .conformances_for_head(conformance.head)
                 .filter(|(_, row)| {
-                    row.synthesized && row.protocol.protocol == conformance.protocol.protocol
+                    row.synthesized && row.protocol.protocol == conformance.protocol.protocol &&
+                    // Args-less protocols (the structural derivables)
+                    // keep the historical head-wide eviction; a protocol
+                    // with arguments evicts only the rows the declared
+                    // one covers — declaring `String: Into<Bool>` must
+                    // not evict reflexive `String: Into<String>`.
+                    (conformance.protocol.args.is_empty()
+                        || self.conformance_rows_overlap(
+                            &row.protocol,
+                            row,
+                            &conformance.protocol,
+                            &conformance,
+                        ))
                 })
                 .map(|(id, _)| id)
                 .collect();
@@ -1456,24 +1503,94 @@ impl TypeCatalog {
         }
     }
 
-    /// Drop compile-local synthesized rows: module exports carry only
-    /// declared conformances, and each importer re-synthesizes against
-    /// its own merged view (so a downstream retroactive extend never
-    /// collides with an upstream synthetic row).
-    pub fn strip_synthesized_conformances(&mut self) {
-        let stale: Vec<ConformanceId> = self
-            .conformances
-            .iter()
-            .filter(|(_, row)| row.synthesized)
-            .map(|(id, _)| *id)
+    /// Reflexive `T: Into<T>`: one context-free row per nominal head,
+    /// the generic self pattern as the protocol argument (Rust's
+    /// blanket `impl<T> From<T> for T`, per head because rows are
+    /// keyed by nominal head). Declared rows win: a head whose declared
+    /// rows already cover the reflexive shape is skipped. A per-table
+    /// derivation like derived rows (ADR 0053) — slices never carry it.
+    /// `commit_dictionaries` fills the dictionary with the identity
+    /// recipe.
+    pub fn synthesize_reflexive_into_conformances(&mut self, module: ModuleId) {
+        if !self.protocols.contains_key(&Symbol::Into) {
+            return;
+        }
+        // Declared structs and enums, plus builtin scalars — visible here
+        // only as the non-protocol heads of declared rows (`extend Int:
+        // Add<Int>`). Sorted so synthesized row ids are deterministic.
+        let mut heads: Vec<Symbol> = self
+            .structs
+            .keys()
+            .copied()
+            .chain(self.enums.keys().copied())
+            .chain(
+                self.conformances
+                    .values()
+                    .map(|row| row.head)
+                    .filter(|head| !matches!(head, Symbol::Protocol(_))),
+            )
             .collect();
-        for id in &stale {
-            if let Some(row) = self.conformances.shift_remove(id) {
-                if let Some(ids) = self.conformances_by_head.get_mut(&row.head) {
-                    ids.retain(|existing| existing != id);
-                }
+        heads.sort();
+        heads.dedup();
+        let mut rows = vec![];
+        for head in heads {
+            let params: Vec<Symbol> = self
+                .structs
+                .get(&head)
+                .map(|info| info.params.iter().map(|param| param.symbol).collect())
+                .or_else(|| {
+                    self.enums
+                        .get(&head)
+                        .map(|info| info.params.iter().map(|param| param.symbol).collect())
+                })
+                .unwrap_or_default();
+            let self_args: Vec<Ty> = params.iter().map(|param| Ty::Param(*param)).collect();
+            let protocol = ProtocolRef {
+                protocol: Symbol::Into,
+                args: vec![Ty::Nominal(head, self_args.clone())],
+            };
+            let row = Conformance {
+                params,
+                self_args,
+                context: vec![],
+                synthesized: true,
+                ..Conformance::new(head, protocol)
+            };
+            let covered = self.conformances_for_head(head).any(|(_, existing)| {
+                self.conformance_rows_overlap(&existing.protocol, existing, &row.protocol, &row)
+            });
+            if !covered {
+                rows.push(row);
             }
         }
+        // Merged catalogs carry rows minted by other compiles; never
+        // reuse a (module, local) pair they already occupy.
+        let ceiling = self
+            .conformances
+            .keys()
+            .filter(|id| id.module_id == module)
+            .map(|id| id.local_id + 1)
+            .max()
+            .unwrap_or(0);
+        self.next_conformance_id = self.next_conformance_id.max(ceiling);
+        for row in rows {
+            self.insert_conformance(module, row);
+        }
+    }
+
+    /// The recipe behind a synthesized row: structural derivation for
+    /// the derivable protocols, identity for a reflexive `T: Into<T>`
+    /// row (its sole requirement is `into`).
+    fn row_derived_recipe(row: &Conformance) -> Option<DerivedRecipe> {
+        if row.synthesized
+            && row.protocol.protocol == Symbol::Into
+            && row.protocol.args.len() == 1
+            && matches!(&row.protocol.args[0], Ty::Nominal(head, args)
+                if *head == row.head && *args == row.self_args)
+        {
+            return Some(DerivedRecipe::Identity);
+        }
+        Self::derived_recipe(row.protocol.protocol)
     }
 
     /// The declared type parameters and field/payload leaf types of a
@@ -1654,15 +1771,16 @@ impl TypeCatalog {
     /// Complete every conformance row's dictionary (ADR 0038): one entry
     /// per protocol requirement in declaration order — the declared
     /// witness, the structural recipe for a derivable protocol's bodyless
-    /// requirement, or the protocol's default body. Runs once collection
-    /// is done and again after merge (idempotent).
+    /// requirement, or the protocol's default body. Idempotent; the
+    /// backend boundary runs the final pass over the assembled world
+    /// (ADR 0053).
     pub fn commit_dictionaries(&mut self) {
         let mut dictionaries: Vec<(ConformanceId, Vec<DictionaryEntry>)> = Vec::new();
         for (id, row) in &self.conformances {
             let Some(info) = self.protocols.get(&row.protocol.protocol) else {
                 continue;
             };
-            let recipe = Self::derived_recipe(row.protocol.protocol);
+            let recipe = Self::row_derived_recipe(row);
             let entries = info
                 .requirements
                 .iter()
@@ -1679,7 +1797,7 @@ impl TypeCatalog {
                                 DictionaryEntry::Derived(recipe)
                             }
                             _ => DictionaryEntry::Implementation {
-                                symbol: requirement.symbol,
+                                symbol: requirement.default_symbol.unwrap_or(requirement.symbol),
                                 writeback_width: requirement.writeback_width,
                             },
                         },
@@ -1750,9 +1868,28 @@ impl TypeCatalog {
                 }
             }
         }
+        // Conformance-row witnesses bind the row's own rigid parameters
+        // (`extend<U, T: Iterator> Map<T, U>: Iterable` — its witness
+        // bodies range over U and T, not the head nominal's declared
+        // params), same as inherent extend members.
+        for row in self.conformances.values() {
+            for &witness in row.witnesses.values() {
+                owners.insert(
+                    witness,
+                    OwnerBinding::Nominal {
+                        params: row.params.clone(),
+                    },
+                );
+            }
+        }
         for (protocol, info) in &self.protocols {
             for requirement in info.requirements.values().flatten() {
                 owners.insert(requirement.symbol, OwnerBinding::Protocol(*protocol));
+                // An out-of-line default body binds Self exactly like the
+                // requirement it defaults.
+                if let Some(default_symbol) = requirement.default_symbol {
+                    owners.insert(default_symbol, OwnerBinding::Protocol(*protocol));
+                }
             }
         }
         self.callable_owners = owners;
@@ -1812,8 +1949,64 @@ impl TypeCatalog {
         }
         match predicate {
             Predicate::Conforms { ty, protocol } => self.ty_conforms_at(ty, protocol, depth + 1),
-            Predicate::TypeEq(left, right) => left == right,
+            // A protocol-head row's context equates its assoc-typed
+            // params with projections (`Element == Self.Element`); a
+            // concrete receiver proves it by reduction, not spelling.
+            Predicate::TypeEq(left, right) => {
+                self.reduce_projections_at(left, depth + 1)
+                    == self.reduce_projections_at(right, depth + 1)
+            }
             _ => false,
+        }
+    }
+
+    /// Reduce associated-type projections through committed rows — the
+    /// store-free analog of the solver's `normalize_ty`, for proving row
+    /// contexts. Unreducible projections stay as spelled (the syntactic
+    /// comparison then decides).
+    fn reduce_projections_at(&self, ty: &Ty, depth: usize) -> Ty {
+        if depth > 64 {
+            return ty.clone();
+        }
+        match ty {
+            Ty::Proj(base, protocol, assoc) => {
+                let base = self.reduce_projections_at(base, depth + 1);
+                let inner = match &base {
+                    Ty::Borrow(_, inner) => (**inner).clone(),
+                    other => other.clone(),
+                };
+                if let Ty::Nominal(symbol, args) = &inner {
+                    let matches = self.matching_conformances_at(*symbol, args, protocol, depth);
+                    if let [matched] = matches.as_slice()
+                        && let Some(binding) = matched.conformance.assoc.get(assoc)
+                    {
+                        let reduced = binding.substitute(
+                            &matched.substitution,
+                            &FxHashMap::default(),
+                            &FxHashMap::default(),
+                        );
+                        return self.reduce_projections_at(&reduced, depth + 1);
+                    }
+                }
+                Ty::Proj(Box::new(base), protocol.clone(), *assoc)
+            }
+            Ty::Nominal(symbol, args) => Ty::Nominal(
+                *symbol,
+                args.iter()
+                    .map(|arg| self.reduce_projections_at(arg, depth + 1))
+                    .collect(),
+            ),
+            Ty::Tuple(items) => Ty::Tuple(
+                items
+                    .iter()
+                    .map(|item| self.reduce_projections_at(item, depth + 1))
+                    .collect(),
+            ),
+            Ty::Borrow(perm, inner) => Ty::Borrow(
+                perm.clone(),
+                Box::new(self.reduce_projections_at(inner, depth + 1)),
+            ),
+            other => other.clone(),
         }
     }
 
@@ -1835,7 +2028,7 @@ impl TypeCatalog {
                 {
                     return true;
                 }
-                self.matching_conformances(*head, args, target)
+                self.matching_conformances_at(*head, args, target, depth)
                     .into_iter()
                     .any(|matched| self.row_context_holds(&matched, depth))
             }
@@ -1852,6 +2045,16 @@ impl TypeCatalog {
         head: Symbol,
         self_args: &[Ty],
         target: &ProtocolRef,
+    ) -> Vec<ConformanceMatch<'a>> {
+        self.matching_conformances_at(head, self_args, target, 0)
+    }
+
+    fn matching_conformances_at<'a>(
+        &'a self,
+        head: Symbol,
+        self_args: &[Ty],
+        target: &ProtocolRef,
+        depth: usize,
     ) -> Vec<ConformanceMatch<'a>> {
         let self_ty = Ty::Nominal(head, self_args.to_vec());
         let mut matches = self
@@ -1875,7 +2078,7 @@ impl TypeCatalog {
         {
             matches.retain(|matched| matched.conformance.protocol.protocol == target.protocol);
         }
-        matches.extend(self.matching_protocol_head_conformances(&self_ty, target));
+        matches.extend(self.matching_protocol_head_conformances_at(&self_ty, target, depth));
         matches
     }
 
@@ -1898,10 +2101,32 @@ impl TypeCatalog {
         self_ty: &Ty,
         target: &ProtocolRef,
     ) -> Vec<ConformanceMatch<'a>> {
+        self.matching_protocol_head_conformances_at(self_ty, target, 0)
+    }
+
+    fn matching_protocol_head_conformances_at<'a>(
+        &'a self,
+        self_ty: &Ty,
+        target: &ProtocolRef,
+        depth: usize,
+    ) -> Vec<ConformanceMatch<'a>> {
         self.conformances
             .iter()
             .filter_map(|(id, conformance)| {
-                self.match_conformance_row(*id, conformance, None, self_ty, target)
+                let matched = self.match_conformance_row(*id, conformance, None, self_ty, target)?;
+                // A protocol-head row (`extend Iterator: Into<[Element]>`)
+                // supplies only types that satisfy its head protocol; its
+                // self pattern alone matches anything. A concrete receiver
+                // that provably does not conform is no match. Non-nominal
+                // receivers (rigid params, projections) keep the permissive
+                // answer — their head conformance is the solver's to judge.
+                if matches!(conformance.head, Symbol::Protocol(_))
+                    && matches!(self_ty, Ty::Nominal(_, _))
+                    && !self.ty_conforms_at(self_ty, &ProtocolRef::bare(conformance.head), depth + 1)
+                {
+                    return None;
+                }
+                Some(matched)
             })
             .collect()
     }
@@ -2095,6 +2320,61 @@ impl TypeCatalog {
     /// super chain, because an overload set can span it (a blanket
     /// `extend P: Q` default beside Q's own requirement). Dispatch
     /// selects among them by written labels.
+    /// Whether a constrained extension member's availability context
+    /// PROVABLY excludes a concrete receiver — its equations pin the
+    /// owner protocol's arguments to closed types the receiver does not
+    /// conform at. Undecidable contexts (open arguments, rigid
+    /// receivers) exclude nothing; the use-site wanteds judge them.
+    /// Decidable exclusion lets dispatch fall past an unavailable
+    /// extension member to an inherent one instead of claiming and
+    /// failing (`Substring.to_string()` vs an `Into<String>` extension).
+    pub fn requirement_context_excludes(
+        &self,
+        receiver: &Ty,
+        owner: &ProtocolRef,
+        requirement: &Requirement,
+    ) -> bool {
+        if requirement.context.is_empty() {
+            return false;
+        }
+        if !matches!(receiver, Ty::Nominal(_, _)) || receiver.has_unification_vars() {
+            return false;
+        }
+        let Some(info) = self.protocols.get(&owner.protocol) else {
+            return false;
+        };
+        let open = |ty: &Ty| {
+            let mut open = false;
+            let _ = ty.try_visit(&mut |ty: &Ty| -> std::ops::ControlFlow<()> {
+                if matches!(ty, Ty::Param(_) | Ty::Var(_)) {
+                    open = true;
+                    return std::ops::ControlFlow::Break(());
+                }
+                std::ops::ControlFlow::Continue(())
+            });
+            open
+        };
+        let mut args = owner.args.clone();
+        for predicate in &requirement.context {
+            if let Predicate::TypeEq(Ty::Param(param), value) = predicate
+                && let Some(index) = info.params.iter().position(|p| p.symbol == *param)
+                && !open(value)
+            {
+                args[index] = value.clone();
+            }
+        }
+        if args.iter().any(open) {
+            return false;
+        }
+        !self.ty_conforms(
+            receiver,
+            &ProtocolRef {
+                protocol: owner.protocol,
+                args,
+            },
+        )
+    }
+
     pub fn requirement_overloads_in_ref(
         &self,
         protocol: &ProtocolRef,
@@ -2166,34 +2446,6 @@ mod tests {
         row.protocol = ProtocolRef::bare(Symbol::CheapClone);
         catalog.insert_conformance(ModuleId::Current, row);
         catalog
-    }
-
-    #[test]
-    fn merge_indexes_one_row_when_commitment_states_share_an_id() {
-        let head = Symbol::Struct(StructId::from(1));
-        let mut imported = TypeCatalog::default();
-        let id = imported.insert_conformance(
-            ModuleId::Current,
-            Conformance::new(head, ProtocolRef::bare(Symbol::Showable)),
-        );
-
-        let mut declaring = TypeCatalog::default();
-        let mut committed = Conformance::new(head, ProtocolRef::bare(Symbol::Showable));
-        committed.dictionary = vec![DictionaryEntry::Derived(DerivedRecipe::Show)];
-        assert_eq!(
-            declaring.insert_conformance(ModuleId::Current, committed),
-            id
-        );
-
-        let mut merged = TypeCatalog::default();
-        merged.merge(imported);
-        merged.merge(declaring);
-
-        assert_eq!(merged.conformances_by_head[&head], vec![id]);
-        assert_eq!(
-            merged.conformances[&id].dictionary,
-            vec![DictionaryEntry::Derived(DerivedRecipe::Show)]
-        );
     }
 
     #[test]

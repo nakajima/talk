@@ -289,6 +289,7 @@ impl Symbol {
     const WELL_KNOWN_CORE_ADD_ID: u32 = u32::MAX - 21;
     const WELL_KNOWN_CORE_SHOWABLE_ID: u32 = u32::MAX - 20;
     const WELL_KNOWN_CORE_EQUATABLE_ID: u32 = u32::MAX - 19;
+    const WELL_KNOWN_CORE_INTO_ID: u32 = u32::MAX - 18;
 
     pub const Int: Symbol = Symbol::Builtin(BuiltinId {
         module_id: ModuleId::Core,
@@ -398,6 +399,10 @@ impl Symbol {
         module_id: ModuleId::Core,
         local_id: Self::WELL_KNOWN_CORE_EQUATABLE_ID,
     });
+    pub const Into: Symbol = Symbol::Protocol(ProtocolId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_INTO_ID,
+    });
 
     pub fn well_known_core_struct(name: &str) -> Option<Symbol> {
         match name {
@@ -421,6 +426,7 @@ impl Symbol {
             "Add" => Some(Symbol::Add),
             "Showable" => Some(Symbol::Showable),
             "Equatable" => Some(Symbol::Equatable),
+            "Into" => Some(Symbol::Into),
             _ => None,
         }
     }

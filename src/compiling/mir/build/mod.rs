@@ -1241,6 +1241,9 @@ struct ProgramBuilder<'a> {
     /// conformances: enums render `Name.variant(payloads…)`, structs
     /// `Name(field: value…)` — the archived synthesis format.
     show_glue: FxHashMap<Ty, FuncId>,
+    /// Synthesized `(x) -> x` chunks for reflexive `T: Into<T>`
+    /// conformances (the checker's synthesized rows carry no body).
+    identity_glue: FxHashMap<Ty, FuncId>,
     /// Symbol indexes over every program's catalog, built once: the
     /// per-query alternative (scan all programs per lookup) is quadratic
     /// in catalog size and dominated large compiles.
@@ -1272,13 +1275,29 @@ struct ProgramBuilder<'a> {
 
 impl<'a> ProgramBuilder<'a> {
     fn new(programs: &'a [ProgramInput<'a>], collect_debug: bool) -> Self {
-        // Catalog symbols are absolute (ADR 0038): every program's
-        // artifacts already carry their real module stamps, so the
-        // merge is a plain union with value-dedup.
-        let mut catalog = crate::types::catalog::TypeCatalog::default();
-        for input in programs {
-            catalog.merge(input.program.types().catalog.clone());
+        // ADR 0053: the main program's catalog IS the compilation's one
+        // fact table — typing evolved the shared table module by module,
+        // and the root compile (index 0, last to typecheck) carries it
+        // whole, commitments included. The other inputs contribute only
+        // facts the export slice does not ship yet (their private
+        // declarations, for compiling their own bodies); inserts skip
+        // anything the table already holds, so the root's committed
+        // entries always win. No union, no reconciliation, no recommit.
+        let mut catalog = programs[0].program.types().catalog.clone();
+        for input in &programs[1..] {
+            catalog.insert_slice(&input.program.types().catalog);
         }
+        // The backend boundary is where the module set closes (ADR 0053
+        // stage 2): non-main inputs bring privately-declared heads the
+        // shared table never saw, so the final synthesis + commitment
+        // pass runs here, once, over the assembled world. Both synthesis
+        // passes skip heads that already carry rows, and commitment is a
+        // full re-derivation — idempotent over the table typing built.
+        catalog.synthesize_derived_conformances(crate::compiling::module::ModuleId::Main);
+        catalog.synthesize_reflexive_into_conformances(crate::compiling::module::ModuleId::Main);
+        catalog.commit_deinit_rows();
+        catalog.commit_dictionaries();
+        catalog.commit_callable_owners();
         let mut struct_index: FxHashMap<Symbol, &'a crate::types::catalog::StructInfo> =
             FxHashMap::default();
         let mut enum_index: FxHashMap<Symbol, &'a crate::types::catalog::Enum> =
@@ -1338,6 +1357,7 @@ impl<'a> ProgramBuilder<'a> {
             glue: FxHashMap::default(),
             equality_glue: FxHashMap::default(),
             show_glue: FxHashMap::default(),
+            identity_glue: FxHashMap::default(),
             collect_debug,
             debug_files: Vec::new(),
             debug_sources: Vec::new(),
@@ -2169,6 +2189,42 @@ impl<'a> ProgramBuilder<'a> {
             arity: 2,
             locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
             blocks,
+        };
+        Ok(id)
+    }
+
+    /// Synthesize `(x) -> x` for a reflexive `T: Into<T>` conformance
+    /// (no source body — `into` returns its receiver unchanged). Raw
+    /// blocks like the requirement forwarder: the one owned reference
+    /// passes straight to the return position — no epilogue, nothing
+    /// for the frame to drop.
+    fn derived_identity(&mut self, ty: &Ty, _span: Span) -> Result<FuncId, BackendError> {
+        if let Some(id) = self.identity_glue.get(ty) {
+            return Ok(*id);
+        }
+        let id = self.reserve("derived_identity");
+        self.identity_glue.insert(ty.clone(), id);
+        let debug = self.collect_debug.then(|| {
+            Box::new(BlockDebug {
+                origins: vec![DebugOrigin::Generated(GeneratedMir::DerivedIdentity)],
+            })
+        });
+        let block = BlockData {
+            debug,
+            params: Vec::new(),
+            insts: Vec::new(),
+            term: Some(Term::Return(Operand::Local(0))),
+        };
+        let layout = self.layouts.borrow_mut().id_of(ty);
+        self.functions[id] = Function {
+            debug_names: None,
+            frame_sites: Default::default(),
+            param_reprs: vec![layout::ParamRepr::Value(layout)],
+            return_repr: None,
+            name: "derived_identity".into(),
+            arity: 1,
+            locals: crate::compiling::mir::build::LocalInfo::uniform(1),
+            blocks: vec![block],
         };
         Ok(id)
     }
@@ -9289,10 +9345,26 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                         DerivedRecipe::Equality => self
                                             .program_builder
                                             .derived_equality(&self_ty, protocol, expr.span)?,
+                                        DerivedRecipe::Identity => self
+                                            .program_builder
+                                            .derived_identity(&self_ty, expr.span)?,
                                     };
                                     let mut operands = Vec::new();
                                     if let Some(receiver) = value_receiver {
-                                        operands.push(self.compile_expr(receiver)?);
+                                        let operand = self.compile_expr(receiver)?;
+                                        // Identity is the one CONSUMING
+                                        // recipe (`into` takes ownership;
+                                        // the value passes through to the
+                                        // result): the frame must stop
+                                        // owning the receiver, or teardown
+                                        // frees it alongside the returned
+                                        // alias. Show/Equality borrow.
+                                        if matches!(recipe, DerivedRecipe::Identity) {
+                                            self.consume_call_argument_into(
+                                                operand, &self_ty, expr.span,
+                                            )?;
+                                        }
+                                        operands.push(operand);
                                     }
                                     for arg in args {
                                         operands.push(self.compile_expr(&arg.value)?);

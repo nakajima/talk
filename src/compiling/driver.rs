@@ -105,10 +105,32 @@ pub enum ParseMode {
     Lenient,
 }
 
+/// The compilation's one fact table (ADR 0053): every module's typecheck
+/// reads and writes this catalog; imported modules' slices are seeded
+/// exactly once, in import order. Shared across the drivers of one
+/// compilation (package graphs, workspaces) via `DriverConfig::catalog`.
+#[derive(Default)]
+pub struct SharedCatalog {
+    pub types: crate::types::catalog::TypeCatalog,
+    seeded: rustc_hash::FxHashSet<crate::compiling::module::StableModuleId>,
+}
+
+impl SharedCatalog {
+    /// Insert a module's fact slice unless this table has already seen
+    /// it. Slices are own-filtered at export, so inserts are disjoint.
+    pub fn seed(&mut self, module: &crate::compiling::module::Module) {
+        if self.seeded.insert(module.id) {
+            self.types.insert_slice(&module.types.catalog);
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct DriverConfig {
     pub module_id: ModuleId,
     pub modules: Rc<ModuleEnvironment>,
+    /// ADR 0053: the shared fact table this compilation accumulates into.
+    pub catalog: Rc<std::cell::RefCell<SharedCatalog>>,
     pub mode: CompilationMode,
     pub module_name: String,
     pub parse_mode: ParseMode,
@@ -151,6 +173,7 @@ impl DriverConfig {
             // assigns a real module id (libraries, stdlib, core).
             module_id: crate::compiling::module::ModuleId::Main,
             modules: Default::default(),
+            catalog: Default::default(),
             mode: CompilationMode::default(),
             module_name: module_name.into(),
             parse_mode: ParseMode::default(),
@@ -844,6 +867,7 @@ impl Driver<NameResolved> {
             &resolved_names,
             &self.config.modules,
             self.config.module_id,
+            &mut self.config.catalog.borrow_mut(),
         );
         diagnostics.extend(type_diagnostics);
         let blocked_files = error_diagnostic_files(&diagnostics);
@@ -1067,12 +1091,10 @@ impl Driver<Typed> {
     /// (sanitized for export — solver variables don't travel) plus this
     /// module's slice of the type catalog.
     ///
-    /// Only symbols this module minted (Current-tagged) are exported. The
-    /// checker's scheme map also holds every imported module's schemes,
-    /// and re-exporting those is corrupting: `Module::import_as` retags
-    /// every key to the importer's id for this module, so a foreign
-    /// symbol and an own symbol sharing a local id would collapse onto
-    /// one key, with hash order deciding which scheme survives.
+    /// Only symbols this module minted are exported (ADR 0053: a slice
+    /// is the module's own facts; imported facts already live in their
+    /// declarers' slices, and shipping copies would reintroduce the
+    /// multi-copy divergence this architecture removed).
     pub fn module<T: Into<String>>(self, name: T) -> Module {
         let name = name.into();
         // Own symbols carry no module tag (Current) or the id this
@@ -1082,22 +1104,19 @@ impl Driver<Typed> {
             None => true,
             Some(id) => id == compiled_as,
         };
-        let (resolved_names, mut types) = self.phase.program.into_semantic_parts();
+        let (resolved_names, types) = self.phase.program.into_semantic_parts();
         let exports = resolved_names.exports();
-        // Synthesized derived rows are compile-local; importers
-        // re-synthesize against their own merged catalogs.
-        types.catalog.strip_synthesized_conformances();
-        // Ship the validated public interface (ADR 0042 §7): exported
-        // names, the semantic closure that types them, and private
-        // suppliers those contracts reference — never unrelated private
-        // schemes or rows. Scheme-level sanitize inside: a leftover
+        // Ship the module's fact slice (ADR 0053): its own facts, whole,
+        // plus its amendments to foreign entities. Privacy is enforced at
+        // use sites (ADR 0042), never by withholding facts.
+        // Scheme-level sanitize inside: a leftover
         // row/effect tail variable becomes an owner-keyed param AND
         // registers in eff_params/row_params, so instantiation freshens
         // it on the importing side (a rigid tail would reject every
         // ambient row it meets — the http.run regression).
         #[cfg_attr(not(debug_assertions), allow(unused_mut))]
         let mut interface =
-            crate::compiling::interface::split_public_interface(&resolved_names, types, own);
+            crate::compiling::interface::module_slice(&resolved_names, types, own, compiled_as);
         // A module's types outlive this store: nothing var-shaped may
         // cross. Finalization guarantees it through the same walk this
         // assertion re-runs; a future catalog field that skips the walk
@@ -1557,12 +1576,8 @@ pub mod tests {
     #[test]
     fn typed_module_exports_only_its_own_schemes() {
         // A library's exported schemes must be keyed by its own binders
-        // only. Re-exporting the merged core schemes is corrupting:
-        // `Module::import_as` retags every key to the importer's id, so a
-        // core symbol and one of the module's own symbols with the same
-        // local id collapse onto one key — and hash order then decides
-        // which scheme survives (the fs `Directory.entries` ->
-        // `(&Float, Float) -> Float` bug).
+        // only (ADR 0053: slices carry own facts; imported facts travel
+        // in their declarers' slices).
         let typed = Driver::new(
             vec![Source::from(
                 "pub struct Tiny {\n\tlet x: Int\n\n\tfunc double() -> Int {\n\t\tself.x + self.x\n\t}\n}",
@@ -1704,6 +1719,7 @@ pub mod tests {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            catalog: Default::default(),
             parser: None,
         };
 
@@ -1717,6 +1733,104 @@ pub mod tests {
             !resolved_b.has_errors(),
             "{:?}",
             resolved_b.phase.diagnostics
+        );
+    }
+
+    #[test]
+    fn sibling_conformance_rows_collide_at_collection() {
+        // ADR 0053 global coherence: module B re-declaring a conformance
+        // module A already ships errors when B COLLECTS — no co-importing
+        // consumer required. (Inherent extend members deliberately keep
+        // the old use-site-ambiguity rule; only conformance rows are
+        // globally coherent.)
+        let id_a = ModuleId::External(0);
+        let mut config_a = DriverConfig::new("TestDriver");
+        config_a.module_id = id_a;
+        let driver_a = Driver::new(
+            vec![Source::from(
+                "\npub protocol Mark {\n\tfunc mark() -> Int\n}\nextend Int: Mark {\n\tpub func mark() -> Int { 1 }\n}\n",
+            )],
+            config_a,
+        );
+        let typed_a = driver_a
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check();
+        assert!(!typed_a.has_errors(), "{:?}", typed_a.diagnostics());
+        let module_a = typed_a.module("A");
+
+        let mut module_environment = ModuleEnvironment::default();
+        module_environment.import_compiled(module_a, id_a).unwrap();
+        let mut config = DriverConfig::new("TestDriver");
+        config.mode = CompilationMode::Library;
+        config.modules = Rc::new(module_environment);
+        let driver_b = Driver::new(
+            vec![Source::from(
+                "use A::{ Mark }\nextend Int: Mark {\n\tpub func mark() -> Int { 2 }\n}\n",
+            )],
+            config,
+        );
+        let typed = driver_b.parse().unwrap().resolve_names().unwrap().type_check();
+        assert!(typed.has_errors(), "the duplicate row must collide");
+        let rendered = typed
+            .diagnostics()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains("Overlapping conformance"),
+            "expected a collection-time overlap diagnostic: {rendered}"
+        );
+    }
+
+    #[test]
+    fn multi_module_compiles_are_deterministic_in_process() {
+        // The one-table architecture makes slot order a function of
+        // insertion order; two identical two-module compiles must produce
+        // byte-identical fact slices (the cross-module half of the
+        // determinism gate).
+        let compile = || {
+            let id_a = ModuleId::External(0);
+            let mut config_a = DriverConfig::new("TestDriver");
+            config_a.module_id = id_a;
+            let driver_a = Driver::new(
+                vec![Source::from(
+                    "\npub protocol Tag {\n\tfunc tag() -> Int\n}\npub struct Box {\n\tpub let n: Int\n}\nextend Box: Tag {\n\tpub func tag() -> Int { self.n }\n}\nextend Int: Tag {\n\tpub func tag() -> Int { 7 }\n}\n",
+                )],
+                config_a,
+            );
+            let typed_a = driver_a
+                .parse()
+                .unwrap()
+                .resolve_names()
+                .unwrap()
+                .type_check();
+            assert!(!typed_a.has_errors(), "{:?}", typed_a.diagnostics());
+            let module_a = typed_a.module("A");
+            let mut module_environment = ModuleEnvironment::default();
+            module_environment.import_compiled(module_a, id_a).unwrap();
+            let mut config = DriverConfig::new("TestDriver");
+            config.mode = CompilationMode::Library;
+            config.modules = Rc::new(module_environment);
+            let driver_b = Driver::new(
+                vec![Source::from(
+                    "use A::{ Tag, Box }\npub func total(box: Box) -> Int { box.tag() + 1.tag() }\n",
+                )],
+                config,
+            );
+            let typed = driver_b.parse().unwrap().resolve_names().unwrap().type_check();
+            assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
+            let module_b = typed.module("B");
+            bincode::serialize(&(&module_b.types.catalog, &module_b.types.schemes))
+                .expect("serialize slice")
+        };
+        assert_eq!(
+            compile(),
+            compile(),
+            "identical multi-module compiles encoded different fact slices"
         );
     }
 
@@ -1757,6 +1871,7 @@ pub mod tests {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            catalog: Default::default(),
             parser: None,
         };
 

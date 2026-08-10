@@ -1917,54 +1917,6 @@ extend Substring: Hashable {
 	}
 }
 
-pub protocol FromString {
-	func from_string(_ text: String) -> Self?
-}
-
-pub func parse<T: FromString>(_ text: String, using exemplar: T) -> T? {
-	exemplar.from_string(text)
-}
-
-extend String: FromString {
-	pub func from_string(_ text: String) -> String? {
-		.some(text)
-	}
-}
-
-extend Bool: FromString {
-	pub func from_string(_ text: String) -> Bool? {
-		if text == "true" { return .some(true) }
-		if text == "false" { return .some(false) }
-		.none
-	}
-}
-
-extend Int: FromString {
-	pub func from_string(_ text: String) -> Int? {
-		let view = text.utf8()
-		if view.byte_count == 0 { return .none }
-		let negative = view.at(index: 0)._toInt() == 45
-		let i = if negative {
-			1
-		} else {
-			0
-		}
-		if i == view.byte_count { return .none }
-		let value = 0
-		loop i < view.byte_count {
-			let byte = view.at(index: i)._toInt()
-			if byte < 48 || byte > 57 { return .none }
-			value = value * 10 + byte - 48
-			i = i + 1
-		}
-		if negative {
-			.some(0 - value)
-		} else {
-			.some(value)
-		}
-	}
-}
-
 // Explicit byte search stays on UTF8View. Results are byte offsets relative
 // to the view and may be used directly with UTF8View.slice.
 extend UTF8View {

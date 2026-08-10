@@ -49,8 +49,8 @@ async fn main() {
             #[arg(value_hint = ValueHint::FilePath)]
             filename: Option<String>,
         },
-        /// Type-check the input (or the enclosing package's workspace
-        /// when no filenames are given inside a package)
+        /// Type-check the input. Package files use their enclosing
+        /// package context; with no filenames, check the whole workspace.
         Check {
             #[arg(value_hint = ValueHint::FilePath)]
             filenames: Vec<String>,
@@ -415,13 +415,17 @@ async fn main() {
                 cli::diagnostics::{ColorMode, render_json_entry, render_json_output, render_text},
             };
 
-            // With no filenames inside a package, check the package's
-            // workspace (the manifest-scoped sources compiled against
-            // the locked dependency graph) instead of reading stdin.
-            let package_root = filenames
-                .is_empty()
-                .then(|| talk::compiling::package::PackageProject::enclosing_root("."))
-                .flatten();
+            // Package context comes from the selected file as well as the
+            // current directory. Keep explicit stdin dependency-free.
+            let package_root = if filenames.is_empty() {
+                talk::compiling::package::PackageProject::enclosing_root(".")
+            } else if filenames.iter().all(|filename| filename != "-") {
+                filenames
+                    .first()
+                    .and_then(talk::compiling::package::PackageProject::enclosing_root)
+            } else {
+                None
+            };
 
             let (docs, package) = match package_root {
                 Some(root) => {
@@ -440,24 +444,32 @@ async fn main() {
                             std::process::exit(1);
                         }
                     };
-                    let paths = talk::cli::package::workspace_source_files(&root);
-                    if paths.is_empty() {
-                        eprintln!("error: no package sources found under {}", root.display());
-                        std::process::exit(1);
-                    }
-                    let mut docs = Vec::with_capacity(paths.len());
-                    for path in paths {
-                        let text = match std::fs::read_to_string(&path) {
+                    let sources = if filenames.is_empty() {
+                        let paths = talk::cli::package::workspace_source_files(&root);
+                        if paths.is_empty() {
+                            eprintln!("error: no package sources found under {}", root.display());
+                            std::process::exit(1);
+                        }
+                        paths
+                            .into_iter()
+                            .map(talk::compiling::driver::Source::from)
+                            .collect()
+                    } else {
+                        sources_for_filenames(filenames)
+                    };
+                    let mut docs = Vec::with_capacity(sources.len());
+                    for source in sources {
+                        let path = source.path().to_string();
+                        let text = match source.read() {
                             Ok(text) => text,
                             Err(err) => {
-                                eprintln!("failed to read {}: {err}", path.display());
+                                eprintln!("failed to read {path}: {err:?}");
                                 std::process::exit(1);
                             }
                         };
-                        let id = path.to_string_lossy().into_owned();
                         docs.push(DocumentInput {
-                            id: id.clone(),
-                            path: id,
+                            id: path.clone(),
+                            path,
                             version: 0,
                             text: text.into(),
                         });
@@ -1092,7 +1104,7 @@ Talk is a statically typed, Swift-flavored language with local type inference, g
     talk test [--json] [--filter NAME] [paths]
         discover `tests/**/*.test.tlk` and `src/**/*.test.tlk`, or run selected paths
     talk check [--json] [files]
-        typecheck and ownership-check; with no files in a package, check its manifest-scoped workspace
+        typecheck and ownership-check; package files use their manifest context, and no files checks targets and tests
     talk build files -o FILE [--entry NAME]
         build a bytecode image; `--native` drives the C backend and compiler (`--cc`, `--target`, `--cflag`, `--keep-c`)
     talk run-image FILE

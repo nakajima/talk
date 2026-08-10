@@ -93,13 +93,42 @@ macro_rules! impl_bounds_for {
                     let WherePredicateKind::Conforms { ty, protocols } = &predicate.kind else {
                         continue;
                     };
-                    let TypeAnnotationKind::Nominal { name, .. } = &ty.kind else {
-                        continue;
-                    };
-                    let Ok(param @ (Symbol::TypeParameter(_) | Symbol::AssociatedType(_))) =
-                        name.symbol()
-                    else {
-                        continue;
+                    // The bound's subject must be a rigid parameter: a
+                    // bare `T`/`Element`, or `Self.Element` — a path
+                    // from Self to an associated type of the enclosing
+                    // protocol.
+                    let param = match &ty.kind {
+                        TypeAnnotationKind::Nominal { name, .. } => match name.symbol() {
+                            Ok(param @ (Symbol::TypeParameter(_) | Symbol::AssociatedType(_))) => {
+                                param
+                            }
+                            _ => continue,
+                        },
+                        TypeAnnotationKind::NominalPath { base, member, .. } => {
+                            let Some(Ty::Param(owner)) = self.self_types.last() else {
+                                continue;
+                            };
+                            let self_rooted = match &base.kind {
+                                TypeAnnotationKind::SelfType(_) => true,
+                                TypeAnnotationKind::Nominal { name, .. } => {
+                                    name.symbol().ok() == Some(*owner)
+                                }
+                                _ => false,
+                            };
+                            if !self_rooted {
+                                continue;
+                            }
+                            let Label::Named(member) = member else {
+                                continue;
+                            };
+                            let Some((_, assoc)) =
+                                self.catalog.associated_type_in(*owner, member)
+                            else {
+                                continue;
+                            };
+                            assoc
+                        }
+                        _ => continue,
                     };
                     for protocol in protocols {
                         if let Some((protocol, _)) =
@@ -417,6 +446,10 @@ macro_rules! impl_bounds_for {
                         && let Some(info) = self.catalog.protocols.get(protocol)
                     {
                         context_params.extend(info.assoc.values().copied());
+                        // A protocol extension may also constrain the
+                        // protocol's input parameters (`extend Into where
+                        // Target == Int`).
+                        context_params.extend(info.params.iter().map(|param| param.symbol));
                     }
                     predicates.extend(self.lower_where_clause_predicates(
                         where_clause,

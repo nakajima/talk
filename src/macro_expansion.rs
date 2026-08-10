@@ -684,6 +684,7 @@ impl MacroExpander<'_> {
             file_id: self.file_id,
             node_ids: &mut self.node_ids,
         });
+        expanded.drive_mut(&mut CallSiteSpanRewriter { span: expr.span });
         let mut nested = Vec::new();
         let mut collector = derive_visitor::visitor_enter_fn(|candidate: &Expr| {
             if matches!(candidate.kind, ExprKind::MacroCall { .. }) {
@@ -1185,6 +1186,9 @@ impl MacroExpander<'_> {
                 file_id: self.file_id,
                 node_ids: &mut self.node_ids,
             });
+            root.drive_mut(&mut CallSiteSpanRewriter {
+                span: invocation_span,
+            });
         }
 
         // Invocations nested in the expansion carry tokens that index the
@@ -1467,9 +1471,104 @@ impl NodeIdRemapper<'_> {
     }
 }
 
+/// Rewrites the spans of an expansion's freshly parsed nodes. Expansions
+/// parse a virtual source string, so their nodes point into that string
+/// while carrying the invocation's file id; rendered against the real
+/// source, those offsets are nonsense. Diagnostics resolve a node's range
+/// from its span, so expanded nodes borrow the invocation's span: an error
+/// inside an expansion points at the macro call that produced it. Only
+/// node spans are rewritten — MacroCall `input_span`/`input_tokens` keep
+/// their virtual coordinates because nested invocations still slice their
+/// arguments out of the virtual source with them.
+#[derive(VisitorMut)]
+#[visitor(
+    Attribute(enter),
+    Block(enter),
+    Body(enter),
+    CallArg(enter),
+    Decl(enter),
+    Expr(enter),
+    FuncSignature(enter),
+    GenericDecl(enter),
+    InlineIRInstruction(enter),
+    MatchArm(enter),
+    Parameter(enter),
+    Pattern(enter),
+    RecordField(enter),
+    Stmt(enter),
+    TypeAnnotation(enter)
+)]
+struct CallSiteSpanRewriter {
+    span: crate::parsing::span::Span,
+}
+
+impl CallSiteSpanRewriter {
+    fn enter_attribute(&mut self, node: &mut Attribute) {
+        node.span = self.span;
+    }
+
+    fn enter_block(&mut self, node: &mut Block) {
+        node.span = self.span;
+    }
+
+    fn enter_body(&mut self, node: &mut Body) {
+        node.span = self.span;
+    }
+
+    fn enter_call_arg(&mut self, node: &mut CallArg) {
+        node.span = self.span;
+    }
+
+    fn enter_decl(&mut self, node: &mut Decl) {
+        node.span = self.span;
+    }
+
+    fn enter_expr(&mut self, node: &mut Expr) {
+        node.span = self.span;
+    }
+
+    fn enter_func_signature(&mut self, node: &mut FuncSignature) {
+        node.span = self.span;
+    }
+
+    fn enter_generic_decl(&mut self, node: &mut GenericDecl) {
+        node.span = self.span;
+    }
+
+    fn enter_inline_ir_instruction(&mut self, node: &mut InlineIRInstruction) {
+        node.span = self.span;
+    }
+
+    fn enter_match_arm(&mut self, node: &mut MatchArm) {
+        node.span = self.span;
+    }
+
+    fn enter_parameter(&mut self, node: &mut Parameter) {
+        node.span = self.span;
+    }
+
+    fn enter_pattern(&mut self, node: &mut Pattern) {
+        node.span = self.span;
+    }
+
+    fn enter_record_field(&mut self, node: &mut RecordField) {
+        node.span = self.span;
+    }
+
+    fn enter_stmt(&mut self, node: &mut Stmt) {
+        node.span = self.span;
+    }
+
+    fn enter_type_annotation(&mut self, node: &mut TypeAnnotation) {
+        node.span = self.span;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+
+    use derive_visitor::Drive;
 
     use crate::{
         macro_expansion::{MacroError, expand_macros_with_sources},
@@ -1477,7 +1576,7 @@ mod tests {
         node_kinds::{
             decl::{Decl, DeclKind},
             expr::ExprKind,
-            stmt::{Stmt, StmtKind},
+            stmt::StmtKind,
         },
         parser_tests::tests::parse,
     };
@@ -1588,6 +1687,54 @@ mod tests {
         let StmtKind::If(..) = &ast.roots[0].as_stmt().kind else {
             panic!("expected an if statement, got {:?}", ast.roots[0]);
         };
+    }
+
+    #[test]
+    fn expanded_nodes_carry_the_invocation_span() {
+        // Expansion parses a virtual source; the resulting nodes must not
+        // keep spans into it, or diagnostics render at unrelated offsets in
+        // the real file. Every expanded node borrows the invocation span.
+        let source = "macro choose($condition, $yes, $no) { if $condition { $yes } else { $no } }\n@choose(true, 1, 2)";
+        let mut ast = parse(source);
+        let sources = HashMap::from([(ast.file_id, std::sync::Arc::from(source))]);
+        let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let invocation_span = crate::parsing::span::Span {
+            file_id: ast.file_id,
+            start: source.find("@choose").unwrap() as u32,
+            end: source.len() as u32,
+        };
+        assert_eq!(ast.roots[0].span(), invocation_span);
+        let mut spans = Vec::new();
+        let mut collect =
+            derive_visitor::visitor_enter_fn(|expr: &crate::node_kinds::expr::Expr| {
+                spans.push(expr.span)
+            });
+        for root in &ast.roots {
+            root.drive(&mut collect);
+        }
+        drop(collect);
+        assert!(spans.len() > 1);
+        assert!(
+            spans.iter().all(|span| *span == invocation_span),
+            "{spans:?}"
+        );
+    }
+
+    #[test]
+    fn nested_expansions_carry_the_outer_invocation_span() {
+        let source =
+            "macro inner($value) { $value }\nmacro outer($value) { @inner($value) }\n@outer(7)";
+        let mut ast = parse(source);
+        let sources = HashMap::from([(ast.file_id, std::sync::Arc::from(source))]);
+        let diagnostics = expand_macros_with_sources(std::slice::from_mut(&mut ast), &sources);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        let invocation_span = crate::parsing::span::Span {
+            file_id: ast.file_id,
+            start: source.find("@outer").unwrap() as u32,
+            end: source.len() as u32,
+        };
+        assert_eq!(ast.roots[0].span(), invocation_span);
     }
 
     #[test]

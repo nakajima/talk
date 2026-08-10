@@ -94,15 +94,23 @@ pub fn check_types(
     resolved: &ResolvedNames,
     modules: &crate::compiling::module::ModuleEnvironment,
     module_id: ModuleId,
+    shared: &mut crate::compiling::driver::SharedCatalog,
 ) -> (TypeOutput, Vec<AnyDiagnostic>) {
-    let mut catalog = TypeCatalog::default();
+    // The compilation's ONE fact table (ADR 0053): seed any imported
+    // slices it hasn't seen (import order — deterministic), then hand the
+    // whole table to this module's session. The session's output carries
+    // the evolved table back (and a copy outward on `TypeOutput`, until
+    // the backend and the cache stop wanting per-program catalogs).
+    for module in modules.all_modules() {
+        shared.seed(module);
+    }
+    let catalog = std::mem::take(&mut shared.types);
     let mut schemes: FxHashMap<Symbol, Scheme> = FxHashMap::default();
     for module in modules.all_modules() {
-        catalog.merge(module.types.catalog.clone());
         schemes.extend(module.types.schemes.clone());
     }
 
-    TypecheckSession {
+    let (output, diagnostics) = TypecheckSession {
         resolved,
         modules,
         symbols,
@@ -121,7 +129,9 @@ pub fn check_types(
         alias_stack: vec![],
         level: GROUP_LEVEL,
     }
-    .run(asts)
+    .run(asts);
+    shared.types = output.catalog.clone();
+    (output, diagnostics)
 }
 
 /// An `extend` block whose member bodies are checked after all binding
@@ -435,6 +445,7 @@ impl<'a> TypecheckSession<'a> {
         // each row's dictionary (ADR 0038) so lowering dereferences
         // committed entries instead of searching and guessing.
         self.catalog.synthesize_derived_conformances(self.module_id);
+        self.catalog.synthesize_reflexive_into_conformances(self.module_id);
         self.catalog.commit_deinit_rows();
         self.catalog.commit_dictionaries();
         self.catalog.commit_callable_owners();

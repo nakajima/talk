@@ -2920,7 +2920,10 @@ impl<'a> Formatter<'a> {
     fn decl_contains_control_flow(decl: &Decl) -> bool {
         matches!(
             &decl.kind,
-            DeclKind::Func(_) | DeclKind::Init { .. } | DeclKind::Method { .. }
+            DeclKind::Func(_)
+                | DeclKind::Init { .. }
+                | DeclKind::Method { .. }
+                | DeclKind::MacroCall { .. }
         )
     }
 
@@ -3224,6 +3227,27 @@ mod formatter_tests {
             format_with_comments(&ast, width, vec![], Some(input))
         };
         adjust_trailing_newlines(input, formatted)
+    }
+
+    #[test]
+    fn match_arm_macro_body_is_stable() {
+        // A macro call arm body gets wrapped in braces; the same tokens parse
+        // as Decl(MacroCall) inside a block vs Stmt(Expr(MacroCall)) in arm
+        // position, and both must format to the same stable output.
+        let stable = "match foo {\n\t_ -> {\n\t\t@html { (\"\") }\n\t}\n}";
+        assert_eq!(
+            format_code("match foo {\n\t_ -> @html { (\"\") }\n}", 80),
+            stable
+        );
+        assert_eq!(format_code(stable, 80), stable);
+    }
+
+    #[test]
+    fn protocol_extension_heads_with_binders_and_arguments_are_stable() {
+        let stable = "extend<T> Into<[T]> {\n\tconsuming func first_converted() -> T? { .none }\n}";
+        assert_eq!(format_code(stable, 80), stable);
+        let stable = "extend Into<Int> {\n\tconsuming func doubled() -> Int {\n\t\tself.into() * 2\n\t}\n}";
+        assert_eq!(format_code(stable, 80), stable);
     }
 
     #[test]

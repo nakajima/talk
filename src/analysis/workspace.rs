@@ -175,6 +175,7 @@ impl Workspace {
                     // on demand as parsing discovers their imports.
                     config.modules = Rc::new(package.modules);
                     config.libraries = package.libraries;
+                    config.catalog = package.catalog;
                     config.workspace_root = Some(package.workspace_root);
                     Driver::new_bare(sources, config)
                 }
