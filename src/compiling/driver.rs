@@ -136,6 +136,11 @@ pub struct DriverConfig {
     pub parse_mode: ParseMode,
     pub preserve_comments: bool,
     pub workspace_root: Option<PathBuf>,
+    /// In-memory macro units (label, text) compiled into this driver's
+    /// procedural macro service, for targets with no filesystem to
+    /// scan (the wasm stdlib). Takes precedence over `workspace_root`
+    /// discovery.
+    pub embedded_macro_sources: Option<Vec<(&'static str, &'static str)>>,
     pub source_root: Option<PathBuf>,
     /// Dependency libraries' typed bodies (package graphs), by the module
     /// id they were compiled and imported under. The backend compiles the
@@ -276,6 +281,7 @@ impl DriverConfig {
             parse_mode: ParseMode::default(),
             preserve_comments: false,
             workspace_root: None,
+            embedded_macro_sources: None,
             source_root: None,
             libraries: Vec::new(),
             precompiled_sources: FxHashMap::default(),
@@ -846,14 +852,20 @@ impl Driver {
         // modules that carry procedural macros (html): load the macro
         // environment only now, from the final module set.
         let procedural_macros = if self.config.module_name != "PackageMacros" {
-            let local = self
-                .config
-                .workspace_root
-                .as_deref()
-                .map(crate::procedural_macros::ProceduralMacroService::discover)
-                .transpose()
-                .map_err(CompileError::Macro)?
-                .flatten();
+            let local = match &self.config.embedded_macro_sources {
+                Some(sources) => Some(
+                    crate::procedural_macros::ProceduralMacroService::compile_embedded(sources)
+                        .map_err(CompileError::Macro)?,
+                ),
+                None => self
+                    .config
+                    .workspace_root
+                    .as_deref()
+                    .map(crate::procedural_macros::ProceduralMacroService::discover)
+                    .transpose()
+                    .map_err(CompileError::Macro)?
+                    .flatten(),
+            };
             crate::procedural_macros::ProceduralMacroEnvironment::load(local, &self.config.modules)
                 .map_err(CompileError::Macro)?
         } else {
@@ -1896,6 +1908,7 @@ pub mod tests {
             parse_mode: ParseMode::Strict,
             preserve_comments: false,
             workspace_root: None,
+            embedded_macro_sources: None,
             source_root: None,
             libraries: Vec::new(),
             catalog: Default::default(),
@@ -2060,6 +2073,7 @@ pub mod tests {
             parse_mode: ParseMode::Strict,
             preserve_comments: false,
             workspace_root: None,
+            embedded_macro_sources: None,
             source_root: None,
             libraries: Vec::new(),
             catalog: Default::default(),

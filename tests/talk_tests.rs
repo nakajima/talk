@@ -5692,6 +5692,43 @@ fn recursive_types_require_heap() {
     );
 }
 
+/// A GADT case-level generic (`add<U: Addable>(Expr<U>, Expr<U>)`) binds
+/// arm payloads of `Expr<U>` for an arm-local skolem `U`. The scrutinee's
+/// instantiation pins `U` (the arm's given), so the backend lowers the
+/// arm against the pinned type: calls forward the frame's witnesses and
+/// drops instantiate concretely. Once a stack overflow in drop-glue
+/// expansion, then a witness-plumbing refusal; now it just runs.
+#[test]
+fn gadt_existential_recursive_evaluator_runs() {
+    assert_runs(
+        b"protocol Addable {\n\
+          \tfunc add(to other: Self) -> Self\n\
+          }\n\
+          extend Int: Addable {\n\
+          \tfunc add(to other: Int) -> Int { self + other }\n\
+          }\n\
+          extend String: Addable {\n\
+          \tfunc add(to other: String) -> String { self + other }\n\
+          }\n\
+          enum Expr<ReturnType> 'heap {\n\
+          \tcase int(Int) -> Expr<Int>\n\
+          \tcase string(String) -> Expr<String>\n\
+          \tcase add<T: Addable>(Expr<T>, Expr<T>) -> Expr<T>\n\
+          }\n\
+          func evaluate<T: Addable>(expr: Expr<T>) -> T {\n\
+          \tmatch expr {\n\
+          \t\t.int(i) -> i,\n\
+          \t\t.string(s) -> s,\n\
+          \t\t.add(a, b) -> evaluate(expr: a).add(to: evaluate(expr: b))\n\
+          \t}\n\
+          }\n\
+          print(evaluate(expr: .add(.int(20), .add(.int(19), .int(3)))))\n\
+          print(evaluate(expr: .add(.string(\"hello \"), .string(\"world\"))))\n",
+        &[],
+        b"42\nhello world\n",
+    );
+}
+
 /// The direct form: the self-call's `T ~ Wrap<T>` obligation defers
 /// through unify's bare-param arm (a given could in principle prove it),
 /// and an undischarged deferred equation must be reported, not dropped —

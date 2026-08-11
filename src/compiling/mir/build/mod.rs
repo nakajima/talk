@@ -2004,10 +2004,7 @@ impl<'a> ProgramBuilder<'a> {
         Some(
             def.variants
                 .values()
-                .map(|variant| match &variant.constructor_scheme.ty {
-                    Ty::Func(params, _, _) => layout::instantiate(&def.params, args, params.iter()),
-                    _ => Vec::new(),
-                })
+                .map(|variant| layout::instantiate_variant_payloads(def, variant, symbol, args))
                 .collect(),
         )
     }
@@ -2651,6 +2648,13 @@ struct FunctionBuilder<'p, 'a> {
     /// function would call itself forever); nested occurrences of the
     /// same type are real recursion and do share.
     drop_glue_root: Option<Ty>,
+    /// The nominal types whose structural drop expansion is currently
+    /// open on this builder's call stack. Concrete recursive types never
+    /// appear here (their nested occurrences route through the shared
+    /// drop function), so a repeat can only be a recursive type whose
+    /// arguments mention rigid parameters — those are barred from shared
+    /// glue, and inline expansion of them would recurse forever.
+    drop_expansion_stack: Vec<Ty>,
     /// Scrutinee local → its tag local, scoped to one `match`
     /// compilation: every arm tests the same scrutinee, and later arm
     /// tests are only reachable on paths where no arm body has run,
@@ -2743,6 +2747,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             consuming_receiver: false,
             param_floor: 0,
             drop_glue_root: None,
+            drop_expansion_stack: Vec::new(),
             match_tag_cache: FxHashMap::default(),
             in_unwind_cleanup: false,
             clause_delimiter: None,
@@ -3326,6 +3331,21 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             ty = *inner;
         }
         let ty = ty;
+        // A recursive nominal whose arguments mention rigid parameters
+        // cannot be dropped: shared glue is barred to it (its sites hold
+        // the frame witnesses) and inline expansion never bottoms out.
+        // Diagnose instead of recursing forever.
+        if self.drop_expansion_stack.contains(&ty) {
+            self.deferred_errors.push(BackendError::unsupported(
+                format!(
+                    "drop glue for the recursive type `{}` cannot be expanded inline: its type arguments mention a generic parameter (not supported yet)",
+                    ty.render_mono()
+                ),
+                Span::SYNTHESIZED,
+            ));
+            return;
+        }
+        self.drop_expansion_stack.push(ty.clone());
         match &ty {
             Ty::Any { .. } => {
                 // The payload's teardown is behind the fixed drop slot.
@@ -3374,6 +3394,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 if let Some(payloads) = self.program_builder.variant_payloads(*symbol, args) {
                     let container = self.container_layout(&ty);
                     self.drop_enum_value(value, container, payloads);
+                    self.drop_expansion_stack.pop();
                     return;
                 }
                 // A `Deinit` conformance is the user's destructor hook: the
@@ -3476,6 +3497,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             _ => {}
         }
+        self.drop_expansion_stack.pop();
     }
 
     /// Enum payload drops dispatch on the tag: one arm per variant with
@@ -7756,6 +7778,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         for arm in arms {
             let matched = self.new_block();
             let next_test = self.new_block();
+            let saved_subst = self.arm_refinement_subst(&arm.pattern, scrutinee_ty);
             self.compile_pattern_test(&arm.pattern, scrutinee, scrutinee_ty, matched, next_test)?;
 
             self.switch_to(matched);
@@ -7771,6 +7794,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.settle_owned_match(&arm.pattern, scrutinee, scrutinee_ty, false)?;
             }
             let value = self.compile_block(&arm.body)?;
+            if let Some(saved) = saved_subst {
+                self.subst = saved;
+            }
             if !self.terminated() {
                 arm_ends.push(ArmEnd {
                     block: self.current,
@@ -7792,6 +7818,74 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         self.merge_arms(arm_ends, result, join, temps_before, moved_before);
         self.match_tag_cache = outer_tag_cache;
         Ok(Operand::Local(result))
+    }
+
+    /// The backend view of a GADT arm's refinement: a variant with
+    /// case-level parameters (an existential like the `T` in
+    /// `case add<T: Addable>(Expr<T>, Expr<T>) -> Expr<T>`) binds
+    /// payloads typed by arm-local skolems, and the checker's given
+    /// (`scrutinee's T ~ the skolem`) pins each one. Record that pinning
+    /// in `self.subst` for the arm's compilation so calls forward this
+    /// frame's own witnesses and drops see the type the value actually
+    /// holds — instead of demanding instances over a skolem whose
+    /// dictionaries no runtime value carries. Returns the subst to
+    /// restore after the arm, or `None` when the arm refines nothing.
+    fn arm_refinement_subst(
+        &mut self,
+        pattern: &Pattern,
+        scrutinee_ty: &Ty,
+    ) -> Option<FxHashMap<Symbol, Ty>> {
+        let PatternKind::Variant {
+            resolved: Some(variant_symbol),
+            variant_name,
+            fields,
+            ..
+        } = &pattern.kind
+        else {
+            return None;
+        };
+        let (enum_symbol, _) = self.program_builder.variant_tag(*variant_symbol)?;
+        let def = self.program_builder.enum_def(enum_symbol)?;
+        let variant = def.variants.get(variant_name)?;
+        if variant.constructor_scheme.params.is_empty() {
+            return None;
+        }
+        let Ty::Func(declared_payloads, result, _) = &variant.constructor_scheme.ty else {
+            return None;
+        };
+        let case_params: rustc_hash::FxHashSet<Symbol> = variant
+            .constructor_scheme
+            .params
+            .iter()
+            .map(|param| param.symbol)
+            .collect();
+        // The checker's pattern instantiation freshened each declared
+        // case parameter into an arm-local skolem, baked into the field
+        // patterns' types; bridge the two spellings positionally.
+        let mut skolems: FxHashMap<Symbol, Symbol> = FxHashMap::default();
+        for (declared, field) in declared_payloads.iter().zip(fields.iter()) {
+            let Some(baked) = &field.ty else { continue };
+            layout::collect_case_skolems(declared, baked, &case_params, &mut skolems);
+        }
+        if skolems.is_empty() {
+            return None;
+        }
+        // The scrutinee's instantiation pins each declared parameter
+        // (the arm's given): compose through the bridge so the arm
+        // compiles against the type the value actually holds.
+        let scrutinee = strip_borrows(self.resolved(scrutinee_ty));
+        let mut pinned = FxHashMap::default();
+        layout::match_case_params(result, &scrutinee, &case_params, &mut pinned);
+        let mapping: FxHashMap<Symbol, Ty> = skolems
+            .iter()
+            .filter_map(|(declared, skolem)| pinned.get(declared).map(|ty| (*skolem, ty.clone())))
+            .collect();
+        if mapping.is_empty() {
+            return None;
+        }
+        let saved = self.subst.clone();
+        self.subst.extend(mapping);
+        Some(saved)
     }
 
     /// Settle a consumed scrutinee for one matched arm: register each

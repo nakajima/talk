@@ -480,6 +480,8 @@ pub enum IoOp {
     Exit,
     RealpathLen,
     RealpathCopy,
+    Seek,
+    FileSize,
 }
 
 #[derive(Debug)]

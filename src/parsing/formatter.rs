@@ -830,9 +830,16 @@ impl<'a> Formatter<'a> {
                 where_clause,
                 body,
                 linear,
+                heap,
                 ..
             } => {
-                let attribute = if *linear { Some("'linear") } else { None };
+                let attribute = if *linear {
+                    Some("'linear")
+                } else if *heap {
+                    Some("'heap")
+                } else {
+                    None
+                };
                 self.format_enum_decl(name, generics, attribute, where_clause.as_ref(), body)
             }
             DeclKind::EnumVariant {
@@ -4147,6 +4154,18 @@ let value = Foo()";
         assert_eq!(
             format_code("struct Node<T> 'heap {\n\tlet value: T\n}", 80),
             "struct Node<T> 'heap {\n\tlet value: T\n}"
+        );
+    }
+
+    #[test]
+    fn enum_grades_round_trip() {
+        assert_eq!(
+            format_code("enum Token 'linear {\n\tcase once(Int)\n}", 80),
+            "enum Token 'linear {\n\tcase once(Int)\n}"
+        );
+        assert_eq!(
+            format_code("enum Expr<T> 'heap {\n\tcase int(Int) -> Expr<Int>\n}", 80),
+            "enum Expr<T> 'heap {\n\tcase int(Int) -> Expr<Int>\n}"
         );
     }
 

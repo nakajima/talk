@@ -14,7 +14,7 @@
 //! re-enters it — which covers non-uniform recursion like
 //! `struct A<T> { x: A<Pair<T>> }` as well.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::visit::{Slot, visit_inst};
 use super::{
@@ -149,11 +149,7 @@ impl<'a> Layouts<'a> {
             let symbol = *symbol;
             let mut payloads = Vec::with_capacity(def.variants.len());
             for variant in def.variants.values() {
-                let declared: Vec<&Ty> = match &variant.constructor_scheme.ty {
-                    Ty::Func(params, _, _) => params.iter().collect(),
-                    _ => Vec::new(),
-                };
-                payloads.push(instantiate(&def.params, args, declared.into_iter()));
+                payloads.push(instantiate_variant_payloads(def, variant, symbol, args));
             }
             return match self.sum_shape(&payloads) {
                 Some(shape) => Layout::Boxed(Some(executable_identity(symbol)), shape),
@@ -247,11 +243,7 @@ impl<'a> Layouts<'a> {
             }
             let mut payloads = Vec::with_capacity(def.variants.len());
             for variant in def.variants.values() {
-                let declared: Vec<&Ty> = match &variant.constructor_scheme.ty {
-                    Ty::Func(params, _, _) => params.iter().collect(),
-                    _ => Vec::new(),
-                };
-                payloads.push(instantiate(&def.params, args, declared.into_iter()));
+                payloads.push(instantiate_variant_payloads(def, variant, symbol, args));
             }
             let shape = self.sum_shape(&payloads);
             return self.aggregate(symbol, shape);
@@ -568,6 +560,141 @@ pub(super) fn instantiate<'t>(
     declared
         .map(|ty| ty.substitute(&substitution, &FxHashMap::default(), &FxHashMap::default()))
         .collect()
+}
+
+/// Bridge a variant's declared case-level parameters to the skolems a
+/// checked pattern freshened them into (the arm's baked field types
+/// name the skolems; the constructor scheme names the declared
+/// parameters). Positional parallel walk, first binding wins.
+pub(super) fn collect_case_skolems(
+    declared: &Ty,
+    baked: &Ty,
+    case_params: &FxHashSet<Symbol>,
+    skolems: &mut FxHashMap<Symbol, Symbol>,
+) {
+    match (declared, baked) {
+        (Ty::Param(declared_param), Ty::Param(skolem)) if case_params.contains(declared_param) => {
+            skolems.entry(*declared_param).or_insert(*skolem);
+        }
+        (Ty::Nominal(_, declared_args), Ty::Nominal(_, baked_args)) => {
+            for (declared, baked) in declared_args.iter().zip(baked_args.iter()) {
+                collect_case_skolems(declared, baked, case_params, skolems);
+            }
+        }
+        (Ty::Tuple(declared_items), Ty::Tuple(baked_items)) => {
+            for (declared, baked) in declared_items.iter().zip(baked_items.iter()) {
+                collect_case_skolems(declared, baked, case_params, skolems);
+            }
+        }
+        (Ty::Borrow(_, declared), Ty::Borrow(_, baked)) => {
+            collect_case_skolems(declared, baked, case_params, skolems);
+        }
+        (Ty::Func(declared_params, declared_ret, _), Ty::Func(baked_params, baked_ret, _)) => {
+            for (declared, baked) in declared_params.iter().zip(baked_params.iter()) {
+                collect_case_skolems(declared, baked, case_params, skolems);
+            }
+            collect_case_skolems(declared_ret, baked_ret, case_params, skolems);
+        }
+        (Ty::Record(declared_row), Ty::Record(baked_row)) => {
+            for ((_, declared), (_, baked)) in declared_row
+                .fields
+                .iter()
+                .zip(baked_row.fields.iter())
+            {
+                collect_case_skolems(declared, baked, case_params, skolems);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// One variant's payload types for an enum application. The enum's own
+/// parameters substitute from the application arguments; a variant's
+/// case-level parameters (a GADT existential such as the `T` in
+/// `case add<T>(Expr<T>, Expr<T>) -> Expr<T>`) substitute by matching
+/// the constructor's result type against the application: in an
+/// `Expr<Int>` value, that case holds `Expr<Int>` payloads. Without
+/// this, drop/retain/layout walks see the raw existential, which names
+/// no value the application can actually hold.
+pub(super) fn instantiate_variant_payloads(
+    def: &Enum,
+    variant: &crate::types::catalog::Variant,
+    head: Symbol,
+    args: &[Ty],
+) -> Vec<Ty> {
+    let Ty::Func(declared, result, _) = &variant.constructor_scheme.ty else {
+        return Vec::new();
+    };
+    let mut substitution: FxHashMap<Symbol, Ty> = def
+        .params
+        .iter()
+        .map(|param| param.symbol)
+        .zip(args.iter().cloned())
+        .collect();
+    if !variant.constructor_scheme.params.is_empty() {
+        let case_params: FxHashSet<Symbol> = variant
+            .constructor_scheme
+            .params
+            .iter()
+            .map(|param| param.symbol)
+            .collect();
+        match_case_params(
+            result,
+            &Ty::Nominal(head, args.to_vec()),
+            &case_params,
+            &mut substitution,
+        );
+    }
+    declared
+        .iter()
+        .map(|ty| ty.substitute(&substitution, &FxHashMap::default(), &FxHashMap::default()))
+        .collect()
+}
+
+/// Bind each case-level parameter to the type it must have for the
+/// constructor's result to equal the application, walking the two in
+/// parallel. A parameter pinned more than once keeps its first binding
+/// (well-typed programs agree on every occurrence).
+pub(super) fn match_case_params(
+    declared: &Ty,
+    actual: &Ty,
+    case_params: &FxHashSet<Symbol>,
+    substitution: &mut FxHashMap<Symbol, Ty>,
+) {
+    match (declared, actual) {
+        (Ty::Param(param), _) if case_params.contains(param) => {
+            substitution.entry(*param).or_insert_with(|| actual.clone());
+        }
+        (Ty::Nominal(_, declared_args), Ty::Nominal(_, actual_args)) => {
+            for (declared, actual) in declared_args.iter().zip(actual_args.iter()) {
+                match_case_params(declared, actual, case_params, substitution);
+            }
+        }
+        (Ty::Tuple(declared_items), Ty::Tuple(actual_items)) => {
+            for (declared, actual) in declared_items.iter().zip(actual_items.iter()) {
+                match_case_params(declared, actual, case_params, substitution);
+            }
+        }
+        (Ty::Borrow(_, declared), Ty::Borrow(_, actual)) => {
+            match_case_params(declared, actual, case_params, substitution);
+        }
+        (Ty::Func(declared_params, declared_ret, _), Ty::Func(actual_params, actual_ret, _)) => {
+            for (declared, actual) in declared_params.iter().zip(actual_params.iter()) {
+                match_case_params(declared, actual, case_params, substitution);
+            }
+            match_case_params(declared_ret, actual_ret, case_params, substitution);
+        }
+        (Ty::Record(declared_row), Ty::Record(actual_row)) => {
+            for ((_, declared), (_, actual)) in declared_row
+                .fields
+                .iter()
+                .zip(actual_row.fields.iter())
+            {
+                match_case_params(declared, actual, case_params, substitution);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// How one parameter is represented at a call boundary: no published

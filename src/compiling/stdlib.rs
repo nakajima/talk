@@ -566,10 +566,26 @@ fn compile_driver_config(
     config.mode = CompilationMode::Library;
     config.modules = Rc::new(modules);
     // The html workspace root is a filesystem path; wasm has no
-    // filesystem and resolves stdlib sources from the embedded set.
+    // filesystem, so its macro units come from the embedded source set
+    // instead.
     #[cfg(not(target_family = "wasm"))]
     if name == "html" {
         config.workspace_root = Some(active_stdlib_dir().join("html"));
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        let prefix = format!("{name}/");
+        let macro_sources: Vec<(&'static str, &'static str)> = STDLIB_FILES
+            .iter()
+            .filter(|(path, _)| {
+                path.starts_with(&prefix)
+                    && path.ends_with(crate::procedural_macros::MACRO_SUFFIX)
+            })
+            .copied()
+            .collect();
+        if !macro_sources.is_empty() {
+            config.embedded_macro_sources = Some(macro_sources);
+        }
     }
     config
 }

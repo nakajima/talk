@@ -568,6 +568,8 @@ impl Encoder {
             IoOp::Exit => 23,
             IoOp::RealpathLen => 24,
             IoOp::RealpathCopy => 25,
+            IoOp::Seek => 26,
+            IoOp::FileSize => 27,
         });
     }
 
@@ -1109,6 +1111,8 @@ impl<'a> Decoder<'a> {
             23 => Ok(IoOp::Exit),
             24 => Ok(IoOp::RealpathLen),
             25 => Ok(IoOp::RealpathCopy),
+            26 => Ok(IoOp::Seek),
+            27 => Ok(IoOp::FileSize),
             _ => Err(DecodeError::InvalidTag("io operation", tag)),
         }
     }

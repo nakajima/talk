@@ -83,9 +83,7 @@ extend Path {
 				let expanded = Path(home)
 				let i = 1
 				loop i < self.components.count {
-					expanded = expanded.appending(
-						component: self.components.get(i).to_string()
-					)
+					expanded = expanded.appending(component: self.components.get(i).to_string())
 					i = i + 1
 				}
 				Optional.some(expanded)
@@ -105,9 +103,7 @@ extend Path {
 				let result = Path(cwd)
 				let i = 0
 				loop i < self.components.count {
-					result = result.appending(
-						component: self.components.get(i).to_string()
-					)
+					result = result.appending(component: self.components.get(i).to_string())
 					i = i + 1
 				}
 				Optional.some(result)
@@ -156,11 +152,9 @@ extend Path {
 			}
 
 			let copied = _io_clamp(count: copied, capacity: len)
-			Optional.some(Path(String(
-				base: ByteStorage(base: buf),
-				byte_count: copied,
-				capacity: copied
-			)))
+			Optional.some(
+				Path(String(base: ByteStorage(base: buf), byte_count: copied, capacity: copied))
+			)
 		}
 	}
 }
@@ -297,38 +291,128 @@ pub struct Path {
 	}
 }
 
-pub enum FileMode {
-	case read
-	case write
-	case append
-}
-
-pub struct Rawfile {
-	pub let fd: Int
-
-	pub func open_read(path: String) -> Rawfile {
-		let fd = open_path(path: path, flags: O_RDONLY, mode: 0)
-		Rawfile(fd: fd)
+pub struct File {
+	// Each case carries the host's negated errno.
+	pub enum Error {
+		case open(Int)
+		case read(Int)
+		case write(Int)
+		case seek(Int)
+		case stat(Int)
 	}
 
-	pub func open_write(path: String) -> Rawfile {
-		let mode = S_IRUSR + S_IWUSR
-		let fd = open_path(path: path, flags: O_WRONLY + O_CREAT + O_TRUNC, mode: mode)
-		Rawfile(fd: fd)
+	pub enum Mode {
+		case r
+		case w
+		case rw
 	}
 
-	pub func open_append(path: String) -> Rawfile {
-		let mode = S_IRUSR + S_IWUSR
-		let fd = open_path(path: path, flags: O_WRONLY + O_CREAT + O_APPEND, mode: mode)
-		Rawfile(fd: fd)
+	pub enum SeekFrom {
+		case start(Int)
+		case current(Int)
+		case end(Int)
 	}
 
-	pub func read(buf: RawPtr, count: Int) -> Int {
-		_io_read(fd: self.fd, buf: buf, count: count)
+	let fd: Int
+	let mode: Mode
+
+	// Open the file at `path`: `.r` reads, `.w` truncates or creates,
+	// `.rw` reads and writes, creating the file when missing.
+	pub static func open(path: Path, mode: Mode) -> Result<File, Error> {
+		let flags = match mode {
+			.r -> O_RDONLY,
+			.w -> O_WRONLY + O_CREAT + O_TRUNC,
+			.rw -> O_RDWR + O_CREAT
+		}
+		let permissions = S_IRUSR + S_IWUSR
+		let fd = open_path(path: path.to_string(), flags: flags, mode: permissions)
+		if fd < 0 { return .error(.open(fd)) }
+		.ok(File(fd: fd, mode: mode))
 	}
 
-	pub func write(buf: RawPtr, count: Int) -> Int {
-		_io_write(fd: self.fd, buf: buf, count: count)
+	// Read from the current offset to the end of the file.
+	pub func read() -> Result<String, Error> {
+		#unsafe {
+			let capacity = 4096
+			let size = _io_file_size(fd: self.fd)
+			if size > capacity { capacity = size }
+			let buf = _alloc<Byte>(count: capacity)
+			let total = 0
+			loop {
+				let n = _io_read(
+					fd: self.fd,
+					buf: _ptr_add(ptr: buf, offset: total),
+					count: capacity - total
+				)
+				if n < 0 {
+					_free(ptr: buf)
+					return .error(.read(n))
+				}
+				if n == 0 { break }
+				total = total + n
+				if total == capacity {
+					let grown = _alloc<Byte>(count: capacity * 2)
+					_copy(from: buf, to: grown, length: total)
+					_free(ptr: buf)
+					buf = grown
+					capacity = capacity * 2
+				}
+			}
+			.ok(String(base: ByteStorage(base: buf), byte_count: total, capacity: capacity))
+		}
+	}
+
+	// Read up to `count` bytes from the current offset.
+	pub func read(count: Int) -> Result<String, Error> {
+		#unsafe {
+			let buf = _alloc<Byte>(count: count)
+			let n = _io_read(fd: self.fd, buf: buf, count: count)
+			if n < 0 {
+				_free(ptr: buf)
+				return .error(.read(n))
+			}
+			let clamped = _io_clamp(count: n, capacity: count)
+			return .ok(String(base: ByteStorage(base: buf), byte_count: clamped, capacity: count))
+		}
+	}
+
+	// Write the whole string, looping over partial writes. The answer
+	// is the byte count written.
+	pub func write(_ string: String) -> Result<Int, Error> {
+		#unsafe {
+			let total = 0
+			loop total < string.byte_count {
+				let n = _io_write(
+					fd: self.fd,
+					buf: _ptr_add(ptr: string.storage.base, offset: total),
+					count: string.byte_count - total
+				)
+				if n < 0 { return .error(.write(n)) }
+				total = total + n
+			}
+			.ok(total)
+		}
+	}
+
+	// Move the file offset. The answer is the new absolute offset.
+	pub func seek(from: SeekFrom) -> Result<Int, Error> {
+		match from {
+			.start(offset) -> self.seek(offset: offset, whence: SEEK_SET),
+			.current(offset) -> self.seek(offset: offset, whence: SEEK_CUR),
+			.end(offset) -> self.seek(offset: offset, whence: SEEK_END)
+		}
+	}
+
+	// The current file offset.
+	pub func tell() -> Result<Int, Error> {
+		self.seek(from: .current(0))
+	}
+
+	// The byte size of the file.
+	pub func size() -> Result<Int, Error> {
+		let size = _io_file_size(fd: self.fd)
+		if size < 0 { return .error(.stat(size)) }
+		.ok(size)
 	}
 
 	pub func close() -> Int {
@@ -336,20 +420,10 @@ pub struct Rawfile {
 	}
 
 	pub func is_valid() -> Bool { self.fd >= 0 }
-}
 
-pub struct File 'linear {
-	pub enum Mode {
-		case r
-		case w
-		case rw
-	}
-
-	let fd: Int
-	let mode: Mode
-
-	pub init(path: Path, mode: Mode) {
-		self.fd = 0
-		self.mode = mode
+	func seek(offset: Int, whence: Int) -> Result<Int, Error> {
+		let position = _io_seek(fd: self.fd, offset: offset, whence: whence)
+		if position < 0 { return .error(.seek(position)) }
+		.ok(position)
 	}
 }

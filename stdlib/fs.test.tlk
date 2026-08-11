@@ -139,3 +139,45 @@ test "path canonicalized asks the host" {
 		}
 	}
 }
+
+// The test host simulates files in memory: writes append to the
+// buffer, reads advance a cursor, and seek moves the cursor.
+test "file write, seek, and read back" {
+	let opened = File.open(path: Path("scratch"), mode: .rw)
+	match opened {
+		.error(_) -> @assert(1 == 2),
+		.ok(file) -> {
+			@assert(file.write("hello")! == 5)
+			@assert(file.size()! == 5)
+			@assert(file.seek(from: .start(0))! == 0)
+			@assert(file.read(count: 3)! == "hel")
+			@assert(file.tell()! == 3)
+			@assert(file.read()! == "lo")
+			@assert(file.close() == 0)
+		}
+	}
+}
+
+test "file seek from the end" {
+	let opened = File.open(path: Path("scratch"), mode: .rw)
+	match opened {
+		.error(_) -> @assert(1 == 2),
+		.ok(file) -> {
+			@assert(file.write("hello")! == 5)
+			@assert(file.seek(from: .end(-2))! == 3)
+			@assert(file.read()! == "lo")
+			@assert(file.close() == 0)
+		}
+	}
+}
+
+test "file read after close is an error" {
+	let opened = File.open(path: Path("scratch"), mode: .rw)
+	match opened {
+		.error(_) -> @assert(1 == 2),
+		.ok(file) -> {
+			file.close()
+			@assert(file.read().is_error())
+		}
+	}
+}

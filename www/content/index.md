@@ -235,6 +235,64 @@ func maybe_increment(x: Option<Int>) -> Option<Int> {
 	return .some(unwrapped_x + 1)
 }
 ```
+
+## gadts
+
+One more enum trick. Cases can refine the generic parameters of the type they build, which sounds scary but is just this:
+
+```tlk
+enum Expr<ReturnType> 'heap {
+	case int(Int) -> Expr<Int>
+	case string(String) -> Expr<String>
+	case add(Expr<Int>, Expr<Int>) -> Expr<Int>
+}
+
+func evaluate<T>(expr: Expr<T>) -> T {
+	match expr {
+		.int(i) -> i,
+		.string(s) -> s,
+		.add(a, b) -> evaluate(expr: a) + evaluate(expr: b)
+	}
+}
+
+print(evaluate(expr: .add(.int(20), .add(.int(19), .int(3)))))
+print(evaluate(expr: .string("sup")))
+```
+
+In the `.add` arm, `T` is refined to `Int`, so the recursive calls return honest `Int`s and `+` is just integer addition. (The `'heap` is there because a case holds the enum itself: recursive values live behind a reference.)
+
+Each arm of the `match` knows what `T` actually is, so `evaluate` hands you an `Int` or a `String`, not some box you have to unwrap. The academics call this a GADT. You can call it "nice".
+
+## results
+
+We met `Optional` and the `?` shortcut up in the enums section. Core also ships a `Result` for when failure deserves a payload:
+
+```tlk
+func divide(a: Int, b: Int) -> Result<Int, String> {
+	if b == 0 {
+		return .error("cannot divide by zero, sorry")
+	}
+	return .ok(a / b)
+}
+
+func double_quotient(a: Int, b: Int) -> Result<Int, String> {
+	// if that's an .error, we bail and return it.
+	// otherwise q is the unwrapped payload
+	let q = divide(a: a, b: b)?
+	return .ok(q * 2)
+}
+
+print(double_quotient(a: 10, b: 2))
+print(double_quotient(a: 10, b: 0))
+```
+
+And if you're feeling dangerous, `!` unwraps the first variant or panics trying:
+
+```tlk
+let definitely: Int? = .some(42)
+definitely!
+```
+
 ## protocols
 
 Ok what about ~~traits~~ ~~type classes~~ ~~interfaces~~ protocols? For making ad-hoc polymorphism less ad-hoc? Yea we've got those.
@@ -272,6 +330,51 @@ Conformances are verified.
 
 ```tlk
 extend Float: Addable {}
+```
+
+Protocols can also have associated types with their own constraints, and default methods that conformers get for free.
+
+```tlk
+protocol Named {
+	func name() -> String
+}
+
+protocol Pet {
+	associated Food: Named
+
+	func favoriteFood() -> Food
+
+	// a default method: every Pet gets this for free
+	func describe() -> String {
+		"a pet who likes " + self.favoriteFood().name()
+	}
+}
+
+struct Kibble {}
+extend Kibble: Named {
+	func name() { "kibble" }
+}
+
+struct Cat {}
+extend Cat: Pet {
+	func favoriteFood() -> Kibble { Kibble() }
+}
+
+Cat().describe()
+```
+
+You can even extend a protocol itself, handing a new method to every conformer at once.
+
+```tlk accumulate(protocols) norun
+extend Addable {
+	func quadruple() -> Self {
+		self.add(to: self).add(to: self.add(to: self))
+	}
+}
+```
+
+```tlk accumulate(protocols)
+1.quadruple()
 ```
 
 ## effects
@@ -312,7 +415,7 @@ func boom(x) {
 	}
 
 	if x == 0 {
-		'throw("boom")
+		'throw(msg: "boom")
 	}
 
 	false // should not run
@@ -321,6 +424,231 @@ func boom(x) {
 boom(0)
 ```
 
+## collections
+
+Arrays. They do what you think.
+
+```tlk
+let numbers = [1, 2, 3, 4, 5, 6]
+
+for n in numbers {
+	print(n * 10)
+}
+
+numbers.count
+```
+
+Subscripts work, and yes, you can mutate (more on that in a second).
+
+```tlk
+let xs = [10, 20, 30]
+print(xs[1])
+
+xs[0] = 99
+xs
+```
+
+They're iterable, so you can do the whole lazy dance.
+
+```tlk
+[1, 2, 3, 4, 5, 6]
+	.map { $0 * 10 }
+	.skip(count: 2)
+	.to_array()
+```
+
+Ranges exist too.
+
+```tlk
+for i in 0..<3 {
+	print(i)
+}
+```
+
+There are tuples, with positional access.
+
+```tlk
+func line_col() -> (Int, Int) { (3, 7) }
+
+let p = line_col()
+p.0 + p.1
+```
+
+And the stdlib has a growable string-keyed `Dict`.
+
+```tlk
+use dict::{ Dict }
+
+let scores = Dict<Int>()
+scores.insert(key: "pat", value: 100)
+scores.insert(key: "sam", value: 85)
+
+match scores.get(key: "pat") {
+	.some(score) -> "pat scored " + score.show(),
+	.none -> "who?"
+}
+```
+
+## strings
+
+Strings are unicode-correct. Iteration is by user-perceived character (extended grapheme clusters, UAX #29, etc. etc.), which means emoji can't tear.
+
+```tlk
+print("héllo 👋🏽".count())       // 7 characters
+print("héllo 👋🏽".utf8().count()) // 15 bytes
+print("👨‍👩‍👧‍👦".count())             // 1. a whole family!
+```
+
+Looping gives you one `Character` at a time.
+
+```tlk
+for ch in "héllo" {
+	print(ch)
+}
+```
+
+The bytes are there when you need them, but you have to ask for them explicitly with `utf8()`. No integer indexing, no surprises.
+
+## ownership
+
+Ok Rust, maybe you like ownership. Here's the talk take: everything has value semantics, sharing is implicit and cheap (refcounted, copy-on-write), and the compiler figures out the retains and releases. You mostly don't have to think about it.
+
+```tlk
+let original = [1, 2, 3]
+let backup = original
+
+original.push(4)
+
+print(original) // [1, 2, 3, 4]
+print(backup)   // [1, 2, 3], backup got a snapshot
+```
+
+Mutation happens through `mut func`s, which get exclusive access with write-back.
+
+```tlk accumulate(ownership) norun
+struct BankAccount {
+	let balance: Int
+
+	mut func deposit(amount: Int) {
+		self.balance = self.balance + amount
+	}
+}
+```
+
+```tlk accumulate(ownership)
+let account = BankAccount(balance: 100)
+account.deposit(amount: 50)
+account.balance
+```
+
+Function parameters borrow by default, so calling a function gives nothing up.
+
+```tlk
+func shout(message: String) {
+	print(message + "!")
+}
+
+let greeting = "i said hello"
+shout(message: greeting)
+shout(message: greeting) // still ours
+greeting
+```
+
+But sometimes a value really is one of a kind: a ticket, a token, a file handle. Mark the type `'linear` and it must be consumed exactly once. Not zero times, not two times.
+
+```tlk
+struct Ticket 'linear {
+	let seat: Int
+
+	consuming func tear() -> Int {
+		self.seat
+	}
+}
+
+func attend_show() -> Int {
+	let ticket = Ticket(seat: 12)
+	ticket.tear()
+	ticket.tear() // Uh oh, one ticket can't admit two
+}
+
+attend_show()
+```
+
+There's more where that came from (`consume` parameters, the `Copy`/`CheapClone` marker protocols, `Deinit` destructors, exclusive `&mut` loans), but the short version is: value semantics for you, references for the compiler, no lifetime annotations, ever.
+
+## macros
+
+Talk has hygienic macros. The declarative kind is a token template:
+
+```tlk
+macro double($x) { $x + $x }
+
+@double(21)
+```
+
+They can introduce control flow, which functions can't.
+
+```tlk
+macro unless($cond, $body) { if $cond { () } else { $body } }
+
+let x = 10
+@unless(x > 5, print("x is beeg"))
+print("still here")
+```
+
+Names a macro introduces can't capture your variables, and expansions get type-checked like any other code. The fun part is that macros can also be whole programs. The stdlib ships an HTML macro, written in Talk itself, that parses and checks your markup at compile time:
+
+```tlk
+use html::{ html }
+
+let name = "<Ada & friends>"
+
+let page = @html {
+	main #content .page data-name=(name) {
+		h1 { "Hello, " (name) }
+		@for number in [1, 2, 3] {
+			span { (number) }
+		}
+	}
+}
+
+print(page.into_string())
+```
+
+Interpolations get escaped, and `@for`/`@if` live right there in the markup. And yes, that one runs in your browser: the macro is compiled to bytecode and executed at compile time, right here in the page.
+
+## tooling
+
+It's a real CLI, with the usual suspects.
+
+<div class='code-block no-run'>
+<pre class='code-highlight'>talk run main.tlk     <span class="comment"># compile and run</span>
+talk test             <span class="comment"># discover and run .test.tlk files</span>
+talk check            <span class="comment"># type-check the whole package</span>
+talk format           <span class="comment"># the formatter</span>
+talk lsp              <span class="comment"># language server, at your service</span></pre>
+</div>
+
+The language server does hover, goto-definition, completion, and rename, and its inlay hints mark every spot where the compiler quietly cloned something for you. `talk setup nvim` installs the Neovim runtime files, including a Neotest adapter so you can run Talk tests from the gutter. There are also packages with lockfiles (`talk new`, `talk install`, `talk update`) if you're building something with more than one file in it.
+
+## unsafe
+
+If you need to touch raw memory, you can, but you have to say so. Raw pointers and friends carry an `'unsafe` effect that must be discharged lexically with `#unsafe`.
+
+```tlk
+#unsafe {
+	let buf = _alloc(count: 1024)
+	print("allocated a kb, doing crimes")
+	_free(ptr: buf)
+}
+print("all cleaned up")
+```
+
+(Leaks are detected, by the way. Free your mallocs.)
+
+There's a `net` module with raw sockets on top of this machinery, and the compiler itself can be embedded in C and Swift hosts — the iOS-flavored XCFramework build is how the playground... just kidding, the playground is wasm. But the embedding thing is real.
+
+## modules
 
 There are modules too. This one isn't runnable in the browser because it spans multiple files, but it works from the CLI.
 
@@ -334,19 +662,23 @@ use package::Exports::{ a }
 print(a)
 ```
 
+## http
+
 And yes, there is already some rough little HTTP stuff.
 
 ```tlk norun
+use http::{ HTTP }
+
 let http = HTTP.Server()
 
-http.get("/", func() {
+http.get(path: "/", handler: func() {
 	"hello from talk"
 })
 
-http.get("/health", func() {
+http.get(path: "/health", handler: func() {
 	"ok"
 })
 
 print("Listening on http://localhost:3000")
-http.run(3000)
+http.run(port: 3000)
 ```

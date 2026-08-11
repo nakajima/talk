@@ -14,7 +14,9 @@ use crate::node_id::FileID;
 use crate::node_kinds::decl::{DeclKind, ImportPath, ImportedSymbols, Visibility};
 use crate::node_kinds::expr::{Expr, ExprKind};
 
-const MACRO_SUFFIX: &str = ".macro.tlk";
+/// The macro-unit file suffix, also used by the stdlib's embedded
+/// source set (wasm has no directory to scan for it).
+pub(crate) const MACRO_SUFFIX: &str = ".macro.tlk";
 const MAX_MACRO_INSTRUCTIONS: u64 = 10_000_000;
 const MAX_MACRO_FRAMES: usize = 4_096;
 const MAX_MACRO_MEMORY: usize = 64 * 1024 * 1024;
@@ -126,22 +128,41 @@ impl ProceduralMacroService {
     }
 
     fn compile(paths: Vec<PathBuf>) -> Result<Self, String> {
+        let mut units = Vec::with_capacity(paths.len());
+        for path in &paths {
+            let text = std::fs::read_to_string(path)
+                .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+            units.push((path.to_string_lossy().into_owned(), text));
+        }
+        let refs: Vec<(&str, &str)> = units
+            .iter()
+            .map(|(name, text)| (name.as_str(), text.as_str()))
+            .collect();
+        Self::compile_units(&refs)
+    }
+
+    /// Compile macro units from in-memory (label, text) pairs: the
+    /// embedded stdlib tree on wasm, where there is no directory to
+    /// scan. Labels are used only for diagnostics.
+    pub fn compile_embedded(sources: &[(&str, &str)]) -> Result<Self, String> {
+        Self::compile_units(sources)
+    }
+
+    fn compile_units(units: &[(&str, &str)]) -> Result<Self, String> {
         let mut macro_sources = Vec::new();
         let mut names = Vec::new();
         let mut seen = HashSet::new();
-        for (index, path) in paths.iter().enumerate() {
-            let text = std::fs::read_to_string(path)
-                .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        for (index, (unit_name, text)) in units.iter().enumerate() {
+            let text = *text;
             let (ast, diagnostics) = crate::compiling::frontend::parse_ast(
-                &text,
+                text,
                 FileID(u32::try_from(index).map_err(|_| "too many macro files")?),
-                path.to_string_lossy().as_ref(),
+                unit_name,
             )
-            .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
+            .map_err(|error| format!("failed to parse {unit_name}: {error}"))?;
             if !diagnostics.is_empty() {
                 return Err(format!(
-                    "{} contains macro parse errors:\n{}",
-                    path.display(),
+                    "{unit_name} contains macro parse errors:\n{}",
                     diagnostics
                         .iter()
                         .map(ToString::to_string)
@@ -174,12 +195,11 @@ impl ProceduralMacroService {
                     rejected.push("#unsafe");
                 }
                 return Err(format!(
-                    "{} uses {}, which is forbidden in macro units",
-                    path.display(),
+                    "{unit_name} uses {}, which is forbidden in macro units",
                     rejected.join(" and ")
                 ));
             }
-            macro_sources.push((path.clone(), text, unit_names));
+            macro_sources.push((text, unit_names));
         }
         if names.is_empty() {
             return Err("macro units declare no public macro functions".into());
@@ -199,7 +219,7 @@ impl ProceduralMacroService {
         for (index, name) in names.iter().enumerate() {
             wrappers.insert(name.clone(), format!("__talk_expand_{index}"));
         }
-        for (index, (_, text, mut unit_names)) in macro_sources.into_iter().enumerate() {
+        for (index, (text, mut unit_names)) in macro_sources.into_iter().enumerate() {
             unit_names.sort();
             let mut unit = String::from(
                 "use package::Lexer::{ capture_macro_input }\n\

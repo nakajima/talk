@@ -37,7 +37,9 @@ func _io_host(request: IORequest) -> Int {
 		.dir_entry_copy(path, index, buf) -> #_ir(path, index, buf) { %? = io 22 $0 $1 $2 },
 		.exit(code) -> #_ir(code) { %? = io 23 $0 0 0 },
 		.realpath_len(path) -> #_ir(path) { %? = io 24 $0 0 0 },
-		.realpath_copy(path, buf) -> #_ir(path, buf) { %? = io 25 $0 $1 0 }
+		.realpath_copy(path, buf) -> #_ir(path, buf) { %? = io 25 $0 $1 0 },
+		.seek(fd, offset, whence) -> #_ir(fd, offset, whence) { %? = io 26 $0 $1 $2 },
+		.file_size(fd) -> #_ir(fd) { %? = io 27 $0 0 0 }
 	}
 }
 

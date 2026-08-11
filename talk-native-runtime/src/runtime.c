@@ -1553,7 +1553,9 @@ enum {
     TALK_IO_DIR_ENTRY_COPY = 22,
     TALK_IO_EXIT = 23,
     TALK_IO_REALPATH_LEN = 24,
-    TALK_IO_REALPATH_COPY = 25
+    TALK_IO_REALPATH_COPY = 25,
+    TALK_IO_SEEK = 26,
+    TALK_IO_FILE_SIZE = 27
 };
 
 /* Negated errno, as every operation returns (core/IO.tlk's constants). */
@@ -1901,6 +1903,17 @@ static int64_t talk_io(uint8_t op, TalkValue a, TalkValue b, TalkValue c) {
             return (int64_t)strlen(resolved);
         }
         return talk_copy_out(b.v.ptr, resolved, strlen(resolved));
+    }
+    case TALK_IO_SEEK: {
+        off_t position = lseek((int)a.v.i, (off_t)b.v.i, (int)c.v.i);
+        return position < 0 ? talk_errno() : (int64_t)position;
+    }
+    case TALK_IO_FILE_SIZE: {
+        struct stat info;
+        if (fstat((int)a.v.i, &info) != 0) {
+            return talk_errno();
+        }
+        return (int64_t)info.st_size;
     }
 #endif
     default:

@@ -96,6 +96,15 @@ pub trait IO {
     /// Copy the canonicalized path into `buf`.
     fn realpath_copy(&mut self, path: &[u8], buf: &mut [u8]) -> i64;
 
+    /// Move a descriptor's file offset (POSIX lseek; `whence` is
+    /// SEEK_SET 0, SEEK_CUR 1, SEEK_END 2): the new absolute offset or
+    /// negative errno.
+    fn seek(&mut self, fd: i64, offset: i64, whence: i64) -> i64;
+
+    /// Byte size of the file behind a descriptor (POSIX fstat), or
+    /// negative errno.
+    fn file_size(&mut self, fd: i64) -> i64;
+
     /// Terminate the process with `code`; test IO returns the code.
     fn exit(&mut self, code: i64) -> i64;
 }
@@ -570,6 +579,38 @@ impl IO for StdioIO {
         }
     }
 
+    fn seek(&mut self, fd: i64, offset: i64, whence: i64) -> i64 {
+        #[cfg(unix)]
+        {
+            let position =
+                unsafe { libc::lseek(fd as i32, offset as libc::off_t, whence as i32) };
+            if position < 0 { errno() } else { position as i64 }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (fd, offset, whence);
+            EPERM
+        }
+    }
+
+    fn file_size(&mut self, fd: i64) -> i64 {
+        #[cfg(unix)]
+        {
+            let mut info: libc::stat = unsafe { std::mem::zeroed() };
+            let result = unsafe { libc::fstat(fd as i32, &mut info) };
+            if result < 0 {
+                errno()
+            } else {
+                info.st_size as i64
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = fd;
+            EPERM
+        }
+    }
+
     fn exit(&mut self, code: i64) -> i64 {
         std::process::exit(code as i32)
     }
@@ -760,6 +801,32 @@ impl IO for CaptureIO {
         }
         buf[..path.len()].copy_from_slice(path);
         path.len() as i64
+    }
+
+    fn seek(&mut self, fd: i64, offset: i64, whence: i64) -> i64 {
+        let Some(buffer) = self.files.get(&fd) else {
+            return EBADF;
+        };
+        let cursor = self.cursors.get(&fd).copied().unwrap_or(0) as i64;
+        let base = match whence {
+            0 => 0,
+            1 => cursor,
+            2 => buffer.len() as i64,
+            _ => return EINVAL,
+        };
+        let position = base + offset;
+        if position < 0 {
+            return EINVAL;
+        }
+        self.cursors.insert(fd, position as usize);
+        position
+    }
+
+    fn file_size(&mut self, fd: i64) -> i64 {
+        match self.files.get(&fd) {
+            Some(buffer) => buffer.len() as i64,
+            None => EBADF,
+        }
     }
 
     fn exit(&mut self, code: i64) -> i64 {

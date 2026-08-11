@@ -33,6 +33,10 @@ pub enum IORequest {
 	// the runtime's operation table; exit stays at index 23.
 	case realpath_len(RawPtr)
 	case realpath_copy(RawPtr, RawPtr)
+	// Appended after realpath_copy for the same reason: seek is 26,
+	// file_size 27.
+	case seek(Int, Int, Int)
+	case file_size(Int)
 }
 
 pub effect 'io(request: IORequest) -> Int
@@ -65,6 +69,10 @@ pub let O_CREAT: Int = 64
 pub let O_TRUNC: Int = 512
 pub let O_APPEND: Int = 1024
 pub let O_NONBLOCK: Int = 2048
+
+pub let SEEK_SET: Int = 0
+pub let SEEK_CUR: Int = 1
+pub let SEEK_END: Int = 2
 
 pub let S_IRUSR: Int = 256
 pub let S_IWUSR: Int = 128
@@ -166,6 +174,19 @@ pub func _io_realpath_len(path: RawPtr) 'io -> Int {
 
 pub func _io_realpath_copy(path: RawPtr, buf: RawPtr) 'io -> Int {
 	'io(request: .realpath_copy(path, buf))
+}
+
+// Move a descriptor's file offset (POSIX lseek): the new absolute
+// offset or a negative errno. `whence` is SEEK_SET, SEEK_CUR, or
+// SEEK_END.
+pub func _io_seek(fd: Int, offset: Int, whence: Int) 'io -> Int {
+	'io(request: .seek(fd, offset, whence))
+}
+
+// The byte size of the file behind a descriptor (POSIX fstat), or a
+// negative errno.
+pub func _io_file_size(fd: Int) 'io -> Int {
+	'io(request: .file_size(fd))
 }
 
 pub func _io_exit(code: Int) 'io -> Never {

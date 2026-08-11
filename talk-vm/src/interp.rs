@@ -1868,6 +1868,8 @@ fn run_io(
                 .ok_or("vm: io realpath out of bounds")?;
             machine.io.realpath_copy(&path, buf)
         }
+        IoOp::Seek => machine.io.seek(int(a)?, int(b)?, int(c)?),
+        IoOp::FileSize => machine.io.file_size(int(a)?),
         // Terminal for every host. `StdioIO` never comes back from
         // `process::exit`, so Core types its exit tails with an idle
         // `loop {}` (`Host.tlk`'s panic fallback, `IO.tlk`'s `_io_exit`).
