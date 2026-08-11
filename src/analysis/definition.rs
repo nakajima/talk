@@ -12,17 +12,55 @@ pub struct Location {
     pub range: TextRange,
 }
 
+/// The outcome of a definition lookup. `Found` carries the target
+/// document's text because it can live in an embedded stdlib module
+/// outside both workspaces — callers convert byte ranges to display
+/// positions against exactly the text the lookup resolved in.
+pub enum GotoDefinition {
+    Found {
+        location: Location,
+        text: crate::common::source_snapshot::SourceSnapshot,
+    },
+    /// The definition lives in a stdlib module whose workspace the
+    /// caller has not built: the LSP builds those on its analysis
+    /// worker and retries, rather than parsing a module inside a
+    /// request handler.
+    NeedsModule(ModuleId),
+    NotFound,
+}
+
 pub fn goto_definition(
     module: &Workspace,
     core: Option<&Workspace>,
     document_id: &DocumentId,
     byte_offset: u32,
-) -> Option<Location> {
-    let file_id = *module.document_to_file_id.get(document_id)?;
-    let ast = module
+) -> GotoDefinition {
+    // The on-demand resolver: callers without a module cache (tests,
+    // one-shot tooling) build the target stdlib module in place.
+    goto_definition_with(module, core, &|module_id| {
+        module
+            .stdlib_workspace_for_module_id(module_id)
+            .map(std::borrow::Cow::Owned)
+    }, document_id, byte_offset)
+}
+
+pub fn goto_definition_with<'a>(
+    module: &'a Workspace,
+    core: Option<&'a Workspace>,
+    stdlib: &dyn Fn(ModuleId) -> Option<std::borrow::Cow<'a, Workspace>>,
+    document_id: &DocumentId,
+    byte_offset: u32,
+) -> GotoDefinition {
+    let Some(file_id) = module.document_to_file_id.get(document_id) else {
+        return GotoDefinition::NotFound;
+    };
+    let Some(ast) = module
         .asts
         .get(file_id.0 as usize)
-        .and_then(|ast| ast.as_ref())?;
+        .and_then(|ast| ast.as_ref())
+    else {
+        return GotoDefinition::NotFound;
+    };
 
     // An import path denotes a file, not a symbol, so it stays here;
     // every other occurrence resolves through the shared resolver.
@@ -30,21 +68,26 @@ pub fn goto_definition(
         let crate::node::Node::Decl(decl) = root else {
             continue;
         };
-        if let Some(location) = goto_definition_from_import_path(module, ast, decl, byte_offset) {
-            return Some(location);
+        if let Some(result) =
+            goto_definition_from_import_path(module, ast, decl, byte_offset, stdlib)
+        {
+            return result;
         }
     }
 
-    let occurrence = occurrence_at(module, document_id, byte_offset)?;
-    definition_location_for_symbol(module, core, occurrence.symbol)
+    let Some(occurrence) = occurrence_at(module, document_id, byte_offset) else {
+        return GotoDefinition::NotFound;
+    };
+    definition_location_for_symbol(module, core, stdlib, occurrence.symbol)
 }
 
-fn goto_definition_from_import_path(
-    module: &Workspace,
+fn goto_definition_from_import_path<'a>(
+    module: &'a Workspace,
     ast: &crate::ast::AST<crate::ast::NameResolved>,
     decl: &crate::node_kinds::decl::Decl,
     byte_offset: u32,
-) -> Option<Location> {
+    stdlib: &dyn Fn(ModuleId) -> Option<std::borrow::Cow<'a, Workspace>>,
+) -> Option<GotoDefinition> {
     use crate::node_kinds::decl::DeclKind;
 
     let DeclKind::Import(import) = &decl.kind else {
@@ -59,24 +102,34 @@ fn goto_definition_from_import_path(
         crate::node_kinds::decl::ImportPath::Local(_) => {
             let target_path = resolve_import_path(&module.source_root, &ast.path, &import.path)?;
             let document_id = document_id_for_path(module, &target_path)?;
-            Some(Location {
-                document_id,
-                range: TextRange::new(0, 0),
+            let text = module_text(module, &document_id)?;
+            Some(GotoDefinition::Found {
+                location: Location {
+                    document_id,
+                    range: TextRange::new(0, 0),
+                },
+                text,
             })
         }
         crate::node_kinds::decl::ImportPath::Package(package) => {
-            let stdlib = module.stdlib_workspace_for_package(package)?;
-            module_start_location(&stdlib)
+            let module_id = module
+                .stdlib_module_ids
+                .iter()
+                .find_map(|(module_id, name)| (name == package).then_some(*module_id))?;
+            let Some(stdlib) = stdlib(module_id) else {
+                return Some(GotoDefinition::NeedsModule(module_id));
+            };
+            let document_id = stdlib.file_id_to_document.first()?.clone();
+            let text = module_text(&stdlib, &document_id)?;
+            Some(GotoDefinition::Found {
+                location: Location {
+                    document_id,
+                    range: TextRange::new(0, 0),
+                },
+                text,
+            })
         }
     }
-}
-
-fn module_start_location(module: &Workspace) -> Option<Location> {
-    let document_id = module.file_id_to_document.first()?.clone();
-    Some(Location {
-        document_id,
-        range: TextRange::new(0, 0),
-    })
 }
 
 fn resolve_import_path(
@@ -94,18 +147,23 @@ fn resolve_import_path(
     }
 }
 
-pub(crate) fn definition_location_for_symbol(
-    module: &Workspace,
-    core: Option<&Workspace>,
+pub(crate) fn definition_location_for_symbol<'a>(
+    module: &'a Workspace,
+    core: Option<&'a Workspace>,
+    stdlib: &dyn Fn(ModuleId) -> Option<std::borrow::Cow<'a, Workspace>>,
     symbol: Symbol,
-) -> Option<Location> {
-    if symbol.module_id() == Some(ModuleId::Core) {
-        let core = core?;
+) -> GotoDefinition {
+    if symbol.module_id() == Some(ModuleId::Core)
+        && let Some(core) = core
+    {
         return definition_location_in_module(core, symbol);
     }
     if let Some(module_id) = symbol.module_id()
-        && let Some(stdlib) = module.stdlib_workspace_for_module_id(module_id)
+        && module.stdlib_module_ids.contains_key(&module_id)
     {
+        let Some(stdlib) = stdlib(module_id) else {
+            return GotoDefinition::NeedsModule(module_id);
+        };
         return definition_location_in_module(&stdlib, symbol);
     }
     // Everything else — the workspace's own symbols included — carries
@@ -114,14 +172,31 @@ pub(crate) fn definition_location_for_symbol(
     definition_location_in_module(module, symbol)
 }
 
-fn definition_location_in_module(module: &Workspace, symbol: Symbol) -> Option<Location> {
-    let def_node = *module.resolved_names.symbols_to_node.get(&symbol)?;
+/// A document's text within a workspace, by document id.
+fn module_text(
+    module: &Workspace,
+    document_id: &DocumentId,
+) -> Option<crate::common::source_snapshot::SourceSnapshot> {
+    let file_id = module.document_to_file_id.get(document_id)?;
+    module.texts.get(file_id.0 as usize).cloned()
+}
+
+fn definition_location_in_module(module: &Workspace, symbol: Symbol) -> GotoDefinition {
+    let Some(&def_node) = module.resolved_names.symbols_to_node.get(&symbol) else {
+        return GotoDefinition::NotFound;
+    };
     let file_id = def_node.0;
-    let document_id = module.file_id_to_document.get(file_id.0 as usize)?.clone();
-    let ast = module
+    let Some(document_id) = module.file_id_to_document.get(file_id.0 as usize).cloned()
+    else {
+        return GotoDefinition::NotFound;
+    };
+    let Some(ast) = module
         .asts
         .get(file_id.0 as usize)
-        .and_then(|ast| ast.as_ref())?;
+        .and_then(|ast| ast.as_ref())
+    else {
+        return GotoDefinition::NotFound;
+    };
 
     let (start, end) = if let Some(span) = definition_name_span(ast, def_node) {
         span
@@ -131,13 +206,22 @@ fn definition_location_in_module(module: &Workspace, symbol: Symbol) -> Option<L
             None => (meta.start.start, meta.end.end),
         }
     } else {
-        node_span(ast, def_node)?
+        let Some(span) = node_span(ast, def_node) else {
+            return GotoDefinition::NotFound;
+        };
+        span
     };
 
-    Some(Location {
-        document_id,
-        range: TextRange::new(start, end),
-    })
+    let Some(text) = module.texts.get(file_id.0 as usize).cloned() else {
+        return GotoDefinition::NotFound;
+    };
+    GotoDefinition::Found {
+        location: Location {
+            document_id,
+            range: TextRange::new(start, end),
+        },
+        text,
+    }
 }
 
 fn definition_name_span(
@@ -188,7 +272,7 @@ fn node_span(
 
 #[cfg(test)]
 mod tests {
-    use crate::analysis::{DocumentId, DocumentInput, Workspace, goto_definition};
+    use crate::analysis::{DocumentId, DocumentInput, GotoDefinition, Workspace, goto_definition};
 
     fn workspace_for(docs: &[(&str, &str)]) -> Workspace {
         let inputs = docs
@@ -211,9 +295,11 @@ mod tests {
 
     fn definition_text_at(code: &str, offset: u32) -> Option<(DocumentId, String)> {
         let ws = workspace_for(&[("main.tlk", code)]);
-        let location = goto_definition(&ws, None, &"main.tlk".to_string(), offset)?;
-        let file_id = ws.document_to_file_id.get(&location.document_id)?;
-        let text = ws.texts.get(file_id.0 as usize)?;
+        let GotoDefinition::Found { location, text } =
+            goto_definition(&ws, None, &"main.tlk".to_string(), offset)
+        else {
+            return None;
+        };
         Some((
             location.document_id.clone(),
             text.text()[location.range.start as usize..location.range.end as usize].to_string(),
@@ -309,8 +395,11 @@ mod tests {
 
         // The use-site import entry jumps to the exported binding.
         let offset = main.find("answer }").expect("import entry") as u32;
-        let location =
-            goto_definition(&ws, None, &"src/main.tlk".to_string(), offset).expect("definition");
+        let GotoDefinition::Found { location, .. } =
+            goto_definition(&ws, None, &"src/main.tlk".to_string(), offset)
+        else {
+            panic!("definition");
+        };
         assert_eq!(location.document_id, "src/other.tlk");
         assert_eq!(
             &other[location.range.start as usize..location.range.end as usize],
@@ -319,8 +408,11 @@ mod tests {
 
         // A later use of the imported name jumps there too.
         let offset = main.rfind("answer").expect("use site") as u32;
-        let location =
-            goto_definition(&ws, None, &"src/main.tlk".to_string(), offset).expect("definition");
+        let GotoDefinition::Found { location, .. } =
+            goto_definition(&ws, None, &"src/main.tlk".to_string(), offset)
+        else {
+            panic!("definition");
+        };
         assert_eq!(location.document_id, "src/other.tlk");
     }
 
@@ -330,8 +422,11 @@ mod tests {
         let other = "pub let answer = 42\n";
         let ws = workspace_for(&[("src/main.tlk", main), ("src/other.tlk", other)]);
         let offset = main.find("other").expect("import path") as u32;
-        let location =
-            goto_definition(&ws, None, &"src/main.tlk".to_string(), offset).expect("definition");
+        let GotoDefinition::Found { location, .. } =
+            goto_definition(&ws, None, &"src/main.tlk".to_string(), offset)
+        else {
+            panic!("definition");
+        };
         assert_eq!(location.document_id, "src/other.tlk");
         assert_eq!((location.range.start, location.range.end), (0, 0));
     }

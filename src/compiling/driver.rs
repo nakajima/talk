@@ -98,7 +98,7 @@ pub enum CompilationMode {
     Library,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum ParseMode {
     #[default]
     Strict,
@@ -144,10 +144,107 @@ pub struct DriverConfig {
         ModuleId,
         std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
     )>,
+    /// Local imports resolving to these canonical source paths bind
+    /// against the named precompiled module's exports instead of
+    /// re-compiling the file (ADR 0056): a package's root library rides
+    /// into its own binary and test compiles as a finished module, so
+    /// its closure is never re-parsed by the importing compile.
+    pub precompiled_sources: FxHashMap<PathBuf, String>,
     /// An explicit parser session for the strict path: bootstrap stage 2
     /// parses with the stage-1 candidate (ADR 0043 §3). `None` is the
     /// shared embedded artifact.
     pub parser: Option<std::sync::Arc<crate::compiling::frontend::ParserSession>>,
+    /// Per-file parse results reused across compilations (the LSP's
+    /// analysis worker rebuilds its workspace on every edit burst, but
+    /// unchanged files parse to identical output). `None` compiles cold.
+    /// Only consulted when `parser` is `None`: a candidate session's
+    /// output is not stable across the bootstrap fixed point.
+    pub parse_cache: Option<Rc<std::cell::RefCell<ParseCache>>>,
+}
+
+/// A per-file parse cache. A file's parse output is a pure function of
+/// (file id, path, parse mode, source text): unchanged files across
+/// workspace rebuilds skip the frontend entirely, which is the bulk of
+/// an LSP rebuild's cost. Entries replace in place — one per file
+/// slot, never accumulating stale texts' ASTs.
+#[derive(Default)]
+pub struct ParseCache {
+    entries: rustc_hash::FxHashMap<ParseCacheKey, ParseCacheEntry>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ParseCacheKey {
+    file_id: FileID,
+    path: String,
+    mode: ParseMode,
+}
+
+struct ParseCacheEntry {
+    text_hash: u64,
+    ast: AST<ast::Parsed>,
+    diagnostics: Vec<AnyDiagnostic>,
+}
+
+impl ParseCache {
+    fn text_hash(text: &str) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = rustc_hash::FxHasher::default();
+        text.as_bytes().hash(&mut hasher);
+        text.len().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    /// A cached parse AST by identity, validated against the current
+    /// text: semantic-token collection reuses the workspace build's
+    /// parse instead of re-parsing the document.
+    pub fn get_ast(
+        &self,
+        file_id: FileID,
+        path: &str,
+        mode: ParseMode,
+        text: &str,
+    ) -> Option<AST<ast::Parsed>> {
+        self.get(
+            &ParseCacheKey {
+                file_id,
+                path: path.to_string(),
+                mode,
+            },
+            text,
+        )
+        .map(|(ast, _)| ast)
+    }
+
+    /// The cached parse for this exact text, cloned out (the driver's
+    /// AST map takes ownership).
+    fn get(
+        &self,
+        key: &ParseCacheKey,
+        text: &str,
+    ) -> Option<(AST<ast::Parsed>, Vec<AnyDiagnostic>)> {
+        let entry = self.entries.get(key)?;
+        if entry.text_hash != Self::text_hash(text) {
+            return None;
+        }
+        Some((entry.ast.clone(), entry.diagnostics.clone()))
+    }
+
+    fn insert(
+        &mut self,
+        key: ParseCacheKey,
+        text: &str,
+        ast: &AST<ast::Parsed>,
+        diagnostics: &[AnyDiagnostic],
+    ) {
+        self.entries.insert(
+            key,
+            ParseCacheEntry {
+                text_hash: Self::text_hash(text),
+                ast: ast.clone(),
+                diagnostics: diagnostics.to_vec(),
+            },
+        );
+    }
 }
 
 impl std::fmt::Debug for DriverConfig {
@@ -181,7 +278,9 @@ impl DriverConfig {
             workspace_root: None,
             source_root: None,
             libraries: Vec::new(),
+            precompiled_sources: FxHashMap::default(),
             parser: None,
+            parse_cache: None,
         }
     }
 
@@ -574,7 +673,7 @@ impl Driver {
             let input = file.read()?;
             tracing::info!("parsing {file:?}");
             source_texts.insert(file_id, input.clone());
-            let result = match self.config.parse_mode {
+            let parse = |driver: &Self| match driver.config.parse_mode {
                 // The strict compile path parses through the frontend
                 // artifact (ADR 0043 Stage 4): the checked-in bytecode
                 // is the parser; there is no fallback. The lenient
@@ -585,7 +684,7 @@ impl Driver {
                 // products come from the disk cache, so the interpreted
                 // parse cost is paid once per compiler build.
                 ParseMode::Strict => crate::compiling::frontend::parse_ast_in(
-                    self.config.parser.as_deref(),
+                    driver.config.parser.as_deref(),
                     &input,
                     file_id,
                     file.path().as_ref(),
@@ -598,6 +697,34 @@ impl Driver {
                     file_id,
                     file.path().as_ref(),
                 )),
+            };
+            // Unchanged files skip the frontend: the cache key pins the
+            // file's identity in this compile (id, path, mode), the
+            // entry validates the text itself. Candidate parser
+            // sessions bypass the cache (their output is not stable).
+            let parse_cache = self
+                .config
+                .parse_cache
+                .clone()
+                .filter(|_| self.config.parser.is_none());
+            let result = match parse_cache {
+                Some(cache) => {
+                    let key = ParseCacheKey {
+                        file_id,
+                        path: file.path().into_owned(),
+                        mode: self.config.parse_mode,
+                    };
+                    if let Some(hit) = cache.borrow().get(&key, &input) {
+                        Ok(hit)
+                    } else {
+                        let result = parse(&self);
+                        if let Ok((ast, ast_diagnostics)) = &result {
+                            cache.borrow_mut().insert(key, &input, ast, ast_diagnostics);
+                        }
+                        result
+                    }
+                }
+                None => parse(&self),
             };
             match result {
                 Ok((mut parsed, ast_diagnostics)) => {
@@ -618,7 +745,21 @@ impl Driver {
                                 else {
                                     continue;
                                 };
-                                for resolved in LocalModulePaths::expand_glob(&base) {
+                                let members = LocalModulePaths::expand_glob(&base);
+                                // Every glob member rides precompiled
+                                // (ADR 0056): the resolver binds the
+                                // glob against the module's exports
+                                // instead of re-parsing the files.
+                                if !members.is_empty()
+                                    && members.iter().all(|path| {
+                                        path.canonicalize().ok().is_some_and(|canonical| {
+                                            self.config.precompiled_sources.contains_key(&canonical)
+                                        })
+                                    })
+                                {
+                                    continue;
+                                }
+                                for resolved in members {
                                     let Some(canonical) = canonicalize_import(
                                         source_path.as_ref(),
                                         &module_path,
@@ -650,7 +791,8 @@ impl Driver {
                         };
                         if let ImportPath::Package(package) = &import_path {
                             if self.config.modules.get_module_by_name(package).is_none()
-                                && let Some((id, module)) = super::stdlib::module_with_id(package)
+                                && let Some((id, module)) =
+                                    super::stdlib::try_module_with_id(package)
                             {
                                 Rc::make_mut(&mut self.config.modules)
                                     .import_shared(module.clone(), id)
@@ -664,6 +806,13 @@ impl Driver {
                             &local_modules,
                             self.config.workspace_root.as_deref(),
                         )? {
+                            // The target rides precompiled (ADR 0056):
+                            // the resolver binds the import against the
+                            // module's exports; the file never enters
+                            // this compile.
+                            if self.config.precompiled_sources.contains_key(&canonical) {
+                                continue;
+                            }
                             queue_discovered(
                                 canonical,
                                 resolved,
@@ -733,7 +882,8 @@ impl Driver<Parsed> {
             self.config.modules.clone(),
             self.config.module_id,
             self.config.source_root.clone().unwrap_or_default(),
-        );
+        )
+        .with_precompiled_sources(self.config.precompiled_sources.clone());
 
         let procedural_macros = self.phase.procedural_macros.local_artifact();
         let file_dependencies = self.phase.file_dependencies;
@@ -1017,20 +1167,44 @@ impl Driver<Typed> {
             .filter(|(name, _)| self.config.modules.get_module_id_by_name(name).is_some())
             .map(|(name, _)| *name)
             .collect();
+        // Library modules (package dependencies, a cached root library)
+        // record every module they were compiled against (CLEAN-03):
+        // their stdlib edges name bodies the program under compilation
+        // may never import itself, so seed the body set from every
+        // registered module's edges, not just the program's own.
+        let registered_edges: Vec<ModuleId> = self
+            .config
+            .modules
+            .iter_modules()
+            .flat_map(|(_, module)| module.dependencies.iter().copied())
+            .collect();
+        for edge in registered_edges {
+            if let Some(name) = crate::compiling::stdlib::name_for_module_id(edge)
+                && !stdlib_names.contains(&name)
+            {
+                stdlib_names.push(name);
+            }
+        }
         // Stdlib modules' bodies may call into the modules they `use`
         // (testing calls into ansi): close the body set over the edges
         // each compiled stdlib module recorded when it was built, even
-        // when the program never names them itself.
+        // when the program never names them itself. Modules nobody
+        // registered are materialized through the stdlib cache so their
+        // own edges still count (full transitivity).
         let mut index = 0;
         while index < stdlib_names.len() {
-            if let Some(module) = self.config.modules.get_module_by_name(stdlib_names[index]) {
-                for dependency in &module.dependencies {
-                    if let Some(dependency) =
-                        crate::compiling::stdlib::name_for_module_id(*dependency)
-                        && !stdlib_names.contains(&dependency)
-                    {
-                        stdlib_names.push(dependency);
-                    }
+            let name = stdlib_names[index];
+            let dependencies: Vec<ModuleId> = match self.config.modules.get_module_by_name(name) {
+                Some(module) => module.dependencies.clone(),
+                None => crate::compiling::stdlib::module_with_id(name)
+                    .map(|(_, module)| module.dependencies.clone())
+                    .unwrap_or_default(),
+            };
+            for dependency in dependencies {
+                if let Some(dependency) = crate::compiling::stdlib::name_for_module_id(dependency)
+                    && !stdlib_names.contains(&dependency)
+                {
+                    stdlib_names.push(dependency);
                 }
             }
             index += 1;
@@ -1055,7 +1229,12 @@ impl Driver<Typed> {
             },
         ];
         for (name, program) in &stdlib {
-            if let Some(module) = self.config.modules.get_module_id_by_name(name) {
+            // The session module table only names the modules the
+            // program imported itself; the dependency closure above can
+            // add modules nobody named (fs's bodies call into os). Their
+            // ids are fixed either way (WellKnown), so mint them
+            // directly rather than consulting the session table.
+            if let Some(module) = crate::compiling::stdlib::module_id_for_name(name) {
                 programs.push(crate::compiling::mir::ProgramInput { program, module });
             }
         }
@@ -1721,6 +1900,8 @@ pub mod tests {
             libraries: Vec::new(),
             catalog: Default::default(),
             parser: None,
+            parse_cache: None,
+            precompiled_sources: Default::default(),
         };
 
         let driver_b = Driver::new(
@@ -1772,7 +1953,12 @@ pub mod tests {
             )],
             config,
         );
-        let typed = driver_b.parse().unwrap().resolve_names().unwrap().type_check();
+        let typed = driver_b
+            .parse()
+            .unwrap()
+            .resolve_names()
+            .unwrap()
+            .type_check();
         assert!(typed.has_errors(), "the duplicate row must collide");
         let rendered = typed
             .diagnostics()
@@ -1821,7 +2007,12 @@ pub mod tests {
                 )],
                 config,
             );
-            let typed = driver_b.parse().unwrap().resolve_names().unwrap().type_check();
+            let typed = driver_b
+                .parse()
+                .unwrap()
+                .resolve_names()
+                .unwrap()
+                .type_check();
             assert!(!typed.has_errors(), "{:?}", typed.diagnostics());
             let module_b = typed.module("B");
             bincode::serialize(&(&module_b.types.catalog, &module_b.types.schemes))
@@ -1873,6 +2064,8 @@ pub mod tests {
             libraries: Vec::new(),
             catalog: Default::default(),
             parser: None,
+            parse_cache: None,
+            precompiled_sources: Default::default(),
         };
 
         let driver_b = Driver::new(

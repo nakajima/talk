@@ -59,6 +59,10 @@ pub enum PackageError {
     Cache(String),
     Resolution(String),
     Compile(String),
+    /// Frontend diagnostics with their sources attached: the CLI
+    /// renders these in the annotated snippet form `talk check` uses;
+    /// other consumers get the message-per-line form.
+    CompileDiagnostics(crate::analysis::CompileDiagnostics),
     Test(crate::testing::TestError),
 }
 
@@ -91,6 +95,7 @@ impl Display for PackageError {
             Self::Cache(message) | Self::Resolution(message) | Self::Compile(message) => {
                 f.write_str(message)
             }
+            Self::CompileDiagnostics(diagnostics) => f.write_str(&diagnostics.render_brief()),
             Self::Test(error) => error.fmt(f),
         }
     }
@@ -1699,6 +1704,10 @@ pub struct PackageProject {
     manifest: PackageManifest,
     lock: PackageLock,
     package_roots: FxHashMap<String, PathBuf>,
+    /// Compiled-library cache root override (ADR 0056); `None` resolves
+    /// the shared cache root (src/compiling/cache.rs) at use. Tests
+    /// inject a temporary root to stay hermetic.
+    compile_cache_root: Option<PathBuf>,
 }
 
 impl PackageProject {
@@ -2063,7 +2072,21 @@ impl PackageProject {
             manifest,
             lock,
             package_roots,
+            compile_cache_root: None,
         })
+    }
+
+    /// The compiled-library cache root this project reads and writes.
+    fn compile_cache_root(&self) -> Option<PathBuf> {
+        self.compile_cache_root
+            .clone()
+            .or_else(super::cache::cache_root)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_compile_cache_root(mut self, root: PathBuf) -> Self {
+        self.compile_cache_root = Some(root);
+        self
     }
 }
 
@@ -2076,6 +2099,14 @@ struct CompiledLibrary {
     module: Module,
     typed: std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
     module_id: ModuleId,
+    /// The canonical source paths the library's compile closure spanned
+    /// — the redirect table a cached image hands to importing compiles
+    /// (ADR 0056).
+    files: Vec<PathBuf>,
+    /// The library's own disk-cache key (ADR 0056): downstream
+    /// libraries close their keys over it, so a source change here
+    /// invalidates everything built on top.
+    cache_key: Option<[u8; 32]>,
 }
 
 struct CompiledGraph {
@@ -2084,6 +2115,94 @@ struct CompiledGraph {
     /// environment and the final binary/test environment clone it, so
     /// the whole build shares one module numbering.
     base: ModuleEnvironment,
+}
+
+/// The compile inputs every package target builds on: the locked
+/// dependency graph as modules and typed bodies, the shared fact table
+/// (ADR 0053), and the base environment a root library's session id
+/// reserves from (ADR 0056).
+struct PackageCompileInputs {
+    modules: ModuleEnvironment,
+    libraries: DependencyLibraries,
+    catalog: Rc<std::cell::RefCell<crate::compiling::driver::SharedCatalog>>,
+    base: ModuleEnvironment,
+    dependency_keys: Option<Vec<[u8; 32]>>,
+}
+
+/// The serialized form of a compiled library (ADR 0056): the module
+/// interface (carrying its ADR 0053 fact slice), the typed bodies the
+/// backend compiles from, and the compile closure's canonical paths,
+/// which importing compiles build their redirect tables from.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct LibraryImage {
+    module: Module,
+    typed: crate::compiling::typed_program::TypedProgram,
+    files: Vec<PathBuf>,
+}
+
+#[derive(serde::Serialize)]
+struct LibraryImageRef<'a> {
+    module: &'a Module,
+    typed: &'a crate::compiling::typed_program::TypedProgram,
+    files: &'a [PathBuf],
+}
+
+/// One library's cache key (ADR 0056): its own sources, the keys of
+/// the libraries it builds on (their contents already close over
+/// theirs), its reserved session module id — symbols mint it, so a
+/// renumbered session must not read another's image — and the
+/// compiler stamp.
+fn library_cache_key(
+    stem: &str,
+    root: &Path,
+    module_id: ModuleId,
+    dependency_keys: &[[u8; 32]],
+) -> Option<[u8; 32]> {
+    let mut inputs = library_cache_sources(root)?;
+    inputs.push(("$module_id".to_string(), module_id.0.to_string()));
+    let mut dependency_keys = dependency_keys.to_vec();
+    dependency_keys.sort();
+    for key in dependency_keys {
+        inputs.push(("$dependency".to_string(), hex_digest(key)));
+    }
+    let refs: Vec<(&str, &str)> = inputs
+        .iter()
+        .map(|(path, content)| (path.as_str(), content.as_str()))
+        .collect();
+    super::cache::key(stem, &refs, super::core::compiler_stamp())
+}
+
+/// Every file whose contents can change a library's product: the
+/// manifest plus each source under src/ (the import closure's
+/// confinement root). The walk is a superset of the closure — an edit
+/// to an unimported source invalidates needlessly, but a needed edit
+/// never stale-hits.
+fn library_cache_sources(root: &Path) -> Option<Vec<(String, String)>> {
+    let mut inputs = Vec::new();
+    let manifest = fs::read_to_string(root.join(MANIFEST_FILE)).ok()?;
+    inputs.push((MANIFEST_FILE.to_string(), manifest));
+    let mut files = Vec::new();
+    collect_source_files(&root.join("src"), &mut files);
+    files.sort();
+    for file in files {
+        let content = fs::read_to_string(&file).ok()?;
+        inputs.push((file.to_string_lossy().into_owned(), content));
+    }
+    Some(inputs)
+}
+
+fn collect_source_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_source_files(&path, files);
+        } else if path.extension().is_some_and(|extension| extension == "tlk") {
+            files.push(path);
+        }
+    }
 }
 
 /// Dependency libraries' typed bodies, by the module id they were
@@ -2097,6 +2216,19 @@ type DependencyLibraries = Vec<(
 /// against it: the module environment dependency imports resolve
 /// against, the dependencies' typed bodies the backend compiles from,
 /// and the roots that scope `package::` and local imports.
+/// One locked dependency as `talk dependencies` reports it: where the
+/// package came from, the Talk import it provides, and the names that
+/// import makes available.
+#[derive(Clone, Debug)]
+pub struct PackageDependencyInfo {
+    pub name: String,
+    pub version: String,
+    pub source: String,
+    pub import_name: String,
+    pub direct: bool,
+    pub exports: Vec<String>,
+}
+
 #[derive(Clone)]
 pub struct PackageCompileContext {
     pub modules: ModuleEnvironment,
@@ -2108,7 +2240,122 @@ pub struct PackageCompileContext {
     pub source_root: PathBuf,
 }
 
+#[derive(Clone)]
+pub struct ReplPackageContext {
+    pub compile: PackageCompileContext,
+    pub import_name: String,
+}
+
 impl PackageProject {
+    /// Compile the root package library and its locked graph so a REPL can
+    /// consume the package through the same module boundary as downstream
+    /// packages do.
+    pub fn repl_context(&self) -> Result<ReplPackageContext, PackageError> {
+        let library = self
+            .manifest
+            .library()
+            .ok_or_else(|| PackageError::Resolution("package has no library target".into()))?;
+        let shared: Rc<std::cell::RefCell<crate::compiling::driver::SharedCatalog>> =
+            Default::default();
+        let graph = self.compile_graph(&shared)?;
+        let module_id = graph.base.reserve_module_id();
+        let environment = self.environment_for(
+            &graph.base,
+            &self.lock.root_dependencies,
+            &graph.dependencies,
+        )?;
+        let dependency_keys: Option<Vec<[u8; 32]>> = graph
+            .dependencies
+            .values()
+            .map(|library| library.cache_key)
+            .collect();
+        let compiled = self.cached_library(
+            &self.manifest,
+            &self.root,
+            library,
+            module_id,
+            environment.clone(),
+            &shared,
+            dependency_keys.as_deref(),
+        )?;
+
+        let mut modules = environment;
+        modules
+            .import_compiled(compiled.module.clone(), compiled.module_id)
+            .map_err(PackageError::Compile)?;
+        let mut libraries = graph
+            .dependencies
+            .values()
+            .map(|library| (library.module_id, library.typed.clone()))
+            .collect::<DependencyLibraries>();
+        libraries.push((compiled.module_id, compiled.typed));
+        let source_root =
+            self.root
+                .join("src")
+                .canonicalize()
+                .map_err(|source| PackageError::Io {
+                    context: format!(
+                        "failed to find package source directory under {}",
+                        self.root.display()
+                    ),
+                    source,
+                })?;
+
+        Ok(ReplPackageContext {
+            compile: PackageCompileContext {
+                modules,
+                libraries,
+                catalog: shared,
+                workspace_root: self.root.clone(),
+                source_root,
+            },
+            import_name: self.manifest.import_name(),
+        })
+    }
+
+    /// The locked dependency graph as `talk dependencies` reports it:
+    /// each package's source, the import name it provides, and the
+    /// names that import exports. Compiles each dependency library the
+    /// same way `talk check` does, so the exports are the ones the type
+    /// checker actually sees.
+    pub fn dependency_report(&self) -> Result<Vec<PackageDependencyInfo>, PackageError> {
+        let shared: Rc<std::cell::RefCell<crate::compiling::driver::SharedCatalog>> =
+            Default::default();
+        let graph = self.compile_graph(&shared)?;
+        let direct = self
+            .lock
+            .root_dependencies
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        let mut report = Vec::with_capacity(self.lock.packages.len());
+        for package in &self.lock.packages {
+            let compiled = graph.dependencies.get(&package.id).ok_or_else(|| {
+                PackageError::Compile(format!(
+                    "missing compiled library for package {}",
+                    package.name
+                ))
+            })?;
+            let source = match &package.source {
+                LockedSource::Git { url, commit, .. } => {
+                    let short = commit.get(..7).unwrap_or(commit);
+                    format!("git {url} @ {short}")
+                }
+                LockedSource::Tar { url, .. } => format!("tar {url}"),
+                LockedSource::Path { path, .. } => format!("path {path}"),
+            };
+            report.push(PackageDependencyInfo {
+                name: package.name.clone(),
+                version: package.version.clone(),
+                source,
+                import_name: compiled.module.name.clone(),
+                direct: direct.contains(package.id.as_str()),
+                exports: compiled.module.exports.keys().cloned().collect(),
+            });
+        }
+        Ok(report)
+    }
+
     /// Compile the selected binary and its locked dependency graph into
     /// one executable (whole-reachable-graph compilation; ledger TOOL-08).
     pub fn compile_binary(
@@ -2151,7 +2398,7 @@ impl PackageProject {
     /// `talk check` compiles every workspace source against this, so
     /// its diagnostics match what `talk run` and `talk test` accept.
     pub fn package_compile_context(&self) -> Result<PackageCompileContext, PackageError> {
-        let (modules, libraries, shared) = self.dependency_compile_inputs()?;
+        let inputs = self.dependency_compile_inputs()?;
         let source_root =
             self.root
                 .join("src")
@@ -2164,9 +2411,9 @@ impl PackageProject {
                     source,
                 })?;
         Ok(PackageCompileContext {
-            modules,
-            libraries,
-            catalog: shared,
+            modules: inputs.modules,
+            libraries: inputs.libraries,
+            catalog: inputs.catalog,
             workspace_root: self.root.clone(),
             source_root,
         })
@@ -2179,7 +2426,10 @@ impl PackageProject {
                 "selected target is not a binary".into(),
             ));
         };
-        let (environment, libraries, shared) = self.dependency_compile_inputs()?;
+        let mut inputs = self.dependency_compile_inputs()?;
+        // ADR 0056: the root library rides precompiled; `package::`
+        // imports of its closure bind against the finished module.
+        let precompiled_sources = self.root_library_redirects(&mut inputs);
         let source = self.manifest.source_path(&self.root, from)?;
         let workspace_root =
             self.root
@@ -2193,11 +2443,12 @@ impl PackageProject {
                     source,
                 })?;
         let mut config = DriverConfig::new(format!("{} binary", self.manifest.name));
-        config.modules = Rc::new(environment);
-        config.catalog = shared;
+        config.modules = Rc::new(inputs.modules);
+        config.catalog = inputs.catalog;
         config.workspace_root = Some(workspace_root.clone());
         config.source_root = Some(workspace_root);
-        config.libraries = libraries;
+        config.libraries = inputs.libraries;
+        config.precompiled_sources = precompiled_sources;
         let driver = Driver::new_bare(vec![Source::from(source)], config);
         let parsed = driver
             .parse()
@@ -2205,15 +2456,14 @@ impl PackageProject {
         let resolved = parsed
             .resolve_names()
             .map_err(|error| PackageError::Compile(format!("{error:?}")))?;
+        let asts_by_source = resolved.phase.asts.clone();
         let typed = resolved.type_check();
         if typed.has_errors() {
-            return Err(PackageError::Compile(
-                typed
-                    .diagnostics()
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("\n"),
+            return Err(PackageError::CompileDiagnostics(
+                crate::analysis::CompileDiagnostics::from_driver_asts(
+                    &asts_by_source,
+                    typed.diagnostics(),
+                ),
             ));
         }
         Ok(typed)
@@ -2287,36 +2537,31 @@ impl PackageProject {
             });
             (roots, source_root)
         };
-        let (environment, libraries, shared) = self.dependency_compile_inputs()?;
+        let mut inputs = self.dependency_compile_inputs()?;
+        // ADR 0056: the root library rides precompiled; test files'
+        // `package::` imports of its closure bind against the finished
+        // module.
+        let precompiled_sources = self.root_library_redirects(&mut inputs);
         let mut config = DriverConfig::new(format!("{} tests", self.manifest.name));
-        config.modules = Rc::new(environment);
-        config.catalog = shared;
+        config.modules = Rc::new(inputs.modules);
+        config.catalog = inputs.catalog;
         config.workspace_root = Some(self.root.clone());
         config.source_root = source_root;
-        config.libraries = libraries;
+        config.libraries = inputs.libraries;
+        config.precompiled_sources = precompiled_sources;
         Ok(Some(
             crate::testing::Runner::with_config(roots, config).with_filter(filter),
         ))
     }
 
     /// The locked dependency graph as the root package's own compiles
-    /// consume it. The root package's own sources always re-parse into
-    /// the final compile (workspace imports), so they live in the same
-    /// module-id space as the binary or tests; injecting the root
-    /// library's compiled program here would duplicate every
-    /// declaration in a second id space and conflate symbols across the
-    /// spaces. Only locked dependencies, whose sources are outside the
-    /// source root and never re-parsed, ride along precompiled.
-    fn dependency_compile_inputs(
-        &self,
-    ) -> Result<
-        (
-            ModuleEnvironment,
-            DependencyLibraries,
-            Rc<std::cell::RefCell<crate::compiling::driver::SharedCatalog>>,
-        ),
-        PackageError,
-    > {
+    /// consume it. The root package's library target rides along
+    /// precompiled too (ADR 0056): binary and test compiles bind its
+    /// `package::` imports against the finished module (see
+    /// `root_library_redirects`), so its closure never re-parses into
+    /// the final compile. `talk check` keeps the fully fused compile —
+    /// its diagnostics must cover the workspace's real sources.
+    fn dependency_compile_inputs(&self) -> Result<PackageCompileInputs, PackageError> {
         // ADR 0053: one fact table for the whole package graph — every
         // dependency library compiles into it, in lock order, and the
         // root binary/test compile continues in the same table.
@@ -2333,7 +2578,123 @@ impl PackageProject {
             .values()
             .map(|library| (library.module_id, library.typed.clone()))
             .collect();
-        Ok((environment, libraries, shared))
+        // The root library's key closes over every dependency's key;
+        // one unkeyable dependency makes the root unkeyable too.
+        let dependency_keys = graph
+            .dependencies
+            .values()
+            .map(|library| library.cache_key)
+            .collect();
+        Ok(PackageCompileInputs {
+            modules: environment,
+            libraries,
+            catalog: shared,
+            base: graph.base,
+            dependency_keys,
+        })
+    }
+
+    /// The root package's library target as a precompiled module (ADR
+    /// 0056): the session registers the finished module, the backend
+    /// inputs carry its typed bodies, and the returned redirect table
+    /// (canonical closure path to module name) binds `package::`
+    /// imports of the closure against it. An empty table — no library
+    /// target, or the library does not compile cleanly right now —
+    /// keeps the fused compile, whose diagnostics render exactly as
+    /// before.
+    fn root_library_redirects(
+        &self,
+        inputs: &mut PackageCompileInputs,
+    ) -> FxHashMap<PathBuf, String> {
+        let empty = FxHashMap::default();
+        let Some(library) = self.manifest.library() else {
+            return empty;
+        };
+        let module_id = inputs.base.reserve_module_id();
+        let Ok(compiled) = self.cached_library(
+            &self.manifest,
+            &self.root,
+            library,
+            module_id,
+            inputs.modules.clone(),
+            &inputs.catalog,
+            inputs.dependency_keys.as_deref(),
+        ) else {
+            return empty;
+        };
+        if inputs
+            .modules
+            .import_compiled(compiled.module.clone(), module_id)
+            .is_err()
+        {
+            return empty;
+        }
+        let name = compiled.module.name.clone();
+        inputs.libraries.push((module_id, compiled.typed));
+        compiled
+            .files
+            .into_iter()
+            .map(|path| (path, name.clone()))
+            .collect()
+    }
+
+    /// Compile one package library, or replay its cached image (ADR
+    /// 0056). The key closes over the library's sources, the keys of
+    /// the libraries it builds on, its reserved session module id, and
+    /// the compiler stamp; only clean compiles are stored.
+    #[allow(clippy::too_many_arguments)]
+    fn cached_library(
+        &self,
+        manifest: &PackageManifest,
+        root: &Path,
+        library: &str,
+        module_id: ModuleId,
+        environment: ModuleEnvironment,
+        shared: &Rc<std::cell::RefCell<crate::compiling::driver::SharedCatalog>>,
+        dependency_keys: Option<&[[u8; 32]]>,
+    ) -> Result<CompiledLibrary, PackageError> {
+        let stem = format!("packages/{}", manifest.import_name());
+        let key = dependency_keys.and_then(|keys| library_cache_key(&stem, root, module_id, keys));
+        if let Some(key) = key
+            && let Some(image) = self.load_library_image(&stem, &key)
+        {
+            return Ok(CompiledLibrary {
+                module: image.module,
+                typed: std::sync::Arc::new(image.typed),
+                module_id,
+                files: image.files,
+                cache_key: Some(key),
+            });
+        }
+        let compiled =
+            self.compile_library(manifest, root, library, module_id, environment, shared)?;
+        if let Some(key) = key {
+            self.store_library_image(&stem, &key, &compiled);
+        }
+        Ok(CompiledLibrary {
+            cache_key: key,
+            ..compiled
+        })
+    }
+
+    fn load_library_image(&self, stem: &str, key: &[u8; 32]) -> Option<LibraryImage> {
+        let payload = super::cache::load_in(&self.compile_cache_root()?, stem, key)?;
+        bincode::deserialize(&payload).ok()
+    }
+
+    fn store_library_image(&self, stem: &str, key: &[u8; 32], compiled: &CompiledLibrary) {
+        let Some(root) = self.compile_cache_root() else {
+            return;
+        };
+        let image = LibraryImageRef {
+            module: &compiled.module,
+            typed: compiled.typed.as_ref(),
+            files: &compiled.files,
+        };
+        let Ok(payload) = bincode::serialize(&image) else {
+            return;
+        };
+        super::cache::store_in(&root, stem, key, &payload);
     }
 
     fn compile_graph(
@@ -2367,13 +2728,27 @@ impl PackageProject {
             let module_id = *ids.get(&package.id).ok_or_else(|| {
                 PackageError::Compile(format!("missing module id for package {}", package.name))
             })?;
-            let compiled =
-                self.compile_library(&manifest, root, library, module_id, environment, shared)?;
+            // Lock order compiles a package's own dependencies first,
+            // so their cache keys are in hand (ADR 0056).
+            let dependency_keys: Option<Vec<[u8; 32]>> = package
+                .dependencies
+                .iter()
+                .map(|id| dependencies.get(id).and_then(|compiled| compiled.cache_key))
+                .collect();
+            let compiled = self.cached_library(
+                &manifest,
+                root,
+                library,
+                module_id,
+                environment,
+                shared,
+                dependency_keys.as_deref(),
+            )?;
             dependencies.insert(package.id.clone(), compiled);
         }
-        // The root package's own sources always re-parse into the binary
-        // or test compile (see the call sites), so the root library is
-        // never compiled here — storing it would be dead work.
+        // The root package's own library target compiles on demand at
+        // the call sites that consume it precompiled (ADR 0056), not
+        // here: `talk check` keeps the fully fused compile.
         Ok(CompiledGraph { dependencies, base })
     }
 
@@ -2408,6 +2783,16 @@ impl PackageProject {
         let parsed = driver.parse().map_err(|error| {
             PackageError::Compile(format!("failed to parse {}: {error:?}", manifest.name))
         })?;
+        // The compile closure: every file parse discovery pulled in.
+        // Importing compiles redirect local imports for exactly these
+        // paths to the finished module (ADR 0056).
+        let files = parsed
+            .phase
+            .asts
+            .keys()
+            .filter_map(|source| source.source_path())
+            .map(|path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+            .collect();
         let resolved = parsed.resolve_names().map_err(|error| {
             PackageError::Compile(format!("failed to resolve {}: {error:?}", manifest.name))
         })?;
@@ -2428,6 +2813,8 @@ impl PackageProject {
             module,
             typed: program,
             module_id,
+            files,
+            cache_key: None,
         })
     }
 
@@ -2712,6 +3099,47 @@ mod tests {
             }
         ));
         assert!(root.join(LOCK_FILE).is_file());
+        fs::remove_dir_all(temporary).expect("remove temporary directory");
+    }
+
+    #[test]
+    fn reports_locked_dependencies_with_their_imports_and_exports() {
+        let temporary = std::env::temp_dir().join(format!(
+            "talk-package-deps-report-test-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let dependency = temporary.join("dependency");
+        let root = temporary.join("root");
+        fs::create_dir_all(dependency.join("src")).expect("create dependency source");
+        fs::create_dir_all(root.join("src")).expect("create root source");
+        fs::write(
+            dependency.join(MANIFEST_FILE),
+            "Package(name: \"local-lib\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+        )
+        .expect("write dependency manifest");
+        fs::write(
+            dependency.join("src/lib.tlk"),
+            "pub func answer() -> Int { 42 }\nfunc hidden() -> Int { 1 }",
+        )
+        .expect("write dependency source");
+        fs::write(
+            root.join(MANIFEST_FILE),
+            "Package(name: \"root\", version: \"0.1.0\", builds: [], dependencies: [.path(package: \"local-lib\", path: \"../dependency\")])",
+        )
+        .expect("write root manifest");
+        PackageProject::install_at(&root, true, false).expect("install path dependency");
+        let project = PackageProject::open_at(&root, true).expect("open locked path dependency");
+        let report = project.dependency_report().expect("dependency report");
+        let [info] = report.as_slice() else {
+            panic!("expected one dependency");
+        };
+        assert_eq!(info.name, "local-lib");
+        assert_eq!(info.version, "0.1.0");
+        assert_eq!(info.source, "path ../dependency");
+        assert_eq!(info.import_name, "local_lib");
+        assert!(info.direct);
+        assert_eq!(info.exports, vec!["answer".to_string()]);
         fs::remove_dir_all(temporary).expect("remove temporary directory");
     }
 

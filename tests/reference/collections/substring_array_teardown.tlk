@@ -1,0 +1,10 @@
+// A container of Borrowed-classified views (Substring) must release
+// each element's stored reference at teardown: `_load` transfers the
+// slot's value out, it never donates an extra view retain — otherwise
+// every vacated slot leaks one reference.
+func main() {
+	let s = "a/b".to_string()
+	let arr: [Substring] = []
+	arr.push(s.as_substring())
+	print(arr.count)
+}

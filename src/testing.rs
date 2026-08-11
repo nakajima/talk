@@ -4,14 +4,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use indexmap::IndexMap;
+use crate::compiling::driver::{Driver, DriverConfig, Source, Typed};
 
-use crate::{
-    analysis::{Diagnostic, DocumentId},
-    ast::{AST, NameResolved},
-    compiling::driver::{Driver, DriverConfig, Source, Typed},
-    diagnostic::AnyDiagnostic,
-};
+// The diagnostic pipeline lives in the analysis layer
+// (`crate::analysis::CompileDiagnostics`) so `talk check`, `talk run`,
+// `talk test`, and package compilation render identically; re-exported
+// here for the harness's historical callers.
+pub use crate::analysis::{CompileDiagnostic, CompileDiagnostics};
 
 const HARNESS_PRELUDE_SOURCE: &str = include_str!("../stdlib/testing_prelude.tlk");
 const HARNESS_JSON_PRELUDE_SOURCE: &str = include_str!("../stdlib/testing_json_prelude.tlk");
@@ -165,34 +164,6 @@ impl Display for JsonEscaped<'_> {
             }
         }
         Ok(())
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct CompileDiagnostic {
-    pub document_id: DocumentId,
-    pub text: String,
-    pub diagnostic: Diagnostic,
-}
-
-#[derive(Clone, Debug)]
-pub struct CompileDiagnostics {
-    pub entries: Vec<CompileDiagnostic>,
-}
-
-impl CompileDiagnostics {
-    #[cfg(feature = "cli")]
-    pub fn render_text(&self, color_mode: crate::cli::diagnostics::ColorMode) -> String {
-        let mut output = String::new();
-        for entry in &self.entries {
-            output.push_str(&crate::cli::diagnostics::render_text(
-                &entry.document_id,
-                &entry.text,
-                &entry.diagnostic,
-                color_mode,
-            ));
-        }
-        output
     }
 }
 
@@ -590,7 +561,10 @@ impl Runner {
         let asts_by_source = resolved.phase.asts.clone();
         let typed = resolved.type_check();
         if typed.has_errors() {
-            let diagnostics = Self::compile_diagnostics(&asts_by_source, typed.diagnostics());
+            let diagnostics = CompileDiagnostics::from_driver_asts(
+                &asts_by_source,
+                typed.diagnostics(),
+            );
             if diagnostics.entries.is_empty() {
                 return Err(TestError::Compile(
                     typed
@@ -610,76 +584,6 @@ impl Runner {
         DriverConfig::new("TalkTests")
             .lenient_parsing()
             .preserve_comments(true)
-    }
-
-    fn compile_diagnostics(
-        asts_by_source: &IndexMap<Source, AST<NameResolved>>,
-        diagnostics: &[AnyDiagnostic],
-    ) -> CompileDiagnostics {
-        let file_count = asts_by_source
-            .values()
-            .map(|ast| ast.file_id.0 as usize + 1)
-            .max()
-            .unwrap_or(0);
-        let mut file_id_to_document = vec![String::new(); file_count];
-        let mut texts: Vec<crate::common::source_snapshot::SourceSnapshot> =
-            vec![crate::common::source_snapshot::SourceSnapshot::new(""); file_count];
-        let mut asts = vec![None; file_count];
-
-        for (source, ast) in asts_by_source {
-            let index = ast.file_id.0 as usize;
-            if index >= file_id_to_document.len() {
-                continue;
-            }
-            file_id_to_document[index] = source.path().into_owned();
-            texts[index] = crate::common::source_snapshot::SourceSnapshot::new(
-                source.read().unwrap_or_default(),
-            );
-            asts[index] = Some(ast.clone());
-        }
-
-        let mut entries: Vec<_> = diagnostics
-            .iter()
-            .filter_map(|diagnostic| {
-                let file_index = Self::diagnostic_file_index(diagnostic);
-                crate::analysis::workspace::diagnostic_for_any(
-                    &file_id_to_document,
-                    &texts,
-                    &asts,
-                    diagnostic,
-                )
-                .map(|(document_id, diagnostic)| CompileDiagnostic {
-                    document_id,
-                    text: texts
-                        .get(file_index)
-                        .map(|text| text.text().to_string())
-                        .unwrap_or_default(),
-                    diagnostic,
-                })
-            })
-            .collect();
-        entries.sort_by(|left, right| {
-            left.document_id
-                .cmp(&right.document_id)
-                .then(
-                    left.diagnostic
-                        .range
-                        .start
-                        .cmp(&right.diagnostic.range.start),
-                )
-                .then(left.diagnostic.range.end.cmp(&right.diagnostic.range.end))
-                .then(left.diagnostic.message.cmp(&right.diagnostic.message))
-        });
-        CompileDiagnostics { entries }
-    }
-
-    fn diagnostic_file_index(diagnostic: &AnyDiagnostic) -> usize {
-        match diagnostic {
-            AnyDiagnostic::Parsing(diagnostic) => diagnostic.id.0.0 as usize,
-            AnyDiagnostic::Macro(diagnostic) => diagnostic.id.0.0 as usize,
-            AnyDiagnostic::NameResolution(diagnostic) => diagnostic.id.0.0 as usize,
-            AnyDiagnostic::Types(diagnostic) => diagnostic.id.0.0 as usize,
-        }
     }
 
     fn is_test_file(path: &Path) -> bool {

@@ -128,7 +128,7 @@ fn level_adjustment_propagates_outward() {
 }
 
 #[test]
-fn apply_reason_clones_borrowed_cheap_clone_argument() {
+fn adaptation_clones_borrowed_cheap_clone_argument() {
     let mut h = Harness::new();
     let cheap = Symbol::Struct(StructId::new(ModuleId::Current, 7));
     h.catalog.insert_conformance(
@@ -137,7 +137,11 @@ fn apply_reason_clones_borrowed_cheap_clone_argument() {
     );
     let owned = Ty::Nominal(cheap, vec![]);
     let borrowed = Ty::Borrow(Perm::Shared, Box::new(owned.clone()));
-    let residual = h.solve(vec![Constraint::Eq(owned, borrowed, origin())]);
+    let residual = h.solve(vec![Constraint::Adapt {
+        expected: owned,
+        found: borrowed,
+        origin: origin(),
+    }]);
     assert!(h.errors.is_empty(), "{:?}", h.errors);
     assert!(residual.is_empty(), "{residual:?}");
     assert!(
@@ -155,14 +159,15 @@ fn general_unification_erases_borrows_only_for_copy_grades() {
     let mut h = Harness::new();
     let int = Ty::Nominal(Symbol::Int, vec![]);
     let borrowed_int = Ty::Borrow(Perm::Shared, Box::new(int.clone()));
-    let residual = h.solve(vec![Constraint::Eq(int, borrowed_int, origin())]);
+    let invariant = CtOrigin::new(NodeID::ANY, CtReason::Annotation);
+    let residual = h.solve(vec![Constraint::Eq(int, borrowed_int, invariant)]);
     assert!(h.errors.is_empty(), "{:?}", h.errors);
     assert!(residual.is_empty(), "{residual:?}");
 
     let mut h = Harness::new();
     let string = Ty::Nominal(Symbol::String, vec![]);
     let borrowed_string = Ty::Borrow(Perm::Shared, Box::new(string.clone()));
-    let residual = h.solve(vec![Constraint::Eq(string, borrowed_string, origin())]);
+    let residual = h.solve(vec![Constraint::Eq(string, borrowed_string, invariant)]);
     assert!(
         h.errors
             .iter()
@@ -178,6 +183,7 @@ fn implication_floats_untouchable_equalities_without_givens() {
     let mut h = Harness::new();
     let outer = h.store.fresh_ty(Level(1), NodeID::ANY);
     let residual = h.solve(vec![Constraint::Implic(Box::new(Implication {
+        node: NodeID::ANY,
         level: Level(2),
         givens: vec![],
         wanteds: vec![Constraint::Eq(
@@ -203,6 +209,7 @@ fn implication_with_givens_floats_safe_untouchable_outer_variable() {
     let outer = h.store.fresh_ty(Level(1), NodeID::ANY);
     let marker = Symbol::TypeParameter(TypeParameterId::new(ModuleId::Current, 98));
     let residual = h.solve(vec![Constraint::Implic(Box::new(Implication {
+        node: NodeID::ANY,
         level: Level(2),
         givens: vec![Predicate::TypeEq(
             Ty::Param(marker),
@@ -230,6 +237,7 @@ fn implication_can_bind_touchable_local_variable() {
     let mut h = Harness::new();
     let local = h.store.fresh_ty(Level(2), NodeID::ANY);
     let residual = h.solve(vec![Constraint::Implic(Box::new(Implication {
+        node: NodeID::ANY,
         level: Level(2),
         givens: vec![],
         wanteds: vec![Constraint::Eq(
@@ -259,6 +267,7 @@ fn implication_floats_untouchable_effect_equalities() {
         tail: None,
     };
     let residual = h.solve(vec![Constraint::Implic(Box::new(Implication {
+        node: NodeID::ANY,
         level: Level(2),
         givens: vec![],
         wanteds: vec![Constraint::EffEq(expected.clone(), found, origin())],
@@ -279,6 +288,7 @@ fn implication_rejects_escape_hidden_by_local_given_rewrite() {
     let outer = h.store.fresh_ty(Level(1), NodeID::ANY);
     let existential = Symbol::TypeParameter(TypeParameterId::new(ModuleId::Current, 97));
     let residual = h.solve(vec![Constraint::Implic(Box::new(Implication {
+        node: NodeID::ANY,
         level: Level(2),
         givens: vec![Predicate::TypeEq(
             Ty::Param(existential),
@@ -316,6 +326,7 @@ fn implication_rejects_escape_laundered_through_given_chain() {
     let existential = Symbol::TypeParameter(TypeParameterId::new(ModuleId::Current, 96));
     let bridge = Symbol::TypeParameter(TypeParameterId::new(ModuleId::Current, 95));
     let residual = h.solve(vec![Constraint::Implic(Box::new(Implication {
+        node: NodeID::ANY,
         level: Level(2),
         givens: vec![
             Predicate::TypeEq(Ty::Param(bridge), Ty::Param(existential)),
@@ -341,6 +352,7 @@ fn implication_rejects_escaping_existential() {
     let outer = h.store.fresh_ty(Level(1), NodeID::ANY);
     let existential = Symbol::TypeParameter(TypeParameterId::new(ModuleId::Current, 99));
     let residual = h.solve(vec![Constraint::Implic(Box::new(Implication {
+        node: NodeID::ANY,
         level: Level(2),
         givens: vec![],
         wanteds: vec![Constraint::Eq(
@@ -358,6 +370,66 @@ fn implication_rejects_escaping_existential() {
         h.errors[0].0,
         TypeError::EscapingExistential { .. }
     ));
+}
+
+/// ADR 0055: every constraint names a real origin — an implication
+/// blames the construct that introduced it, so an error pinned to the
+/// implication as a whole (a solver overflow, an escape) is displayable.
+#[test]
+fn an_implications_origin_is_the_construct_that_introduced_it() {
+    let implic = Constraint::Implic(Box::new(Implication {
+        node: NodeID(crate::node_id::FileID(0), 7),
+        level: Level(2),
+        givens: vec![],
+        wanteds: vec![],
+        local_params: vec![],
+        touchable_level: None,
+    }));
+    let origin = implic.origin();
+    assert_eq!(origin.node.1, 7);
+    assert_eq!(origin.node.0, crate::node_id::FileID(0));
+}
+
+/// ADR 0055: the escaping-existential check that scans outer bindings
+/// (rather than residuals) reported at NodeID::SYNTHESIZED — the error
+/// was silently dropped by every renderer. It must carry a real node.
+#[test]
+fn escaping_existential_from_outer_binding_carries_a_real_node() {
+    let mut h = Harness::new();
+    let outer = h.store.fresh_ty(Level(1), NodeID(crate::node_id::FileID(0), 3));
+    let existential = Symbol::TypeParameter(TypeParameterId::new(ModuleId::Current, 94));
+    let holder = Symbol::Struct(StructId::new(ModuleId::Current, 40));
+    // No touchability restriction: the wanted legally binds the OUTER
+    // variable to a type mentioning the constructor-local existential,
+    // which the post-solve outer-binding scan must reject.
+    let residual = h.solve(vec![Constraint::Implic(Box::new(Implication {
+        node: NodeID(crate::node_id::FileID(0), 11),
+        level: Level(2),
+        givens: vec![],
+        wanteds: vec![Constraint::Eq(
+            Ty::Var(outer),
+            Ty::Nominal(holder, vec![Ty::Param(existential)]),
+            CtOrigin::new(NodeID(crate::node_id::FileID(0), 9), CtReason::Pattern),
+        )],
+        local_params: vec![existential],
+        touchable_level: None,
+    }))]);
+
+    assert!(residual.is_empty(), "{residual:?}");
+    assert!(
+        h.errors
+            .iter()
+            .any(|(error, _)| matches!(error, TypeError::EscapingExistential { .. })),
+        "expected an escaping-existential error, got {:?}",
+        h.errors
+    );
+    for (error, node) in &h.errors {
+        assert_ne!(
+            node.0,
+            crate::node_id::FileID::SYNTHESIZED,
+            "error {error:?} is pinned to a synthesized node — undisplayable (ADR 0055)"
+        );
+    }
 }
 
 #[test]

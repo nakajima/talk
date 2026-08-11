@@ -64,7 +64,8 @@ pub(crate) fn from_source(symbol: Symbol) -> Option<MirSymbol> {
 /// Emission sites only ever name declared effects and protocols, so a
 /// miss is a compiler bug, not a source error.
 pub(crate) fn executable(symbol: Symbol) -> MirSymbol {
-    from_source(symbol).expect("only executable identities reach finalized MIR")
+    from_source(symbol)
+        .unwrap_or_else(|| panic!("only executable identities reach finalized MIR: {symbol:?}"))
 }
 
 /// Well-known identities targets must recognize structurally: the
@@ -1150,8 +1151,13 @@ fn display_names(programs: &[ProgramInput<'_>]) -> DisplayNames {
                 .unwrap_or_else(|| format!("{symbol:?}"))
         };
         for (symbol, def) in &types.catalog.enums {
+            // Alias-keyed entries are lookup conveniences, not executable
+            // identities (slices carry them; carving used to strip them).
+            let Some(identity) = from_source(*symbol) else {
+                continue;
+            };
             names.entries.insert(
-                executable(*symbol),
+                identity,
                 DisplayEntry {
                     name: name_of(symbol),
                     kind: TypeKind::Enum,
@@ -1160,8 +1166,11 @@ fn display_names(programs: &[ProgramInput<'_>]) -> DisplayNames {
             );
         }
         for (symbol, def) in &types.catalog.structs {
+            let Some(identity) = from_source(*symbol) else {
+                continue;
+            };
             names.entries.insert(
-                executable(*symbol),
+                identity,
                 DisplayEntry {
                     name: name_of(symbol),
                     kind: if *symbol == Symbol::String {
@@ -5950,6 +5959,22 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// Compile a block in its own drop scope. The block's value escapes the
     /// scope to the enclosing statement; everything else the scope owns
     /// drops here, in reverse declaration order.
+    /// The value type an `if` arm's block hands to the join: the tail
+    /// expression's checked type, following nested trailing `if/else`s —
+    /// the checker's block-value rule. Only consulted for arms that
+    /// reach the join, so divergent tails need no Never case here.
+    fn block_tail_ty(block: &Block) -> Ty {
+        match block.body.last() {
+            Some(Node::Expr(expr)) => expr.ty.clone(),
+            Some(Node::Stmt(stmt)) => match &stmt.kind {
+                StmtKind::Expr(expr) => expr.ty.clone(),
+                StmtKind::If(_, then_block, Some(_)) => Self::block_tail_ty(then_block),
+                _ => Ty::unit(),
+            },
+            _ => Ty::unit(),
+        }
+    }
+
     fn compile_block(&mut self, block: &Block) -> Result<Operand, BackendError> {
         self.scopes.push(Vec::new());
         let nodes: Vec<&Node> = block.body.iter().collect();
@@ -6390,10 +6415,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let globals_before = self.moved_globals.clone();
                 let temps_before = self.stmt_temps.clone();
                 let mut arm_ends: Vec<ArmEnd> = Vec::new();
+                let mut arm_tys: Vec<Ty> = Vec::new();
 
                 self.switch_to(then_id);
                 let value = self.compile_block(then_block)?;
                 if !self.terminated() {
+                    arm_tys.push(Self::block_tail_ty(then_block));
                     arm_ends.push(ArmEnd {
                         block: self.current,
                         value,
@@ -6409,6 +6436,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     self.stmt_temps = temps_before.clone();
                     let value = self.compile_block(else_block)?;
                     if !self.terminated() {
+                        arm_tys.push(Self::block_tail_ty(else_block));
                         arm_ends.push(ArmEnd {
                             block: self.current,
                             value,
@@ -6419,6 +6447,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     }
                 } else {
                     // The fall-through path joins with a Unit value.
+                    arm_tys.push(Ty::unit());
                     arm_ends.push(ArmEnd {
                         block: else_id,
                         value: Operand::Const(Constant::Unit),
@@ -6431,13 +6460,33 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // rvalue: a statement-position `if` whose arms produce a
                 // droppable value (a mut call's returned view, say) must
                 // hand it to the release planner, not strand it in the
-                // join parameter.
-                let result_ty = arm_ends.iter().find_map(|arm| match arm.value {
-                    Operand::Local(local) => self.owned_ty(local).cloned(),
-                    _ => None,
-                });
+                // join parameter. One drop type covers the join only when
+                // every reaching arm produced that type, folded exactly
+                // like the checker's join (Never is wild). A block-final
+                // `if` is the block's value, so its arms always fold: the
+                // checker rejected the program otherwise. Any other `if`
+                // checks each arm on its own and the types can differ,
+                // including the no-else fall-through's unit; the value is
+                // provably discarded then, so each arm keeps it and the
+                // planner drops it on the arm's own edge, with the arm's
+                // own type.
+                let mut result_ty: Option<Ty> = None;
+                let mut unified = true;
+                for ty in &arm_tys {
+                    match &result_ty {
+                        None => result_ty = Some(ty.clone()),
+                        Some(acc) if acc.is_never() => result_ty = Some(ty.clone()),
+                        Some(acc) if ty.is_never() || *acc == *ty => {}
+                        Some(_) => unified = false,
+                    }
+                }
+                if !unified {
+                    for arm in &mut arm_ends {
+                        arm.value = Operand::Const(Constant::Unit);
+                    }
+                }
                 self.merge_arms(arm_ends, result, join, temps_before, moved_before);
-                if let Some(ty) = result_ty {
+                if unified && let Some(ty) = result_ty {
                     self.produce_temp(result, &ty);
                 }
                 Ok(Operand::Local(result))
@@ -10452,9 +10501,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 return Ok(Operand::Local(dest));
             }
             K::Load { ty, addr } => {
-                let kind = layout::scalar_kind(&self.resolved(ty));
+                let element = self.resolved(ty);
+                let kind = layout::scalar_kind(&element);
                 let ptr = self.ir_value(instruction, addr)?;
                 self.push(Inst::Load { dest, ptr, kind });
+                // The read transfers the slot's value to the frame — the
+                // mirror of `store`'s donation below. Owning the result
+                // makes returning it a move; without the claim a
+                // Borrowed-classified result donates a view retain the
+                // vacated slot never gets back.
+                self.produce_temp(dest, &element);
                 return Ok(Operand::Local(dest));
             }
             K::Store { ty, value, addr } => {

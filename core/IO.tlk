@@ -29,6 +29,10 @@ pub enum IORequest {
 	case dir_entry_len(RawPtr, Int)
 	case dir_entry_copy(RawPtr, Int, RawPtr)
 	case exit(Int)
+	// Appended after exit so every pre-existing request keeps its slot in
+	// the runtime's operation table; exit stays at index 23.
+	case realpath_len(RawPtr)
+	case realpath_copy(RawPtr, RawPtr)
 }
 
 pub effect 'io(request: IORequest) -> Int
@@ -151,6 +155,17 @@ pub func _io_dir_entry_len(path: RawPtr, index: Int) 'io -> Int {
 
 pub func _io_dir_entry_copy(path: RawPtr, index: Int, buf: RawPtr) 'io -> Int {
 	'io(request: .dir_entry_copy(path, index, buf))
+}
+
+// Canonicalize a NUL-terminated path (resolving ".", "..", and
+// symlinks, like POSIX realpath): the resolved byte length or a negative
+// errno. Pair with _io_realpath_copy.
+pub func _io_realpath_len(path: RawPtr) 'io -> Int {
+	'io(request: .realpath_len(path))
+}
+
+pub func _io_realpath_copy(path: RawPtr, buf: RawPtr) 'io -> Int {
+	'io(request: .realpath_copy(path, buf))
 }
 
 pub func _io_exit(code: Int) 'io -> Never {

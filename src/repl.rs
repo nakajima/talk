@@ -9,10 +9,23 @@ use crate::{
 
 pub const REPL_DOCUMENT_ID: &str = "<repl>";
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ReplSession {
+    prelude_source: String,
     persistent_source: String,
     source_path: PathBuf,
+    package: Option<crate::compiling::package::PackageCompileContext>,
+}
+
+impl std::fmt::Debug for ReplSession {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReplSession")
+            .field("prelude_source", &self.prelude_source)
+            .field("persistent_source", &self.persistent_source)
+            .field("source_path", &self.source_path)
+            .field("has_package", &self.package.is_some())
+            .finish()
+    }
 }
 
 impl Default for ReplSession {
@@ -31,8 +44,20 @@ impl ReplSession {
 
     pub fn with_source_path(source_path: PathBuf) -> Self {
         Self {
+            prelude_source: String::new(),
             persistent_source: String::new(),
             source_path,
+            package: None,
+        }
+    }
+
+    pub fn with_package_context(context: crate::compiling::package::ReplPackageContext) -> Self {
+        let source_path = context.compile.workspace_root.join("repl.tlk");
+        Self {
+            prelude_source: format!("use {}\n", context.import_name),
+            persistent_source: String::new(),
+            source_path,
+            package: Some(context.compile),
         }
     }
 
@@ -80,7 +105,7 @@ impl ReplSession {
             // An item-position macro invocation may expand to declarations,
             // statements, or both; persist it whenever its expansion is
             // usable, and treat a declaration-only expansion as success.
-            let result = Self::run(None, &source);
+            let result = self.run(None, &source);
             let declarative_only = matches!(
                 &result,
                 ReplEvalResult::Error(message) if message.contains("nothing to run")
@@ -99,7 +124,7 @@ impl ReplSession {
             };
         }
 
-        let result = Self::run(None, &source);
+        let result = self.run(None, &source);
         // The session is source-backed, so replay every successful input
         // with later evaluations. This rebuilds mutable top-level values
         // and reapplies mutations in their original order.
@@ -128,19 +153,25 @@ impl ReplSession {
                 message: None,
             };
         }
-        Self::run(path, source)
+        self.run(path, source)
     }
 
     /// Compile and execute a source unit through the backend (ADR 0034),
     /// capturing IO for the session.
-    fn run(path: Option<&std::path::Path>, source: &str) -> ReplEvalResult {
-        use crate::compiling::driver::{Driver, DriverConfig, Source};
+    fn run(&self, path: Option<&std::path::Path>, source: &str) -> ReplEvalResult {
+        use crate::compiling::driver::{Driver, Source};
 
+        let path = path.or_else(|| self.package.as_ref().map(|_| self.source_path.as_path()));
         let unit = match path {
             Some(path) => Source::in_memory(path.to_path_buf(), source),
             None => Source::from(source),
         };
-        let driver = Driver::new(vec![unit], DriverConfig::new("Repl"));
+        let config = self.driver_config();
+        let driver = if self.package.is_some() {
+            Driver::new_bare(vec![unit], config)
+        } else {
+            Driver::new(vec![unit], config)
+        };
         let parsed = match driver.parse() {
             Ok(parsed) => parsed,
             Err(error) => return ReplEvalResult::Error(format!("{error:?}")),
@@ -175,7 +206,7 @@ impl ReplSession {
     }
 
     pub fn type_of(&self, input: &str) -> ReplEvalResult {
-        use crate::compiling::driver::{Driver, DriverConfig, Source};
+        use crate::compiling::driver::{Driver, Source};
 
         let repl_input = ReplInput::new(input);
         if repl_input.is_empty() {
@@ -183,10 +214,16 @@ impl ReplSession {
         }
 
         let source = self.combined_source(input);
-        let driver = Driver::new(
-            vec![Source::from(source.as_str())],
-            DriverConfig::new("Repl"),
-        );
+        let unit = match &self.package {
+            Some(_) => Source::in_memory(self.source_path.clone(), source.as_str()),
+            None => Source::from(source.as_str()),
+        };
+        let config = self.driver_config();
+        let driver = if self.package.is_some() {
+            Driver::new_bare(vec![unit], config)
+        } else {
+            Driver::new(vec![unit], config)
+        };
         let typed = match driver.parse() {
             Ok(parsed) => match parsed.resolve_names() {
                 Ok(resolved) => resolved.type_check(),
@@ -273,7 +310,7 @@ impl ReplSession {
             text: source.into(),
         };
 
-        let Some(workspace) = Workspace::new(vec![doc]) else {
+        let Some(workspace) = Workspace::new_with_package(vec![doc], self.package.clone()) else {
             return ReplCompletions {
                 start: original_line_offset + start,
                 items: vec![],
@@ -316,7 +353,7 @@ impl ReplSession {
     }
 
     fn source_for_completion(&self, line: &str, pos: usize) -> (String, usize) {
-        let mut source = self.persistent_source.clone();
+        let mut source = self.stored_source();
         if !source.is_empty() && !source.ends_with('\n') {
             source.push('\n');
         }
@@ -326,12 +363,30 @@ impl ReplSession {
     }
 
     fn combined_source(&self, input: &str) -> String {
-        let mut source = self.persistent_source.clone();
+        let mut source = self.stored_source();
         if !source.is_empty() && !source.ends_with('\n') {
             source.push('\n');
         }
         source.push_str(input);
         source
+    }
+
+    fn stored_source(&self) -> String {
+        let mut source = self.prelude_source.clone();
+        source.push_str(&self.persistent_source);
+        source
+    }
+
+    fn driver_config(&self) -> crate::compiling::driver::DriverConfig {
+        let mut config = crate::compiling::driver::DriverConfig::new("Repl");
+        if let Some(package) = &self.package {
+            config.modules = std::rc::Rc::new(package.modules.clone());
+            config.libraries = package.libraries.clone();
+            config.catalog = package.catalog.clone();
+            config.workspace_root = Some(package.workspace_root.clone());
+            config.source_root = Some(package.source_root.clone());
+        }
+        config
     }
 
     fn persist(&mut self, input: &str) {
@@ -362,7 +417,7 @@ impl ReplSession {
             version: 0,
             text: source.into(),
         };
-        let workspace = Workspace::new(vec![doc])?;
+        let workspace = Workspace::new_with_package(vec![doc], self.package.clone())?;
         let diagnostics = workspace.diagnostics.get(REPL_DOCUMENT_ID)?.clone();
         (!diagnostics.is_empty()).then_some(diagnostics)
     }

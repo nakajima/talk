@@ -25,11 +25,20 @@ const PRIMARY_PROMPT: &[u8] = b"talk> ";
 const CONTINUATION_PROMPT: &[u8] = b"....> ";
 const HISTORY_FILE_NAME: &str = ".talk_history";
 
-pub fn run() {
-    let mut repl = Repl::new(ReplSession::new());
-    if let Err(err) = repl.run() {
-        eprintln!("repl error: {err}");
-    }
+pub fn run(import_package: bool) -> Result<(), String> {
+    let session = if import_package {
+        let root = crate::compiling::package::PackageProject::enclosing_root(".")
+            .ok_or_else(|| "the current directory is not inside a package".to_string())?;
+        let project = crate::compiling::package::PackageProject::open_at(root, false)
+            .map_err(|err| err.to_string())?;
+        let context = project.repl_context().map_err(|err| err.to_string())?;
+        ReplSession::with_package_context(context)
+    } else {
+        ReplSession::new()
+    };
+    Repl::new(session)
+        .run()
+        .map_err(|err| format!("repl error: {err}"))
 }
 
 struct Repl {

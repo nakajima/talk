@@ -136,8 +136,7 @@ impl<'s> Solver<'s> {
             while let Some(constraint) = queue.pop() {
                 steps += 1;
                 if steps > SOLVER_STEP_LIMIT {
-                    let node = Self::constraint_origin(&constraint)
-                        .map_or(NodeID::SYNTHESIZED, |origin| origin.node);
+                    let node = constraint.origin().node;
                     let constraint = self.constraint_summary(&constraint);
                     self.errors.push((
                         TypeError::SolverOverflow {
@@ -203,24 +202,11 @@ impl<'s> Solver<'s> {
                             stuck.push(Constraint::EffEq(a, b, origin));
                         }
                     }
-                    Constraint::ApplyBorrow {
-                        expected_perm,
-                        expected_inner,
-                        found,
-                        origin,
-                    } => self.solve_apply_borrow(
-                        expected_perm,
-                        expected_inner,
-                        found,
-                        origin,
-                        &mut queue,
-                        &mut stuck,
-                    ),
-                    Constraint::CoerceOwned {
+                    Constraint::Adapt {
                         expected,
                         found,
                         origin,
-                    } => self.solve_coerce_owned(expected, found, origin, &mut queue, &mut stuck),
+                    } => self.solve_adapt(expected, found, origin, &mut queue, &mut stuck),
                     Constraint::Conforms {
                         ty,
                         protocol,
@@ -372,7 +358,7 @@ impl<'s> Solver<'s> {
                 queue.extend(std::mem::take(&mut stuck));
                 continue;
             }
-            if self.default_apply_borrows(&mut stuck, &mut queue) {
+            if self.default_adaptations(&mut stuck, &mut queue) {
                 continue;
             }
             if self.apply_preferred_equalities(&mut preferred_equalities, &mut queue) {
@@ -479,21 +465,8 @@ impl<'s> Solver<'s> {
                     // enum's head.
                     residual.push(variant);
                 }
-                Constraint::ApplyBorrow {
-                    expected_perm,
-                    expected_inner,
-                    found,
-                    origin,
-                } => {
-                    residual.push(Constraint::ApplyBorrow {
-                        expected_perm,
-                        expected_inner,
-                        found,
-                        origin,
-                    });
-                }
-                coerce @ Constraint::CoerceOwned { .. } => {
-                    residual.push(coerce);
+                adapt @ Constraint::Adapt { .. } => {
+                    residual.push(adapt);
                 }
                 _ => {}
             }
@@ -518,68 +491,10 @@ impl<'s> Solver<'s> {
         applied
     }
 
-    fn solve_apply_borrow(
-        &mut self,
-        expected_perm: Perm,
-        expected_inner: Ty,
-        found: Ty,
-        origin: CtOrigin,
-        queue: &mut Vec<Constraint>,
-        stuck: &mut Vec<Constraint>,
-    ) {
-        let expected_inner = normalize_ty(self.store, self.catalog, &expected_inner);
-        let found = normalize_ty(self.store, self.catalog, &found);
-        if stuck_projection(self.store, &expected_inner) || stuck_projection(self.store, &found) {
-            stuck.push(Constraint::ApplyBorrow {
-                expected_perm,
-                expected_inner,
-                found,
-                origin,
-            });
-            return;
-        }
-
-        match self.store.shallow(&found) {
-            Ty::Var(_) => stuck.push(Constraint::ApplyBorrow {
-                expected_perm,
-                expected_inner,
-                found,
-                origin,
-            }),
-            Ty::Borrow(found_perm, found_inner) => {
-                let expected_perm = self.store.shallow_perm(expected_perm);
-                let found_perm = self.store.shallow_perm(found_perm);
-                if expected_perm == found_perm
-                    || (expected_perm == Perm::Shared && found_perm == Perm::Exclusive)
-                {
-                    // Peeling the borrow consumes the application boundary:
-                    // the inner equation demotes `Apply` so a nested
-                    // function type unifies invariantly.
-                    queue.push(Constraint::Eq(
-                        expected_inner,
-                        (*found_inner).clone(),
-                        origin.nested(),
-                    ));
-                } else {
-                    queue.push(Constraint::Eq(
-                        Ty::Borrow(expected_perm, Box::new(expected_inner)),
-                        found,
-                        origin,
-                    ));
-                }
-            }
-            Ty::Error => {}
-            _ => queue.push(Constraint::Eq(expected_inner, found, origin.nested())),
-        }
-    }
-
-    /// The owned twin of `solve_apply_borrow`: an owned slot fed a
-    /// still-unsolved argument. A borrow-resolved argument satisfies an
-    /// owned `Param` only when its declared bounds prove it is Copy or
-    /// CheapClone, or a concrete Copy/CheapClone nominal (the eager tier-2
-    /// rule's deferred form); anything else is the plain equality this
-    /// deferral replaced.
-    fn solve_coerce_owned(
+    /// Adapt one expression to a contextual value slot. This is the only
+    /// solver judgment that may cross an ownership wrapper; ordinary `Eq`
+    /// remains invariant and only compares the resulting value shapes.
+    fn solve_adapt(
         &mut self,
         expected: Ty,
         found: Ty,
@@ -587,129 +502,135 @@ impl<'s> Solver<'s> {
         queue: &mut Vec<Constraint>,
         stuck: &mut Vec<Constraint>,
     ) {
+        let expected = normalize_ty(self.store, self.catalog, &expected);
         let found = normalize_ty(self.store, self.catalog, &found);
-        match self.store.shallow(&found) {
-            // An unresolved head (or an irreducible projection of one)
-            // waits: whether the value arrives borrowed is not known yet.
-            Ty::Var(_) | Ty::Proj(..) => stuck.push(Constraint::CoerceOwned {
+        if stuck_projection(self.store, &expected) || stuck_projection(self.store, &found) {
+            stuck.push(Constraint::Adapt {
                 expected,
                 found,
                 origin,
-            }),
-            Ty::Borrow(_, found_inner) => {
-                // Return-position donation (implicit sharing): a borrow
-                // returned where the frame's type owns always donates a
-                // retained reference. MIR's return path retains any
-                // referent the frame does not own, so no clone marking
-                // is needed — the equation just continues against the
-                // referent.
-                if matches!(origin.reason, CtReason::Return | CtReason::Body)
-                    && !matches!(self.store.shallow(&expected), Ty::Var(_) | Ty::Borrow(..))
-                {
-                    queue.push(Constraint::Eq(
-                        expected,
-                        (*found_inner).clone(),
-                        origin.nested(),
-                    ));
-                    return;
+            });
+            return;
+        }
+
+        match self.store.shallow(&expected) {
+            Ty::Borrow(expected_perm, expected_inner) => match self.store.shallow(&found) {
+                Ty::Var(_) | Ty::Proj(..) => stuck.push(Constraint::Adapt {
+                    expected,
+                    found,
+                    origin,
+                }),
+                Ty::Borrow(found_perm, found_inner) => {
+                    let expected_perm = self.store.shallow_perm(expected_perm);
+                    let found_perm = self.store.shallow_perm(found_perm);
+                    if expected_perm == found_perm
+                        || (expected_perm == Perm::Shared && found_perm == Perm::Exclusive)
+                    {
+                        queue.push(Constraint::Eq(
+                            (*expected_inner).clone(),
+                            (*found_inner).clone(),
+                            origin.nested(),
+                        ));
+                    } else {
+                        queue.push(Constraint::Eq(expected, found, origin));
+                    }
                 }
-                let coerces = match self.store.shallow(&expected) {
-                    // The slot's own type is still unsolved: whether this
-                    // is a coercion (owned slot) or a plain borrow payload
-                    // (e.g. `Optional<&T>`) is not decidable yet. Wait; the
-                    // fixpoint default turns leftovers into the plain
-                    // equality (today's inference).
-                    Ty::Var(_) => {
-                        stuck.push(Constraint::CoerceOwned {
-                            expected,
-                            found,
-                            origin,
-                        });
-                        return;
-                    }
-                    Ty::Param(param) => {
-                        let bounds = self
-                            .catalog
-                            .param_bounds
-                            .get(&param)
-                            .cloned()
-                            .unwrap_or_default();
-                        if let Some(kind) = self.catalog.bounds_coerce_kind(&bounds) {
-                            if kind == crate::types::catalog::CoerceKind::CheapClone {
-                                self.coerce_clones.insert(origin.node);
-                            }
-                            queue.push(Constraint::Eq(
-                                expected,
-                                (*found_inner).clone(),
-                                origin.nested(),
-                            ));
-                        } else {
-                            let rendered = self.store.render(&expected);
-                            self.errors.push((
-                                TypeError::NotConforming {
-                                    ty: rendered,
-                                    protocol: "Copy or CheapClone".to_string(),
-                                },
-                                origin.node,
-                            ));
-                        }
-                        return;
-                    }
-                    Ty::Nominal(symbol, args) => {
-                        if let Some(kind) = self.catalog.coerce_kind_application(symbol, &args) {
-                            if kind == crate::types::catalog::CoerceKind::CheapClone {
-                                self.coerce_clones.insert(origin.node);
-                            }
-                            queue.push(Constraint::Eq(
-                                expected,
-                                (*found_inner).clone(),
-                                origin.nested(),
-                            ));
-                            return;
-                        }
-                        // Implicit sharing: any non-linear managed value
-                        // satisfies an owned slot from a borrow by
-                        // donating a retain. MIR's consume boundaries
-                        // emit the donation from provenance, so no clone
-                        // mark is recorded here.
-                        if self
-                            .catalog
-                            .implicitly_duplicable(&Ty::Nominal(symbol, args))
-                        {
-                            queue.push(Constraint::Eq(
-                                expected,
-                                (*found_inner).clone(),
-                                origin.nested(),
-                            ));
-                            return;
-                        }
-                        false
-                    }
-                    other => {
-                        if self.catalog.implicitly_duplicable(&other) {
-                            queue.push(Constraint::Eq(
-                                expected,
-                                (*found_inner).clone(),
-                                origin.nested(),
-                            ));
-                            return;
-                        }
-                        false
-                    }
-                };
-                if coerces {
-                    self.coerce_clones.insert(origin.node);
-                    queue.push(Constraint::Eq(
-                        expected,
-                        (*found_inner).clone(),
-                        origin.nested(),
-                    ));
-                } else {
-                    queue.push(Constraint::Eq(expected, found, origin.nested()));
-                }
+                Ty::Error => {}
+                _ => queue.push(Constraint::Eq(
+                    (*expected_inner).clone(),
+                    found,
+                    origin.nested(),
+                )),
+            },
+            Ty::Var(_) if matches!(self.store.shallow(&found), Ty::Borrow(..) | Ty::Var(_)) => {
+                stuck.push(Constraint::Adapt {
+                    expected,
+                    found,
+                    origin,
+                });
             }
-            Ty::Error => {}
-            _ => queue.push(Constraint::Eq(expected, found, origin.nested())),
+            _ => match self.store.shallow(&found) {
+                Ty::Var(_) | Ty::Proj(..) => stuck.push(Constraint::Adapt {
+                    expected,
+                    found,
+                    origin,
+                }),
+                Ty::Borrow(_, found_inner) => {
+                    // Returning a borrow into an owned result always donates
+                    // a retained reference; MIR already owns that return rule.
+                    if matches!(origin.reason, CtReason::Return | CtReason::Body) {
+                        queue.push(Constraint::Eq(
+                            expected,
+                            (*found_inner).clone(),
+                            origin.nested(),
+                        ));
+                        return;
+                    }
+                    match self.store.shallow(&expected) {
+                        Ty::Param(param) => {
+                            let bounds = self
+                                .catalog
+                                .param_bounds
+                                .get(&param)
+                                .cloned()
+                                .unwrap_or_default();
+                            if let Some(kind) = self.catalog.bounds_coerce_kind(&bounds) {
+                                if kind == crate::types::catalog::CoerceKind::CheapClone {
+                                    self.coerce_clones.insert(origin.node);
+                                }
+                                queue.push(Constraint::Eq(
+                                    expected,
+                                    (*found_inner).clone(),
+                                    origin.nested(),
+                                ));
+                            } else {
+                                let rendered = self.store.render(&expected);
+                                self.errors.push((
+                                    TypeError::NotConforming {
+                                        ty: rendered,
+                                        protocol: "Copy or CheapClone".to_string(),
+                                    },
+                                    origin.node,
+                                ));
+                            }
+                        }
+                        Ty::Nominal(symbol, args) => {
+                            if let Some(kind) = self.catalog.coerce_kind_application(symbol, &args)
+                            {
+                                if kind == crate::types::catalog::CoerceKind::CheapClone {
+                                    self.coerce_clones.insert(origin.node);
+                                }
+                                queue.push(Constraint::Eq(
+                                    expected,
+                                    (*found_inner).clone(),
+                                    origin.nested(),
+                                ));
+                            } else if self
+                                .catalog
+                                .implicitly_duplicable(&Ty::Nominal(symbol, args))
+                            {
+                                queue.push(Constraint::Eq(
+                                    expected,
+                                    (*found_inner).clone(),
+                                    origin.nested(),
+                                ));
+                            } else {
+                                queue.push(Constraint::Eq(expected, found, origin.nested()));
+                            }
+                        }
+                        other if self.catalog.implicitly_duplicable(&other) => {
+                            queue.push(Constraint::Eq(
+                                expected,
+                                (*found_inner).clone(),
+                                origin.nested(),
+                            ));
+                        }
+                        _ => queue.push(Constraint::Eq(expected, found, origin.nested())),
+                    }
+                }
+                Ty::Error => {}
+                _ => queue.push(Constraint::Eq(expected, found, origin.nested())),
+            },
         }
     }
 
@@ -723,7 +644,7 @@ impl<'s> Solver<'s> {
     /// mismatching the `&Element` the `.some` payload resolves to). Such
     /// vars stay stuck and float out with their chain; everything else
     /// defaults here so in-group generalization still sees one type.
-    fn default_apply_borrows(
+    fn default_adaptations(
         &mut self,
         stuck: &mut Vec<Constraint>,
         queue: &mut Vec<Constraint>,
@@ -733,11 +654,10 @@ impl<'s> Solver<'s> {
         let mut defaulted = false;
         for constraint in stuck.drain(..) {
             match constraint {
-                // Group solves hold member chains for the final solve, so
-                // a coercion's value may still resolve borrowed later:
-                // committing it to plain equality is final-solve-only —
-                // group leftovers float with their chains.
-                Constraint::CoerceOwned {
+                // Group solves hold member and variant output chains for the
+                // final solve. Do not default an adaptation until those
+                // producers have had a chance to reveal a borrow.
+                Constraint::Adapt {
                     expected,
                     found,
                     origin,
@@ -747,18 +667,11 @@ impl<'s> Solver<'s> {
                     && !self.mentions_pending_output(&found, &pending_outputs)
                     && !self.mentions_pending_output(&expected, &pending_outputs) =>
                 {
+                    let expected = match self.store.shallow(&expected) {
+                        Ty::Borrow(_, inner) => *inner,
+                        other => other,
+                    };
                     queue.push(Constraint::Eq(expected, found, origin.nested()));
-                    defaulted = true;
-                }
-                Constraint::ApplyBorrow {
-                    expected_inner,
-                    found,
-                    origin,
-                    ..
-                } if matches!(self.store.shallow(&found), Ty::Var(_))
-                    && !self.mentions_pending_output(&found, &pending_outputs) =>
-                {
-                    queue.push(Constraint::Eq(expected_inner, found, origin.nested()));
                     defaulted = true;
                 }
                 other => remaining.push(other),
@@ -986,21 +899,12 @@ impl<'s> Solver<'s> {
                     .unwrap_or_default();
                 format!("{enum_ty} has variant `.{label}({payload})`{ctor}")
             }
-            Constraint::ApplyBorrow {
-                expected_inner,
-                found,
-                ..
-            } => {
-                let expected_inner = self.store.render(expected_inner);
-                let found = self.store.render(found);
-                format!("borrowed argument &{expected_inner} accepts {found}")
-            }
-            Constraint::CoerceOwned {
+            Constraint::Adapt {
                 expected, found, ..
             } => {
                 let expected = self.store.render(expected);
                 let found = self.store.render(found);
-                format!("owned slot {expected} accepts {found}")
+                format!("value slot {expected} accepts {found}")
             }
             Constraint::PatternView {
                 scrutinee, view, ..

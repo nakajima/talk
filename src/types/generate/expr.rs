@@ -70,6 +70,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         self.check_expr(expr, &scheme.ty, reason, ctx);
         let wanteds = self.wanteds.split_off(wanted_start);
         self.wanteds.push(Constraint::Implic(Box::new(Implication {
+            node: expr.id,
             level: self.level,
             givens: scheme.predicates.clone(),
             wanteds,
@@ -190,16 +191,16 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                             .map(crate::types::callables::WrittenSlot::of)
                             .collect(),
                     );
-                    if let Some(variant) = self
+                    let variant = self
                         .catalog
                         .enums
                         .get(&symbol)
                         .and_then(|info| info.variants.get(&label.to_string()))
-                        .cloned()
-                    {
+                        .cloned();
+                    if let Some(variant) = &variant {
                         self.validate_variant_payload_labels(
                             &label.to_string(),
-                            &variant,
+                            variant,
                             &args.iter().map(|arg| arg.label.clone()).collect::<Vec<_>>(),
                             expr.id,
                         );
@@ -207,11 +208,13 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     match self.resolve_type_member(symbol, &[], label, callee.id, reason) {
                         Some(member) => {
                             self.artifacts.node_types.insert(callee.id, member.clone());
-                            let result = self.finish_call(
+                            let result = self.finish_call_with_result_origin(
+                                expr.id,
                                 expr.id,
                                 format!("Type member '{label}'"),
                                 member,
                                 args,
+                                variant.is_some(),
                                 ctx,
                             );
                             self.emit_eq(expected.clone(), result, expr.id, reason);
@@ -471,9 +474,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             // borrow-typed return once it resolves (ADR 0021's first-class
             // borrow results).
             Ty::Var(_) | Ty::Proj(..) => {
-                self.wanteds.push(Constraint::ApplyBorrow {
-                    expected_perm: expected_kind,
-                    expected_inner,
+                self.wanteds.push(Constraint::Adapt {
+                    expected,
                     found,
                     origin: CtOrigin::new(node, reason),
                 });
@@ -540,7 +542,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             // slot must keep the eager equality that drives inference,
             // except the legacy Apply deferrals above.
             (Ty::Borrow(..), _) => false,
-            (Ty::Var(_), Ty::Borrow(..)) => reason.coerces_borrows(),
+            (Ty::Var(_), Ty::Borrow(..)) => {
+                matches!(reason, CtReason::Apply | CtReason::ArrayElement)
+            }
             (Ty::Param(_), Ty::Var(_)) => reason == CtReason::Apply,
             (Ty::Var(_), _) => false,
             // A concrete owned slot fed a still-unsolved value: the value
@@ -551,7 +555,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             _ => false,
         };
         if defer_coercion {
-            self.wanteds.push(Constraint::CoerceOwned {
+            self.wanteds.push(Constraint::Adapt {
                 expected: expected.clone(),
                 found,
                 origin: CtOrigin::new(node, reason),
@@ -761,6 +765,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.wanteds.extend(wanteds);
             } else {
                 self.wanteds.push(Constraint::Implic(Box::new(Implication {
+                    node: arm.pattern.id,
                     level: arm_level,
                     givens: refinement.givens,
                     wanteds,

@@ -227,6 +227,18 @@ pub fn module_with_id(name: &str) -> Option<(ModuleId, Arc<Module>)> {
     Some((module_id_for_index(index), module.clone()))
 }
 
+/// `module_with_id` for editor sessions: `None` when the module's
+/// current sources do not compile cleanly (mid-edit), so sessions
+/// degrade to ordinary unresolved-import diagnostics instead of
+/// panicking inside parse discovery.
+pub fn try_module_with_id(name: &str) -> Option<(ModuleId, Arc<Module>)> {
+    let index = STDLIB_MODULES
+        .iter()
+        .position(|(candidate, _, _)| *candidate == name)?;
+    let (_, module, _) = try_compiled_at(index)?;
+    Some((module_id_for_index(index), module.clone()))
+}
+
 /// One module's typed bodies, compiled on demand. The backend compiles
 /// the reachable source graph as one unit, so imported stdlib modules
 /// supply their bodies from here.
@@ -260,6 +272,28 @@ fn compile_index(index: usize) -> CompiledStdlib {
     let compiled = compile_module(name, module_sources(name), module_id_for_index(index));
     store_cached(name, &compiled);
     compiled
+}
+
+/// `compiled_at` for editor sessions: a module whose sources do not
+/// compile cleanly right now (mid-edit) comes back `None` instead of
+/// panicking, so the session degrades to ordinary unresolved-import
+/// diagnostics. Only clean results are cached.
+fn try_compiled_at(index: usize) -> Option<&'static CompiledStdlib> {
+    let (name, _, _) = STDLIB_MODULES[index];
+    let slot = if name == "syntax" {
+        &SYNTAX
+    } else {
+        &slots()[index]
+    };
+    if let Some(cached) = slot.get() {
+        return Some(cached);
+    }
+    if let Some(cached) = load_cached(name) {
+        return Some(slot.get_or_init(|| cached));
+    }
+    let compiled = compile_module_fallible(name, module_sources(name), module_id_for_index(index))?;
+    store_cached(name, &compiled);
+    Some(slot.get_or_init(|| compiled))
 }
 
 type CompiledStdlib = (
@@ -409,8 +443,24 @@ fn compile_module(name: &'static str, sources: Vec<Source>, module_id: ModuleId)
     (name, Arc::new(typed.module(name)), Arc::new(program))
 }
 
+/// `compile_module` without the clean-compile assert: `None` when the
+/// module's current sources produce errors.
+fn compile_module_fallible(
+    name: &'static str,
+    sources: Vec<Source>,
+    module_id: ModuleId,
+) -> Option<CompiledStdlib> {
+    let typed = compile_driver_fallible(name, sources, module_id)?;
+    let program = typed.phase.program.clone();
+    Some((name, Arc::new(typed.module(name)), Arc::new(program)))
+}
+
+/// The stdlib source tree sessions compile against: the
+/// `TALK_STDLIB_PATH` override when set, otherwise the bundled tree
+/// (the repository's `stdlib/` for a source build). The LSP scopes
+/// per-module editing sessions against this root.
 #[cfg(not(target_family = "wasm"))]
-fn active_stdlib_dir() -> PathBuf {
+pub fn active_stdlib_dir() -> PathBuf {
     path_override().unwrap_or_else(bundled_compilation_dir)
 }
 
@@ -501,7 +551,10 @@ fn bundled_compilation_dir() -> PathBuf {
     }
 }
 
-fn compile_driver(name: &'static str, sources: Vec<Source>, module_id: ModuleId) -> Driver<Typed> {
+fn compile_driver_config(
+    name: &'static str,
+    module_id: ModuleId,
+) -> DriverConfig {
     let mut modules = ModuleEnvironment::default();
     modules.import_core(super::core::compile());
     // Stdlib-internal imports (`use ansi` in testing.tlk) activate
@@ -518,8 +571,26 @@ fn compile_driver(name: &'static str, sources: Vec<Source>, module_id: ModuleId)
     if name == "html" {
         config.workspace_root = Some(active_stdlib_dir().join("html"));
     }
+    config
+}
 
-    let driver = Driver::new_bare(sources, config);
+/// `compile_driver` without the clean-compile assert: `None` on parse,
+/// resolution, or type errors.
+fn compile_driver_fallible(
+    name: &'static str,
+    sources: Vec<Source>,
+    module_id: ModuleId,
+) -> Option<Driver<Typed>> {
+    let driver = Driver::new_bare(sources, compile_driver_config(name, module_id));
+    let typed = driver.parse().ok()?.resolve_names().ok()?.type_check();
+    if typed.has_errors() {
+        return None;
+    }
+    Some(typed)
+}
+
+fn compile_driver(name: &'static str, sources: Vec<Source>, module_id: ModuleId) -> Driver<Typed> {
+    let driver = Driver::new_bare(sources, compile_driver_config(name, module_id));
 
     #[allow(clippy::unwrap_used)]
     let typed = driver
@@ -570,7 +641,7 @@ mod tests {
         };
         assert_eq!(stdlib_dependencies_in(&texts("testing")), vec!["ansi"]);
         assert_eq!(stdlib_dependencies_in(&texts("http")), vec!["net"]);
-        assert!(stdlib_dependencies_in(&texts("fs")).is_empty());
+        assert_eq!(stdlib_dependencies_in(&texts("fs")), vec!["os"]);
         // And the closure lands in the keys: fs's key is unaffected by
         // ansi's sources, testing's is not.
         let fs_key = cache_key_for("fs").expect("fs key");

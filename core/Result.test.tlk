@@ -16,7 +16,13 @@ test "result cases and predicates" {
 	assert(failure != other_failure)
 	assert(success != failure)
 
-	match success { .ok(value) -> assert(value == 42), .error(_) -> assert(false) }
+	match success {
+		.ok(value) -> assert(value == 42),
+		.error(_) -> assert(false)
+	}
 
-	match failure { .ok(_) -> assert(false), .error(message) -> assert(message == "nope") }
+	match failure {
+		.ok(_) -> assert(false),
+		.error(message) -> assert(message == "nope")
+	}
 }

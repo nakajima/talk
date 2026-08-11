@@ -125,22 +125,11 @@ impl PatternRefinement {
                 ctor: ctor.map(|ty| ty.substitute(&tys, &effs, &rows)),
                 origin,
             },
-            Constraint::ApplyBorrow {
-                expected_perm,
-                expected_inner,
-                found,
-                origin,
-            } => Constraint::ApplyBorrow {
-                expected_perm,
-                expected_inner: expected_inner.substitute(&tys, &effs, &rows),
-                found: found.substitute(&tys, &effs, &rows),
-                origin,
-            },
-            Constraint::CoerceOwned {
+            Constraint::Adapt {
                 expected,
                 found,
                 origin,
-            } => Constraint::CoerceOwned {
+            } => Constraint::Adapt {
                 expected: expected.substitute(&tys, &effs, &rows),
                 found: found.substitute(&tys, &effs, &rows),
                 origin,

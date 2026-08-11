@@ -100,12 +100,12 @@ pub struct CompletionItem {
     pub import_from: Option<String>,
 }
 
-pub use definition::{Location, goto_definition};
+pub use definition::{GotoDefinition, Location, goto_definition, goto_definition_with};
 pub use hover::{Hover, hover_at};
 pub use occurrence::{Occurrence, OccurrenceKind, occurrence_at};
 pub use rename::{DocumentEdit, TextEdit, WorkspaceEdit, rename_at};
 pub use requirements::{RequirementSuggestion, requirement_suggestion_by_name};
-pub use workspace::Workspace;
+pub use workspace::{CompileDiagnostic, CompileDiagnostics, Workspace};
 
 pub(crate) fn node_ids_at_offset(
     ast: &crate::ast::AST<crate::ast::NameResolved>,

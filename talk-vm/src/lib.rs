@@ -478,6 +478,8 @@ pub enum IoOp {
     DirEntryLen,
     DirEntryCopy,
     Exit,
+    RealpathLen,
+    RealpathCopy,
 }
 
 #[derive(Debug)]

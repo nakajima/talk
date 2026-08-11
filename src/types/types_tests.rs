@@ -28,12 +28,14 @@ pub mod tests {
     /// `// no-core` to opt out of the core prelude for isolation.
     pub fn check(code: &'static str) -> Driver<Typed> {
         let driver = Driver::new_bare(vec![Source::from(code)], DriverConfig::new("TypesTest"));
-        driver
+        let typed = driver
             .parse()
             .expect("parse failed")
             .resolve_names()
             .expect("name resolution failed")
-            .type_check()
+            .type_check();
+        assert_displayable(&typed);
+        typed
     }
 
     /// Parse, resolve, and type-check several sibling source files of one
@@ -46,12 +48,14 @@ pub mod tests {
             })
             .collect();
         let config = DriverConfig::new("TypesTest").source_root(std::path::PathBuf::from("."));
-        Driver::new_bare(sources, config)
+        let typed = Driver::new_bare(sources, config)
             .parse()
             .expect("parse failed")
             .resolve_names()
             .expect("name resolution failed")
-            .type_check()
+            .type_check();
+        assert_displayable(&typed);
+        typed
     }
 
     /// Compile a library module under an explicit module id (absolute
@@ -139,6 +143,35 @@ pub mod tests {
         assert!(
             errors.is_empty(),
             "expected no type errors, got: {errors:?}"
+        );
+    }
+
+    /// Diagnostics pinned to a synthesized node: no document exists for
+    /// them, so every renderer (workspace, LSP, test harness) drops them
+    /// and the build fails with no visible message. Emission must always
+    /// carry a node from a real file (ADR 0055).
+    pub fn undisplayable_diagnostics(driver: &Driver<Typed>) -> Vec<String> {
+        driver
+            .phase
+            .diagnostics
+            .iter()
+            .filter_map(|d| {
+                let id = match d {
+                    AnyDiagnostic::Parsing(diag) => diag.id,
+                    AnyDiagnostic::Macro(diag) => diag.id,
+                    AnyDiagnostic::NameResolution(diag) => diag.id,
+                    AnyDiagnostic::Types(diag) => diag.id,
+                };
+                (id.0 == crate::node_id::FileID::SYNTHESIZED).then(|| d.to_string())
+            })
+            .collect()
+    }
+
+    pub fn assert_displayable(driver: &Driver<Typed>) {
+        let undisplayable = undisplayable_diagnostics(driver);
+        assert!(
+            undisplayable.is_empty(),
+            "diagnostics pinned to synthesized nodes cannot be rendered (ADR 0055): {undisplayable:?}"
         );
     }
 
@@ -5590,19 +5623,21 @@ pub mod tests {
 
 #[cfg(test)]
 mod with_core {
-    use super::tests::compile_library;
+    use super::tests::{assert_clean, assert_displayable, compile_library};
     use crate::compiling::driver::{Driver, DriverConfig, Source, Typed};
     use crate::diagnostic::AnyDiagnostic;
 
     /// Check a source against the full core prelude.
     fn check_with_core(source: Source) -> Driver<Typed> {
         let driver = Driver::new(vec![source], DriverConfig::new("WithCore"));
-        driver
+        let typed = driver
             .parse()
             .expect("parse failed")
             .resolve_names()
             .expect("resolve failed")
-            .type_check()
+            .type_check();
+        assert_displayable(&typed);
+        typed
     }
 
     fn type_errors(driver: &Driver<Typed>) -> Vec<String> {
@@ -5615,6 +5650,22 @@ mod with_core {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn borrowed_subscript_donates_into_owned_variant_payload() {
+        let typed = check_with_core(Source::from(
+            "struct Entry {\n\tlet name: String\n}\nstruct Store {\n\tlet items: [Entry]\n\tfunc get(index: Int) -> Entry? {\n\t\t.some(self.items[index])\n\t}\n}",
+        ));
+        assert_clean(&typed);
+    }
+
+    #[test]
+    fn borrowed_receiver_uses_owned_into_conformance() {
+        let typed = check_with_core(Source::from(
+            "struct Entry {\n\tlet name: String\n}\nextend Entry: Into<String> {\n\tconsuming func into() -> String { self.name }\n}\nfunc convert(entry: Entry) -> String {\n\tentry.into()\n}",
+        ));
+        assert_clean(&typed);
     }
 
     fn example(name: &str) -> Source {
@@ -5740,6 +5791,8 @@ mod with_core {
             libraries: Vec::new(),
             catalog: Default::default(),
             parser: None,
+            parse_cache: None,
+            precompiled_sources: Default::default(),
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -5813,6 +5866,8 @@ mod with_core {
             libraries: Vec::new(),
             catalog: Default::default(),
             parser: None,
+            parse_cache: None,
+            precompiled_sources: Default::default(),
         };
         let typed = Driver::new(
             vec![Source::from(
@@ -5862,6 +5917,8 @@ mod with_core {
             libraries: Vec::new(),
             catalog: Default::default(),
             parser: None,
+            parse_cache: None,
+            precompiled_sources: Default::default(),
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -5916,6 +5973,8 @@ mod with_core {
             module_name: "B".to_string(),
             parse_mode: crate::compiling::driver::ParseMode::Strict,
             parser: None,
+            parse_cache: None,
+            precompiled_sources: Default::default(),
             catalog: Default::default(),
             preserve_comments: false,
             workspace_root: None,
@@ -5965,6 +6024,8 @@ mod with_core {
             libraries: Vec::new(),
             catalog: Default::default(),
             parser: None,
+            parse_cache: None,
+            precompiled_sources: Default::default(),
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -7261,6 +7322,8 @@ func width<static N: Int>() -> Int { N }",
             libraries: Vec::new(),
             catalog: Default::default(),
             parser: None,
+            parse_cache: None,
+            precompiled_sources: Default::default(),
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -8791,6 +8854,8 @@ mod nested_types {
             libraries: Vec::new(),
             catalog: Default::default(),
             parser: None,
+            parse_cache: None,
+            precompiled_sources: Default::default(),
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -8836,6 +8901,8 @@ mod nested_types {
             libraries: Vec::new(),
             catalog: Default::default(),
             parser: None,
+            parse_cache: None,
+            precompiled_sources: Default::default(),
         };
         let driver_b = Driver::new(vec![Source::from("use A::{ fizz }\nlet f = fizz")], config);
         let typed = driver_b
@@ -8896,6 +8963,8 @@ mod nested_types {
             libraries: Vec::new(),
             catalog: Default::default(),
             parser: None,
+            parse_cache: None,
+            precompiled_sources: Default::default(),
         };
         let driver_b = Driver::new(
             vec![Source::from(
@@ -9133,6 +9202,8 @@ mod declared_struct_field_tests {
             libraries: Vec::new(),
             catalog: Default::default(),
             parser: None,
+            parse_cache: None,
+            precompiled_sources: Default::default(),
         };
         let driver_b = Driver::new(
             vec![Source::from(

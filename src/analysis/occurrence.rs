@@ -482,8 +482,21 @@ fn import_occurrence_at(
             symbol_exported_by_import(module, source_path, import, &imported.name)?
         }
         crate::node_kinds::decl::ImportPath::Package(package) => module
-            .stdlib_workspace_for_package(package)?
-            .exported_symbol(&imported.name)?,
+            .importable_modules
+            .get(package)
+            .and_then(|exports| {
+                exports
+                    .iter()
+                    .find(|(name, _)| name == &imported.name)
+                    .map(|(_, symbol)| *symbol)
+            })
+            // The session only indexes the modules it loaded; a module
+            // nobody imported resolves through a one-off build.
+            .or_else(|| {
+                module
+                    .stdlib_workspace_for_package(package)?
+                    .exported_symbol(&imported.name)
+            })?,
     };
 
     Some(Occurrence::span(

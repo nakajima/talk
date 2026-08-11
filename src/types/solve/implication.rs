@@ -7,6 +7,7 @@ impl<'s> Solver<'s> {
     /// non-escape condition from Peyton Jones et al. 2006.
     pub(super) fn solve_implication(&mut self, implication: Implication) -> Vec<Constraint> {
         let Implication {
+            node,
             level,
             givens,
             wanteds,
@@ -40,7 +41,7 @@ impl<'s> Solver<'s> {
                 TypeError::EscapingExistential {
                     param: param.to_string(),
                 },
-                NodeID::SYNTHESIZED,
+                node,
             ));
         }
 
@@ -51,8 +52,7 @@ impl<'s> Solver<'s> {
                     TypeError::EscapingExistential {
                         param: param.to_string(),
                     },
-                    Self::constraint_origin(&residual)
-                        .map_or(NodeID::SYNTHESIZED, |origin| origin.node),
+                    residual.origin().node,
                 ));
                 continue;
             }
@@ -65,26 +65,6 @@ impl<'s> Solver<'s> {
             floatable.push(residual);
         }
         floatable
-    }
-
-    pub(super) fn constraint_origin(constraint: &Constraint) -> Option<CtOrigin> {
-        match constraint {
-            Constraint::Eq(_, _, origin)
-            | Constraint::EffEq(_, _, origin)
-            | Constraint::EffectSubset { origin, .. }
-            | Constraint::PreferEq(_, _, origin)
-            | Constraint::Conforms { origin, .. }
-            | Constraint::HasMember { origin, .. }
-            | Constraint::HasTypeMember { origin, .. }
-            | Constraint::HasVariant { origin, .. }
-            | Constraint::ApplyBorrow { origin, .. }
-            | Constraint::CoerceOwned { origin, .. }
-            | Constraint::PatternView { origin, .. }
-            | Constraint::StringPattern { origin, .. }
-            | Constraint::HandleEffect { origin, .. }
-            | Constraint::StaticCmp { origin, .. } => Some(*origin),
-            Constraint::Implic(_) => None,
-        }
     }
 
     pub(super) fn escaping_outer_binding(
@@ -177,14 +157,7 @@ impl<'s> Solver<'s> {
                     ctor.as_ref()
                         .and_then(|ty| self.ty_mentions_params(ty, params))
                 }),
-            Constraint::ApplyBorrow {
-                expected_inner,
-                found,
-                ..
-            } => self
-                .ty_mentions_params(expected_inner, params)
-                .or_else(|| self.ty_mentions_params(found, params)),
-            Constraint::CoerceOwned {
+            Constraint::Adapt {
                 expected, found, ..
             } => self
                 .ty_mentions_params(expected, params)

@@ -1,0 +1,23 @@
+use fs
+
+// The program never imports os, but Path.expanding_tilde's body calls
+// OS.getenv: compiling it pulls the os module's bodies in through fs's
+// recorded dependency edge. The handler scripts HOME so the run is
+// deterministic; every other request delegates to the host fallback.
+#handle 'io { request in
+	match request {
+		.getenv_len(name, name_len) -> 'continue 10,
+		.getenv_copy(name, name_len, buf) -> {
+			let home = "/home/talk"
+			#unsafe {
+				_copy(from: home.storage.base, to: buf, length: home.byte_count)
+			}
+			'continue 10
+		},
+		other -> 'continue 'io(request: other)
+	}
+}
+match Path("~/src").expanding_tilde() {
+	.some(path) -> print(path.to_string()),
+	.none -> print("none")
+}

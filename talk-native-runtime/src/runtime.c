@@ -23,10 +23,14 @@
  */
 
 /* `-std=c11` is strict ISO, so the POSIX declarations the host IO
- * operations use are only visible with the feature test macro. It has to
- * precede every include. */
+ * operations use are only visible with the feature test macros. They
+ * have to precede every include. `_XOPEN_SOURCE` is what exposes
+ * realpath(3), which is XSI rather than base POSIX. */
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
+#endif
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE 700
 #endif
 
 #include <float.h>
@@ -1547,7 +1551,9 @@ enum {
     TALK_IO_DIR_ENTRY_KIND = 20,
     TALK_IO_DIR_ENTRY_LEN = 21,
     TALK_IO_DIR_ENTRY_COPY = 22,
-    TALK_IO_EXIT = 23
+    TALK_IO_EXIT = 23,
+    TALK_IO_REALPATH_LEN = 24,
+    TALK_IO_REALPATH_COPY = 25
 };
 
 /* Negated errno, as every operation returns (core/IO.tlk's constants). */
@@ -1884,6 +1890,17 @@ static int64_t talk_io(uint8_t op, TalkValue a, TalkValue b, TalkValue c) {
         }
         talk_free_entries(names, count);
         return result;
+    }
+    case TALK_IO_REALPATH_LEN:
+    case TALK_IO_REALPATH_COPY: {
+        char resolved[4096];
+        if (realpath((const char *)a.v.ptr, resolved) == NULL) {
+            return talk_errno();
+        }
+        if (op == TALK_IO_REALPATH_LEN) {
+            return (int64_t)strlen(resolved);
+        }
+        return talk_copy_out(b.v.ptr, resolved, strlen(resolved));
     }
 #endif
     default:

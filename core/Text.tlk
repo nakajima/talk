@@ -1657,11 +1657,15 @@ extend StringMethods {
 			let saw_cased = false
 			for scalar in word.scalars() {
 				if scalar_is_cased(scalar: scalar) {
-					_append_case(builder: builder, scalar: scalar, kind: if saw_cased {
+					_append_case(
+						builder: builder,
+						scalar: scalar,
+						kind: if saw_cased {
 							0
 						} else {
 							2
-						})
+						}
+					)
 					saw_cased = true
 				} else {
 					builder.append_scalar(scalar)

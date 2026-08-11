@@ -47,7 +47,7 @@ use crate::analysis::{
 use crate::lsp::code_actions::compute_code_actions;
 #[cfg(test)]
 use crate::lsp::code_actions::{code_action_diagnostic, separator_list_item_removal_range};
-use crate::lsp::goto_definition::goto_definition;
+use crate::lsp::goto_definition::{LspGoto, goto_definition};
 use crate::lsp::rename::rename_at;
 use crate::lsp::semantic_tokens::collect;
 use crate::lsp::{completion, document::Document, semantic_tokens::TOKEN_TYPES};
@@ -86,37 +86,89 @@ struct ServerState {
     pending_document_work: FxHashMap<Url, PendingDocumentWork>,
     roots: FxHashMap<PathBuf, RootState>,
     core: Option<Arc<AnalysisWorkspace>>,
+    core_build_requested: bool,
+    /// Stdlib module navigation workspaces (goto-definition targets),
+    /// built off-loop and cached until a stdlib source changes.
+    stdlib_modules: FxHashMap<crate::compiling::module::ModuleId, Arc<AnalysisWorkspace>>,
+    stdlib_modules_requested: rustc_hash::FxHashSet<crate::compiling::module::ModuleId>,
     workspace_roots: Vec<PathBuf>,
+    analysis: std::sync::mpsc::Sender<AnalysisJob>,
 }
 
-/// Per-root analysis state (CLEAN-01). The generation is the only
-/// invalidation signal: it bumps on every event that can affect the
-/// root's analysis, and a cached workspace whose generation matches is
-/// returned without any filesystem traversal.
+/// A rebuild request for one analysis root. Analysis is CPU-heavy
+/// (native-frontend parses, name resolution, type checking), so it
+/// never runs on the server's event loop: this job goes to the
+/// analysis worker thread and the result returns as a loopback event.
+/// Request handlers serve the latest completed snapshot, stale or not.
+struct WorkspaceBuildJob {
+    root: PathBuf,
+    focus: Url,
+    /// Open .tlk documents relevant to the root (those under it, plus
+    /// the focus): everything else the worker reads from disk.
+    open_docs: Vec<OpenDocument>,
+    /// An open/close/watched-file event happened since the last build:
+    /// the worker's cached file inventory is stale and re-walks once.
+    inventory_changed: bool,
+}
+
+struct OpenDocument {
+    uri: Url,
+    version: i32,
+    text: String,
+}
+
+enum AnalysisJob {
+    Workspace(WorkspaceBuildJob),
+    /// The name-resolved core workspace goto-definition navigates into,
+    /// built once per session and cached.
+    Core,
+    /// A stdlib module's navigation workspace (goto-definition
+    /// target), built on demand and cached until a stdlib source
+    /// changes.
+    StdlibModule(crate::compiling::module::ModuleId),
+}
+
+struct WorkspaceBuildEvent {
+    root: PathBuf,
+    focus: Url,
+    /// Ok(None) means nothing analyzable remained (e.g. the last
+    /// document closed); Err carries the panic payload message.
+    result: Result<Option<Arc<AnalysisWorkspace>>, String>,
+    /// Semantic tokens for the focus document, computed off-loop from
+    /// the same text snapshot the build used.
+    semantic_tokens: Option<SemanticTokensResult>,
+}
+
+struct CoreBuildEvent(Option<Arc<AnalysisWorkspace>>);
+
+struct StdlibModuleBuildEvent {
+    module_id: crate::compiling::module::ModuleId,
+    workspace: Option<Arc<AnalysisWorkspace>>,
+}
+
+/// Per-root editor state (CLEAN-01). The workspace snapshot is whatever
+/// the analysis worker last completed — served stale by request
+/// handlers so typing never waits on a build. Freshness is
+/// demand-driven: document events flag the root dirty and a background
+/// build publishes diagnostics when it lands.
 #[derive(Default)]
 struct RootState {
-    generation: u64,
-    /// The walked file inventory (path uri, disk stamp). `None` means
-    /// an inventory-affecting event (open, close, watched files)
-    /// invalidated it and the next use re-walks once. Content edits to
-    /// open documents do not invalidate it: their versions come from
-    /// `documents`, not the walk.
-    inventory: Option<Vec<(Url, i32)>>,
-    workspace: Option<CachedWorkspace>,
-    /// The package compile context workspaces build against, cached by
-    /// manifest/lock stamps so the locked dependency graph is not
-    /// recompiled per edit. `None` means not loaded yet.
-    package: Option<CachedPackageContext>,
+    workspace: Option<Arc<AnalysisWorkspace>>,
+    build_in_flight: bool,
+    /// A rebuild was requested while one was running: the latest
+    /// requester's focus wins, sent when the in-flight build
+    /// completes. The focus matters — the document set (a stdlib
+    /// session's module) and semantic tokens key on it.
+    build_pending: Option<Url>,
+    /// Bumped by every event that can affect the root's analysis; the
+    /// failure backoff keys on it so a new edit retries immediately.
+    revision: u64,
+    /// The file list may have changed (open/close/watched): the next
+    /// build re-walks instead of reusing the worker's inventory.
+    /// Content edits to open documents do not set this: their versions
+    /// travel with the build job, not the walk.
+    inventory_dirty: bool,
     backoff: Option<WorkspaceAnalysisBackoff>,
-}
-
-struct CachedWorkspace {
-    workspace: Arc<AnalysisWorkspace>,
-    generation: u64,
-    /// The manifest/lock stamps the workspace was built with: a lock
-    /// change alone does not alter any document version, so the retag
-    /// fast path must compare it explicitly.
-    package_stamp: (i32, i32),
 }
 
 struct CachedPackageContext {
@@ -172,25 +224,25 @@ impl ServerState {
         is_ready
     }
 
-    /// Bump the generation of the root containing `uri` (CLEAN-01):
-    /// only that root's cached analysis is affected. `inventory_changed`
-    /// additionally forces a one-time re-walk of the root's file list on
-    /// next use (opens, closes, and watched-file events; plain edits to
+    /// Flag the root containing `uri` dirty (CLEAN-01): only that
+    /// root's analysis is affected. `inventory_changed` additionally
+    /// forces a one-time re-walk of the root's file list on the next
+    /// build (opens, closes, and watched-file events; plain edits to
     /// open documents do not change the file list).
     fn invalidate_root(&mut self, uri: &Url, inventory_changed: bool) {
         let Some(root) = analysis_root_for_uri(self, uri) else {
             return;
         };
         let root_state = self.roots.entry(root).or_default();
-        root_state.generation = root_state.generation.wrapping_add(1);
+        root_state.revision = root_state.revision.wrapping_add(1);
         if inventory_changed {
-            root_state.inventory = None;
+            root_state.inventory_dirty = true;
         }
     }
 }
 
 struct WorkspaceAnalysisBackoff {
-    versions: FxHashMap<DocumentId, i32>,
+    revision: u64,
     consecutive_failures: u32,
     retry_at: Instant,
 }
@@ -198,26 +250,22 @@ struct WorkspaceAnalysisBackoff {
 impl WorkspaceAnalysisBackoff {
     const MAX_DELAY_SECS: u64 = 30;
 
-    fn after_failure(
-        versions: FxHashMap<DocumentId, i32>,
-        previous: Option<&Self>,
-        now: Instant,
-    ) -> Self {
+    fn after_failure(revision: u64, previous: Option<&Self>, now: Instant) -> Self {
         let consecutive_failures = previous
-            .filter(|failure| failure.versions == versions)
+            .filter(|failure| failure.revision == revision)
             .map_or(1, |failure| failure.consecutive_failures.saturating_add(1));
         let exponent = consecutive_failures.saturating_sub(1).min(5);
         let delay_secs = (1_u64 << exponent).min(Self::MAX_DELAY_SECS);
 
         Self {
-            versions,
+            revision,
             consecutive_failures,
             retry_at: now + Duration::from_secs(delay_secs),
         }
     }
 
-    fn blocks(&self, versions: &FxHashMap<DocumentId, i32>, now: Instant) -> bool {
-        self.versions == *versions && now < self.retry_at
+    fn blocks(&self, revision: u64, now: Instant) -> bool {
+        self.revision == revision && now < self.retry_at
     }
 }
 
@@ -235,9 +283,8 @@ fn report_lsp_internal_error(
     state: &mut ServerState,
     uri: Option<&Url>,
     context: &str,
-    payload: &(dyn Any + Send),
+    detail: &str,
 ) {
-    let detail = panic_payload_message(payload);
     let message = format!(
         "Talk LSP internal error while {context}: {detail}. The server recovered; results may be incomplete until the next edit."
     );
@@ -282,7 +329,12 @@ fn recover_lsp_result<T>(
     match catch_unwind(AssertUnwindSafe(f)) {
         Ok(value) => Ok(value),
         Err(payload) => {
-            report_lsp_internal_error(state, uri, context, payload.as_ref());
+            report_lsp_internal_error(
+                state,
+                uri,
+                context,
+                &panic_payload_message(payload.as_ref()),
+            );
             Err(())
         }
     }
@@ -303,6 +355,18 @@ fn recover_lsp<T>(
 
 pub async fn start() {
     let (server, _) = async_lsp::MainLoop::new_server(|client| {
+        // The analysis worker: rebuilds are CPU-heavy and run off the
+        // event loop. Jobs go over a std channel; results come back as
+        // loopback events through the client socket (both thread-safe).
+        let (analysis_tx, analysis_rx) = std::sync::mpsc::channel::<AnalysisJob>();
+        let worker_client = client.clone();
+        if let Err(err) = std::thread::Builder::new()
+            .name("talk-analysis".to_string())
+            .spawn(move || run_analysis_worker(worker_client, analysis_rx))
+        {
+            eprintln!("Talk LSP could not spawn the analysis worker: {err}");
+        }
+
         let mut router = Router::new(ServerState {
             client: client.clone(),
             documents: Default::default(),
@@ -310,7 +374,11 @@ pub async fn start() {
             pending_document_work: Default::default(),
             roots: Default::default(),
             core: None,
+            core_build_requested: false,
+            stdlib_modules: Default::default(),
+            stdlib_modules_requested: Default::default(),
             workspace_roots: Default::default(),
+            analysis: analysis_tx,
         });
 
         router
@@ -402,13 +470,14 @@ pub async fn start() {
                     document.version = version;
                     state.schedule_document_work(uri.clone());
                     state.invalidate_root(&uri, false);
+                    invalidate_stdlib_module_workspaces(state, &uri);
                 }
                 if let Some(payload) = panic_payload {
                     report_lsp_internal_error(
                         state,
                         Some(&uri),
                         "applying document changes",
-                        payload.as_ref(),
+                        &panic_payload_message(payload.as_ref()),
                     );
                 }
 
@@ -421,17 +490,12 @@ pub async fn start() {
                 state.documents.remove(&document_url);
                 state.pending_document_work.remove(&document_url);
                 state.invalidate_root(&document_url, true);
+                invalidate_stdlib_module_workspaces(state, &document_url);
 
                 if is_tlk_uri(&document_url) {
-                    if let Some(workspace) = workspace_analysis(state, &document_url) {
-                        publish_workspace_diagnostics(state, &workspace);
-                    } else {
-                        let _ = state.client.publish_diagnostics(PublishDiagnosticsParams {
-                            uri: document_url.clone(),
-                            diagnostics: vec![],
-                            version: None,
-                        });
-                    }
+                    // Rebuild from disk state off-loop; the completion
+                    // event republishes (or clears) diagnostics.
+                    request_workspace_build(state, &document_url);
                 }
 
                 std::ops::ControlFlow::Continue(())
@@ -496,7 +560,7 @@ pub async fn start() {
                     .get(&uri)
                     .and_then(|document| document.byte_offset(position).map(|o| o as u32));
 
-                let workspace = workspace_analysis(st, &uri);
+                let workspace = snapshot_workspace(st, &uri);
                 let result = match (byte_offset, workspace) {
                     (Some(byte_offset), Some(workspace)) => {
                         recover_lsp(st, Some(&uri), "renaming symbol", None, || {
@@ -519,7 +583,7 @@ pub async fn start() {
                     .documents
                     .get(&uri)
                     .and_then(|document| document.byte_offset(position).map(|o| o as u32));
-                let workspace = workspace_analysis(st, &uri);
+                let workspace = snapshot_workspace(st, &uri);
                 let result = match (byte_offset, workspace) {
                     (Some(byte_offset), Some(workspace)) => {
                         recover_lsp(st, Some(&uri), "computing hover", None, || {
@@ -543,17 +607,38 @@ pub async fn start() {
                     .get(&uri)
                     .and_then(|document| document.byte_offset(position).map(|o| o as u32));
 
-                let workspace = workspace_analysis(st, &uri);
-                let core = core_analysis(st, &uri);
+                let workspace = snapshot_workspace(st, &uri);
+                let core = core_snapshot(st);
+                let stdlib_modules = st.stdlib_modules.clone();
+                let mut needed_module = None;
                 let result = match (byte_offset, workspace) {
                     (Some(byte_offset), Some(workspace)) => {
                         recover_lsp(st, Some(&uri), "resolving definition", None, || {
-                            goto_definition(&workspace, core.as_deref(), &uri, byte_offset)
-                                .map(GotoDefinitionResponse::Scalar)
+                            match goto_definition(
+                                &workspace,
+                                core.as_deref(),
+                                &stdlib_modules,
+                                &uri,
+                                byte_offset,
+                            ) {
+                                LspGoto::Found(location) => {
+                                    Some(GotoDefinitionResponse::Scalar(location))
+                                }
+                                LspGoto::NeedsModule(module_id) => {
+                                    needed_module = Some(module_id);
+                                    None
+                                }
+                                LspGoto::NotFound => None,
+                            }
                         })
                     }
                     _ => None,
                 };
+                if let Some(module_id) = needed_module {
+                    // The target stdlib module's navigation workspace
+                    // builds off-loop; the next goto finds it cached.
+                    request_stdlib_module(st, module_id);
+                }
 
                 async move { Ok(result) }
             })
@@ -565,7 +650,7 @@ pub async fn start() {
                     .documents
                     .get(&uri)
                     .and_then(|document| document.byte_offset(position).map(|o| o as u32));
-                let workspace = workspace_analysis(st, &uri);
+                let workspace = snapshot_workspace(st, &uri);
                 let result = match (byte_offset, workspace) {
                     (Some(byte_offset), Some(workspace)) => recover_lsp(
                         st,
@@ -611,7 +696,7 @@ pub async fn start() {
             .request::<request::CodeActionRequest, _>(|state, params| {
                 let uri = params.text_document.uri.clone();
                 let range = params.range;
-                let workspace = workspace_analysis(state, &uri);
+                let workspace = snapshot_workspace(state, &uri);
                 let actions = if let Some(workspace) = workspace {
                     recover_lsp(
                         state,
@@ -655,12 +740,12 @@ pub async fn start() {
                     // The file list or a disk stamp may have changed:
                     // invalidate only the containing root (CLEAN-01).
                     state.invalidate_root(&uri, true);
+                    invalidate_stdlib_module_workspaces(state, &uri);
                 }
 
                 for focus_uri in diagnostics_workspaces.values() {
-                    if let Some(workspace) = workspace_analysis(state, focus_uri) {
-                        publish_workspace_diagnostics(state, &workspace);
-                    }
+                    // Rebuild off-loop; completion events publish.
+                    request_workspace_build(state, focus_uri);
                 }
 
                 ControlFlow::Continue(())
@@ -671,6 +756,16 @@ pub async fn start() {
                 }
 
                 let document_url = event.uri;
+                if is_tlk_uri(&document_url) {
+                    // The debounced rebuild runs on the analysis worker;
+                    // diagnostics and semantic tokens ride back on the
+                    // completion event.
+                    request_workspace_build(state, &document_url);
+                    return std::ops::ControlFlow::Continue(());
+                }
+
+                // Non-talk documents never build a workspace; their
+                // tokens are cheap enough to collect inline.
                 let semantic_tokens = if let Some(text) = state
                     .documents
                     .get(&document_url)
@@ -698,10 +793,76 @@ pub async fn start() {
                     false
                 };
 
-                if is_tlk_uri(&document_url)
-                    && let Some(workspace) = workspace_analysis(state, &document_url)
+                if needs_refresh {
+                    let client = state.client.clone();
+                    spawn(async move {
+                        client
+                            .request::<request::SemanticTokensRefresh>(())
+                            .await
+                            .ok();
+                    });
+                }
+
+                std::ops::ControlFlow::Continue(())
+            })
+            .event::<WorkspaceBuildEvent>(|state, event| {
+                let WorkspaceBuildEvent {
+                    root,
+                    focus,
+                    result,
+                    semantic_tokens,
+                } = event;
+
+                let mut root_state = state.roots.remove(&root).unwrap_or_default();
+                root_state.build_in_flight = false;
+
+                match result {
+                    Ok(Some(workspace)) => {
+                        root_state.backoff = None;
+                        root_state.workspace = Some(workspace.clone());
+                        publish_workspace_diagnostics(state, &workspace);
+                    }
+                    Ok(None) => {
+                        // Nothing analyzable remained (e.g. the last
+                        // document closed): clear the focus.
+                        root_state.backoff = None;
+                        let _ = state.client.publish_diagnostics(PublishDiagnosticsParams {
+                            uri: focus.clone(),
+                            diagnostics: vec![],
+                            version: None,
+                        });
+                    }
+                    Err(detail) => {
+                        let revision = root_state.revision;
+                        root_state.backoff = Some(WorkspaceAnalysisBackoff::after_failure(
+                            revision,
+                            root_state.backoff.as_ref(),
+                            Instant::now(),
+                        ));
+                        report_lsp_internal_error(
+                            state,
+                            Some(&focus),
+                            "analyzing workspace",
+                            &detail,
+                        );
+                    }
+                }
+
+                let build_pending = root_state.build_pending.take();
+                state.roots.insert(root, root_state);
+
+                let mut needs_refresh = false;
+                if let Some(tokens) = semantic_tokens
+                    && let Some(document) = state.documents.get_mut(&focus)
                 {
-                    publish_workspace_diagnostics(state, &workspace);
+                    document.semantic_tokens = Some(tokens);
+                    needs_refresh = true;
+                }
+
+                if let Some(pending_focus) = build_pending {
+                    // Edits landed while the build ran: rebuild with the
+                    // latest requester's inputs.
+                    request_workspace_build(state, &pending_focus);
                 }
 
                 if needs_refresh {
@@ -714,6 +875,27 @@ pub async fn start() {
                     });
                 }
 
+                std::ops::ControlFlow::Continue(())
+            })
+            .event::<CoreBuildEvent>(|state, event| {
+                state.core_build_requested = false;
+                if let Some(core) = event.0 {
+                    state.core = Some(core);
+                } else {
+                    tracing::warn!("core workspace build failed; goto-definition into core degraded");
+                }
+                std::ops::ControlFlow::Continue(())
+            })
+            .event::<StdlibModuleBuildEvent>(|state, event| {
+                state.stdlib_modules_requested.remove(&event.module_id);
+                if let Some(workspace) = event.workspace {
+                    state.stdlib_modules.insert(event.module_id, workspace);
+                } else {
+                    tracing::warn!(
+                        "stdlib module workspace build failed for {:?}",
+                        event.module_id
+                    );
+                }
                 std::ops::ControlFlow::Continue(())
             });
 
@@ -929,159 +1111,466 @@ fn tlk_files_under_root(root: &PathBuf) -> Vec<PathBuf> {
     crate::cli::package::workspace_source_files(root)
 }
 
-fn workspace_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<AnalysisWorkspace>> {
-    let root = analysis_root_for_uri(state, focus_uri)?;
-    let mut root_state = state.roots.remove(&root).unwrap_or_default();
-
-    // Fast path: nothing the server knows about changed since this
-    // analysis was built. No filesystem traversal at all (CLEAN-01).
-    if let Some(cached) = &root_state.workspace
-        && cached.generation == root_state.generation
-    {
-        let workspace = cached.workspace.clone();
-        state.roots.insert(root, root_state);
-        return Some(workspace);
-    }
-
-    // The package context anchors `package::` at the manifest's source
-    // root and resolves dependency imports, matching what `talk check`
-    // accepts. It reloads only when the manifest or lock changes.
-    let package_stamp = package_context_stamp(&root);
-    if root_state.package.as_ref().map(|cached| cached.stamp) != Some(package_stamp) {
-        root_state.package = Some(CachedPackageContext {
-            stamp: package_stamp,
-            context: load_package_context(&root),
-        });
-    }
-
-    // The file inventory refreshes only after inventory-affecting
-    // events; a burst of edits reuses the last walk.
-    let inventory = match root_state.inventory {
-        Some(ref inventory) => inventory.clone(),
-        None => {
-            let walked: Vec<(Url, i32)> = tlk_files_under_root(&root)
-                .into_iter()
-                .filter_map(|path| {
-                    let stamp = file_stamp_version(&path);
-                    Url::from_file_path(&path).ok().map(|uri| (uri, stamp))
-                })
-                .collect();
-            root_state.inventory = Some(walked.clone());
-            walked
-        }
-    };
-
-    let mut docs_by_uri: FxHashMap<Url, i32> = inventory.into_iter().collect();
-
-    for (uri, doc) in state.documents.iter() {
-        if !is_tlk_uri(uri) {
-            continue;
-        }
-        if uri == focus_uri || uri_is_under_root(uri, &root) {
-            docs_by_uri.insert(uri.clone(), doc.version);
-        }
-    }
-
-    if docs_by_uri.is_empty() {
-        state.roots.insert(root, root_state);
+/// The document set for a session focused inside the stdlib tree, or
+/// None when the focus is not a stdlib path. Module sources compile as
+/// their own module (the `Stdlib` workspace context, matching
+/// `talk check`): the set is the module's source files, with open
+/// documents overriding disk by canonical path. Open documents from
+/// OTHER stdlib modules stay out — their `use module::` imports would
+/// collide with the module compiling here.
+///
+/// Test files and harness internals (which no module owns) get an
+/// open-documents-only session: their `use fs::`-style imports resolve
+/// against the compiled stdlib artifacts, exactly like `talk test`.
+/// Open documents that ARE module sources stay out of it — the
+/// artifact already provides those definitions, and compiling the
+/// source again in this Normal context both duplicates them and
+/// drags the module through checks meant for user programs.
+fn stdlib_session_documents(
+    open_docs: &[OpenDocument],
+    focus_uri: &Url,
+) -> Option<FxHashMap<Url, i32>> {
+    let focus_path = focus_uri.to_file_path().ok()?;
+    let stdlib_dir = crate::compiling::stdlib::active_stdlib_dir();
+    let canonical_focus = focus_path.canonicalize().unwrap_or(focus_path);
+    if !canonical_focus.starts_with(&stdlib_dir) {
         return None;
     }
 
-    let versions: FxHashMap<DocumentId, i32> = docs_by_uri
+    let is_test = canonical_focus
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".test.tlk"));
+
+    // Open documents by canonical path, for override matching.
+    let open_by_path: FxHashMap<PathBuf, (&Url, i32)> = open_docs
         .iter()
-        .map(|(uri, version)| (document_id_for_uri(uri), *version))
+        .filter_map(|doc| {
+            let path = doc.uri.to_file_path().ok()?;
+            let canonical = path.canonicalize().unwrap_or(path);
+            Some((canonical, (&doc.uri, doc.version)))
+        })
         .collect();
 
-    // The generation bumped but the content may not have changed (an
-    // open/close round trip, a watched-file event that touched nothing
-    // relevant): retag the cached analysis instead of rebuilding.
-    if let Some(cached) = &mut root_state.workspace
-        && cached.workspace.versions == versions
-        && cached.package_stamp == package_stamp
+    if !is_test
+        && let Some(module) = crate::compiling::stdlib::module_name_for_path(&canonical_focus)
     {
-        cached.generation = root_state.generation;
-        let workspace = cached.workspace.clone();
-        state.roots.insert(root, root_state);
-        return Some(workspace);
+        let mut set: FxHashMap<Url, i32> = FxHashMap::default();
+        for (path, _) in crate::compiling::stdlib::source_documents(module)? {
+            if let Some((uri, version)) = open_by_path.get(&path) {
+                set.insert((*uri).clone(), *version);
+            } else {
+                let stamp = file_stamp_version(&path);
+                set.insert(Url::from_file_path(&path).ok()?, stamp);
+            }
+        }
+        // A module file the fixed source list does not know yet (new
+        // file under syntax/) still joins its own session.
+        if let Some((uri, version)) = open_by_path.get(&canonical_focus) {
+            set.entry((*uri).clone()).or_insert(*version);
+        }
+        return Some(set);
     }
 
+    let mut set: FxHashMap<Url, i32> = FxHashMap::default();
+    for (path, (uri, version)) in &open_by_path {
+        if !path.starts_with(&stdlib_dir) {
+            continue;
+        }
+        let is_module_source = !path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".test.tlk"))
+            && crate::compiling::stdlib::module_name_for_path(path).is_some();
+        if is_module_source {
+            // A module source: its own module session covers it, and
+            // the compiled artifact already defines it here.
+            continue;
+        }
+        set.insert((*uri).clone(), *version);
+    }
+    if set.is_empty() {
+        // The focus is closed and nothing else is open: a one-document
+        // session from disk, so close-time diagnostics still publish.
+        set.insert(focus_uri.clone(), file_stamp_version(&canonical_focus));
+    }
+    Some(set)
+}
+
+/// Kick an off-loop rebuild of the root containing `focus_uri`. At
+/// most one build per root is in flight; requests made during a build
+/// mark the root pending and the latest inputs win on completion.
+fn request_workspace_build(state: &mut ServerState, focus_uri: &Url) {
+    let Some(root) = analysis_root_for_uri(state, focus_uri) else {
+        return;
+    };
+    let root_state = state.roots.entry(root.clone()).or_default();
+    if root_state.build_in_flight {
+        root_state.build_pending = Some(focus_uri.clone());
+        return;
+    }
     if root_state
         .backoff
         .as_ref()
-        .is_some_and(|backoff| backoff.blocks(&versions, Instant::now()))
+        .is_some_and(|backoff| backoff.blocks(root_state.revision, Instant::now()))
     {
-        state.roots.insert(root, root_state);
-        return None;
+        return;
     }
 
-    let mut uris: Vec<Url> = docs_by_uri.keys().cloned().collect();
-    uris.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    let open_docs = state
+        .documents
+        .iter()
+        .filter(|(uri, _)| is_tlk_uri(uri))
+        .filter(|(uri, _)| *uri == focus_uri || uri_is_under_root(uri, &root))
+        .map(|(uri, doc)| OpenDocument {
+            uri: uri.clone(),
+            version: doc.version,
+            text: doc.text.clone(),
+        })
+        .collect();
 
-    let mut docs: Vec<DocumentInput> = vec![];
-    for uri in uris {
-        let Some(version) = docs_by_uri.get(&uri) else {
-            continue;
-        };
-        let text = if let Some(doc) = state.documents.get(&uri)
-            && (uri == *focus_uri || uri_is_under_root(&uri, &root))
-        {
-            doc.text.clone()
-        } else if let Ok(path) = uri.to_file_path() {
-            match std::fs::read_to_string(&path) {
-                Ok(text) => text,
-                Err(err) => {
-                    tracing::warn!("skipping unreadable file {path:?}: {err}");
-                    continue;
+    let inventory_changed = std::mem::take(&mut root_state.inventory_dirty);
+    root_state.build_in_flight = true;
+    let job = WorkspaceBuildJob {
+        root,
+        focus: focus_uri.clone(),
+        open_docs,
+        inventory_changed,
+    };
+    if state.analysis.send(AnalysisJob::Workspace(job)).is_err() {
+        root_state.build_in_flight = false;
+    }
+}
+
+/// The latest completed analysis for the focus root, possibly stale.
+/// Handlers never build on the event loop: a cold root kicks the
+/// worker and answers empty this once.
+fn snapshot_workspace(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<AnalysisWorkspace>> {
+    let root = analysis_root_for_uri(state, focus_uri)?;
+    let snapshot = state
+        .roots
+        .get(&root)
+        .and_then(|root_state| root_state.workspace.clone());
+    if snapshot.is_none() {
+        request_workspace_build(state, focus_uri);
+    }
+    snapshot
+}
+
+/// The name-resolved core workspace goto-definition navigates into,
+/// built once per session on the worker.
+fn core_snapshot(state: &mut ServerState) -> Option<Arc<AnalysisWorkspace>> {
+    if state.core.is_none() && !state.core_build_requested {
+        state.core_build_requested = true;
+        let _ = state.analysis.send(AnalysisJob::Core);
+    }
+    state.core.clone()
+}
+
+/// Kick an off-loop build of a stdlib module's navigation workspace
+/// (a goto-definition target), deduplicated against in-flight builds.
+fn request_stdlib_module(state: &mut ServerState, module_id: crate::compiling::module::ModuleId) {
+    if state.stdlib_modules.contains_key(&module_id)
+        || !state.stdlib_modules_requested.insert(module_id)
+    {
+        return;
+    }
+    if state
+        .analysis
+        .send(AnalysisJob::StdlibModule(module_id))
+        .is_err()
+    {
+        state.stdlib_modules_requested.remove(&module_id);
+    }
+}
+
+/// Stdlib module navigation workspaces mirror stdlib sources; an edit
+/// under the stdlib tree invalidates them all.
+fn invalidate_stdlib_module_workspaces(state: &mut ServerState, uri: &Url) {
+    let Ok(path) = uri.to_file_path() else {
+        return;
+    };
+    let stdlib_dir = crate::compiling::stdlib::active_stdlib_dir();
+    let canonical = path.canonicalize().unwrap_or(path);
+    if canonical.starts_with(&stdlib_dir) {
+        state.stdlib_modules.clear();
+        state.stdlib_modules_requested.clear();
+    }
+}
+
+fn run_analysis_worker(client: ClientSocket, receiver: std::sync::mpsc::Receiver<AnalysisJob>) {
+    let mut build = AnalysisBuild::default();
+    while let Ok(job) = receiver.recv() {
+        match job {
+            AnalysisJob::Workspace(job) => {
+                let root = job.root.clone();
+                let focus = job.focus.clone();
+                let focus_text = job
+                    .open_docs
+                    .iter()
+                    .find(|doc| doc.uri == focus)
+                    .map(|doc| doc.text.clone());
+                let result = build.workspace(job);
+                // Tokens ride the build: same debounce, same text
+                // snapshot, and the focus document's parse reused from
+                // the build's parse cache instead of a re-parse.
+                let semantic_tokens = focus_text.and_then(|text| {
+                    let ast = result
+                        .as_ref()
+                        .ok()
+                        .and_then(|workspace| workspace.as_ref())
+                        .and_then(|workspace| {
+                            let document_id = document_id_for_uri(&focus);
+                            let file_id = *workspace.document_to_file_id.get(&document_id)?;
+                            build.parse_cache.borrow().get_ast(
+                                file_id,
+                                &document_path_for_uri(&focus),
+                                crate::compiling::driver::ParseMode::Lenient,
+                                &text,
+                            )
+                        });
+                    catch_unwind(AssertUnwindSafe(|| {
+                        SemanticTokensResult::Tokens(SemanticTokens {
+                            result_id: None,
+                            data: crate::lsp::semantic_tokens::collect_with_ast(
+                                &text,
+                                ast.as_ref(),
+                            ),
+                        })
+                    }))
+                    .ok()
+                });
+                if client
+                    .emit(WorkspaceBuildEvent {
+                        root,
+                        focus,
+                        result,
+                        semantic_tokens,
+                    })
+                    .is_err()
+                {
+                    return;
                 }
             }
-        } else {
-            continue;
+            AnalysisJob::Core => {
+                let core = catch_unwind(AssertUnwindSafe(AnalysisWorkspace::core))
+                    .ok()
+                    .flatten()
+                    .map(Arc::new);
+                if client.emit(CoreBuildEvent(core)).is_err() {
+                    return;
+                }
+            }
+            AnalysisJob::StdlibModule(module_id) => {
+                let parse_cache = build.parse_cache.clone();
+                let workspace = catch_unwind(AssertUnwindSafe(|| {
+                    AnalysisWorkspace::stdlib_module_workspace(module_id, Some(parse_cache))
+                }))
+                .ok()
+                .flatten()
+                .map(Arc::new);
+                if client
+                    .emit(StdlibModuleBuildEvent {
+                        module_id,
+                        workspace,
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// The worker-side build pipeline. Owns the caches the synchronous
+/// path kept in RootState (inventories, per-root last-build dedup)
+/// plus the package compile contexts, which are not Send and so never
+/// leave this thread.
+#[derive(Default)]
+struct AnalysisBuild {
+    package_contexts: FxHashMap<PathBuf, CachedPackageContext>,
+    /// Walked file inventories per root (path uri, disk stamp),
+    /// refreshed when a job arrives with `inventory_changed`.
+    inventories: FxHashMap<PathBuf, Vec<(Url, i32)>>,
+    last_builds: FxHashMap<PathBuf, LastBuild>,
+    /// Per-file parse results shared across every root's rebuilds:
+    /// unchanged files skip the native frontend entirely (parse is the
+    /// bulk of a rebuild's cost).
+    parse_cache: std::rc::Rc<std::cell::RefCell<crate::compiling::driver::ParseCache>>,
+}
+
+struct LastBuild {
+    versions: FxHashMap<DocumentId, i32>,
+    /// The manifest/lock stamps the workspace was built with: a lock
+    /// change alone does not alter any document version, so the dedup
+    /// must compare it explicitly.
+    package_stamp: (i32, i32),
+    workspace: Option<Arc<AnalysisWorkspace>>,
+}
+
+impl AnalysisBuild {
+    fn workspace(
+        &mut self,
+        job: WorkspaceBuildJob,
+    ) -> Result<Option<Arc<AnalysisWorkspace>>, String> {
+        let WorkspaceBuildJob {
+            root,
+            focus,
+            open_docs,
+            inventory_changed,
+        } = job;
+
+        // The package context anchors `package::` at the manifest's
+        // source root and resolves dependency imports, matching what
+        // `talk check` accepts. It reloads only when the manifest or
+        // lock changes.
+        let package_stamp = package_context_stamp(&root);
+        let package = match self.package_contexts.get(&root) {
+            Some(cached) if cached.stamp == package_stamp => cached.context.clone(),
+            _ => {
+                let context = load_package_context(&root);
+                self.package_contexts.insert(
+                    root.clone(),
+                    CachedPackageContext {
+                        stamp: package_stamp,
+                        context: context.clone(),
+                    },
+                );
+                context
+            }
         };
 
-        docs.push(DocumentInput {
-            id: document_id_for_uri(&uri),
-            path: document_path_for_uri(&uri),
-            version: *version,
-            text: text.into(),
-        });
-    }
+        // stdlib sources compile one module at a time, the way
+        // `talk check` sees them: a mixed walk of the whole stdlib tree
+        // forces the dependency-free Normal context, where intra-module
+        // `package::` imports cannot resolve and every edit recompiles
+        // modules it did not touch. A stdlib session's document set is
+        // the focus module's sources, with open documents overriding
+        // disk.
+        let docs_by_uri: FxHashMap<Url, i32> = if let Some(session) =
+            stdlib_session_documents(&open_docs, &focus)
+        {
+            session
+        } else {
+            // The file inventory refreshes only after inventory-affecting
+            // events; a burst of edits reuses the last walk.
+            if inventory_changed || !self.inventories.contains_key(&root) {
+                let walked: Vec<(Url, i32)> = tlk_files_under_root(&root)
+                    .into_iter()
+                    .filter_map(|path| {
+                        let stamp = file_stamp_version(&path);
+                        Url::from_file_path(&path).ok().map(|uri| (uri, stamp))
+                    })
+                    .collect();
+                self.inventories.insert(root.clone(), walked);
+            }
+            let mut docs_by_uri: FxHashMap<Url, i32> = self
+                .inventories
+                .get(&root)
+                .into_iter()
+                .flatten()
+                .cloned()
+                .collect();
+            for doc in &open_docs {
+                docs_by_uri.insert(doc.uri.clone(), doc.version);
+            }
+            docs_by_uri
+        };
 
-    if docs.is_empty() {
-        state.roots.insert(root, root_state);
-        return None;
-    }
+        if docs_by_uri.is_empty() {
+            self.last_builds.insert(
+                root,
+                LastBuild {
+                    versions: FxHashMap::default(),
+                    package_stamp,
+                    workspace: None,
+                },
+            );
+            return Ok(None);
+        }
 
-    let package = root_state
-        .package
-        .as_ref()
-        .and_then(|cached| cached.context.clone());
-    let analysis = match recover_lsp_result(state, Some(focus_uri), "analyzing workspace", || {
-        AnalysisWorkspace::new_with_package(docs, package)
-    }) {
-        Ok(Some(analysis)) => analysis,
-        Ok(None) => {
-            state.roots.insert(root, root_state);
-            return None;
+        let versions: FxHashMap<DocumentId, i32> = docs_by_uri
+            .iter()
+            .map(|(uri, version)| (document_id_for_uri(uri), *version))
+            .collect();
+
+        // Inputs identical to the last build (an open/close round trip,
+        // a watched-file event that touched nothing relevant, a burst
+        // of kicks while one build ran): reuse rather than rebuild.
+        if let Some(last) = self.last_builds.get(&root)
+            && last.versions == versions
+            && last.package_stamp == package_stamp
+        {
+            return Ok(last.workspace.clone());
         }
-        Err(()) => {
-            root_state.backoff = Some(WorkspaceAnalysisBackoff::after_failure(
-                versions,
-                root_state.backoff.as_ref(),
-                Instant::now(),
-            ));
-            state.roots.insert(root, root_state);
-            return None;
+
+        let open_texts: FxHashMap<&Url, &str> = open_docs
+            .iter()
+            .map(|doc| (&doc.uri, doc.text.as_str()))
+            .collect();
+
+        let mut uris: Vec<Url> = docs_by_uri.keys().cloned().collect();
+        uris.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+
+        let mut docs: Vec<DocumentInput> = vec![];
+        for uri in uris {
+            let Some(version) = docs_by_uri.get(&uri) else {
+                continue;
+            };
+            let text = if let Some(text) = open_texts.get(&uri) {
+                (*text).to_string()
+            } else if let Ok(path) = uri.to_file_path() {
+                match std::fs::read_to_string(&path) {
+                    Ok(text) => text,
+                    Err(err) => {
+                        tracing::warn!("skipping unreadable file {path:?}: {err}");
+                        continue;
+                    }
+                }
+            } else {
+                continue;
+            };
+
+            docs.push(DocumentInput {
+                id: document_id_for_uri(&uri),
+                path: document_path_for_uri(&uri),
+                version: *version,
+                text: text.into(),
+            });
         }
-    };
-    let analysis = Arc::new(analysis);
-    root_state.backoff = None;
-    root_state.workspace = Some(CachedWorkspace {
-        workspace: analysis.clone(),
-        generation: root_state.generation,
-        package_stamp,
-    });
-    state.roots.insert(root, root_state);
-    Some(analysis)
+
+        if docs.is_empty() {
+            self.last_builds.insert(
+                root,
+                LastBuild {
+                    versions,
+                    package_stamp,
+                    workspace: None,
+                },
+            );
+            return Ok(None);
+        }
+
+        let build = catch_unwind(AssertUnwindSafe(|| {
+            AnalysisWorkspace::new_with_parse_cache(docs, package, self.parse_cache.clone())
+        }));
+        match build {
+            Ok(workspace) => {
+                let workspace = workspace.map(Arc::new);
+                self.last_builds.insert(
+                    root,
+                    LastBuild {
+                        versions,
+                        package_stamp,
+                        workspace: workspace.clone(),
+                    },
+                );
+                Ok(workspace)
+            }
+            Err(payload) => Err(panic_payload_message(payload.as_ref())),
+        }
+    }
 }
 
 fn publish_workspace_diagnostics(state: &mut ServerState, workspace: &AnalysisWorkspace) {
@@ -1108,7 +1597,13 @@ fn publish_workspace_diagnostics(state: &mut ServerState, workspace: &AnalysisWo
                 lsp_diagnostic_for_analysis(snapshot.line_index(), snapshot.text(), &diagnostic)
             })
             .collect();
-        let version = state.documents.get(&uri).map(|d| d.version);
+        // The version the analysis was built from, not the document's
+        // current one: the positions belong to that text.
+        let version = workspace
+            .versions
+            .get(doc_id)
+            .copied()
+            .or_else(|| state.documents.get(&uri).map(|d| d.version));
 
         let _ = state.client.publish_diagnostics(PublishDiagnosticsParams {
             uri,
@@ -1116,19 +1611,6 @@ fn publish_workspace_diagnostics(state: &mut ServerState, workspace: &AnalysisWo
             version,
         });
     }
-}
-
-fn core_analysis(state: &mut ServerState, focus_uri: &Url) -> Option<Arc<AnalysisWorkspace>> {
-    if let Some(core) = state.core.as_ref() {
-        return Some(core.clone());
-    }
-
-    let core = recover_lsp(state, Some(focus_uri), "analyzing core", None, || {
-        AnalysisWorkspace::core()
-    })?;
-    let core = Arc::new(core);
-    state.core = Some(core.clone());
-    Some(core)
 }
 
 pub(crate) fn document_id_for_uri(uri: &Url) -> DocumentId {
@@ -1291,32 +1773,25 @@ mod tests {
     #[test]
     fn workspace_analysis_failures_back_off_until_the_input_changes() {
         let now = Instant::now();
-        let versions = [("main.tlk".to_string(), 1)].into_iter().collect();
-        let first = WorkspaceAnalysisBackoff::after_failure(versions, None, now);
-        assert!(first.blocks(&first.versions, now + Duration::from_millis(999)));
-        assert!(!first.blocks(&first.versions, now + Duration::from_secs(1)));
+        let first = WorkspaceAnalysisBackoff::after_failure(1, None, now);
+        assert!(first.blocks(1, now + Duration::from_millis(999)));
+        assert!(!first.blocks(1, now + Duration::from_secs(1)));
 
-        let versions = first.versions.clone();
-        let second = WorkspaceAnalysisBackoff::after_failure(versions, Some(&first), now);
+        let second = WorkspaceAnalysisBackoff::after_failure(1, Some(&first), now);
         assert_eq!(second.retry_at, now + Duration::from_secs(2));
 
-        let changed_versions = [("main.tlk".to_string(), 2)].into_iter().collect();
-        assert!(!second.blocks(&changed_versions, now));
-        let changed = WorkspaceAnalysisBackoff::after_failure(changed_versions, Some(&second), now);
+        // A new revision (an edit landed) retries immediately.
+        assert!(!second.blocks(2, now));
+        let changed = WorkspaceAnalysisBackoff::after_failure(2, Some(&second), now);
         assert_eq!(changed.retry_at, now + Duration::from_secs(1));
     }
 
     #[test]
     fn workspace_analysis_backoff_is_capped() {
         let now = Instant::now();
-        let versions = [("main.tlk".to_string(), 1)].into_iter().collect();
-        let mut backoff = WorkspaceAnalysisBackoff::after_failure(versions, None, now);
+        let mut backoff = WorkspaceAnalysisBackoff::after_failure(1, None, now);
         for _ in 0..10 {
-            backoff = WorkspaceAnalysisBackoff::after_failure(
-                backoff.versions.clone(),
-                Some(&backoff),
-                now,
-            );
+            backoff = WorkspaceAnalysisBackoff::after_failure(1, Some(&backoff), now);
         }
         assert_eq!(backoff.retry_at, now + Duration::from_secs(30));
     }
@@ -2347,7 +2822,11 @@ mod tests {
             pending_document_work: Default::default(),
             roots: Default::default(),
             core: None,
+            core_build_requested: false,
+            stdlib_modules: Default::default(),
+            stdlib_modules_requested: Default::default(),
             workspace_roots: Default::default(),
+            analysis: test_analysis_channel(),
         };
         let uri = Url::parse("file:///test/file.tlk").expect("file uri");
         let started = Instant::now();
@@ -2450,7 +2929,7 @@ mod tests {
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         // Inside "some" of the pattern ".some(x)"
         let byte_offset = code.find(".some(x)").expect("variant pattern") as u32 + 1;
-        let target = super::goto_definition(&module, None, &uri, byte_offset);
+        let target = goto_for_test(&module, None, &uri, byte_offset);
         assert!(
             target.is_some(),
             "should find the variant definition from the pattern"
@@ -2742,17 +3221,22 @@ mod tests {
             pending_document_work: Default::default(),
             roots: Default::default(),
             core: None,
+            core_build_requested: false,
+            stdlib_modules: Default::default(),
+            stdlib_modules_requested: Default::default(),
             workspace_roots: vec![root],
+            analysis: test_analysis_channel(),
         };
         state
             .documents
             .insert(uri_a.clone(), Document::new(0, code_a.to_string()));
 
-        let workspace = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
+        let mut build = super::AnalysisBuild::default();
+        let workspace = analyze(&mut build, &state, &uri_a, true).expect("workspace");
         // Find the "foo" reference after the import statement
         let byte_offset = code_a.rfind("foo").expect("foo") as u32;
 
-        let target = super::goto_definition(&workspace, None, &uri_a, byte_offset)
+        let target = goto_for_test(&workspace, None, &uri_a, byte_offset)
             .expect("definition location");
         assert_eq!(target.uri, uri_b);
     }
@@ -2894,7 +3378,7 @@ extend Person {
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         // Find the T in the return type position
         let return_t_offset = code.find(") -> T").expect("return T") + 5;
-        let target = super::goto_definition(&module, None, &uri, return_t_offset as u32);
+        let target = goto_for_test(&module, None, &uri, return_t_offset as u32);
         assert!(target.is_some(), "should find type parameter definition");
     }
 
@@ -2909,7 +3393,7 @@ extend Person {
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         let token_offset = code.rfind("Token?").expect("return Token") as u32;
         let target =
-            super::goto_definition(&module, None, &uri, token_offset).expect("Token definition");
+            goto_for_test(&module, None, &uri, token_offset).expect("Token definition");
         assert_eq!(target.uri, uri);
         assert_eq!(target.range.start.line, 0);
     }
@@ -2927,7 +3411,7 @@ extend Person {
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         // Find the usage of `a` at the end
         let a_usage_offset = code.rfind("a\n").expect("a usage") as u32;
-        let target = super::goto_definition(&module, None, &uri, a_usage_offset);
+        let target = goto_for_test(&module, None, &uri, a_usage_offset);
         assert!(target.is_some(), "should find pattern binding definition");
     }
 
@@ -2944,7 +3428,7 @@ extend Person {
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         // Find the usage of x at the end
         let x_usage_offset = code.rfind("x\n").expect("x usage") as u32;
-        let target = super::goto_definition(&module, None, &uri, x_usage_offset);
+        let target = goto_for_test(&module, None, &uri, x_usage_offset);
         assert!(target.is_some(), "should find local variable definition");
     }
 
@@ -2957,7 +3441,7 @@ extend Person {
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         // Find the T in the generic declaration <T>
         let generic_t_offset = code.find("<T>").expect("generic T") + 1;
-        let target = super::goto_definition(&module, None, &uri, generic_t_offset as u32);
+        let target = goto_for_test(&module, None, &uri, generic_t_offset as u32);
         assert!(target.is_some(), "should find generic declaration");
     }
 
@@ -2969,7 +3453,7 @@ extend Person {
 
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         let m_offset = code.find("N + M>").expect("static argument") + "N + ".len();
-        let target = super::goto_definition(&module, None, &uri, m_offset as u32)
+        let target = goto_for_test(&module, None, &uri, m_offset as u32)
             .expect("the right operand of static arithmetic must navigate");
         let func_line = code.lines().nth(1).expect("func line");
         let m_char = func_line.find("static M").expect("M declaration") + "static ".len();
@@ -3010,7 +3494,7 @@ extend Person {
 
         // Click on "foo" in the import - should navigate to definition in a.tlk
         let import_foo_offset = code_b.find("{ foo }").expect("import foo") + 2;
-        let target = super::goto_definition(&module, None, &uri_b, import_foo_offset as u32)
+        let target = goto_for_test(&module, None, &uri_b, import_foo_offset as u32)
             .expect("target");
 
         assert_eq!(target.uri, uri_a, "should navigate to a.tlk");
@@ -3026,7 +3510,7 @@ extend Person {
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
 
         let import_directory_offset = code.find("{ Directory }").expect("import Directory") + 2;
-        let target = super::goto_definition(&module, None, &uri, import_directory_offset as u32)
+        let target = goto_for_test(&module, None, &uri, import_directory_offset as u32)
             .expect("stdlib definition");
 
         assert!(
@@ -3034,7 +3518,7 @@ extend Person {
             "should jump to stdlib fs, got {:?}",
             target.uri
         );
-        assert_eq!(target.range.start.line, 39);
+        assert_eq!(target.range.start.line, 173);
     }
 
     #[test]
@@ -3045,7 +3529,7 @@ extend Person {
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
 
         let directory_offset = code.rfind("Directory(path").expect("Directory constructor") as u32;
-        let target = super::goto_definition(&module, None, &uri, directory_offset)
+        let target = goto_for_test(&module, None, &uri, directory_offset)
             .expect("stdlib definition");
 
         assert!(
@@ -3053,7 +3537,7 @@ extend Person {
             "should jump to stdlib fs instead of the outer call, got {:?}",
             target.uri
         );
-        assert_eq!(target.range.start.line, 39);
+        assert_eq!(target.range.start.line, 173);
     }
 
     #[test]
@@ -3065,7 +3549,7 @@ extend Person {
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
 
         let directory_offset = code.find("fs::Directory").expect("qualified type") + "fs::".len();
-        let target = super::goto_definition(&module, None, &uri, directory_offset as u32)
+        let target = goto_for_test(&module, None, &uri, directory_offset as u32)
             .expect("stdlib definition");
 
         assert!(
@@ -3073,7 +3557,7 @@ extend Person {
             "should jump to stdlib fs, got {:?}",
             target.uri
         );
-        assert_eq!(target.range.start.line, 39);
+        assert_eq!(target.range.start.line, 173);
     }
 
     #[test]
@@ -3103,7 +3587,7 @@ extend Person {
 
         // Click on "package::a" in the import path - should navigate to a.tlk
         let path_offset = code_b.find("package::a").expect("import path") as u32;
-        let target = super::goto_definition(&module, None, &uri_b, path_offset).expect("target");
+        let target = goto_for_test(&module, None, &uri_b, path_offset).expect("target");
 
         assert_eq!(target.uri, uri_a, "should navigate to a.tlk");
         // Should point to the start of the file
@@ -3161,7 +3645,7 @@ extend Person {
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         // Effect name span excludes the leading ', so find "fizz" in the call (third occurrence)
         let byte_offset = code.match_indices("fizz").nth(2).expect("effect call").0 as u32;
-        let target = super::goto_definition(&module, None, &uri, byte_offset);
+        let target = goto_for_test(&module, None, &uri, byte_offset);
         assert!(target.is_some(), "should find effect definition from call");
     }
 
@@ -3176,7 +3660,7 @@ extend Person {
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         // Effect name span excludes the leading ', so find "fizz" in the handler (second occurrence)
         let byte_offset = code.match_indices("fizz").nth(1).expect("handler").0 as u32;
-        let target = super::goto_definition(&module, None, &uri, byte_offset);
+        let target = goto_for_test(&module, None, &uri, byte_offset);
         assert!(
             target.is_some(),
             "should find effect definition from handler"
@@ -3191,7 +3675,7 @@ extend Person {
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         // Effect name span excludes the leading ', so point to 'fizz' (after ')
         let byte_offset = code.find("fizz").expect("effect name") as u32;
-        let target = super::goto_definition(&module, None, &uri, byte_offset);
+        let target = goto_for_test(&module, None, &uri, byte_offset);
         assert!(
             target.is_some(),
             "should find effect declaration definition"
@@ -3211,7 +3695,7 @@ extend Person {
 
         // Find "helper" in the call (second occurrence in code_b)
         let byte_offset = code_b.rfind("helper").expect("helper call") as u32;
-        let target = super::goto_definition(&module, None, &uri_b, byte_offset);
+        let target = goto_for_test(&module, None, &uri_b, byte_offset);
         assert!(
             target.is_some(),
             "should find cross-file function definition"
@@ -3237,7 +3721,7 @@ func foo() 'fizz -> Int {
             .nth(1)
             .expect("func sig effect")
             .0 as u32;
-        let target = super::goto_definition(&module, None, &uri, byte_offset);
+        let target = goto_for_test(&module, None, &uri, byte_offset);
         assert!(
             target.is_some(),
             "should find effect definition from function signature"
@@ -3256,7 +3740,7 @@ func foo() 'fizz -> Int {
             .expect("file uri");
         let module = workspace_for_docs(vec![(uri.clone(), code)]);
         let byte_offset = code.find("Self").expect("Self type") as u32;
-        let target = super::goto_definition(&module, None, &uri, byte_offset);
+        let target = goto_for_test(&module, None, &uri, byte_offset);
         assert!(target.is_some(), "should find Self type definition");
         let target = target.expect("target");
         // Should navigate to the struct Foo definition (line 0)
@@ -3273,7 +3757,7 @@ func foo() 'fizz -> Int {
         let core = super::AnalysisWorkspace::core();
 
         let byte_offset = code.find("print_raw").expect("print_raw") as u32;
-        let target = super::goto_definition(&module, core.as_ref(), &uri, byte_offset);
+        let target = goto_for_test(&module, core.as_ref(), &uri, byte_offset);
         assert!(target.is_some(), "should find core function definition");
     }
 
@@ -3286,7 +3770,7 @@ func foo() 'fizz -> Int {
         let core = super::AnalysisWorkspace::core();
 
         let byte_offset = code.find("utf8").expect("utf8") as u32;
-        let target = super::goto_definition(&module, core.as_ref(), &uri, byte_offset)
+        let target = goto_for_test(&module, core.as_ref(), &uri, byte_offset)
             .expect("core member definition");
         assert!(
             target.uri.path().ends_with("String.tlk"),
@@ -3304,7 +3788,7 @@ func foo() 'fizz -> Int {
         let core = super::AnalysisWorkspace::core();
 
         let byte_offset = code.find("utf8").expect("utf8") as u32;
-        let target = super::goto_definition(&module, core.as_ref(), &uri, byte_offset)
+        let target = goto_for_test(&module, core.as_ref(), &uri, byte_offset)
             .expect("core member definition inside extension");
         assert!(
             target.uri.path().ends_with("String.tlk"),
@@ -3323,7 +3807,7 @@ func foo() 'fizz -> Int {
 
         // Find "foo" in the call expression "foo()" (second occurrence)
         let byte_offset = code.rfind("foo").expect("foo call") as u32;
-        let target = super::goto_definition(&module, None, &uri, byte_offset);
+        let target = goto_for_test(&module, None, &uri, byte_offset);
         assert!(
             target.is_some(),
             "should find function definition from call callee"
@@ -3346,11 +3830,73 @@ func foo() 'fizz -> Int {
         // Find the ' before "fizz" in the handler (the second ' in the code)
         let tick_offset = code.match_indices("'").nth(1).expect("handler tick").0;
         assert_eq!(&code[tick_offset..tick_offset + 1], "'");
-        let target = super::goto_definition(&module, None, &uri, tick_offset as u32);
+        let target = goto_for_test(&module, None, &uri, tick_offset as u32);
         assert!(
             target.is_some(),
             "should find effect definition when clicking on tick mark"
         );
+    }
+
+    fn test_analysis_channel() -> std::sync::mpsc::Sender<super::AnalysisJob> {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        tx
+    }
+
+    /// Goto-definition with a stdlib module cache: on `NeedsModule`
+    /// the test builds the module workspace in place (production
+    /// builds it on the analysis worker) and retries, exactly like the
+    /// server's request-build-retry loop.
+    fn goto_for_test(
+        module: &super::AnalysisWorkspace,
+        core: Option<&super::AnalysisWorkspace>,
+        uri: &Url,
+        byte_offset: u32,
+    ) -> Option<async_lsp::lsp_types::Location> {
+        let mut stdlib_modules: rustc_hash::FxHashMap<
+            crate::compiling::module::ModuleId,
+            std::sync::Arc<super::AnalysisWorkspace>,
+        > = Default::default();
+        loop {
+            match super::goto_definition(module, core, &stdlib_modules, uri, byte_offset) {
+                super::LspGoto::Found(location) => return Some(location),
+                super::LspGoto::NeedsModule(module_id) => {
+                    let workspace =
+                        super::AnalysisWorkspace::stdlib_module_workspace(module_id, None)?;
+                    stdlib_modules.insert(module_id, std::sync::Arc::new(workspace));
+                }
+                super::LspGoto::NotFound => return None,
+            }
+        }
+    }
+
+    /// Drive the worker-side build pipeline synchronously, the way the
+    /// analysis worker would: one job per call, flags explicit.
+    fn analyze(
+        build: &mut super::AnalysisBuild,
+        state: &super::ServerState,
+        focus: &Url,
+        inventory_changed: bool,
+    ) -> Option<std::sync::Arc<super::AnalysisWorkspace>> {
+        let root = super::analysis_root_for_uri(state, focus).expect("root");
+        let open_docs = state
+            .documents
+            .iter()
+            .filter(|(uri, _)| super::is_tlk_uri(uri))
+            .filter(|(uri, _)| *uri == focus || super::uri_is_under_root(uri, &root))
+            .map(|(uri, doc)| super::OpenDocument {
+                uri: uri.clone(),
+                version: doc.version,
+                text: doc.text.clone(),
+            })
+            .collect();
+        build
+            .workspace(super::WorkspaceBuildJob {
+                root,
+                focus: focus.clone(),
+                open_docs,
+                inventory_changed,
+            })
+            .expect("build")
     }
 
     fn state_with_roots(roots: Vec<std::path::PathBuf>) -> super::ServerState {
@@ -3361,7 +3907,11 @@ func foo() 'fizz -> Int {
             pending_document_work: Default::default(),
             roots: Default::default(),
             core: None,
+            core_build_requested: false,
+            stdlib_modules: Default::default(),
+            stdlib_modules_requested: Default::default(),
             workspace_roots: roots,
+            analysis: test_analysis_channel(),
         }
     }
 
@@ -3408,9 +3958,10 @@ func foo() 'fizz -> Int {
         let uri = Url::from_file_path(root.join("tests/property.test.tlk")).expect("test uri");
         // Some clients advertise the test directory itself as the workspace.
         // The enclosing package still owns analysis and module resolution.
-        let mut state = state_with_roots(vec![root.join("tests")]);
+        let state = state_with_roots(vec![root.join("tests")]);
 
-        let workspace = super::workspace_analysis(&mut state, &uri).expect("workspace");
+        let mut build = super::AnalysisBuild::default();
+        let workspace = analyze(&mut build, &state, &uri, true).expect("workspace");
         assert_eq!(
             workspace.source_root,
             root.join("src").canonicalize().expect("canonical src"),
@@ -3429,31 +3980,32 @@ func foo() 'fizz -> Int {
     }
 
     #[test]
-    fn cached_workspace_skips_the_filesystem_entirely() {
+    fn unchanged_inputs_reuse_the_last_build() {
         let root = temp_root("cache");
         let path_a = root.join("a.tlk");
         std::fs::write(&path_a, "let x = 1\n").expect("write a");
         let uri_a = Url::from_file_path(&path_a).expect("uri a");
-        let mut state = state_with_roots(vec![root]);
+        let state = state_with_roots(vec![root]);
+        let mut build = super::AnalysisBuild::default();
 
-        let first = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
+        let first = analyze(&mut build, &state, &uri_a, true).expect("workspace");
 
         // The disk changes underneath, but no event reaches the server:
-        // the cached analysis comes back without any traversal.
+        // the cached inventory keeps the old stamps, the versions match
+        // the last build's, and the workspace comes back untouched.
         std::fs::write(&path_a, "let x = 2\n").expect("rewrite a");
-        let second = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
+        let second = analyze(&mut build, &state, &uri_a, false).expect("workspace");
         assert!(
             std::sync::Arc::ptr_eq(&first, &second),
-            "an unchanged generation returns the cached workspace"
+            "unchanged inputs return the cached workspace"
         );
 
-        // The watched-file event invalidates the root; the next request
-        // re-walks and picks the change up.
-        state.invalidate_root(&uri_a, true);
-        let third = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
+        // The watched-file event re-walks; the new stamp changes the
+        // inputs and the next build picks the change up.
+        let third = analyze(&mut build, &state, &uri_a, true).expect("workspace");
         assert!(
             !std::sync::Arc::ptr_eq(&first, &third),
-            "an invalidated root rebuilds"
+            "a refreshed inventory rebuilds"
         );
         assert!(
             third
@@ -3466,29 +4018,29 @@ func foo() 'fizz -> Int {
     }
 
     #[test]
-    fn invalidation_is_scoped_to_the_containing_root() {
+    fn builds_are_scoped_to_the_containing_root() {
         let root_a = temp_root("scope_a");
         let root_b = temp_root("scope_b");
         std::fs::write(root_a.join("main.tlk"), "let a = 1\n").expect("write a");
         std::fs::write(root_b.join("main.tlk"), "let b = 1\n").expect("write b");
         let uri_a = Url::from_file_path(root_a.join("main.tlk")).expect("uri a");
         let uri_b = Url::from_file_path(root_b.join("main.tlk")).expect("uri b");
-        let mut state = state_with_roots(vec![root_a.clone(), root_b]);
+        let state = state_with_roots(vec![root_a.clone(), root_b]);
+        let mut build = super::AnalysisBuild::default();
 
-        let workspace_a = super::workspace_analysis(&mut state, &uri_a).expect("workspace a");
-        let workspace_b = super::workspace_analysis(&mut state, &uri_b).expect("workspace b");
+        let workspace_a = analyze(&mut build, &state, &uri_a, true).expect("workspace a");
+        let workspace_b = analyze(&mut build, &state, &uri_b, true).expect("workspace b");
 
         // A disk change in root A followed by its watched-file event:
         // root A rebuilds, root B is untouched.
         std::fs::write(root_a.join("main.tlk"), "let a = 2\n").expect("rewrite a");
-        state.invalidate_root(&uri_a, true);
 
-        let workspace_b_after = super::workspace_analysis(&mut state, &uri_b).expect("workspace b");
+        let workspace_b_after = analyze(&mut build, &state, &uri_b, false).expect("workspace b");
         assert!(
             std::sync::Arc::ptr_eq(&workspace_b, &workspace_b_after),
             "an unrelated root keeps its analysis"
         );
-        let workspace_a_after = super::workspace_analysis(&mut state, &uri_a).expect("workspace a");
+        let workspace_a_after = analyze(&mut build, &state, &uri_a, true).expect("workspace a");
         assert!(
             !std::sync::Arc::ptr_eq(&workspace_a, &workspace_a_after),
             "the changed root rebuilds"
@@ -3509,20 +4061,20 @@ func foo() 'fizz -> Int {
             uri_a.clone(),
             super::Document::new(0, "let x = 1\n".to_string()),
         );
+        let mut build = super::AnalysisBuild::default();
 
-        let first = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
+        let first = analyze(&mut build, &state, &uri_a, true).expect("workspace");
 
         // A new file appears on disk with no watched-file event, then a
-        // content edit bumps the root generation: the rebuild reuses
-        // the walked inventory, so the new file is not discovered yet.
+        // content edit: the rebuild reuses the walked inventory, so the
+        // new file is not discovered yet.
         let path_b = root.join("b.tlk");
         std::fs::write(&path_b, "let y = 2\n").expect("write b");
         if let Some(document) = state.documents.get_mut(&uri_a) {
             document.text = "let x = 2\n".to_string();
             document.version = 1;
         }
-        state.invalidate_root(&uri_a, false);
-        let second = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
+        let second = analyze(&mut build, &state, &uri_a, false).expect("workspace");
         assert!(
             !std::sync::Arc::ptr_eq(&first, &second),
             "a content change rebuilds"
@@ -3534,8 +4086,7 @@ func foo() 'fizz -> Int {
         );
 
         // Only the inventory-affecting event re-walks.
-        state.invalidate_root(&uri_a, true);
-        let third = super::workspace_analysis(&mut state, &uri_a).expect("workspace");
+        let third = analyze(&mut build, &state, &uri_a, true).expect("workspace");
         assert!(
             third.versions.contains_key(&doc_b),
             "a watched-file event refreshes the inventory"

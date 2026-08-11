@@ -685,7 +685,14 @@ fn run_loop<S: StatsSink>(
                 args_len,
             } => {
                 if frame_count >= budgets.frames {
-                    return Err("vm: call stack overflow".into());
+                    let mut cycle: Vec<String> = frames
+                        .iter()
+                        .rev()
+                        .take(8)
+                        .map(|f| chunk(module, f.chunk).map(|c| c.name.clone()).unwrap_or_default())
+                        .collect();
+                    cycle.reverse();
+                    return Err(format!("vm: call stack overflow [top frames: {}]", cycle.join(" -> ")));
                 }
                 let target = chunk(module, callee)?;
                 check_call_shape(target, args_len)?;
@@ -1831,6 +1838,35 @@ fn run_io(
                 .get_mut(dest..dest + entry_len as usize)
                 .ok_or("vm: io dir entry out of bounds")?;
             machine.io.dir_entry_copy(&path, index, buf)
+        }
+        IoOp::RealpathLen => {
+            let tail = machine.c_string_tail(ptr(a)?)?;
+            let len = tail
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(tail.len());
+            let path = tail[..len].to_vec();
+            machine.io.realpath_len(&path)
+        }
+        IoOp::RealpathCopy => {
+            let tail = machine.c_string_tail(ptr(a)?)?;
+            let len = tail
+                .iter()
+                .position(|&byte| byte == 0)
+                .unwrap_or(tail.len());
+            let path = tail[..len].to_vec();
+            let resolved_len = machine.io.realpath_len(&path);
+            if resolved_len < 0 {
+                return Ok(resolved_len);
+            }
+            let pointer = ptr(b)?;
+            machine.check_access(pointer, resolved_len as usize, "io")?;
+            let dest = pointer.address() as usize;
+            let buf = machine
+                .mem
+                .get_mut(dest..dest + resolved_len as usize)
+                .ok_or("vm: io realpath out of bounds")?;
+            machine.io.realpath_copy(&path, buf)
         }
         // Terminal for every host. `StdioIO` never comes back from
         // `process::exit`, so Core types its exit tails with an idle

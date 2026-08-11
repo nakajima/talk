@@ -14,16 +14,17 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         args: &[CallArg],
         ctx: &Ctx,
     ) -> Ty {
-        self.finish_call_with_result_origin(node, node, target, callee_ty, args, ctx)
+        self.finish_call_with_result_origin(node, node, target, callee_ty, args, false, ctx)
     }
 
-    fn finish_call_with_result_origin(
+    pub(super) fn finish_call_with_result_origin(
         &mut self,
         node: NodeID,
         result_origin: NodeID,
         target: String,
         callee_ty: Ty,
         args: &[CallArg],
+        adapt_unresolved_variant_params: bool,
         ctx: &Ctx,
     ) -> Ty {
         let arg_count = args.len();
@@ -43,7 +44,22 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     return Ty::Error;
                 }
                 for (arg, param) in args.iter().zip(&params) {
-                    self.check_expr(&arg.value, param, CtReason::Apply, ctx);
+                    if adapt_unresolved_variant_params
+                        && matches!(self.store.shallow(param), Ty::Var(_))
+                    {
+                        let found = self.infer_expr(&arg.value, ctx);
+                        if matches!(self.store.shallow(&found), Ty::Var(_) | Ty::Borrow(..)) {
+                            self.wanteds.push(Constraint::Adapt {
+                                expected: param.clone(),
+                                found,
+                                origin: CtOrigin::new(arg.value.id, CtReason::Apply),
+                            });
+                        } else {
+                            self.emit_eq(param.clone(), found, arg.value.id, CtReason::Apply);
+                        }
+                    } else {
+                        self.check_expr(&arg.value, param, CtReason::Apply, ctx);
+                    }
                     self.note_copy_marker(arg, param);
                 }
                 self.wanteds.push(Constraint::EffectSubset {
@@ -113,6 +129,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             format!("Method '{label}'"),
             member.clone(),
             args,
+            false,
             ctx,
         );
         self.wanteds.push(Constraint::HasMember {

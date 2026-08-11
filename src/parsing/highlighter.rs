@@ -75,24 +75,30 @@ impl<'a> Higlighter<'a> {
     }
 
     pub fn highlight(&mut self) -> Vec<HighlightToken> {
-        let mut result = vec![];
+        let Ok(ast) = crate::compiling::frontend::parse_ast(self.source, FileID(0), "-") else {
+            return self.highlight_lexed_only();
+        };
+        self.highlight_with_ast(&ast.0)
+    }
 
+    /// Highlight with a parse the caller already computed (the LSP's
+    /// analysis worker reuses the workspace build's cached parse
+    /// instead of re-parsing the document for tokens).
+    pub fn highlight_with_ast(&mut self, ast: &AST<Parsed>) -> Vec<HighlightToken> {
+        let mut result = self.highlight_lexed_only();
+        for root in ast.roots.iter() {
+            result.extend(self.tokens_from_expr(root, ast));
+        }
+        result
+    }
+
+    fn highlight_lexed_only(&mut self) -> Vec<HighlightToken> {
         // The frontend's lexing surface (ADR 0043 Stage 5): the token
         // stream with comments included as LineComment tokens.
         let lexed = crate::compiling::frontend::lex(self.source)
             .map(|(tokens, _)| tokens)
             .unwrap_or_default();
-        result.extend(self.collect_lexed_tokens(&lexed));
-
-        let Ok(ast) = crate::compiling::frontend::parse_ast(self.source, FileID(0), "-") else {
-            return result;
-        };
-
-        for root in ast.0.roots.iter() {
-            result.extend(self.tokens_from_expr(&root, &ast.0));
-        }
-
-        result
+        self.collect_lexed_tokens(&lexed)
     }
 
     fn collect_lexed_tokens(&mut self, lexed: &[crate::token::Token]) -> Vec<HighlightToken> {

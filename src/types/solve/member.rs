@@ -8,6 +8,20 @@ pub(super) enum MemberDispatch {
     Stuck,
 }
 
+/// Whether a call's shape selects a concrete type's own extend member
+/// over a same-label protocol requirement (`slots_prefer_inherent`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InherentPreference {
+    /// The inherent member fits the call; conformance dispatch would
+    /// bind the wrong callable.
+    Inherent,
+    /// The requirement is (or may be) the selection.
+    Requirement,
+    /// Both admit the labels but the member type is still unresolved —
+    /// the tie can't be judged yet; the constraint should float.
+    Undecided,
+}
+
 impl<'s> Solver<'s> {
     /// One step on a HasMember predicate against a known head.
     /// Dispatch a member use through the protocols that could provide it.
@@ -681,73 +695,14 @@ impl<'s> Solver<'s> {
                 // type via the protocol requirement, which is always valid if
                 // the conformance is (the witness is checked against the
                 // requirement when the extend body is checked).
-                if self.catalog.conformances_by_head.contains_key(&symbol)
-                    && !self.slots_prefer_inherent(symbol, &label_str, origin)
-                {
-                    // One offered application per protocol symbol. A row may
-                    // commit its declared arguments only when it is the sole
-                    // possible supplier; once several rows could serve
-                    // (`Into<Self>` synthesized next to a declared
-                    // `Into<Response>`, or a protocol-head row like
-                    // `Iterator: Into<[Element]>`), the arguments stay fresh
-                    // variables and the Conforms constraint selects the row —
-                    // committing here would be a guess, not a forced move.
-                    let mut grouped: Vec<(Symbol, Option<ProtocolRef>)> = Vec::new();
-                    for (_, row) in self.catalog.conformances_for_head(symbol) {
-                        match grouped
-                            .iter_mut()
-                            .find(|(protocol, _)| *protocol == row.protocol.protocol)
-                        {
-                            Some((_, committed)) => *committed = None,
-                            None => {
-                                let contested = self.catalog.conformances.values().any(|other| {
-                                    matches!(other.head, Symbol::Protocol(_))
-                                        && other.protocol.protocol == row.protocol.protocol
-                                });
-                                grouped.push((
-                                    row.protocol.protocol,
-                                    (!contested).then(|| row.protocol.clone()),
-                                ));
-                            }
-                        }
-                    }
-                    let protocols: Vec<ProtocolRef> = grouped
-                        .into_iter()
-                        .map(|(protocol, committed)| {
-                            committed.unwrap_or_else(|| {
-                                let args = self
-                                    .catalog
-                                    .protocols
-                                    .get(&protocol)
-                                    .map(|info| {
-                                        info.params
-                                            .iter()
-                                            .map(|_| {
-                                                Ty::Var(
-                                                    self.store
-                                                        .fresh_ty(self.level, origin.node),
-                                                )
-                                            })
-                                            .collect()
-                                    })
-                                    .unwrap_or_default();
-                                ProtocolRef { protocol, args }
-                            })
-                        })
-                        .collect();
-                    match self.dispatch_member_through(
-                        &protocols,
-                        Some(symbol),
-                        &member_receiver,
-                        &self_receiver,
-                        &label_str,
-                        &member,
-                        origin,
-                        queue,
-                        true,
-                    ) {
-                        MemberDispatch::Handled => return None,
-                        MemberDispatch::Stuck => {
+                if self.catalog.conformances_by_head.contains_key(&symbol) {
+                    match self.slots_prefer_inherent(symbol, &label_str, origin, &member) {
+                        // The inherent member is the selection: skip
+                        // conformance dispatch and fall through to it.
+                        InherentPreference::Inherent => {}
+                        // The tie can't be judged until the call pins the
+                        // member's shape: float the constraint and retry.
+                        InherentPreference::Undecided => {
                             return Some(Constraint::HasMember {
                                 receiver,
                                 label,
@@ -755,7 +710,81 @@ impl<'s> Solver<'s> {
                                 origin,
                             });
                         }
-                        MemberDispatch::NoCandidate => {}
+                        InherentPreference::Requirement => {
+                            // One offered application per protocol symbol. A row may
+                            // commit its declared arguments only when it is the sole
+                            // possible supplier; once several rows could serve
+                            // (`Into<Self>` synthesized next to a declared
+                            // `Into<Response>`, or a protocol-head row like
+                            // `Iterator: Into<[Element]>`), the arguments stay fresh
+                            // variables and the Conforms constraint selects the row —
+                            // committing here would be a guess, not a forced move.
+                            let mut grouped: Vec<(Symbol, Option<ProtocolRef>)> = Vec::new();
+                            for (_, row) in self.catalog.conformances_for_head(symbol) {
+                                match grouped
+                                    .iter_mut()
+                                    .find(|(protocol, _)| *protocol == row.protocol.protocol)
+                                {
+                                    Some((_, committed)) => *committed = None,
+                                    None => {
+                                        let contested = self.catalog.conformances.values().any(|other| {
+                                            matches!(other.head, Symbol::Protocol(_))
+                                                && other.protocol.protocol == row.protocol.protocol
+                                        });
+                                        grouped.push((
+                                            row.protocol.protocol,
+                                            (!contested).then(|| row.protocol.clone()),
+                                        ));
+                                    }
+                                }
+                            }
+                            let protocols: Vec<ProtocolRef> = grouped
+                                .into_iter()
+                                .map(|(protocol, committed)| {
+                                    committed.unwrap_or_else(|| {
+                                        let args = self
+                                            .catalog
+                                            .protocols
+                                            .get(&protocol)
+                                            .map(|info| {
+                                                info.params
+                                                    .iter()
+                                                    .map(|_| {
+                                                        Ty::Var(
+                                                            self.store
+                                                                .fresh_ty(self.level, origin.node),
+                                                        )
+                                                    })
+                                                    .collect()
+                                            })
+                                            .unwrap_or_default();
+                                        ProtocolRef { protocol, args }
+                                    })
+                                })
+                                .collect();
+                            match self.dispatch_member_through(
+                                &protocols,
+                                Some(symbol),
+                                &member_receiver,
+                                &self_receiver,
+                                &label_str,
+                                &member,
+                                origin,
+                                queue,
+                                true,
+                            ) {
+                                MemberDispatch::Handled => return None,
+                                MemberDispatch::Stuck => {
+                                    return Some(Constraint::HasMember {
+                                        receiver,
+                                        label,
+                                        member,
+                                        origin,
+                                    });
+                                }
+                                MemberDispatch::NoCandidate => {}
+                            }
+                        }
                     }
                 }
                 // Inherent extend members (`extend Float { func _trunc() }`).
@@ -1492,16 +1521,12 @@ impl<'s> Solver<'s> {
             ));
         } else {
             for (expected, (_, found)) in instantiation.argument_types.iter().zip(&payload) {
-                // A borrow-typed (or still-solving) payload argument against
-                // an owned/unsolved slot defers (ADR 0021): eager equality
-                // would bind the slot to the borrow — or the argument var
-                // owned — before the coercion can be judged.
-                let defer = matches!(
+                let defers = matches!(
                     (self.store.shallow(expected), self.store.shallow(found)),
                     (_, Ty::Borrow(..)) | (Ty::Param(_), Ty::Var(_))
                 );
-                if defer {
-                    queue.push(Constraint::CoerceOwned {
+                if defers {
+                    queue.push(Constraint::Adapt {
                         expected: expected.clone(),
                         found: found.clone(),
                         origin,
@@ -1550,11 +1575,17 @@ impl<'s> Solver<'s> {
     /// requirement but admit an inherent extension member, the inherent
     /// member is the selection (ADR 0041) — protocol dispatch would bind
     /// the wrong callable.
-    fn slots_prefer_inherent(&mut self, symbol: Symbol, label: &str, origin: CtOrigin) -> bool {
+    fn slots_prefer_inherent(
+        &mut self,
+        symbol: Symbol,
+        label: &str,
+        origin: CtOrigin,
+        member: &Ty,
+    ) -> InherentPreference {
         use crate::types::callables::labels_admit;
 
         let Some(slots) = self.member_call_slots.get(&origin.node) else {
-            return false;
+            return InherentPreference::Requirement;
         };
         let Some(rows) = self
             .catalog
@@ -1562,16 +1593,53 @@ impl<'s> Solver<'s> {
             .get(&symbol)
             .and_then(|members| members.get(label))
         else {
-            return false;
+            return InherentPreference::Requirement;
         };
-        let inherent_admits = rows.iter().any(|row| {
-            self.catalog
-                .callable_contracts
-                .get(&row.symbol)
-                .is_some_and(|contract| labels_admit(&contract.name.labels, slots))
-        });
-        if !inherent_admits {
-            return false;
+        let admitting: Vec<Symbol> = rows
+            .iter()
+            .filter(|row| {
+                self.catalog
+                    .callable_contracts
+                    .get(&row.symbol)
+                    .is_some_and(|contract| labels_admit(&contract.name.labels, slots))
+            })
+            .map(|row| row.symbol)
+            .collect();
+        if admitting.is_empty() {
+            return InherentPreference::Requirement;
+        }
+        // A concrete type's own member wins a both-admit tie ONLY when its
+        // parameter TYPES also fit the call (Swift's concrete-beats-
+        // extension rule, shape-gated): `Path.to_string()` prefers the
+        // fs inherent over the `Into<String>` extension member — whose
+        // body calls back into `into()`, a dispatch cycle — while
+        // `"...".replacing(_:with:)` still falls to the protocol overload
+        // because the inherent's StringRange parameter rejects a String
+        // argument.
+        let member_shallow = self.store.shallow(member);
+        if let Ty::Func(member_params, _, _) = &member_shallow {
+            let shape_fits = admitting.iter().any(|symbol| {
+                let Some(scheme) = self.schemes.get(symbol) else {
+                    return false;
+                };
+                let Ty::Func(params, _, _) = &scheme.ty else {
+                    return false;
+                };
+                let params: Vec<Ty> = params.iter().skip(1).cloned().collect();
+                params.len() == member_params.len()
+                    && params.iter().zip(member_params.iter()).all(|(expected, actual)| {
+                        let mut bindings = FxHashMap::default();
+                        crate::types::ty::match_pattern(expected, actual, &mut bindings) || {
+                            let mut reverse = FxHashMap::default();
+                            crate::types::ty::match_pattern(actual, expected, &mut reverse)
+                        }
+                    })
+            });
+            return if shape_fits {
+                InherentPreference::Inherent
+            } else {
+                InherentPreference::Requirement
+            };
         }
         let requirement_admits = self.catalog.conformances_for_head(symbol).any(|(_, row)| {
             self.catalog
@@ -1584,7 +1652,20 @@ impl<'s> Solver<'s> {
                         .is_some_and(|contract| labels_admit(&contract.name.labels, slots))
                 })
         });
-        !requirement_admits
+        if !requirement_admits {
+            return InherentPreference::Inherent;
+        }
+        // Both an inherent member and a requirement admit the labels, but
+        // the member's type is still a bare variable, so the shapes can't
+        // be compared yet. The call's Apply constraint will pin the member
+        // to a Func — defer the tie until it does. Only the final solve,
+        // where nothing more can resolve, keeps the requirement (the old
+        // conservative rule).
+        if self.defaulting {
+            InherentPreference::Requirement
+        } else {
+            InherentPreference::Undecided
+        }
     }
 
     /// Select one method from an overload set by the call's written labels
@@ -1841,6 +1922,7 @@ impl<'s> Solver<'s> {
         } else if !local_wanteds.is_empty() {
             queue.push(Constraint::Implic(Box::new(
                 crate::types::constraint::Implication {
+                    node: origin.node,
                     level: self.level,
                     givens,
                     wanteds: local_wanteds,
@@ -1938,16 +2020,20 @@ impl<'s> Solver<'s> {
                     ));
                 }
                 Ty::Borrow(..) => queue.push(Constraint::Eq(expected, found, origin)),
-                Ty::Var(_) if origin.reason == CtReason::Apply => {
-                    queue.push(Constraint::ApplyBorrow {
-                        expected_perm: expected_kind,
-                        expected_inner: (*expected_inner).clone(),
-                        found,
-                        origin,
-                    });
-                }
+                Ty::Var(_) | Ty::Proj(..) => queue.push(Constraint::Adapt {
+                    expected,
+                    found,
+                    origin,
+                }),
                 _ => queue.push(Constraint::Eq((*expected_inner).clone(), found, origin)),
             },
+            _ if matches!(self.store.shallow(&found), Ty::Borrow(..)) => {
+                queue.push(Constraint::Adapt {
+                    expected,
+                    found,
+                    origin,
+                });
+            }
             _ => queue.push(Constraint::Eq(expected, found, origin)),
         }
     }

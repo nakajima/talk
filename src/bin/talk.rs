@@ -125,12 +125,7 @@ async fn main() {
             #[arg(long)]
             keep_c: bool,
         },
-        /// Regenerate a service artifact and its manifest from a source
-        /// directory, requiring the stage-1/stage-2 fixed point (ADR
-        /// 0043). With no directory, regenerates the self-hosted
-        /// frontend artifact (bootstrap/frontend.tbc) from stdlib/syntax/
-        /// in the current directory. With --check, verifies the on-disk
-        /// artifact and manifest are current instead of writing.
+        /// Regenerates the self-hosted frontend artifact (bootstrap/frontend.tbc)
         Bootstrap {
             /// Directory of .tlk sources (non-recursive); omit for the
             /// frontend profile.
@@ -209,6 +204,12 @@ async fn main() {
             #[arg(long)]
             offline: bool,
         },
+        /// List the package's locked dependencies: the import each one
+        /// provides and the names that import makes available.
+        Dependencies {
+            #[arg(long)]
+            offline: bool,
+        },
         /// Refresh the package lockfile in the current directory.
         Update {
             packages: Vec<String>,
@@ -216,7 +217,11 @@ async fn main() {
             offline: bool,
         },
         /// Interactive frontend for declarations, type queries, and completion.
-        Repl,
+        Repl {
+            /// Import the current package library's public surface.
+            #[arg(long)]
+            package: bool,
+        },
         /// Print a dense Talk language reference for LLMs.
         Llm,
         /// Generate shell completions
@@ -360,8 +365,11 @@ async fn main() {
             let bin_name = cmd.get_name().to_string();
             generate(*shell, &mut cmd, bin_name, &mut std::io::stdout());
         }
-        Commands::Repl => {
-            talk::cli::repl::run();
+        Commands::Repl { package } => {
+            if let Err(err) = talk::cli::repl::run(*package) {
+                eprintln!("error: {err}");
+                std::process::exit(1);
+            }
         }
         Commands::Llm => {
             println!("{LLM_REFERENCE}");
@@ -400,6 +408,45 @@ async fn main() {
                 std::process::exit(1);
             }
         },
+        Commands::Dependencies { offline } => {
+            let root = match std::env::current_dir() {
+                Ok(root) => root,
+                Err(err) => {
+                    eprintln!("error: failed to determine the current directory: {err}");
+                    std::process::exit(1);
+                }
+            };
+            match talk::compiling::package::PackageProject::open_at(root, *offline)
+                .and_then(|project| project.dependency_report())
+            {
+                Ok(dependencies) => {
+                    if dependencies.is_empty() {
+                        println!("no dependencies");
+                    }
+                    for dependency in dependencies {
+                        let kind = if dependency.direct {
+                            "direct"
+                        } else {
+                            "transitive"
+                        };
+                        println!(
+                            "{} {} ({}, {})",
+                            dependency.name, dependency.version, dependency.source, kind
+                        );
+                        println!("  import: use {}", dependency.import_name);
+                        if dependency.exports.is_empty() {
+                            println!("  exports: (none)");
+                        } else {
+                            println!("  exports: {}", dependency.exports.join(", "));
+                        }
+                    }
+                }
+                Err(err) => {
+                    eprintln!("error: {err}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Commands::Update { packages, offline } => {
             match update_current_package(*offline, packages) {
                 Ok(_) => println!("updated package dependencies"),
@@ -585,7 +632,7 @@ async fn main() {
                     match project.compile_binary_entry(bin.as_deref(), entry.as_deref()) {
                         Ok(executable) => executable,
                         Err(err) => {
-                            eprintln!("error: {err}");
+                            print_package_error(&err);
                             std::process::exit(1);
                         }
                     };
@@ -624,13 +671,9 @@ async fn main() {
                     std::process::exit(1);
                 }
             };
+            let asts_by_source = resolved.phase.asts.clone();
             let typed = resolved.type_check();
-            if typed.has_errors() {
-                for diagnostic in typed.diagnostics() {
-                    eprintln!("{diagnostic}");
-                }
-                std::process::exit(1);
-            }
+            report_diagnostics_or_exit(&asts_by_source, &typed);
 
             let module = match typed.compile_executable(entry.as_deref()) {
                 Ok(module) => module,
@@ -1532,6 +1575,45 @@ fn single_source_for(filename: Option<&str>) -> (String, talk::compiling::driver
     (module_name, source)
 }
 
+/// Print the compiler's diagnostics in the same annotated form
+/// `talk check` renders, exiting on errors. One pipeline for every
+/// command that type-checks. Successful-but-noisy programs print
+/// nothing here: the corpus contract keeps stderr for failures (and
+/// the runtime's own reports), so warnings wait for `talk check`.
+#[cfg(feature = "cli")]
+fn report_diagnostics_or_exit(
+    asts_by_source: &indexmap::IndexMap<
+        talk::compiling::driver::Source,
+        talk::ast::AST<talk::ast::NameResolved>,
+    >,
+    typed: &talk::compiling::driver::Driver<talk::compiling::driver::Typed>,
+) {
+    if !typed.has_errors() {
+        return;
+    }
+    let diagnostics =
+        talk::analysis::CompileDiagnostics::from_driver_asts(asts_by_source, typed.diagnostics());
+    eprint!(
+        "{}",
+        diagnostics.render_text(talk::cli::diagnostics::ColorMode::Auto)
+    );
+    std::process::exit(1);
+}
+
+/// Package errors with frontend diagnostics print in the same
+/// annotated form; everything else keeps the one-line form.
+#[cfg(feature = "cli")]
+fn print_package_error(err: &talk::compiling::package::PackageError) {
+    if let talk::compiling::package::PackageError::CompileDiagnostics(diagnostics) = err {
+        eprint!(
+            "{}",
+            diagnostics.render_text(talk::cli::diagnostics::ColorMode::Auto)
+        );
+    } else {
+        eprintln!("error: {err}");
+    }
+}
+
 #[cfg(feature = "cli")]
 fn check_or_exit(
     filenames: &[String],
@@ -1553,13 +1635,9 @@ fn check_or_exit(
             std::process::exit(1);
         }
     };
+    let asts_by_source = resolved.phase.asts.clone();
     let typed = resolved.type_check();
-    if typed.has_errors() {
-        for diagnostic in typed.diagnostics() {
-            eprintln!("{diagnostic}");
-        }
-        std::process::exit(1);
-    }
+    report_diagnostics_or_exit(&asts_by_source, &typed);
     typed
 }
 

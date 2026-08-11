@@ -21,7 +21,7 @@
 use crate::label::Label;
 use crate::node_id::NodeID;
 use crate::types::Level;
-use crate::types::ty::{EffectRow, Perm, Predicate, Ty};
+use crate::types::ty::{EffectRow, Predicate, Ty};
 
 /// Why a constraint exists — the blame half of GHC's CtOrigin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -71,20 +71,6 @@ impl CtReason {
             CtReason::Apply => CtReason::NestedApply,
             other => other,
         }
-    }
-
-    /// Coercion sites for the borrow-donation rule when the slot is still
-    /// unsolved: a borrow-typed value meeting an unsolved slot at these
-    /// positions defers to the owned-coercion judgment — the slot may yet
-    /// resolve owned, and donation decides then — instead of eagerly
-    /// equating the borrow into the variable. Concrete owned slots defer
-    /// under every reason already (`check_inferred_against_expected`'s
-    /// found-borrow arm); this set only governs unsolved slots, where
-    /// deferral trades against the eager equalities that drive inference.
-    /// Invariant positions (nested and callback parameters) stay eager
-    /// deliberately: coercion never applies under a type constructor.
-    pub fn coerces_borrows(self) -> bool {
-        matches!(self, CtReason::Apply | CtReason::ArrayElement)
     }
 }
 
@@ -172,23 +158,13 @@ pub enum Constraint {
         ctor: Option<Ty>,
         origin: CtOrigin,
     },
-    /// Application-position auto-borrow whose argument type is not known yet.
-    /// If `found` later resolves to a borrow, it is checked directly against
-    /// the expected borrow; if it remains owned, it defaults to the usual
-    /// owned-argument auto-borrow.
-    ApplyBorrow {
-        expected_perm: Perm,
-        expected_inner: Ty,
-        found: Ty,
-        origin: CtOrigin,
-    },
-    /// Application-position owned-`Param` slot whose argument type is not
-    /// known yet (a call result still being solved). If `found` later
-    /// resolves to a borrow, the argument satisfies the owned slot by a
-    /// clone recorded at the origin node — elided or emitted per
-    /// instantiation by lowering (ADR 0021). Otherwise it is the plain
-    /// equality this deferral replaced.
-    CoerceOwned {
+    /// A value crossing a contextual use seam. Unlike `Eq`, adaptation is
+    /// directional: an owned value may be borrowed, an exclusive borrow may
+    /// be reborrowed shared, and a borrowed shareable value may donate an
+    /// owned copy. It never decomposes recursively under type constructors.
+    /// Unresolved sides defer until the surrounding member, variant, or
+    /// contextual type determines which access conversion is required.
+    Adapt {
         expected: Ty,
         found: Ty,
         origin: CtOrigin,
@@ -233,6 +209,30 @@ pub enum Constraint {
     Implic(Box<Implication>),
 }
 
+impl Constraint {
+    /// The origin a diagnostic about this constraint reports at. Total:
+    /// every constraint names a real node — an implication blames the
+    /// construct that introduced it (ADR 0055).
+    pub fn origin(&self) -> CtOrigin {
+        match self {
+            Constraint::Eq(_, _, origin)
+            | Constraint::EffEq(_, _, origin)
+            | Constraint::EffectSubset { origin, .. }
+            | Constraint::PreferEq(_, _, origin)
+            | Constraint::Conforms { origin, .. }
+            | Constraint::HasMember { origin, .. }
+            | Constraint::HasTypeMember { origin, .. }
+            | Constraint::HasVariant { origin, .. }
+            | Constraint::Adapt { origin, .. }
+            | Constraint::PatternView { origin, .. }
+            | Constraint::StringPattern { origin, .. }
+            | Constraint::HandleEffect { origin, .. }
+            | Constraint::StaticCmp { origin, .. } => *origin,
+            Constraint::Implic(implication) => CtOrigin::new(implication.node, CtReason::Body),
+        }
+    }
+}
+
 impl Predicate {
     pub(crate) fn into_constraint(self, origin: CtOrigin) -> Constraint {
         match self {
@@ -272,6 +272,12 @@ impl Predicate {
 /// describe such constructor-local variables as existential and non-escaping.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Implication {
+    /// The construct that introduced this implication (the match arm,
+    /// declaration, or expression). Errors blamed on the implication as a
+    /// whole — an escaping existential, a solver overflow — report here,
+    /// so it must be a real node: a synthesized one cannot be rendered
+    /// (ADR 0055).
+    pub node: NodeID,
     pub level: Level,
     pub givens: Vec<Predicate>,
     pub wanteds: Vec<Constraint>,

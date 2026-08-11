@@ -1202,7 +1202,7 @@ impl Lowering<'_> {
             Inst::Io { dest, op, a, b, c } => {
                 // Core `IORequest` variant order maps one-to-one onto the
                 // runtime operation table.
-                const IO_OPS: [IoOp; 24] = [
+                const IO_OPS: [IoOp; 26] = [
                     IoOp::Read,
                     IoOp::Write,
                     IoOp::Open,
@@ -1227,6 +1227,8 @@ impl Lowering<'_> {
                     IoOp::DirEntryLen,
                     IoOp::DirEntryCopy,
                     IoOp::Exit,
+                    IoOp::RealpathLen,
+                    IoOp::RealpathCopy,
                 ];
                 let Some(op) = IO_OPS.get(usize::from(*op)).copied() else {
                     return Err(BackendError::new(

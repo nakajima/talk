@@ -263,9 +263,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         use derive_visitor::{Drive, Visitor};
 
         #[derive(Visitor)]
-        #[visitor(Decl(enter))]
+        #[visitor(Decl(enter), Func(enter, exit))]
         struct AliasCollector {
-            aliases: Vec<(Symbol, TypeAnnotation)>,
+            aliases: Vec<(Symbol, TypeAnnotation, bool)>,
+            func_depth: u32,
         }
 
         impl AliasCollector {
@@ -273,8 +274,22 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 if let DeclKind::TypeAlias(name, _, rhs) = &decl.kind
                     && let Ok(symbol) = name.symbol()
                 {
-                    self.aliases.push((symbol, rhs.clone()));
+                    // Source-structural top-level test: an alias inside a
+                    // function body is scope-local; everything else (module
+                    // scope, type bodies via `owner`) exports with its
+                    // module's slice. Scope-map depth was unsound here — the
+                    // symbol registers in several scopes and hash order
+                    // picked one.
+                    self.aliases.push((symbol, rhs.clone(), self.func_depth == 0));
                 }
+            }
+
+            fn enter_func(&mut self, _func: &crate::node_kinds::func::Func) {
+                self.func_depth += 1;
+            }
+
+            fn exit_func(&mut self, _func: &crate::node_kinds::func::Func) {
+                self.func_depth -= 1;
             }
         }
 
@@ -287,29 +302,19 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             }
         }
 
-        let mut scopes: FxHashMap<Symbol, NodeID> = FxHashMap::default();
-        for (scope_id, scope) in &self.resolved.scopes {
-            for symbol in scope.types.values() {
-                if matches!(symbol, Symbol::TypeAlias(_)) {
-                    scopes.insert(*symbol, *scope_id);
-                }
-            }
-        }
-
-        let mut collector = AliasCollector { aliases: vec![] };
+        let mut collector = AliasCollector {
+            aliases: vec![],
+            func_depth: 0,
+        };
         for ast in asts.values() {
             for root in &ast.roots {
                 root.drive(&mut collector);
             }
         }
 
-        for (symbol, rhs) in collector.aliases {
+        for (symbol, rhs, top_level) in collector.aliases {
             let owner = owners.get(&symbol).copied();
-            let exportable = owner.is_some()
-                || scopes
-                    .get(&symbol)
-                    .map(|scope_id| scope_id.1 == 0)
-                    .unwrap_or(false);
+            let exportable = owner.is_some() || top_level;
             self.type_aliases.insert(
                 symbol,
                 TypeAliasDef {

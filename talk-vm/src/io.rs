@@ -89,6 +89,13 @@ pub trait IO {
     /// Copy a directory entry name into `buf`.
     fn dir_entry_copy(&mut self, path: &[u8], index: i64, buf: &mut [u8]) -> i64;
 
+    /// Canonicalized path byte length (POSIX realpath: resolves `.`,
+    /// `..`, and symlinks; the path must exist), or negative errno.
+    fn realpath_len(&mut self, path: &[u8]) -> i64;
+
+    /// Copy the canonicalized path into `buf`.
+    fn realpath_copy(&mut self, path: &[u8], buf: &mut [u8]) -> i64;
+
     /// Terminate the process with `code`; test IO returns the code.
     fn exit(&mut self, code: i64) -> i64;
 }
@@ -180,6 +187,18 @@ impl StdioIO {
         }
         out.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(out)
+    }
+    fn realpath(path: &[u8]) -> Result<Vec<u8>, i64> {
+        let resolved = std::fs::canonicalize(Self::host_path(path)?).map_err(Self::io_error)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            Ok(resolved.as_os_str().as_bytes().to_vec())
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(resolved.to_string_lossy().as_bytes().to_vec())
+        }
     }
 }
 
@@ -533,6 +552,24 @@ impl IO for StdioIO {
         }
     }
 
+    fn realpath_len(&mut self, path: &[u8]) -> i64 {
+        match Self::realpath(path) {
+            Ok(resolved) => resolved.len() as i64,
+            Err(error) => error,
+        }
+    }
+
+    fn realpath_copy(&mut self, path: &[u8], buf: &mut [u8]) -> i64 {
+        match Self::realpath(path) {
+            Ok(resolved) if buf.len() >= resolved.len() => {
+                buf[..resolved.len()].copy_from_slice(&resolved);
+                resolved.len() as i64
+            }
+            Ok(_) => EINVAL,
+            Err(error) => error,
+        }
+    }
+
     fn exit(&mut self, code: i64) -> i64 {
         std::process::exit(code as i32)
     }
@@ -709,6 +746,20 @@ impl IO for CaptureIO {
 
     fn dir_entry_copy(&mut self, _path: &[u8], _index: i64, _buf: &mut [u8]) -> i64 {
         ENOENT
+    }
+
+    fn realpath_len(&mut self, path: &[u8]) -> i64 {
+        // The simulated file system has no symlinks or `.`/`..`
+        // resolution: canonicalization is the identity.
+        path.len() as i64
+    }
+
+    fn realpath_copy(&mut self, path: &[u8], buf: &mut [u8]) -> i64 {
+        if buf.len() < path.len() {
+            return EINVAL;
+        }
+        buf[..path.len()].copy_from_slice(path);
+        path.len() as i64
     }
 
     fn exit(&mut self, code: i64) -> i64 {

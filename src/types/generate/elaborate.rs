@@ -1234,8 +1234,16 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
             return;
         }
         let wanteds = self.obligations.split_off(start);
+        // The obligations are `StaticCmp`s from the declaration's own
+        // annotations; the first one's node is inside the declaration.
+        let node = wanteds
+            .first()
+            .expect("guarded non-empty above")
+            .origin()
+            .node;
         self.obligations
             .push(Constraint::Implic(Box::new(Implication {
+                node,
                 level: self.level,
                 givens: givens.to_vec(),
                 wanteds,

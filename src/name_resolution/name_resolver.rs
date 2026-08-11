@@ -181,7 +181,7 @@ impl Scope {
         }
     }
 
-    fn type_binding(&self, name: &Name) -> Option<Symbol> {
+    pub(super) fn type_binding(&self, name: &Name) -> Option<Symbol> {
         match name.syntax_context() {
             Some(context) if context.has_expansion_scope() => self
                 .hygienic_types
@@ -326,6 +326,10 @@ pub struct NameResolver {
     path_to_file_id: FxHashMap<String, FileID>,
     file_path_by_id: FxHashMap<FileID, String>,
     local_modules: LocalModulePaths,
+    // Local imports resolving to these canonical source paths bind
+    // against the named precompiled module's exports instead of a
+    // re-parsed file's scope (ADR 0056).
+    precompiled_sources: FxHashMap<PathBuf, String>,
 
     // Scope stuff
     pub(super) scopes: FxHashMap<NodeID, Scope>,
@@ -390,10 +394,30 @@ impl NameResolver {
             path_to_file_id: Default::default(),
             file_path_by_id: Default::default(),
             local_modules: LocalModulePaths::new(source_root),
+            precompiled_sources: Default::default(),
         };
 
         resolver.init_root_scope();
         resolver
+    }
+
+    /// The precompiled-source redirect table (ADR 0056): package
+    /// binary/test compiles carry their root library's closure here.
+    pub fn with_precompiled_sources(
+        mut self,
+        precompiled_sources: FxHashMap<PathBuf, String>,
+    ) -> Self {
+        self.precompiled_sources = precompiled_sources;
+        self
+    }
+
+    /// The precompiled module a resolved local-import target rides in
+    /// on, if any (ADR 0056's generalization of the core redirect).
+    fn precompiled_module_for(&self, resolved: &Path) -> Option<&crate::compiling::module::Module> {
+        let name = self
+            .precompiled_sources
+            .get(&resolved.canonicalize().ok()?)?;
+        self.modules.get_module_by_name(name)
     }
 
     fn init_root_scope(&mut self) {
@@ -622,35 +646,76 @@ impl NameResolver {
                                     .map(|(file_id, path)| (*file_id, path.clone()))
                                     .collect();
                                 matched.sort_by(|left, right| left.1.cmp(&right.1));
-                                if matched.is_empty() {
-                                    self.diagnostic(
-                                        decl_id,
-                                        NameResolverError::ModuleNotFound(module_path.clone()),
-                                    );
-                                    continue;
-                                }
-                                // As with a single-file import, core sources
-                                // redirect to the compiled Core module's
-                                // exports to avoid duplicate type identities.
-                                let core_module =
-                                    self.modules.get_module_by_name("Core").filter(|_| {
-                                        matched.iter().all(|(_, path)| is_core_source_path(path))
-                                    });
-                                if let Some(core) = core_module {
+                                // Every glob member may ride a
+                                // precompiled module (ADR 0056): the
+                                // parse phase left the files out, so
+                                // match the glob on the filesystem and
+                                // bind the module's exports. A mixed
+                                // glob keeps the file behavior — its
+                                // outside members parsed normally.
+                                let members = LocalModulePaths::expand_glob(&base);
+                                let precompiled = if members.is_empty() {
+                                    None
+                                } else {
+                                    let canonical: Vec<PathBuf> = members
+                                        .iter()
+                                        .filter_map(|path| path.canonicalize().ok())
+                                        .collect();
+                                    let module = canonical
+                                        .first()
+                                        .and_then(|path| self.precompiled_module_for(path));
+                                    module.filter(|_| {
+                                        canonical.len() == members.len()
+                                            && canonical.iter().all(|path| {
+                                                self.precompiled_sources.contains_key(path)
+                                            })
+                                    })
+                                };
+                                if let Some(module) = precompiled {
                                     imported_module = true;
-                                    let symbols = Self::module_export_symbols(core);
+                                    let symbols = Self::module_export_symbols(module);
                                     for (_, set, _) in &symbols {
-                                        harvested.extend(Self::collect_module_labels(core, set));
+                                        harvested.extend(Self::collect_module_labels(module, set));
                                     }
                                     symbols
                                 } else {
-                                    let mut symbols: Vec<(String, Vec<Symbol>, bool)> = Vec::new();
-                                    for (target_file_id, _) in matched {
-                                        symbols.extend(
-                                            self.scope_export_symbols(NodeID(target_file_id, 0)),
+                                    if matched.is_empty() {
+                                        self.diagnostic(
+                                            decl_id,
+                                            NameResolverError::ModuleNotFound(module_path.clone()),
                                         );
+                                        continue;
                                     }
-                                    symbols
+                                    // As with a single-file import, core sources
+                                    // redirect to the compiled Core module's
+                                    // exports to avoid duplicate type identities.
+                                    let core_module =
+                                        self.modules.get_module_by_name("Core").filter(|_| {
+                                            matched
+                                                .iter()
+                                                .all(|(_, path)| is_core_source_path(path))
+                                        });
+                                    if let Some(core) = core_module {
+                                        imported_module = true;
+                                        let symbols = Self::module_export_symbols(core);
+                                        for (_, set, _) in &symbols {
+                                            harvested
+                                                .extend(Self::collect_module_labels(core, set));
+                                        }
+                                        symbols
+                                    } else {
+                                        let mut symbols: Vec<(String, Vec<Symbol>, bool)> =
+                                            Vec::new();
+                                        for (target_file_id, _) in matched {
+                                            symbols.extend(
+                                                self.scope_export_symbols(NodeID(
+                                                    target_file_id,
+                                                    0,
+                                                )),
+                                            );
+                                        }
+                                        symbols
+                                    }
                                 }
                             }
                             (ImportPath::Package(pkg_name), _) => {
@@ -682,37 +747,56 @@ impl NameResolver {
                                     );
                                     continue;
                                 };
-                                let target_path = resolved.to_string_lossy().to_string();
 
-                                let Some(target_file_id) = module_path_keys(&target_path)
-                                    .into_iter()
-                                    .find_map(|key| self.path_to_file_id.get(&key).copied())
-                                else {
-                                    self.diagnostic(
-                                        decl_id,
-                                        NameResolverError::ModuleNotFound(module_path.clone()),
-                                    );
-                                    continue;
-                                };
-                                imported_file_id = Some(target_file_id);
-
-                                let target_scope_id = NodeID(target_file_id, 0);
-
-                                // Get symbols from the target scope. If the target is a core file
-                                // and we have the pre-compiled Core module, use its exports instead
-                                // to avoid type identity conflicts from re-compiling core sources.
-                                let core_module = is_core_source_path(&target_path)
-                                    .then(|| self.modules.get_module_by_name("Core"))
-                                    .flatten();
-                                if let Some(core) = core_module {
+                                // A target riding a precompiled module
+                                // (ADR 0056) binds from the module's
+                                // exports, exactly like the core
+                                // redirect below.
+                                if let Some(module) = self.precompiled_module_for(&resolved) {
                                     imported_module = true;
-                                    let symbols = Self::module_export_symbols(core);
+                                    if let Some(artifact) = &module.procedural_macros {
+                                        procedural_macro_exports
+                                            .extend(artifact.exported_names().map(str::to_string));
+                                    }
+                                    let symbols = Self::module_export_symbols(module);
                                     for (_, set, _) in &symbols {
-                                        harvested.extend(Self::collect_module_labels(core, set));
+                                        harvested.extend(Self::collect_module_labels(module, set));
                                     }
                                     symbols
                                 } else {
-                                    self.scope_export_symbols(target_scope_id)
+                                    let target_path = resolved.to_string_lossy().to_string();
+
+                                    let Some(target_file_id) = module_path_keys(&target_path)
+                                        .into_iter()
+                                        .find_map(|key| self.path_to_file_id.get(&key).copied())
+                                    else {
+                                        self.diagnostic(
+                                            decl_id,
+                                            NameResolverError::ModuleNotFound(module_path.clone()),
+                                        );
+                                        continue;
+                                    };
+                                    imported_file_id = Some(target_file_id);
+
+                                    let target_scope_id = NodeID(target_file_id, 0);
+
+                                    // Get symbols from the target scope. If the target is a core file
+                                    // and we have the pre-compiled Core module, use its exports instead
+                                    // to avoid type identity conflicts from re-compiling core sources.
+                                    let core_module = is_core_source_path(&target_path)
+                                        .then(|| self.modules.get_module_by_name("Core"))
+                                        .flatten();
+                                    if let Some(core) = core_module {
+                                        imported_module = true;
+                                        let symbols = Self::module_export_symbols(core);
+                                        for (_, set, _) in &symbols {
+                                            harvested
+                                                .extend(Self::collect_module_labels(core, set));
+                                        }
+                                        symbols
+                                    } else {
+                                        self.scope_export_symbols(target_scope_id)
+                                    }
                                 }
                             }
                         };
@@ -1145,6 +1229,17 @@ impl NameResolver {
                 .local_modules
                 .resolve(&source_path, module_path)
                 .ok_or_else(|| NameResolverError::ModuleNotFound(module_path.to_string()))?;
+            // A target riding a precompiled module (ADR 0056) resolves
+            // the qualified name against the module's exports, exactly
+            // like the core redirect below.
+            if let Some(module) = self.precompiled_module_for(&resolved) {
+                let set = module.exports.get(symbol_name).cloned().ok_or_else(|| {
+                    NameResolverError::SymbolNotFoundInModule(symbol_name.to_string())
+                })?;
+                let pairs = Self::collect_module_labels(module, &set);
+                self.apply_callable_labels(pairs);
+                return Ok((set, true));
+            }
             let target_path = resolved.to_string_lossy().to_string();
             let target_file_id = module_path_keys(&target_path)
                 .into_iter()

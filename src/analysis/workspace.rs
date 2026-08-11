@@ -61,8 +61,27 @@ impl Workspace {
     /// accept), with `package::` anchored at the package's source root.
     /// `new` is the dependency-free session (editor).
     pub fn new_with_package(
+        docs: Vec<DocumentInput>,
+        package: Option<crate::compiling::package::PackageCompileContext>,
+    ) -> Option<Self> {
+        Self::build(docs, package, None)
+    }
+
+    /// `new_with_package` with a per-file parse cache shared across
+    /// rebuilds (the LSP's analysis worker): unchanged documents skip
+    /// the frontend entirely.
+    pub fn new_with_parse_cache(
+        docs: Vec<DocumentInput>,
+        package: Option<crate::compiling::package::PackageCompileContext>,
+        parse_cache: std::rc::Rc<std::cell::RefCell<crate::compiling::driver::ParseCache>>,
+    ) -> Option<Self> {
+        Self::build(docs, package, Some(parse_cache))
+    }
+
+    fn build(
         mut docs: Vec<DocumentInput>,
         package: Option<crate::compiling::package::PackageCompileContext>,
+        parse_cache: Option<std::rc::Rc<std::cell::RefCell<crate::compiling::driver::ParseCache>>>,
     ) -> Option<Self> {
         if docs.is_empty() {
             return None;
@@ -149,6 +168,7 @@ impl Workspace {
             .source_root(source_root.clone())
             .lenient_parsing()
             .preserve_comments(true);
+        config.parse_cache = parse_cache;
         match compile_context {
             WorkspaceCompileContext::Core => {
                 config.module_id = ModuleId::Core;
@@ -185,7 +205,7 @@ impl Workspace {
                     // demand-driven: a document's own imports activate them
                     // during parse, and only modules loaded that way serve
                     // auto-import completions and cross-module navigation.
-                    if let Some((id, module)) = crate::compiling::stdlib::module_with_id("Package")
+                    if let Some((id, module)) = crate::compiling::stdlib::try_module_with_id("Package")
                     {
                         Rc::make_mut(&mut config.modules)
                             .import_shared(module.clone(), id)
@@ -583,7 +603,7 @@ impl Workspace {
 
     pub fn stdlib_workspace_for_module_id(&self, module_id: ModuleId) -> Option<Self> {
         let name = self.stdlib_module_ids.get(&module_id)?;
-        Self::stdlib_module(name, module_id)
+        Self::stdlib_module(name, module_id, None)
     }
 
     pub fn stdlib_workspace_for_package(&self, package: &str) -> Option<Self> {
@@ -591,27 +611,31 @@ impl Workspace {
             .stdlib_module_ids
             .iter()
             .find_map(|(module_id, name)| (name == package).then_some(*module_id))?;
-        Self::stdlib_module(package, module_id)
+        Self::stdlib_module(package, module_id, None)
+    }
+
+    /// A stdlib module's navigation workspace by module id, for
+    /// cross-module definition lookups — no session workspace needed.
+    /// The LSP's analysis worker builds these off the event loop and
+    /// caches them; the parse cache lets a rebuild after a stdlib edit
+    /// skip the module's unchanged files.
+    pub fn stdlib_module_workspace(
+        module_id: ModuleId,
+        parse_cache: Option<std::rc::Rc<std::cell::RefCell<crate::compiling::driver::ParseCache>>>,
+    ) -> Option<Self> {
+        let name = crate::compiling::stdlib::name_for_module_id(module_id)?;
+        Self::stdlib_module(name, module_id, parse_cache)
     }
 
     pub(crate) fn exported_symbol(&self, name: &str) -> Option<Symbol> {
         self.resolved_names.exports().get(name)?.first().copied()
     }
 
-    /// The text of an embedded stdlib document a definition lookup can
-    /// land in — those live outside the workspace's own documents.
-    pub fn stdlib_document_text(
-        &self,
-        document_id: &DocumentId,
-    ) -> Option<crate::common::source_snapshot::SourceSnapshot> {
-        self.stdlib_module_ids.iter().find_map(|(module_id, name)| {
-            let stdlib = Self::stdlib_module(name, *module_id)?;
-            let file_id = *stdlib.document_to_file_id.get(document_id)?;
-            stdlib.texts.get(file_id.0 as usize).cloned()
-        })
-    }
-
-    fn stdlib_module(name: &str, module_id: ModuleId) -> Option<Self> {
+    fn stdlib_module(
+        name: &str,
+        module_id: ModuleId,
+        parse_cache: Option<std::rc::Rc<std::cell::RefCell<crate::compiling::driver::ParseCache>>>,
+    ) -> Option<Self> {
         let documents = crate::compiling::stdlib::source_documents(name)?;
         let source_root =
             LocalModulePaths::infer_source_root(documents.iter().map(|(path, _)| path.clone()))?;
@@ -643,6 +667,7 @@ impl Workspace {
         config.module_id = module_id;
         config.mode = CompilationMode::Library;
         config.modules = Rc::new(modules);
+        config.parse_cache = parse_cache;
 
         let driver = Driver::new_bare(sources, config);
         let resolved = driver.parse().ok()?.resolve_names().ok()?;
@@ -863,6 +888,123 @@ pub(crate) fn diagnostic_for_any(
             message,
         },
     ))
+}
+
+/// One compiler diagnostic bound to the source text it renders against.
+#[derive(Clone, Debug)]
+pub struct CompileDiagnostic {
+    pub document_id: DocumentId,
+    pub text: String,
+    pub diagnostic: Diagnostic,
+}
+
+/// The CLI's one diagnostic pipeline: `talk check`, `talk run`,
+/// `talk test`, and package compilation all convert driver diagnostics
+/// through here so every command prints the same annotated snippets.
+/// Built from the resolved ASTs a driver reports — captured before
+/// `type_check` consumes them.
+#[derive(Clone, Debug)]
+pub struct CompileDiagnostics {
+    pub entries: Vec<CompileDiagnostic>,
+}
+
+impl CompileDiagnostics {
+    pub fn from_driver_asts(
+        asts_by_source: &indexmap::IndexMap<
+            crate::compiling::driver::Source,
+            AST<NameResolved>,
+        >,
+        diagnostics: &[AnyDiagnostic],
+    ) -> Self {
+        let file_count = asts_by_source
+            .values()
+            .map(|ast| ast.file_id.0 as usize + 1)
+            .max()
+            .unwrap_or(0);
+        let mut file_id_to_document = vec![String::new(); file_count];
+        let mut texts: Vec<crate::common::source_snapshot::SourceSnapshot> =
+            vec![crate::common::source_snapshot::SourceSnapshot::new(""); file_count];
+        let mut asts = vec![None; file_count];
+
+        for (source, ast) in asts_by_source {
+            let index = ast.file_id.0 as usize;
+            if index >= file_id_to_document.len() {
+                continue;
+            }
+            file_id_to_document[index] = source.path().into_owned();
+            texts[index] = crate::common::source_snapshot::SourceSnapshot::new(
+                source.read().unwrap_or_default(),
+            );
+            asts[index] = Some(ast.clone());
+        }
+
+        let mut entries: Vec<_> = diagnostics
+            .iter()
+            .filter_map(|diagnostic| {
+                let file_index = diagnostic_file_index(diagnostic);
+                diagnostic_for_any(&file_id_to_document, &texts, &asts, diagnostic).map(
+                    |(document_id, diagnostic)| CompileDiagnostic {
+                        document_id,
+                        text: texts
+                            .get(file_index)
+                            .map(|text| text.text().to_string())
+                            .unwrap_or_default(),
+                        diagnostic,
+                    },
+                )
+            })
+            .collect();
+        entries.sort_by(|left, right| {
+            left.document_id
+                .cmp(&right.document_id)
+                .then(
+                    left.diagnostic
+                        .range
+                        .start
+                        .cmp(&right.diagnostic.range.start),
+                )
+                .then(left.diagnostic.range.end.cmp(&right.diagnostic.range.end))
+                .then(left.diagnostic.message.cmp(&right.diagnostic.message))
+        });
+        CompileDiagnostics { entries }
+    }
+
+    #[cfg(feature = "cli")]
+    pub fn render_text(&self, color_mode: crate::cli::diagnostics::ColorMode) -> String {
+        let mut output = String::new();
+        for entry in &self.entries {
+            output.push_str(&crate::cli::diagnostics::render_text(
+                &entry.document_id,
+                &entry.text,
+                &entry.diagnostic,
+                color_mode,
+            ));
+        }
+        output
+    }
+
+    /// Message-per-line rendering for error channels that cannot carry
+    /// the annotated snippet form (e.g. a `PackageError` payload
+    /// printed by an embedder without the CLI renderer).
+    pub fn render_brief(&self) -> String {
+        if self.entries.is_empty() {
+            return "compilation failed".to_string();
+        }
+        self.entries
+            .iter()
+            .map(|entry| format!("{}: {}", entry.document_id, entry.diagnostic.message))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+fn diagnostic_file_index(diagnostic: &AnyDiagnostic) -> usize {
+    match diagnostic {
+        AnyDiagnostic::Parsing(diagnostic) => diagnostic.id.0.0 as usize,
+        AnyDiagnostic::Macro(diagnostic) => diagnostic.id.0.0 as usize,
+        AnyDiagnostic::NameResolution(diagnostic) => diagnostic.id.0.0 as usize,
+        AnyDiagnostic::Types(diagnostic) => diagnostic.id.0.0 as usize,
+    }
 }
 
 fn range_for_node(

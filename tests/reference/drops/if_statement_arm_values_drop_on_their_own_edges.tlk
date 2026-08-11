@@ -1,0 +1,15 @@
+let out: [String] = ["a", "b"]
+// Statement-position if: the arms produce different types (Optional
+// from pop, unit from push or the no-else fall-through), so each arm's
+// value must drop on its own edge — threading both into one join local
+// once dropped the unit path with the Optional's drop glue.
+if out.count > 1 {
+	out.pop()
+} else {
+	out.push("c")
+}
+print(out.count)
+if out.count > 10 {
+	out.pop()
+}
+print(out.count)

@@ -139,8 +139,9 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
 
     /// The position-blind ambient row (every top-level handler): for
     /// bodies with no top-level execution order of their own (extend
-    /// members, protocol defaults).
-    pub(super) fn ambient_row(&mut self) -> EffectRow {
+    /// members, protocol defaults). `node` is the declaration the row
+    /// serves — an unhandled effect spilling through it reports there.
+    pub(super) fn ambient_row(&mut self, node: NodeID) -> EffectRow {
         let mut labels: Vec<Symbol> = self
             .handler_positions
             .iter()
@@ -148,7 +149,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             .collect();
         labels.sort();
         labels.dedup();
-        self.filtered_ambient(labels, NodeID::SYNTHESIZED)
+        self.filtered_ambient(labels, node)
     }
 
     fn filtered_ambient(&mut self, labels: Vec<Symbol>, node: NodeID) -> EffectRow {
@@ -307,14 +308,20 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     protocol,
                     origin,
                 } => {
-                    let rendered = self.store.render(&ty);
-                    self.diagnostics.errors.push((
+                    let protocol = protocol.to_string();
+                    let diagnostic = if matches!(self.store.shallow(&ty), Ty::Var(_)) {
+                        // The checker never learned the type — usually
+                        // another error kept it open. `_ does not
+                        // conform` would blame the wrong thing.
+                        TypeError::UnconformableUnknown { protocol }
+                    } else {
+                        let rendered = self.store.render(&ty);
                         TypeError::NotConforming {
                             ty: rendered,
-                            protocol: protocol.to_string(),
-                        },
-                        origin.node,
-                    ));
+                            protocol,
+                        }
+                    };
+                    self.diagnostics.errors.push((diagnostic, origin.node));
                 }
                 Constraint::HasMember {
                     receiver,
@@ -405,15 +412,12 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         origin.node,
                     ));
                 }
-                Constraint::ApplyBorrow {
-                    expected_perm,
-                    expected_inner,
+                Constraint::Adapt {
+                    expected,
                     found,
                     origin,
                 } => {
-                    let expected = self
-                        .store
-                        .render(&Ty::Borrow(expected_perm, Box::new(expected_inner)));
+                    let expected = self.store.render(&expected);
                     let found = self.store.render(&found);
                     self.diagnostics.errors.push((
                         TypeError::Mismatch {
@@ -581,6 +585,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             let nominal_givens = nominal_predicates_for(self.catalog, &self_ty);
             let nominal_wanted_start = self.wanteds.len();
             self.self_types.push(self_ty);
+            let mut first_member_node = None;
             for (symbol, work) in members {
                 // A method's own declared generics quantify its scheme
                 // (instantiated fresh at each call site, like any other
@@ -593,6 +598,11 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     MemberWork::Init { .. } => DeclaredSchemeContext::default(),
                 };
                 let member_ctx = group_ctx.with_binder(symbol);
+                let member_node = match &work {
+                    MemberWork::Method(func) => func.id,
+                    MemberWork::Init { node, .. } => *node,
+                };
+                first_member_node.get_or_insert(member_node);
                 let ty = match work {
                     MemberWork::Method(func) => self.body().infer_func(func, &member_ctx),
                     MemberWork::Init { params, body, node } => {
@@ -601,12 +611,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     }
                 };
                 let skeleton = self.mono[&symbol].clone();
-                self.emit_eq(
-                    skeleton.clone(),
-                    ty,
-                    NodeID::SYNTHESIZED,
-                    CtReason::Recursion,
-                );
+                self.emit_eq(skeleton.clone(), ty, member_node, CtReason::Recursion);
                 // Member bodies are function literals: always values.
                 outputs.push((symbol, skeleton, true, false, declared));
             }
@@ -614,6 +619,8 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                 let wanteds = self.wanteds.split_off(nominal_wanted_start);
                 if !wanteds.is_empty() {
                     self.wanteds.push(Constraint::Implic(Box::new(Implication {
+                        node: first_member_node
+                            .expect("non-empty member wanteds imply a member was checked"),
                         level: self.level,
                         givens: nominal_givens,
                         wanteds,
@@ -743,8 +750,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                 Constraint::EffEq(..)
                 | Constraint::EffectSubset { .. }
                 | Constraint::HandleEffect { .. }
-                | Constraint::ApplyBorrow { .. }
-                | Constraint::CoerceOwned { .. } => self.deferred.push(residual),
+                | Constraint::Adapt { .. } => self.deferred.push(residual),
                 // Leading-dot lookup never qualifies a scheme: lowering
                 // needs one concrete type member or pattern variant per node.
                 // A later group (or the final solve's error) owns it.

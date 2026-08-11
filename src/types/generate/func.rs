@@ -307,7 +307,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 });
         }
         self.register_func_bounds(func);
-        self.with_declared_givens(&func.generics, func.where_clause.as_ref(), |this| {
+        self.with_declared_givens(func.id, &func.generics, func.where_clause.as_ref(), |this| {
             let inferred =
                 this.infer_callable(&func.params, func.ret.as_ref(), &func.body, func.id, ctx);
             if func.effects.is_open {
@@ -337,6 +337,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
 
     pub(super) fn with_declared_givens<T>(
         &mut self,
+        node: NodeID,
         generics: &[GenericDecl],
         where_clause: Option<&WhereClause>,
         f: impl FnOnce(&mut Self) -> T,
@@ -348,6 +349,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             let wanteds = self.wanteds.split_off(start);
             if !wanteds.is_empty() {
                 self.wanteds.push(Constraint::Implic(Box::new(Implication {
+                    node,
                     level: self.level,
                     givens,
                     wanteds,
@@ -421,7 +423,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         ctx: &Ctx,
     ) -> Ty {
         self.register_func_bounds(func);
-        self.with_declared_givens(&func.generics, func.where_clause.as_ref(), |this| {
+        self.with_declared_givens(func.id, &func.generics, func.where_clause.as_ref(), |this| {
             this.infer_func_against_inner(
                 func,
                 expected_params,

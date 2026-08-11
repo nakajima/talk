@@ -64,15 +64,31 @@ struct SemanticTokenCollector<'a> {
 }
 
 pub fn collect(source: String) -> Vec<SemanticToken> {
-    let tokens = collect_highlight_tokens(&source);
-    let collector = SemanticTokenCollector::new(&source, tokens);
+    collect_with_ast(&source, None)
+}
+
+/// Token collection with an optional pre-parsed AST: the analysis
+/// worker hands over the workspace build's cached parse so tokens do
+/// not re-parse the document.
+pub fn collect_with_ast(
+    source: &str,
+    ast: Option<&crate::ast::AST<crate::ast::Parsed>>,
+) -> Vec<SemanticToken> {
+    let tokens = collect_highlight_tokens(source, ast);
+    let collector = SemanticTokenCollector::new(source, tokens);
 
     collector.encode_tokens()
 }
 
-fn collect_highlight_tokens(source: &str) -> Vec<HighlightToken> {
+fn collect_highlight_tokens(
+    source: &str,
+    ast: Option<&crate::ast::AST<crate::ast::Parsed>>,
+) -> Vec<HighlightToken> {
     let mut highlighter = Higlighter::new(source);
-    let mut tokens = highlighter.highlight();
+    let mut tokens = match ast {
+        Some(ast) => highlighter.highlight_with_ast(ast),
+        None => highlighter.highlight(),
+    };
     tokens.sort_by(|a, b| a.start.cmp(&b.start));
     tokens
 }
@@ -159,7 +175,7 @@ mod tests {
     use crate::lsp::semantic_tokens::{SemanticTokenCollector, TOKEN_TYPES};
 
     fn tokens_for(code: &'static str) -> Vec<SemanticToken> {
-        let tokens = super::collect_highlight_tokens(code);
+        let tokens = super::collect_highlight_tokens(code, None);
         let semantic_tokens = SemanticTokenCollector::new(code, tokens);
         semantic_tokens.encode_tokens()
     }

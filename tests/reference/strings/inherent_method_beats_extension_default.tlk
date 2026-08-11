@@ -1,0 +1,20 @@
+// A concrete type's own method must win over a protocol-extension
+// default with the same name: `into()` here calls `self.to_string()`,
+// and the `Into<String>` extension also offers a defaulted
+// `to_string` whose body calls back into `into()`. Preferring the
+// extension member would dispatch into -> to_string -> into forever.
+pub struct Widget {}
+
+extend Widget {
+	pub func to_string() -> String { "widget" }
+}
+
+extend Widget: Into<String> {
+	consuming func into() -> String { self.to_string() }
+}
+
+extend Into<String> {
+	consuming func to_string() -> String { self.into() }
+}
+
+print(Widget().into())

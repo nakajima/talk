@@ -35,7 +35,9 @@ func _io_host(request: IORequest) -> Int {
 		.dir_entry_kind(path, index) -> #_ir(path, index) { %? = io 20 $0 $1 0 },
 		.dir_entry_len(path, index) -> #_ir(path, index) { %? = io 21 $0 $1 0 },
 		.dir_entry_copy(path, index, buf) -> #_ir(path, index, buf) { %? = io 22 $0 $1 $2 },
-		.exit(code) -> #_ir(code) { %? = io 23 $0 0 0 }
+		.exit(code) -> #_ir(code) { %? = io 23 $0 0 0 },
+		.realpath_len(path) -> #_ir(path) { %? = io 24 $0 0 0 },
+		.realpath_copy(path, buf) -> #_ir(path, buf) { %? = io 25 $0 $1 0 }
 	}
 }
 

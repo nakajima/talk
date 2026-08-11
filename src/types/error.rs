@@ -127,6 +127,13 @@ pub enum TypeError {
         ty: String,
         protocol: String,
     },
+    /// A conformance the checker never got to test: the expression's
+    /// type stayed unknown to the end (usually because another error
+    /// kept it open). Reporting `_ does not conform` would blame the
+    /// wrong thing.
+    UnconformableUnknown {
+        protocol: String,
+    },
     /// A call-site ownership marker (ADR 0018) that disagrees with the
     /// callee's parameter mode.
     ArgMarkerMismatch {
@@ -375,6 +382,7 @@ impl TypeError {
             Self::MutArgumentNotAPlace => "type.mut-argument-not-a-place",
             Self::AssignThroughSharedBorrow { .. } => "type.assign-through-shared-borrow",
             Self::NotConforming { .. } => "type.not-conforming",
+            Self::UnconformableUnknown { .. } => "type.unconformable-unknown",
             Self::ArgMarkerMismatch { .. } => "type.arg-marker-mismatch",
             Self::EqualityNotSupported { .. } => "type.equality-not-supported",
             Self::AmbiguousMember { .. } => "type.ambiguous-member",
@@ -629,6 +637,12 @@ impl Display for TypeError {
             }
             TypeError::NotConforming { ty, protocol } => {
                 write!(f, "{ty} does not conform to {protocol}")
+            }
+            TypeError::UnconformableUnknown { protocol } => {
+                write!(
+                    f,
+                    "the type of this expression is unknown, so it cannot be shown to conform to {protocol}"
+                )
             }
             TypeError::ArgMarkerMismatch { marker, requires } => {
                 write!(f, "the `{marker}` marker requires {requires}")

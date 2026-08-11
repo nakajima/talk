@@ -1,5 +1,5 @@
 use super::*;
-use crate::types::catalog::{CoerceKind, Grade};
+use crate::types::catalog::Grade;
 use crate::types::ty::Perm;
 
 /// Where a leftover row/effect-row binds its tail when it flows into a
@@ -79,36 +79,34 @@ impl<'s> Solver<'s> {
                 PermUnify::Defer => return false,
             },
 
+            // A known owned argument auto-borrows immediately. An unresolved
+            // argument defers through the directional adaptation judgment so
+            // a later borrow-typed result is not pinned owned prematurely.
             (Ty::Borrow(_, inner), other) if origin.reason == CtReason::Apply => {
-                worklist.push(Constraint::Eq(
-                    (**inner).clone(),
-                    other.clone(),
-                    origin.nested(),
-                ));
+                if matches!(other, Ty::Var(_) | Ty::Proj(..)) {
+                    worklist.push(Constraint::Adapt {
+                        expected: a.clone(),
+                        found: b.clone(),
+                        origin,
+                    });
+                } else {
+                    worklist.push(Constraint::Eq(
+                        (**inner).clone(),
+                        other.clone(),
+                        origin.nested(),
+                    ));
+                }
             }
 
-            // Tier-2 copy-out-of-borrow coercion: a borrowed argument
-            // satisfies an owned parameter when extraction is free — Copy
-            // grade (a scalar borrow is a value copy at runtime, nothing to
-            // emit) or CheapClone (an O(1) buffer retain, emitted by
-            // lowering at the recorded node).
-            (Ty::Nominal(symbol, args), Ty::Borrow(_, found_inner))
-                if origin.reason == CtReason::Apply
-                    && self
-                        .catalog
-                        .coerce_kind_application(*symbol, args)
-                        .is_some() =>
-            {
-                if self.catalog.coerce_kind_application(*symbol, args)
-                    == Some(CoerceKind::CheapClone)
-                {
-                    self.coerce_clones.insert(origin.node);
-                }
-                worklist.push(Constraint::Eq(
-                    a.clone(),
-                    (**found_inner).clone(),
-                    origin.nested(),
-                ));
+            // A borrowed argument satisfying an owned nominal always goes
+            // through adaptation, which selects Copy, CheapClone, retain, or
+            // a linearity error in one place.
+            (Ty::Nominal(..), Ty::Borrow(..)) if origin.reason == CtReason::Apply => {
+                worklist.push(Constraint::Adapt {
+                    expected: a.clone(),
+                    found: b.clone(),
+                    origin,
+                });
             }
 
             // Borrow erasure for Copy grades: `&T` and `T` are the same
@@ -448,11 +446,9 @@ impl<'s> Solver<'s> {
         }
     }
 
-    /// Auto-borrow an immediate call argument to its parameter: an owned value
-    /// satisfies a `&`/`&mut` parameter, and a `&mut` value satisfies a `&`
-    /// parameter. Only called for `Apply` origins at the application boundary;
-    /// the emitted sub-constraints use the (demoted) `origin` so nested
-    /// function types do not coerce.
+    /// Adapt an immediate call argument to its parameter. The surrounding
+    /// function application identifies the coercion seam; nested function
+    /// types continue to unify invariantly.
     fn push_apply_param_eq(
         &mut self,
         expected: &Ty,
@@ -475,9 +471,6 @@ impl<'s> Solver<'s> {
                 Ty::Borrow(found_perm, found_inner) => {
                     let expected_perm = self.store.shallow_perm(expected_perm);
                     let found_perm = self.store.shallow_perm(found_perm);
-                    // `&mut` satisfies `&` at the application boundary; every
-                    // other pairing (vars included) unifies invariantly via
-                    // the full borrow types.
                     if expected_perm == found_perm
                         || (expected_perm == Perm::Shared && found_perm == Perm::Exclusive)
                     {
@@ -490,22 +483,24 @@ impl<'s> Solver<'s> {
                         worklist.push(Constraint::Eq(expected.clone(), found.clone(), origin));
                     }
                 }
-                Ty::Var(_) => {
-                    worklist.push(Constraint::ApplyBorrow {
-                        expected_perm,
-                        expected_inner: (*expected_inner).clone(),
-                        found: found.clone(),
-                        origin,
-                    });
-                }
-                _ => {
-                    worklist.push(Constraint::Eq(
-                        (*expected_inner).clone(),
-                        found.clone(),
-                        origin,
-                    ));
-                }
+                Ty::Var(_) => worklist.push(Constraint::Adapt {
+                    expected: expected.clone(),
+                    found: found.clone(),
+                    origin,
+                }),
+                _ => worklist.push(Constraint::Eq(
+                    (*expected_inner).clone(),
+                    found.clone(),
+                    origin,
+                )),
             },
+            _ if matches!(self.store.shallow(found), Ty::Borrow(..)) => {
+                worklist.push(Constraint::Adapt {
+                    expected: expected.clone(),
+                    found: found.clone(),
+                    origin,
+                });
+            }
             _ => worklist.push(Constraint::Eq(expected.clone(), found.clone(), origin)),
         }
     }

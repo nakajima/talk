@@ -69,7 +69,7 @@ impl<'a> TypecheckSession<'a> {
     }
 
     /// The borrowed-to-owned judgment for an implicit existential pack's
-    /// payload (the deferred twin of `solve_coerce_owned`'s tier-2 rule):
+    /// payload (the deferred twin of `solve_adapt`'s ownership rule):
     /// a borrow of a Copy payload is a value copy, a CheapClone payload
     /// retains (recorded in `coerce_clones` for lowering), and anything
     /// else — linear or uniquely-owned — is an error. Returns the owned

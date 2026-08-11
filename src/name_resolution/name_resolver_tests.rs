@@ -529,6 +529,39 @@ pub mod tests {
         );
     }
 
+    #[test]
+    fn type_alias_shares_the_nominal_namespace() {
+        // A type alias collides with a same-named nominal in its scope:
+        // the merged symbol could otherwise reach the backend as an
+        // alias nominal it cannot lower.
+        let resolved = resolve_err("pub struct File {\n}\npub typealias File = Int\n");
+        assert!(
+            resolved.1.diagnostics.iter().any(|diagnostic| matches!(
+                diagnostic,
+                AnyDiagnostic::NameResolution(Diagnostic::<NameResolverError> {
+                    kind: NameResolverError::DuplicateDeclaration(name),
+                    ..
+                }) if name == "File"
+            )),
+            "{:?}",
+            resolved.1.diagnostics
+        );
+
+        // Two same-named aliases collide too.
+        let resolved = resolve_err("pub typealias File = Int\npub typealias File = String\n");
+        assert!(
+            resolved.1.diagnostics.iter().any(|diagnostic| matches!(
+                diagnostic,
+                AnyDiagnostic::NameResolution(Diagnostic::<NameResolverError> {
+                    kind: NameResolverError::DuplicateDeclaration(name),
+                    ..
+                }) if name == "File"
+            )),
+            "{:?}",
+            resolved.1.diagnostics
+        );
+    }
+
     ///////////////////////////////////////////////////////////////////////
     // Sequential-scoping characterization matrix
     // (docs/adr/0013-sequential-scoping-for-locals.md). Each test locks today's

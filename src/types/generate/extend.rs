@@ -11,7 +11,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         self.level = GROUP_LEVEL;
         debug_assert!(self.wanteds.is_empty());
 
-        let group_eff = self.ambient_row();
+        let group_eff = self.ambient_row(work.decl.id);
         let group_ret = Ty::Var(self.store.fresh_ty(OUTER_LEVEL, NodeID::SYNTHESIZED));
         let group_ctx = Ctx::root().with_ret_eff(group_ret, group_eff);
         self.self_types.push(work.self_ty.clone());
@@ -202,6 +202,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     self.wanteds.push(wanted);
                 } else {
                     self.wanteds.push(Constraint::Implic(Box::new(Implication {
+                        node: member.id,
                         level: self.level,
                         givens,
                         wanteds: vec![wanted],
@@ -222,6 +223,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             let wanteds = self.wanteds.split_off(extend_wanted_start);
             if !wanteds.is_empty() {
                 self.wanteds.push(Constraint::Implic(Box::new(Implication {
+                    node: work.decl.id,
                     level: self.level,
                     givens: work.context.clone(),
                     wanteds,
@@ -317,7 +319,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                 vec![ProtocolRef { protocol, args }]
             });
 
-        let group_eff = self.ambient_row();
+        let group_eff = self.ambient_row(func.id);
         let group_ret = Ty::Var(self.store.fresh_ty(OUTER_LEVEL, NodeID::SYNTHESIZED));
         let group_ctx = Ctx::root().with_ret_eff(group_ret, group_eff);
         self.self_types.push(Ty::Param(protocol));
@@ -365,6 +367,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             let wanteds = self.wanteds.split_off(wanted_start);
             if !wanteds.is_empty() {
                 self.wanteds.push(Constraint::Implic(Box::new(Implication {
+                    node: func.id,
                     level: self.level,
                     givens,
                     wanteds,

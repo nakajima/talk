@@ -447,9 +447,7 @@ fn check_mode_compiles_generic_conformance_witnesses() {
 fn binder_extension_heads_point_at_the_protocol_spelling() {
     // `extend<T: P> T` is Rust blanket-impl syntax; Talk spells it as a
     // protocol extension, and the diagnostic should say so.
-    let output = check_source(
-        b"extend<T: Iterator> T {\n\tfunc noop() -> Int { 0 }\n}\n",
-    );
+    let output = check_source(b"extend<T: Iterator> T {\n\tfunc noop() -> Int { 0 }\n}\n");
     assert!(!output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -2817,6 +2815,63 @@ fn test_command_resolves_the_package_root_from_a_path_argument() {
 }
 
 #[test]
+fn repl_package_imports_the_current_library() {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_nanos();
+    let root =
+        std::env::temp_dir().join(format!("talk-repl-package-{}-{unique}", std::process::id()));
+    std::fs::create_dir_all(root.join("src")).expect("package src");
+    std::fs::write(
+        root.join("package.tlk"),
+        "Package(name: \"repl-package\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+    )
+    .expect("package manifest");
+    std::fs::write(
+        root.join("src/lib.tlk"),
+        "pub func answer() -> Int { 42 }\n",
+    )
+    .expect("package library");
+
+    let install = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["install", "--offline"])
+        .current_dir(&root)
+        .output()
+        .expect("install package");
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["repl", "--package"])
+        .current_dir(root.join("src"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start package REPL");
+    child
+        .stdin
+        .take()
+        .expect("REPL stdin")
+        .write_all(b"answer()\n/reset\nanswer()\n")
+        .expect("write REPL input");
+    let output = child.wait_with_output().expect("read REPL output");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("REPL stdout is UTF-8");
+    assert_eq!(stdout.matches("42").count(), 2, "{stdout}");
+
+    std::fs::remove_dir_all(root).expect("remove package fixture");
+}
+
+#[test]
 fn package_run_and_test_use_the_locked_graph() {
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3065,6 +3120,345 @@ fn check_command_checks_the_package_workspace() {
         "{}",
         String::from_utf8_lossy(&stdin_check.stdout)
     );
+
+    std::fs::remove_dir_all(dir).expect("remove package fixture");
+}
+
+#[test]
+fn package_tests_reuse_the_cached_root_library() {
+    // ADR 0056: a package's own library target compiles once into the
+    // disk cache; test and binary compiles bind `package::` imports of
+    // its closure against the finished module instead of re-parsing it.
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_nanos();
+    let dir =
+        std::env::temp_dir().join(format!("talk-pkg-libcache-{}-{unique}", std::process::id()));
+    let root = dir.join("root");
+    let cache = dir.join("cache");
+    std::fs::create_dir_all(root.join("src")).expect("root src");
+    std::fs::create_dir_all(root.join("tests")).expect("root tests");
+    std::fs::write(
+        root.join("package.tlk"),
+        "Package(name: \"cached-root\", version: \"0.1.0\", builds: [.bin(named: \"app\", from: \"src/main.tlk\"), .lib(from: \"src/lib.tlk\")], dependencies: [])",
+    )
+    .expect("root manifest");
+    // The library reaches a stdlib module its importers never name:
+    // its bodies must still reach the backend through the recorded
+    // dependency edges (CLEAN-03).
+    std::fs::write(
+        root.join("src/lib.tlk"),
+        "use dict::{ Dict }\n\nfunc helper() -> Int {\n\t41\n}\n\npub func answer() -> Int {\n\tlet dict = Dict()\n\tdict.insert(key: \"a\", value: helper())\n\tmatch dict.get(key: \"a\") {\n\t\t.some(value) -> value + 1,\n\t\t.none -> 0\n\t}\n}\n",
+    )
+    .expect("library source");
+    std::fs::write(
+        root.join("src/main.tlk"),
+        "use package::lib::{ answer }\n\nprint(answer())\n",
+    )
+    .expect("binary source");
+    std::fs::write(
+        root.join("tests/lib.test.tlk"),
+        "use package::lib::{ answer }\n\ntest(\"named import\") {\n\tassert(answer() == 42)\n}\n\ntest(\"qualified reference\") {\n\tassert(package::lib::answer() == 42)\n}\n",
+    )
+    .expect("test source");
+
+    let talk = |args: &[&str]| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_talk"));
+        command
+            .args(args)
+            .current_dir(&root)
+            .env("XDG_CACHE_HOME", &cache);
+        command.output().expect("run talk")
+    };
+    let stamps = || {
+        let dir = cache.join("talk/packages");
+        if !dir.is_dir() {
+            return Vec::new();
+        }
+        let mut stamps: Vec<_> = std::fs::read_dir(dir)
+            .expect("read package cache")
+            .flatten()
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("cached_root-")
+            })
+            .map(|entry| entry.path())
+            .collect();
+        stamps.sort();
+        stamps
+    };
+
+    let install = talk(&["install", "--offline"]);
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    let first = talk(&["test"]);
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&first.stdout).contains("2 tests passed"),
+        "{}",
+        String::from_utf8_lossy(&first.stdout)
+    );
+    assert_eq!(stamps().len(), 1, "a clean library compile is cached");
+    // A cache hit reads the image without rewriting it; a silent
+    // recompile would refresh the stamp's modification time.
+    let written = stamps()[0]
+        .metadata()
+        .expect("stamp metadata")
+        .modified()
+        .expect("stamp mtime");
+
+    // Unchanged sources: the second run reads the cached image.
+    let second = talk(&["test"]);
+    assert!(
+        second.status.success(),
+        "{}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    assert_eq!(stamps().len(), 1, "an unchanged library is a cache hit");
+    assert_eq!(
+        stamps()[0]
+            .metadata()
+            .expect("stamp metadata")
+            .modified()
+            .expect("stamp mtime"),
+        written,
+        "the cached image is read, not rewritten"
+    );
+
+    // Editing only the tests keeps the library cache valid.
+    std::fs::write(
+        root.join("tests/lib.test.tlk"),
+        "use package::lib::{ answer }\n\ntest(\"named import\") {\n\tassert(answer() == 42)\n}\n\ntest(\"qualified reference\") {\n\tassert(package::lib::answer() == 42)\n}\n\ntest(\"more math\") {\n\tassert(answer() + 1 == 43)\n}\n",
+    )
+    .expect("rewrite tests");
+    let third = talk(&["test"]);
+    assert!(
+        String::from_utf8_lossy(&third.stdout).contains("3 tests passed"),
+        "{}",
+        String::from_utf8_lossy(&third.stdout)
+    );
+    assert_eq!(stamps().len(), 1, "test-only edits keep the library image");
+
+    // Editing the library invalidates its image.
+    std::fs::write(
+        root.join("src/lib.tlk"),
+        "use dict::{ Dict }\n\n// a comment changes the key\nfunc helper() -> Int {\n\t41\n}\n\npub func answer() -> Int {\n\tlet dict = Dict()\n\tdict.insert(key: \"a\", value: helper())\n\tmatch dict.get(key: \"a\") {\n\t\t.some(value) -> value + 1,\n\t\t.none -> 0\n\t}\n}\n",
+    )
+    .expect("edit library");
+    let fourth = talk(&["test"]);
+    assert!(
+        String::from_utf8_lossy(&fourth.stdout).contains("3 tests passed"),
+        "{}",
+        String::from_utf8_lossy(&fourth.stdout)
+    );
+    assert_eq!(
+        stamps().len(),
+        2,
+        "a library edit recompiles into a new stamp"
+    );
+
+    // The binary target consumes the same cached module.
+    let run = talk(&["run", "--offline"]);
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(run.stdout, b"42\n");
+
+    std::fs::remove_dir_all(dir).expect("remove package fixture");
+}
+
+#[test]
+fn package_tests_keep_library_visibility_rules_through_the_redirect() {
+    // ADR 0056: binding `package::` imports against the precompiled
+    // library changes no visibility outcomes — private members stay
+    // unreachable from package tests.
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "talk-pkg-visibility-{}-{unique}",
+        std::process::id()
+    ));
+    let root = dir.join("root");
+    std::fs::create_dir_all(root.join("src")).expect("root src");
+    std::fs::create_dir_all(root.join("tests")).expect("root tests");
+    std::fs::write(
+        root.join("package.tlk"),
+        "Package(name: \"visibility-root\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+    )
+    .expect("root manifest");
+    std::fs::write(
+        root.join("src/lib.tlk"),
+        "func hidden() -> Int {\n\t1\n}\n\npub func shown() -> Int {\n\thidden()\n}\n",
+    )
+    .expect("library source");
+    std::fs::write(
+        root.join("tests/lib.test.tlk"),
+        "use package::lib::{ hidden }\n\ntest(\"private import\") {\n\tassert(hidden() == 1)\n}\n",
+    )
+    .expect("test source");
+
+    let install = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["install", "--offline"])
+        .current_dir(&root)
+        .output()
+        .expect("install");
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    let test = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .arg("test")
+        .current_dir(&root)
+        .output()
+        .expect("package test");
+    assert!(
+        !test.status.success(),
+        "importing a private member must fail"
+    );
+    let stderr = String::from_utf8_lossy(&test.stderr);
+    let stdout = String::from_utf8_lossy(&test.stdout);
+    assert!(
+        stderr.contains("hidden") || stdout.contains("hidden"),
+        "the diagnostic names the private member\nstderr: {stderr}\nstdout: {stdout}"
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove package fixture");
+}
+
+#[test]
+fn package_test_reports_library_errors_through_the_fused_fallback() {
+    // ADR 0056: a library that does not compile cleanly right now
+    // falls back to the fused compile, so its diagnostics render
+    // exactly as they did before the cache existed.
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "talk-pkg-brokenlib-{}-{unique}",
+        std::process::id()
+    ));
+    let root = dir.join("root");
+    std::fs::create_dir_all(root.join("src")).expect("root src");
+    std::fs::create_dir_all(root.join("tests")).expect("root tests");
+    std::fs::write(
+        root.join("package.tlk"),
+        "Package(name: \"broken-root\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+    )
+    .expect("root manifest");
+    std::fs::write(
+        root.join("src/lib.tlk"),
+        "pub func answer() -> Int {\n\t\"nope\"\n}\n",
+    )
+    .expect("library source");
+    std::fs::write(
+        root.join("tests/lib.test.tlk"),
+        "use package::lib::{ answer }\n\ntest(\"math\") {\n\tassert(answer() == 42)\n}\n",
+    )
+    .expect("test source");
+
+    let install = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["install", "--offline"])
+        .current_dir(&root)
+        .output()
+        .expect("install");
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    let test = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .arg("test")
+        .current_dir(&root)
+        .output()
+        .expect("package test");
+    assert!(!test.status.success(), "the broken library fails the run");
+    let stderr = String::from_utf8_lossy(&test.stderr);
+    let stdout = String::from_utf8_lossy(&test.stdout);
+    assert!(
+        (stderr.contains("lib.tlk") || stdout.contains("lib.tlk"))
+            && (stderr.contains("Type mismatch") || stdout.contains("Type mismatch")),
+        "the library's own diagnostic surfaces\nstderr: {stderr}\nstdout: {stdout}"
+    );
+
+    std::fs::remove_dir_all(dir).expect("remove package fixture");
+}
+
+#[test]
+fn package_dependency_stdlib_bodies_reach_the_backend() {
+    // A locked dependency whose bodies call into a stdlib module the
+    // root never names compiles through the dependency's recorded
+    // module edges (CLEAN-03): the backend input set closes over them.
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "talk-pkg-depstdlib-{}-{unique}",
+        std::process::id()
+    ));
+    let dependency = dir.join("dependency");
+    let root = dir.join("root");
+    std::fs::create_dir_all(dependency.join("src")).expect("dependency src");
+    std::fs::create_dir_all(root.join("src")).expect("root src");
+    std::fs::write(
+        dependency.join("package.tlk"),
+        "Package(name: \"dict-dependency\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+    )
+    .expect("dependency manifest");
+    std::fs::write(
+        dependency.join("src/lib.tlk"),
+        "use dict::{ Dict }\n\npub func answer() -> Int {\n\tlet dict = Dict()\n\tdict.insert(key: \"a\", value: 41)\n\tmatch dict.get(key: \"a\") {\n\t\t.some(value) -> value + 1,\n\t\t.none -> 0\n\t}\n}\n",
+    )
+    .expect("dependency source");
+    std::fs::write(
+        root.join("package.tlk"),
+        "Package(name: \"stdlib-root\", version: \"0.1.0\", builds: [.bin(named: \"app\", from: \"src/main.tlk\")], dependencies: [.path(package: \"dict-dependency\", path: \"../dependency\")])",
+    )
+    .expect("root manifest");
+    std::fs::write(
+        root.join("src/main.tlk"),
+        "use dict_dependency::{ answer }\n\nprint(answer())\n",
+    )
+    .expect("root source");
+
+    let install = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["install", "--offline"])
+        .current_dir(&root)
+        .output()
+        .expect("install");
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    let run = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["run", "--offline"])
+        .current_dir(&root)
+        .output()
+        .expect("package run");
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(run.stdout, b"42\n");
 
     std::fs::remove_dir_all(dir).expect("remove package fixture");
 }
@@ -3676,6 +4070,15 @@ fn run_retains_field_reads_consumed_by_constructions() {
           print(go())\n",
         &[],
         b"3\n",
+    );
+}
+
+#[test]
+fn run_adapts_borrowed_values_at_variant_and_consuming_receiver_seams() {
+    assert_runs(
+        b"struct Entry {\n\tlet name: String\n}\nextend Entry: Into<String> {\n\tconsuming func into() -> String { self.name }\n}\nstruct Store {\n\tlet items: [Entry]\n\tfunc get(index: Int) -> Entry? { .some(self.items[index]) }\n\tfunc converted(index: Int) -> String { self.items[index].into() }\n}\nlet store = Store(items: [Entry(name: \"abc\" + \"def\")])\nlet entry = store.get(index: 0).or { Entry(name: \"bad\") }\nlet converted = store.converted(index: 0)\nprint(entry.name.byte_count + converted.byte_count + store.items[0].name.byte_count)\n",
+        &[],
+        b"18\n",
     );
 }
 

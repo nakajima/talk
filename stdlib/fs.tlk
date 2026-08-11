@@ -2,6 +2,8 @@
 let _directory_entry_directory = 1
 let _directory_entry_symlink = 3
 
+use os::{ OS }
+
 extend Path {
 	pub func to_string() -> String {
 		if self.components.count == 0 { return "" }
@@ -10,7 +12,9 @@ extend Path {
 		let i = 1
 		loop i < self.components.count {
 			let component = self.components.get(i).to_string()
-			if str.to_string() == "/" { str = str + component } else {
+			if str.to_string() == "/" {
+				str = str + component
+			} else {
 				str = str + "/" + component
 			}
 			i = i + 1
@@ -29,6 +33,136 @@ extend Path {
 		storage.set(index: self.components.count, value: component)
 		Path(components: Array<String>(storage: storage, count: count, capacity: count))
 	}
+
+	pub func is_absolute() -> Bool {
+		self.components.count > 0 && self.components.get(0).to_string() == "/"
+	}
+
+	// Resolve "." and ".." lexically, without touching the file system:
+	// "." drops out, ".." pops one component, ".." at the root of an
+	// absolute path goes nowhere, and leading ".."s of a relative path
+	// are kept.
+	pub func normalized() -> Path {
+		let out: [String] = []
+		if self.is_absolute() { out.push("/") }
+		let i = 0
+		loop i < self.components.count {
+			let component = self.components.get(i).to_string()
+			if component == "/" || component == "." {
+				// The root marker is already in `out`; "." is a no-op.
+			} else {
+				if component == ".." {
+					if out.count == 0 {
+						out.push("..")
+					} else {
+						let last = out.get(out.count - 1).to_string()
+						if last == ".." {
+							out.push("..")
+						} else {
+							if last != "/" { out.pop() }
+						}
+					}
+				} else {
+					out.push(component)
+				}
+			}
+			i = i + 1
+		}
+		Path(components: out)
+	}
+
+	// Replace a leading "~" component with the value of $HOME. The answer
+	// is none when the path has no leading tilde and none is needed, and
+	// none when HOME is not set.
+	pub func expanding_tilde() -> Path? {
+		if self.components.count == 0 { return Optional.some(self) }
+		if self.components.get(0).to_string() != "~" { return Optional.some(self) }
+		match OS.getenv(name: "HOME") {
+			.none -> Optional.none,
+			.some(home) -> {
+				let expanded = Path(home)
+				let i = 1
+				loop i < self.components.count {
+					expanded = expanded.appending(
+						component: self.components.get(i).to_string()
+					)
+					i = i + 1
+				}
+				Optional.some(expanded)
+			}
+		}
+	}
+
+	// Prepend the current working directory to a relative path; absolute
+	// paths are returned unchanged. The answer is none when the cwd cannot
+	// be determined. No "."/".." resolution happens here: that is what
+	// normalized and expanded are for.
+	pub func absolute() -> Path? {
+		if self.is_absolute() { return Optional.some(self) }
+		match OS.cwd() {
+			.none -> Optional.none,
+			.some(cwd) -> {
+				let result = Path(cwd)
+				let i = 0
+				loop i < self.components.count {
+					result = result.appending(
+						component: self.components.get(i).to_string()
+					)
+					i = i + 1
+				}
+				Optional.some(result)
+			}
+		}
+	}
+
+	// The full lexical expansion: tilde, then cwd, then dot resolution.
+	pub func expanded() -> Path? {
+		match self.expanding_tilde() {
+			.none -> Optional.none,
+			.some(tilde) -> {
+				match tilde.absolute() {
+					.none -> Optional.none,
+					.some(full) -> Optional.some(full.normalized())
+				}
+			}
+		}
+	}
+
+	// Canonicalize through the host (POSIX realpath): every component is
+	// resolved, symlinks included, so the path must exist. The answer is
+	// none when the host cannot resolve it.
+	pub func canonicalized() -> Path? {
+		#unsafe {
+			let path_string = self.to_string()
+			let path_buf = _alloc<Byte>(count: path_string.byte_count + 1)
+			_copy(
+				from: path_string.storage.base,
+				to: path_buf,
+				length: path_string.byte_count
+			)
+
+			let len = _io_realpath_len(path: path_buf)
+			if len < 0 {
+				_free(ptr: path_buf)
+				return Optional.none
+			}
+
+			let buf = _alloc<Byte>(count: len)
+			let copied = _io_realpath_copy(path: path_buf, buf: buf)
+			_free(ptr: path_buf)
+			if copied < 0 {
+				_free(ptr: buf)
+				return Optional.none
+			}
+
+			let copied = _io_clamp(count: copied, capacity: len)
+			Optional.some(Path(String(
+				base: ByteStorage(base: buf),
+				byte_count: copied,
+				capacity: copied
+			)))
+		}
+	}
 }
 
 extend Path: Showable {
@@ -40,11 +174,15 @@ extend Path: Showable {
 pub struct Directory {
 	pub let path: Path
 
-	pub func entries() -> Array<DirectoryEntry> {
+	pub func entries() -> [DirectoryEntry] {
 		#unsafe {
 			let path_string = self.path.to_string()
 			let path_buf = _alloc<Byte>(count: path_string.byte_count + 1)
-			_copy(from: path_string.storage.base, to: path_buf, length: path_string.byte_count)
+			_copy(
+				from: path_string.storage.base,
+				to: path_buf,
+				length: path_string.byte_count
+			)
 
 			let real_count = _io_dir_count(path: path_buf)
 			if real_count < 0 {
@@ -71,18 +209,23 @@ pub struct Directory {
 					break
 				}
 
-				let name = String(base: ByteStorage(base: name_buf), byte_count: copied, capacity: copied)
+				let name = String(
+					base: ByteStorage(base: name_buf),
+					byte_count: copied,
+					capacity: copied
+				)
 				let entry_path = self.path.appending(component: name)
 				let kind = _io_dir_entry_kind(path: path_buf, index: i)
 
-				if kind == _directory_entry_directory { storage.set(
-					index: out,
-					value: DirectoryEntry.directory(Directory(path: entry_path))
-				) } else {
-					if kind == _directory_entry_symlink { storage.set(
+				if kind == _directory_entry_directory {
+					storage.set(
 						index: out,
-						value: DirectoryEntry.symlink(entry_path)
-					) } else {
+						value: DirectoryEntry.directory(Directory(path: entry_path))
+					)
+				} else {
+					if kind == _directory_entry_symlink {
+						storage.set(index: out, value: DirectoryEntry.symlink(entry_path))
+					} else {
 						storage.set(index: out, value: DirectoryEntry.file(FsFile(path: entry_path)))
 					}
 				}
@@ -95,7 +238,7 @@ pub struct Directory {
 		}
 	}
 
-	pub func walk(fn: (&DirectoryEntry) -> ()) {
+	pub func walk(fn: (DirectoryEntry) -> ()) {
 		for entry in self.entries() {
 			match entry {
 				.directory(directory) -> {
@@ -111,8 +254,6 @@ pub struct Directory {
 pub struct FsFile {
 	pub let path: Path
 }
-
-pub typealias File = FsFile
 
 pub enum DirectoryEntry {
 	case directory(Directory)
@@ -138,6 +279,22 @@ extend Directory: Showable {
 
 pub struct Path {
 	pub let components: [String]
+
+	init(components: [String]) {
+		self.components = components
+	}
+
+	pub init(_ string: String) {
+		// `split` omits empty components, so the absolute-path marker is
+		// restored explicitly: a leading separator becomes the "/" root
+		// component `to_string` and `appending` already understand.
+		let all: [String] = []
+		if string.starts_with(needle: "/") { all.push("/") }
+		for part in string.split(character: '/').into_iter() {
+			all.push(part.to_string())
+		}
+		self.components = all
+	}
 }
 
 pub enum FileMode {
@@ -179,4 +336,20 @@ pub struct Rawfile {
 	}
 
 	pub func is_valid() -> Bool { self.fd >= 0 }
+}
+
+pub struct File 'linear {
+	pub enum Mode {
+		case r
+		case w
+		case rw
+	}
+
+	let fd: Int
+	let mode: Mode
+
+	pub init(path: Path, mode: Mode) {
+		self.fd = 0
+		self.mode = mode
+	}
 }

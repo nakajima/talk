@@ -1,0 +1,141 @@
+use fs
+use os
+
+test "path from string" {
+	@assert(Path("/fizz/buzz").to_string() == "/fizz/buzz")
+}
+
+test "path normalized resolves dots lexically" {
+	@assert(Path("/a/b/../c").normalized().to_string() == "/a/c")
+	@assert(Path("a/./b").normalized().to_string() == "a/b")
+	@assert(Path("a/b/..").normalized().to_string() == "a")
+	@assert(Path("../a").normalized().to_string() == "../a")
+	@assert(Path("a/../../b").normalized().to_string() == "../b")
+	@assert(Path("/../..").normalized().to_string() == "/")
+	@assert(Path("/").normalized().to_string() == "/")
+}
+
+// The io handlers below script HOME and the cwd; requests they do not
+// recognize delegate to the host fallback below them.
+
+test "path expanding tilde uses HOME" {
+	#handle 'io { request in
+		match request {
+			.getenv_len(name, name_len) -> {
+				'continue 10
+			},
+			.getenv_copy(name, name_len, buf) -> {
+				let home = "/home/talk"
+				#unsafe { _copy(from: home.storage.base, to: buf, length: home.byte_count) }
+				'continue 10
+			},
+			other -> {
+				'continue 'io(request: other)
+			}
+		}
+	}
+	match Path("~/src").expanding_tilde() {
+		.some(path) -> {
+			@assert(path.to_string() == "/home/talk/src")
+		},
+		.none -> {
+			@assert(1 == 2)
+		}
+	}
+	match Path("/already/absolute").expanding_tilde() {
+		.some(path) -> {
+			@assert(path.to_string() == "/already/absolute")
+		},
+		.none -> {
+			@assert(1 == 2)
+		}
+	}
+}
+
+test "path absolute prepends the cwd" {
+	#handle 'io { request in
+		match request {
+			.cwd_len -> {
+				'continue 9
+			},
+			.cwd_copy(buf) -> {
+				let cwd = "/work/dir"
+				#unsafe { _copy(from: cwd.storage.base, to: buf, length: cwd.byte_count) }
+				'continue 9
+			},
+			other -> {
+				'continue 'io(request: other)
+			}
+		}
+	}
+	match Path("src/main.tlk").absolute() {
+		.some(path) -> {
+			@assert(path.to_string() == "/work/dir/src/main.tlk")
+		},
+		.none -> {
+			@assert(1 == 2)
+		}
+	}
+	match Path("/already/absolute").absolute() {
+		.some(path) -> {
+			@assert(path.to_string() == "/already/absolute")
+		},
+		.none -> {
+			@assert(1 == 2)
+		}
+	}
+}
+
+test "path expanded composes tilde, cwd, and dot resolution" {
+	#handle 'io { request in
+		match request {
+			.getenv_len(name, name_len) -> {
+				'continue 10
+			},
+			.getenv_copy(name, name_len, buf) -> {
+				let home = "/home/talk"
+				#unsafe { _copy(from: home.storage.base, to: buf, length: home.byte_count) }
+				'continue 10
+			},
+			.cwd_len -> {
+				'continue 9
+			},
+			.cwd_copy(buf) -> {
+				let cwd = "/work/dir"
+				#unsafe { _copy(from: cwd.storage.base, to: buf, length: cwd.byte_count) }
+				'continue 9
+			},
+			other -> {
+				'continue 'io(request: other)
+			}
+		}
+	}
+	match Path("~/a/../b").expanded() {
+		.some(path) -> {
+			@assert(path.to_string() == "/home/talk/b")
+		},
+		.none -> {
+			@assert(1 == 2)
+		}
+	}
+	match Path("./x").expanded() {
+		.some(path) -> {
+			@assert(path.to_string() == "/work/dir/x")
+		},
+		.none -> {
+			@assert(1 == 2)
+		}
+	}
+}
+
+// The test host simulates canonicalization as the identity.
+test "path canonicalized asks the host" {
+	match Path("some/where").canonicalized() {
+		.some(path) -> {
+			@assert(path.to_string() == "some/where")
+		},
+		.none -> {
+			@assert(1 == 2)
+		}
+	}
+}

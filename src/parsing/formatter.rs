@@ -3103,7 +3103,10 @@ impl<'a> Formatter<'a> {
             match doc {
                 Doc::Empty => continue,
                 Doc::Text(s) | Doc::Comment(s) => width -= s.len() as isize,
-                Doc::Line | Doc::Softline | Doc::Hardline => return true,
+                Doc::Line | Doc::Softline => return true,
+                // A hardline in the flattened doc means the group cannot
+                // render flat; force it to break.
+                Doc::Hardline => return false,
                 Doc::Concat(left, right) => {
                     queue.push(right);
                     queue.push(left);

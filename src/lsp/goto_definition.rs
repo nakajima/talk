@@ -1,47 +1,71 @@
 use async_lsp::lsp_types::{Location, Range, Url};
+use rustc_hash::FxHashMap;
+use std::sync::Arc;
 
 use crate::analysis::workspace::Workspace as AnalysisWorkspace;
+use crate::compiling::module::ModuleId;
 
 use super::server::{document_id_for_uri, url_from_document_id};
 
+pub enum LspGoto {
+    Found(Location),
+    /// The target stdlib module's workspace is not built yet; the
+    /// handler kicks an off-loop build and answers empty this once.
+    NeedsModule(ModuleId),
+    NotFound,
+}
+
 /// The analysis definition lookup as an LSP location: the target
-/// document's URL plus its byte range as UTF-16 positions. The target's
-/// text can live in either workspace or — for package imports — in an
-/// embedded stdlib module outside both.
+/// document's URL plus its byte range as UTF-16 positions. The text
+/// comes back with the lookup itself — the target can live in an
+/// embedded stdlib module outside both workspaces, and positions must
+/// convert against exactly the text the lookup resolved in.
 pub fn goto_definition(
     module: &AnalysisWorkspace,
     core: Option<&AnalysisWorkspace>,
+    stdlib_modules: &FxHashMap<ModuleId, Arc<AnalysisWorkspace>>,
     uri: &Url,
     byte_offset: u32,
-) -> Option<Location> {
+) -> LspGoto {
     let document_id = document_id_for_uri(uri);
-    let location = crate::analysis::goto_definition(module, core, &document_id, byte_offset)?;
-    let target_uri = url_from_document_id(&location.document_id)?;
-
-    if location.range.start == 0 && location.range.end == 0 {
-        return Some(Location {
-            uri: target_uri,
-            range: Range::default(),
-        });
+    let result = crate::analysis::goto_definition_with(
+        module,
+        core,
+        &|module_id| {
+            stdlib_modules
+                .get(&module_id)
+                .map(|workspace| std::borrow::Cow::Borrowed(workspace.as_ref()))
+        },
+        &document_id,
+        byte_offset,
+    );
+    match result {
+        crate::analysis::GotoDefinition::NotFound => LspGoto::NotFound,
+        crate::analysis::GotoDefinition::NeedsModule(module_id) => {
+            LspGoto::NeedsModule(module_id)
+        }
+        crate::analysis::GotoDefinition::Found { location, text } => {
+            let Some(target_uri) = url_from_document_id(&location.document_id) else {
+                return LspGoto::NotFound;
+            };
+            if location.range.start == 0 && location.range.end == 0 {
+                return LspGoto::Found(Location {
+                    uri: target_uri,
+                    range: Range::default(),
+                });
+            }
+            let Some(range) = super::server::byte_span_to_range_utf16_in(
+                text.line_index(),
+                text.text(),
+                location.range.start,
+                location.range.end,
+            ) else {
+                return LspGoto::NotFound;
+            };
+            LspGoto::Found(Location {
+                uri: target_uri,
+                range,
+            })
+        }
     }
-
-    let text = [Some(module), core]
-        .into_iter()
-        .flatten()
-        .find_map(|workspace| {
-            let file_id = workspace.document_to_file_id.get(&location.document_id)?;
-            workspace.texts.get(file_id.0 as usize).cloned()
-        })
-        .or_else(|| module.stdlib_document_text(&location.document_id))?;
-    let range = super::server::byte_span_to_range_utf16_in(
-        text.line_index(),
-        text.text(),
-        location.range.start,
-        location.range.end,
-    )?;
-
-    Some(Location {
-        uri: target_uri,
-        range,
-    })
 }

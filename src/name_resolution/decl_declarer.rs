@@ -179,6 +179,24 @@ impl<'a> DeclDeclarer<'a> {
     pub(super) fn predeclare_type_aliases(&mut self, decls: &[&Decl]) {
         for decl in decls.iter() {
             if let DeclKind::TypeAlias(name, name_span, ..) = &decl.kind {
+                // An alias shares the scope's type namespace with the
+                // nominals predeclared above (and with earlier aliases):
+                // a same-named declaration would silently collapse onto
+                // it, and the merged symbol can later reach the backend
+                // as an alias nominal it cannot lower. ADR 0042
+                // diagnoses instead.
+                let duplicate = self
+                    .resolver
+                    .current_scope()
+                    .and_then(|scope| scope.type_binding(name))
+                    .is_some();
+                if duplicate {
+                    self.resolver.diagnostic(
+                        decl.id,
+                        NameResolverError::DuplicateDeclaration(name.name_str()),
+                    );
+                    continue;
+                }
                 let resolved =
                     self.resolver
                         .declare(name, SymbolKind::TypeAlias, decl.id, *name_span);

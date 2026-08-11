@@ -55,11 +55,13 @@ extend Int: Showable {
 			digits = digits + 1
 			probe = probe / 10
 		}
-		let builder = StringBuilder(capacity: digits + if negative {
+		let builder = StringBuilder(
+			capacity: digits + if negative {
 				1
 			} else {
 				0
-			})
+			}
+		)
 		if negative { builder.append(string: "-") }
 		let divisor = 0 - 1
 		let remaining = digits - 1
