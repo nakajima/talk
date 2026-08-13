@@ -242,9 +242,15 @@ fn runnable(code: &str, accumulate_group: Option<&str>) -> String {
                 <textarea class='code-editable' rows='{rows}' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>{raw}</textarea>
             </div>
             <div class='actions'>
-                <button type='button' class='run'>Run</button>
-                <button type='button' class='lower'>Lower</button>
-                <button type='button' class='format'>Format</button>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
             </div>
             <div class='result'></div>
         </div>"

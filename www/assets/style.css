@@ -356,6 +356,34 @@ p code, li code, h4 code, h5 code {
 
 .runnable button:hover { color: #fff; }
 .runnable button:active { background: rgba(255, 255, 255, 0.05); }
+.runnable button:disabled { cursor: wait; }
+
+.action-control {
+  display: inline-flex;
+  position: relative;
+}
+
+.action-control[data-tooltip]::after {
+  position: absolute;
+  left: 0.5rem;
+  bottom: calc(100% + 0.4rem);
+  z-index: 60;
+  display: none;
+  width: max-content;
+  max-width: 16rem;
+  padding: 0.4rem 0.6rem;
+  background: rgb(30, 28, 36);
+  color: var(--ink);
+  content: attr(data-tooltip);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  pointer-events: none;
+}
+
+.action-control[data-tooltip]:hover::after,
+.action-control[data-tooltip]:focus::after {
+  display: block;
+}
 
 .runnable button.run {
   background: var(--color-tin-2);
@@ -391,6 +419,25 @@ hr {
   font-size: 0.85rem;
   color: var(--ink-dim);
   margin-top: 4rem;
+}
+
+@media (min-width: 701px) {
+  .band-nav {
+    position: relative;
+    left: 50%;
+    transform: translateX(-50%);
+    flex-wrap: nowrap;
+    width: max-content;
+    max-width: 100vw;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .band-nav::-webkit-scrollbar { display: none; }
+
+  .band-nav a {
+    flex: 0 0 auto;
+  }
 }
 
 @media (max-width: 700px) {

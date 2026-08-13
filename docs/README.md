@@ -7,6 +7,9 @@ code and tests.
 
 ## Current documents
 
+- [Compiler phase primitives](compiler-phase-primitives.md) - current phase-by-phase
+  inventory of consumed, private, and exported compiler primitives, semantic
+  authority, and consolidation pressure.
 - [Backend crate extraction plan](backend-crate-extraction-plan.md) - staged
   migration to public MIR and separate bytecode, VM, C, LLVM, native-runtime,
   FFI, and Swift modules. Implemented by ADR 0047.

@@ -26,16 +26,113 @@ function initIntroExamples() {
 initIntroExamples();
 
 const wasmCacheKey = new URL(import.meta.url).search;
-const {
-  default: init,
-  highlight,
-  format,
-  run_program,
-  version: wasmVersion,
-  show_ir,
-  check,
-  hover,
-} = await import(`/pkg/talk_wasm.js${wasmCacheKey}`);
+const talk = createWasmClient();
+talk.onFailure(disableFailedActionButtons);
+talk.ready.then(enableActionButtons).catch(() => {});
+
+function createWasmClient() {
+  const worker = new Worker(`/wasm-worker.js${wasmCacheKey}`, {
+    type: "module",
+  });
+  const pending = new Map();
+  const failureListeners = new Set();
+  let nextId = 0;
+  let fatalError = null;
+  let resolveReady;
+  let rejectReady;
+  const ready = new Promise((resolve, reject) => {
+    resolveReady = resolve;
+    rejectReady = reject;
+  });
+
+  const fail = (error) => {
+    if (fatalError) return;
+    fatalError = error;
+    rejectReady(error);
+    for (const { reject } of pending.values()) reject(error);
+    pending.clear();
+    for (const listener of failureListeners) listener(error);
+  };
+
+  worker.addEventListener("message", (event) => {
+    const message = event.data;
+    if (message.type === "ready") {
+      resolveReady();
+      return;
+    }
+    if (message.type !== "result") return;
+
+    const request = pending.get(message.id);
+    if (!request) return;
+    pending.delete(message.id);
+    if (message.error) {
+      const error = new Error(message.error.message);
+      if (message.error.stack) error.stack = message.error.stack;
+      request.reject(error);
+    } else {
+      request.resolve(message.value);
+    }
+  });
+  worker.addEventListener("error", (event) => {
+    fail(new Error(event.message || "WASM worker failed"));
+  });
+
+  const request = async (operation, payload = {}) => {
+    await ready;
+    if (fatalError) throw fatalError;
+
+    const id = nextId++;
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      worker.postMessage({ type: "request", id, operation, payload });
+    });
+  };
+
+  return {
+    ready,
+    get failed() {
+      return fatalError !== null;
+    },
+    onFailure(listener) {
+      failureListeners.add(listener);
+      if (fatalError) listener(fatalError);
+    },
+    runProgram: (source) => request("runProgram", { source }),
+    format: (source) => request("format", { source }),
+    showIr: (source) => request("showIr", { source }),
+    analyze: (source, currentSource) =>
+      request("analyze", { source, currentSource }),
+    hover: (source, byteOffset) =>
+      request("hover", { source, byteOffset }),
+    version: () => request("version"),
+  };
+}
+
+function enableActionButtons() {
+  for (const button of document.querySelectorAll(".actions button")) {
+    const control = button.closest(".action-control");
+    button.disabled = false;
+    control?.removeAttribute("data-tooltip");
+    control?.removeAttribute("aria-label");
+    control?.removeAttribute("tabindex");
+  }
+}
+
+function disableFailedActionButtons(error) {
+  console.error(error);
+  for (const button of document.querySelectorAll(".actions button")) {
+    button.disabled = true;
+    const control = button.closest(".action-control");
+    control?.setAttribute(
+      "data-tooltip",
+      "WASM bundle failed to initialize",
+    );
+    control?.setAttribute(
+      "aria-label",
+      "WASM bundle failed to initialize",
+    );
+  }
+}
 
 function createHoverTooltips() {
   const tooltipEl = document.createElement("div");
@@ -101,7 +198,7 @@ function createHoverTooltips() {
     return offset;
   };
 
-  const showHover = (editor, highlightEl, tokenEl) => {
+  const showHover = async (editor, highlightEl, tokenEl) => {
     if (!tokenEl.isConnected) return;
 
     const { source, currentSource } = getAccumulatedSource(editor);
@@ -116,9 +213,9 @@ function createHoverTooltips() {
 
     let result;
     try {
-      result = hover(source, byteOffset);
-    } catch (err) {
-      console.error(err);
+      result = await talk.hover(source, byteOffset);
+    } catch (error) {
+      if (!talk.failed) console.error(error);
       return;
     }
 
@@ -416,45 +513,6 @@ function renderDiagnostics(container, highlightEl, diagnosticsLayer, checkResult
   diagnosticsEl.scrollLeft = highlightEl.scrollLeft;
 }
 
-async function initWasm() {
-  const wasmPath = `/pkg/talk_wasm_bg.wasm${wasmCacheKey}`;
-
-  if ("DecompressionStream" in window) {
-    try {
-      const response = await fetch(
-        `/pkg/talk_wasm_bg.wasm.gz${wasmCacheKey}`,
-      );
-      if (!response.ok || !response.body) {
-        throw new Error("compressed WASM unavailable");
-      }
-      const decompressed = new Response(
-        response.body.pipeThrough(new DecompressionStream("gzip")),
-        { headers: { "Content-Type": "application/wasm" } },
-      );
-      await init({ module_or_path: decompressed });
-      return;
-    } catch (error) {
-      console.warn("Falling back to uncompressed WASM", error);
-    }
-  }
-
-  await init({ module_or_path: wasmPath });
-}
-
-export async function loadTalk() {
-  await initWasm();
-
-  return {
-    runProgram: (source) => run_program(source),
-    highlight: (source) => highlight(source),
-    format: (source) => format(source),
-    check: (source) => check(source),
-    show_ir: (source) => show_ir(source),
-    version: () => wasmVersion(),
-  };
-}
-
-const talk = await loadTalk();
 const hoverTooltips = createHoverTooltips();
 const editorRenderers = new WeakMap();
 
@@ -558,35 +616,46 @@ function renderFollowingAccumulatedExamples(editor) {
 }
 
 function initLowerable(el) {
-  el.addEventListener("click", function (e) {
+  el.addEventListener("click", async function (e) {
     let container = e.target.closest(".runnable");
     if (!container) return;
     let editor = container.querySelector(".code-editable");
     if (!editor) return;
-    let { source } = getAccumulatedSource(editor);
-    let output = talk.show_ir(source);
     let result = container.querySelector(".result");
-    result.innerHTML = `<pre class="output ir">${output.highlightedIr}</pre>`;
-    result.classList.add("active");
+    let { source } = getAccumulatedSource(editor);
+    el.disabled = true;
+
+    try {
+      let output = await talk.showIr(source);
+      result.innerHTML = `<pre class="output ir">${output.highlightedIr}</pre>`;
+      result.classList.add("active");
+    } catch (error) {
+      showActionError(result, error);
+    } finally {
+      if (!talk.failed) el.disabled = false;
+    }
   });
 }
 
 function initFormattable(el) {
-  el.addEventListener("click", function (e) {
+  el.addEventListener("click", async function (e) {
     let container = e.target.closest(".runnable");
     if (!container) return;
     let editor = container.querySelector(".code-editable");
     if (!editor) return;
+    let result = container.querySelector(".result");
     let content = editor.value || "";
-    let formatted = "";
+    el.disabled = true;
+
     try {
-      formatted = talk.format(content);
-    } catch (err) {
-      console.error(err);
-      return;
+      let formatted = await talk.format(content);
+      editor.value = formatted;
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    } catch (error) {
+      showActionError(result, error);
+    } finally {
+      if (!talk.failed) el.disabled = false;
     }
-    editor.value = formatted;
-    editor.dispatchEvent(new Event("input", { bubbles: true }));
   });
 }
 
@@ -596,15 +665,28 @@ function initRunnable(el) {
     if (!container) return;
     let editor = container.querySelector(".code-editable");
     if (!editor) return;
-    let { source } = getAccumulatedSource(editor);
-    let output = await talk.runProgram(source);
-    console.log(output);
     let result = container.querySelector(".result");
-    result.innerHTML = `
-      <pre class="output">${output.output}</pre>
-      <pre class="value"><span class="arrow">=> </span>${output.highlightedValue}</pre>`;
-    result.classList.add("active");
+    let { source } = getAccumulatedSource(editor);
+    el.disabled = true;
+
+    try {
+      let output = await talk.runProgram(source);
+      result.innerHTML = `
+        <pre class="output">${output.output}</pre>
+        <pre class="value"><span class="arrow">=> </span>${output.highlightedValue}</pre>`;
+      result.classList.add("active");
+    } catch (error) {
+      showActionError(result, error);
+    } finally {
+      if (!talk.failed) el.disabled = false;
+    }
   });
+}
+
+function showActionError(result, error) {
+  console.error(error);
+  result.textContent = error.message || String(error);
+  result.classList.add("active");
 }
 
 function setEditorValue(el, value, selectionStart, selectionEnd = selectionStart) {
@@ -676,28 +758,33 @@ function initEditable(el) {
   let diagnosticsLayer = getDiagnosticsLayer(container);
 
   let isComposing = false;
+  let renderVersion = 0;
 
   let resizeEditor = () => {
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
   };
 
-  let renderHighlight = () => {
+  let renderHighlight = async () => {
+    const version = ++renderVersion;
     let { source, currentSource, lineOffset } = getAccumulatedSource(el);
-    let checkResult = null;
+
     try {
-      checkResult = diagnosticsForCurrentExample(
-        check(source),
+      const analysis = await talk.analyze(source, currentSource);
+      if (version !== renderVersion || el.value !== currentSource) return;
+
+      const checkResult = diagnosticsForCurrentExample(
+        analysis.checkResult,
         lineOffset,
         currentSource,
       );
-    } catch (err) {
-      console.error(err);
+      highlight.innerHTML = analysis.highlightedSource;
+      hoverTooltips.hide();
+      syncScroll();
+      renderDiagnostics(container, highlight, diagnosticsLayer, checkResult);
+    } catch (error) {
+      if (!talk.failed) console.error(error);
     }
-    highlight.innerHTML = talk.highlight(currentSource);
-    hoverTooltips.hide();
-    syncScroll();
-    renderDiagnostics(container, highlight, diagnosticsLayer, checkResult);
   };
 
   editorRenderers.set(el, renderHighlight);
@@ -705,6 +792,7 @@ function initEditable(el) {
   let handleInput = () => {
     resizeEditor();
     if (isComposing) return;
+    hoverTooltips.hide();
     renderHighlight();
     renderFollowingAccumulatedExamples(el);
   };
