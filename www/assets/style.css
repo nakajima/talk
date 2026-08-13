@@ -194,6 +194,11 @@ header {
   padding-bottom: 4rem;
 }
 
+header + p {
+  margin-top: 2rem;
+  margin-bottom: 2rem;
+}
+
 header h1 {
   font-weight: 700;
   margin: 0 0 2.5rem;

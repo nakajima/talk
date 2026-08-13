@@ -14,7 +14,6 @@
     <main>
       <header>
         <h1><code>print(<span class="string">"hi, it’s talktalk"</span>)</code></h1>
-
         <div class="intro">
           <code class="intro-txt">
             We’ve got <span class="type" data-example="structs">structs</span>, <span class="string" data-example="strings">strings</span>, <span
@@ -28,7 +27,6 @@ class="number" data-example="ints">ints</span>, <span class="number" data-exampl
           <div class="intro-code">
             <pre></pre>
           </div>
-
         </div>
       </header>
       {CONTENT_GOES_HERE}

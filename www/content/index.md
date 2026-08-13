@@ -1,5 +1,6 @@
-## syntax
+<span style="color: white;">talktalk</span> is a programming language. It kind of looks like Swift or Rust or Go, especially if you don’t know those languages.
 
+## syntax
 Here, have some math.
 
 ```tlk
@@ -44,7 +45,6 @@ let c = a + b
 c // => 3
 ```
 ## types
-
 Ok Philip Wadler, maybe you like types? You can specify them if you want.
 
 ```tlk accumulate(types) norun
@@ -100,11 +100,9 @@ twice {
 }
 ```
 ## objects
-
 Ok Alan Kay, maybe you like objects. You know, big bags of state and behavior that are the only correct way to program.
 
 ```tlk
-
 struct Person {
 	let first_name: String
 	let last_name: String
@@ -150,24 +148,22 @@ print(rec.count)
 print(rec.greeting("pat"))
 ```
 ## enums / pattern matching
-
 What about enumerations? With attached values even?
 
 ```tlk accumulate(enums)
 enum Response {
-    case ok(String), redirect(String), other(Int)
+	case ok(String), redirect(String), other(Int)
 }
 
 let response = Response.ok("all good here, how are you?")
 ```
-
 You can pattern match on `enum`s. Your `match` expression will be checked for exhaustivity.
 
 ```tlk accumulate(enums)
 match response {
     .ok(string) -> string,
     .redirect(message) -> message,
-    .other(_) -> "uh oh"
+    .other(_) -> "uh oh" // try deleting this line. i dare u.
 }
 ```
 We can pattern match in conditionals too.
@@ -189,9 +185,20 @@ match point {
 	{ y, .. } -> y
 }
 ```
-One enum everyone loves is `Optional`. We love it so much there's a shorthand for it: `?`.
+Wow. Astounding.. Amazing. Simply... Extraordinary ok fine all modern languages can do that but talktalk can as well is all I'm saying.
 
-Let's see an example of it with `let else`, which lets you bail unless the pattern matches.
+You've also got a couple builtin enums, `Optional` and `Result`. They look like this:
+
+```tlk norun
+enum Optional<T> {
+	case some(T), none
+}
+
+enum Result<T, E> {
+	case ok(T), error(E)
+}
+```
+Pretty standard stuff. I never promised you flowers. Or wait, i did? Ugh ok here have guard clauses instead, in the form of `let else`.
 
 ```tlk
 func unwrap_or_zero(_ value: Int?) -> Int {
@@ -201,15 +208,10 @@ func unwrap_or_zero(_ value: Int?) -> Int {
 
 unwrap_or_zero(.some(42))
 ```
-Speaking of bailing early, any two-variant enum can short circuit a function. Think rust's `?` operator but dumber but simpler. Elegant? One might say. But one might say a lot of things so who knows.
+Speaking of bailing early, any two-variant enum can short circuit a function (say like, `Optional` or `Result`). Think rust's `?` operator but dumber but simpler. Elegant? One might say. But one might say a lot of things so who knows.
 
 ```tlk
-// For example
-enum Option<T> {
-	case some(T), none
-}
-
-func maybe_increment(x: Option<Int>) -> Option<Int> {
+func maybe_increment(x: Int?) -> Int? {
 	// if x is the second variant (none), we just return it here
 	let unwrapped_x = x?
 	
@@ -217,40 +219,14 @@ func maybe_increment(x: Option<Int>) -> Option<Int> {
 	return .some(unwrapped_x + 1)
 }
 ```
-
-## results
-
-We met `Optional` and the `?` shortcut up in the enums section. Core also ships a `Result` for when failure deserves a payload:
-
-```tlk
-func divide(a: Int, b: Int) -> Result<Int, String> {
-	if b == 0 {
-		return .error("cannot divide by zero, sorry")
-	}
-	return .ok(a / b)
-}
-
-func double_quotient(a: Int, b: Int) -> Result<Int, String> {
-	// if that's an .error, we bail and return it.
-	// otherwise q is the unwrapped payload
-	let q = divide(a: a, b: b)?
-	return .ok(q * 2)
-}
-
-print(double_quotient(a: 10, b: 2))
-print(double_quotient(a: 10, b: 0))
-```
-
-And if you're feeling dangerous, `!` unwraps the first variant or panics trying:
+What if you want to just go nuts and damn the torpedoes I know this thing is fine, stop yelling at me compiler, do you even know who my dad is?? For those cases you can use `!`, which simply unwraps the first variant and panics if it hits the second variant.
 
 ```tlk
 let definitely: Int? = .some(42)
 definitely!
 ```
-
-## protocols
-
-Ok what about ~~traits~~ ~~type classes~~ ~~interfaces~~ protocols? For making ad-hoc polymorphism less ad-hoc? Yea we've got those.
+# protocols
+*visits Glasgow once* what about ~~traits~~ ~~type classes~~ ~~interfaces~~ protocols? For making ad-hoc polymorphism less ad-hoc? Yea we've got those.
 
 Let's write a super basic protocol that let's a type be added to itself.
 
@@ -279,7 +255,7 @@ extend String: Addable {
 print(1.add(to: 2))
 print("world".add(to: "hello "))
 ```
-Protocols can also have associated types with their own constraints, and default methods that conformers get for free.
+Protocols can also have associated types with their own constraints (basically the associated values must conform to other prototypes).
 
 ```tlk
 protocol Named {
@@ -325,8 +301,7 @@ extend Addable {
 ```
 
 ## gadts
-
-Not only can we pronounce "gadts", we can use them.
+Not only can we pronounce "GADTs"[^1], we can use them.
 
 ```tlk accumulate(protocols)
 enum Expr<Returns> 'heap {
@@ -343,21 +318,21 @@ func eval<T: Addable>(_ expr: Expr<T>) -> T {
 	}
 }
 
-print(evaluate(expr: .add(.int(20), .add(.int(19), .int(3)))))
-print(evaluate(expr: .add(.string("hello "), .string("world"))))
+print(eval(.add(.int(20), .add(.int(19), .int(3)))))
+print(eval(.add(.string("hello "), .string("world"))))
 ```
-Each arm of the `match` knows what `T` actually is, so `evaluate` hands you an honest `Int` or `String`, not some box you have to unwrap. The academics call this a GADT. You can call it "nice".
+Each arm of the `match` knows what `T` actually is, so `eval` can give you back `Int` or `String`, not `T`. Because everyone hates `T`[^2]
 
+PS: That `'heap` thing will be explained later. Probably?
 ## effects
-
-Check it out, we've got effects:
+What are effects? Great question. I don't know. But i think they're like weird lil functions. Functions that can suspend execution, hand control off somewhere else, then return it. Think like, `async`/`await` in other languages, but more generalized.
 
 ```tlk
 // Define an effect. Effect names have the prefix `'`
 effect 'throw<T: Showable>(_ val: T) -> ()
 
 // Handles 'fizz for as long as handler is in scope
-func rescue<T>(fn: () 'throw -> T) -> T? {
+func rescue<T>(fn: () -> T) -> T? {
 	#handle 'throw { val in
 		print("oops got an error")
 		print(val)
@@ -373,29 +348,27 @@ rescue {
 	print("this should not show up")
 }
 ```
+Functions carry their effects as part of their signatures. In talktalk, panics are handled by the `'panic`, I/O operations are handled by the `'io` effect and memory allocations are handled by the `'alloc` effect.
 
-Ok so are effects just weird functions? I mean kind of? But you can also use them as exceptions:
+Hover your mouse over the function names to see their effects.
 
 ```tlk
-effect 'throw(msg: String) -> Never
-
-func boom(x) {
-	#handle 'throw { msg in
-		print("caught: " + msg)
-		return true
-	}
-
-	if x == 0 {
-		'throw(msg: "boom")
-	}
-
-	false // should not run
+func could_panic(panics) {
+	if panics { unreachable }
 }
 
-boom(0)
+func does_io() {
+	print("oh hi")
+}
+
+func allocates_memory() {
+	let s = ""
+	for i in 1..<5 {
+		s = s + i.show()
+	}
+}
 ```
 ## collections
-
 Arrays. They do what you think.
 
 ```tlk
@@ -407,16 +380,16 @@ for n in numbers {
 
 numbers.count
 ```
-Subscripts work, and yes, you can mutate (more on that in a second).
+Subscripts work the way you would think. Unless you don't think they'd work. In which case they work but they don't work the way you don't think they don't work.
 
 ```tlk
 let xs = [10, 20, 30]
 print(xs[1])
 
 xs[0] = 99
-xs
+xs.show()
 ```
-They're iterable, so you can do the whole lazy dance.
+There's some generic iteration helpers. It's not all the way fleshed out yet. It will be.
 
 ```tlk
 [1, 2, 3, 4, 5, 6]
@@ -446,7 +419,7 @@ use dict::{ Dict }
 
 let scores = Dict<Int>()
 scores.insert(key: "pat", value: 100)
-scores.insert(key: "sam", value: 85)
+scores.insert(key: "not pat", value: 85)
 
 match scores.get(key: "pat") {
 	.some(score) -> "pat scored " + score.show(),
@@ -455,7 +428,7 @@ match scores.get(key: "pat") {
 ```
 ## strings
 
-Strings are unicode-correct. Iteration is by user-perceived character (extended grapheme clusters, UAX #29, etc. etc.), which means emoji can't tear.
+Strings are unicode-correct[^3]. Iteration is by user-perceived character (extended grapheme clusters, UAX #29, etc. etc.), which means emoji can't tear.
 
 ```tlk
 print("héllo 👋🏽".count())       // 7 characters
@@ -469,10 +442,13 @@ for ch in "héllo" {
 	print(ch)
 }
 ```
-The bytes are there when you need them, but you have to ask for them explicitly with `utf8()`. No integer indexing, no surprises.
-## ownership
+Ok Werner Buchholz, you want the bytes? You can call `utf8()` to get bytes.
 
-Ok Rust, maybe you like ownership. Here's the talk take: everything has value semantics, sharing is implicit and cheap (refcounted, copy-on-write), and the compiler figures out the retains and releases. You mostly don't have to think about it.
+```tlk
+"héllo".utf8()
+```
+## ownership
+talktalk has memory semantics. what are they? um, basically: everything has value semantics, sharing is implicit and cheap (refcounted, copy-on-write), and the compiler figures out the retains and releases. You mostly don't have to think about it.
 
 ```tlk
 let original = [1, 2, 3]
@@ -483,7 +459,7 @@ original.push(4)
 print(original) // [1, 2, 3, 4]
 print(backup)   // [1, 2, 3], backup got a snapshot
 ```
-Mutation happens through `mut func`s, which get exclusive access with write-back.
+Mutation happens through `mut func`s, which get exclusive access to `self`.
 
 ```tlk accumulate(ownership) norun
 struct BankAccount {
@@ -512,6 +488,7 @@ shout(message: greeting)
 shout(message: greeting) // still ours
 greeting
 ```
+
 But sometimes a value really is one of a kind: a ticket, a token, a file handle. Mark the type `'linear` and it must be consumed exactly once. Not zero times, not two times.
 
 ```tlk
@@ -531,7 +508,8 @@ func attend_show() -> Int {
 
 attend_show()
 ```
-There's more where that came from (`consume` parameters, the `Copy`/`CheapClone` marker protocols, `Deinit` destructors, exclusive `&mut` loans), but the short version is: value semantics for you, references for the compiler, no lifetime annotations, ever.
+Some day I'll tell you all about `consume` parameters, the `Copy`/`CheapClone` marker protocols, `Deinit` destructors, and exclusive `&mut` loans, but not today. I simply don't remember how they work atm.
+
 ## macros
 
 Talk has hygienic macros. The declarative kind is a token template:
@@ -550,9 +528,11 @@ let x = 10
 @unless(x > 5, print("x is beeg"))
 print("still here")
 ```
-Names a macro introduces can't capture your variables, and expansions get type-checked like any other code. The fun part is that macros can also be whole programs. The stdlib ships an HTML macro, written in Talk itself, that parses and checks your markup at compile time:
+Macro names don't capture variables, and expansions get type-checked like any other code.
 
-```tlk norun
+The stdlib ships an HTML generation macro, written in talk itself, that parses and checks your markup at compile time:
+
+```tlk 
 use html::{ html }
 
 let name = "<Ada & friends>"
@@ -567,70 +547,11 @@ let page = @html {
 }
 
 print(page.into_string())
-// <main id="content" class="page" data-name="&lt;Ada &amp; friends&gt;">
-//   <h1>Hello, &lt;Ada &amp; friends&gt;</h1><span>1</span><span>2</span><span>3</span>
-// </main>
 ```
 Interpolations get escaped, and `@for`/`@if` live right there in the markup. This one isn't runnable in the browser (the playground doesn't run procedural macros yet), but it works from the CLI.
-## tooling
 
-It's a real CLI, with the usual suspects.
+[^1]: Generalized algebraic data types. GAAAAAA dits.
 
-<div class='code-block no-run'>
-<pre class='code-highlight'>talk run main.tlk     <span class="comment"># compile and run</span>
-talk test             <span class="comment"># discover and run .test.tlk files</span>
-talk check            <span class="comment"># type-check the whole package</span>
-talk format           <span class="comment"># the formatter</span>
-talk lsp              <span class="comment"># language server, at your service</span></pre>
-</div>
+[^2]: jk `T`, we love u
 
-The language server does hover, goto-definition, completion, and rename, and its inlay hints mark every spot where the compiler quietly cloned something for you. `talk setup nvim` installs the Neovim runtime files, including a Neotest adapter so you can run Talk tests from the gutter. There are also packages with lockfiles (`talk new`, `talk install`, `talk update`) if you're building something with more than one file in it.
-## unsafe
-
-If you need to touch raw memory, you can, but you have to say so. Raw pointers and friends carry an `'unsafe` effect that must be discharged lexically with `#unsafe`.
-
-```tlk
-#unsafe {
-	let buf = _alloc(count: 1024)
-	print("allocated a kb, doing crimes")
-	_free(ptr: buf)
-}
-print("all cleaned up")
-```
-
-(Leaks are detected, by the way. Free your mallocs.)
-
-There's a `net` module with raw sockets on top of this machinery, and the compiler itself can be embedded in C and Swift hosts — the iOS-flavored XCFramework build is how the playground... just kidding, the playground is wasm. But the embedding thing is real.
-## modules
-
-There are modules too. This one isn't runnable in the browser because it spans multiple files, but it works from the CLI.
-
-```tlk norun
-// Exports.tlk
-pub let a = "we can export this string"
-
-// Main.tlk
-use package::Exports::{ a }
-
-print(a)
-```
-## http
-
-And yes, there is already some rough little HTTP stuff.
-
-```tlk norun
-use http::{ HTTP }
-
-let http = HTTP.Server()
-
-http.get(path: "/", handler: func() {
-	"hello from talk"
-})
-
-http.get(path: "/health", handler: func() {
-	"ok"
-})
-
-print("Listening on http://localhost:3000")
-http.run(port: 3000)
-```
+[^3]: Probably!
