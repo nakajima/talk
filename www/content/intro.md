@@ -1,5 +1,3 @@
-<span style="color: white;">talktalk</span> is a programming language. It kind of looks like Swift or Rust or Go if you squint. I want it to feel familiar and cozy but still have a lot of modern power. Like an F1 car with those seats that massage your back (todo: fix this lousy metaphor).
-
 **Here are some goals:**
 #### Learning stuff
 This is by far the biggest goal. I didn’t super understand all the ins and outs of compilers. I still don’t but at least I have a way to learn now. You shouldn't use talktalk. But you might enjoy perusing talktalk.

@@ -46,6 +46,8 @@ jobs:
           # Optional version of wasm-pack to install(eg. 'v0.9.1', 'latest')
           version: 'latest'
       - run: ./build.sh
+      - name: Compress WASM for the website
+        run: gzip --best --keep assets/pkg/talk_wasm_bg.wasm
       - name: Stamp build with short SHA
         run: |
           sha=$(git rev-parse --short HEAD)

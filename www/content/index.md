@@ -1,4 +1,4 @@
-<span style="color: white;">talktalk</span> is a programming language. It kind of looks like Swift or Rust or Go, especially if you don’t know those languages.
+<span style="color: white;">talktalk</span> is a programming language. It kind of looks like Swift or Rust, especially if you don’t know those languages.
 
 ## syntax
 Here, have some math.

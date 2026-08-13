@@ -416,10 +416,33 @@ function renderDiagnostics(container, highlightEl, diagnosticsLayer, checkResult
   diagnosticsEl.scrollLeft = highlightEl.scrollLeft;
 }
 
+async function initWasm() {
+  const wasmPath = `/pkg/talk_wasm_bg.wasm${wasmCacheKey}`;
+
+  if ("DecompressionStream" in window) {
+    try {
+      const response = await fetch(
+        `/pkg/talk_wasm_bg.wasm.gz${wasmCacheKey}`,
+      );
+      if (!response.ok || !response.body) {
+        throw new Error("compressed WASM unavailable");
+      }
+      const decompressed = new Response(
+        response.body.pipeThrough(new DecompressionStream("gzip")),
+        { headers: { "Content-Type": "application/wasm" } },
+      );
+      await init({ module_or_path: decompressed });
+      return;
+    } catch (error) {
+      console.warn("Falling back to uncompressed WASM", error);
+    }
+  }
+
+  await init({ module_or_path: wasmPath });
+}
+
 export async function loadTalk() {
-  await init({
-    module_or_path: `/pkg/talk_wasm_bg.wasm${wasmCacheKey}`,
-  });
+  await initWasm();
 
   return {
     runProgram: (source) => run_program(source),

@@ -197,6 +197,7 @@ header {
 header + p {
   margin-top: 2rem;
   margin-bottom: 2rem;
+  max-width: none;
 }
 
 header h1 {
