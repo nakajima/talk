@@ -314,7 +314,7 @@ You can even extend a protocol itself, handing a new method to every conformer a
 
 ```tlk accumulate(protocols) norun
 extend Addable {
-	pub func quadruple() -> Self {
+	func quadruple() -> Self {
 		self.add(to: self).add(to: self.add(to: self))
 	}
 }
@@ -323,6 +323,7 @@ extend Addable {
 ```tlk accumulate(protocols)
 1.quadruple()
 ```
+
 ## gadts
 
 Not only can we pronounce "gadts", we can use them.
@@ -338,7 +339,7 @@ func eval<T: Addable>(_ expr: Expr<T>) -> T {
 	match expr {
 		.int(i) -> i,
 		.string(s) -> s,
-		.add(a, b) -> eval(a).add(to: b)
+		.add(a, b) -> eval(a).add(to: eval(b))
 	}
 }
 
