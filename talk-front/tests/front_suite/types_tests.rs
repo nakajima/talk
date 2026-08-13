@@ -5359,6 +5359,41 @@ pub mod tests {
         );
     }
 
+    /// An equation pinning an arm skolem to a type that mentions it
+    /// (`U ~ Expr<U>`) is an occurs failure, not an escape: report the
+    /// infinite type, not the misleading skolem-escape message.
+    #[test]
+    fn gadt_match_reports_occurs_violation_as_infinite_type() {
+        let typed = check(
+            "// no-core
+            enum Expr<T> {
+                case int(Int) -> Expr<Int>
+                case add<A>(Expr<A>, Expr<A>) -> Expr<A>
+            }
+
+            func eval<T>(expr: Expr<T>, fallback: T) -> T {
+                match expr {
+                    .int(i) -> i,
+                    .add(x, y) -> eval(expr: x, fallback: y)
+                }
+            }
+            ",
+        );
+        let errors = type_errors(&typed);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("infinite type")),
+            "{errors:?}"
+        );
+        assert!(
+            !errors
+                .iter()
+                .any(|error| error.contains("escapes this pattern arm")),
+            "{errors:?}"
+        );
+    }
+
     #[test]
     fn inferred_gadt_match_result_works_when_arms_agree() {
         let typed = check(

@@ -441,18 +441,19 @@ function getAccumulatedSource(editor) {
     const containers = Array.from(
       document.querySelectorAll(".runnable, .no-run"),
     );
-    let candidateIndex = containers.indexOf(currentContainer) - 1;
-    while (containers[candidateIndex]?.dataset.accumulates === "true") {
-      const candidate = containers[candidateIndex];
-      if (accumulateGroup(candidate) === group) {
+    for (const candidate of containers) {
+      if (candidate === currentContainer) break;
+      if (
+        candidate.dataset.accumulates === "true" &&
+        accumulateGroup(candidate) === group
+      ) {
         const candidateEditor = candidate.querySelector(".code-editable");
         const candidateSource =
           candidateEditor?.value ?? candidate.dataset.source ?? "";
         if (candidateSource.trim().length > 0) {
-          priorSources.unshift(candidateSource);
+          priorSources.push(candidateSource);
         }
       }
-      candidateIndex -= 1;
     }
   }
 
@@ -494,17 +495,18 @@ function renderFollowingAccumulatedExamples(editor) {
   const containers = Array.from(
     document.querySelectorAll(".runnable, .no-run"),
   );
-  let candidateIndex = containers.indexOf(currentContainer) + 1;
+  const currentIndex = containers.indexOf(currentContainer);
 
-  while (containers[candidateIndex]?.dataset.accumulates === "true") {
-    const candidate = containers[candidateIndex];
-    if (accumulateGroup(candidate) === group) {
+  for (const candidate of containers.slice(currentIndex + 1)) {
+    if (
+      candidate.dataset.accumulates === "true" &&
+      accumulateGroup(candidate) === group
+    ) {
       const candidateEditor = candidate.querySelector(".code-editable");
       if (candidateEditor) {
         editorRenderers.get(candidateEditor)?.();
       }
     }
-    candidateIndex += 1;
   }
 }
 

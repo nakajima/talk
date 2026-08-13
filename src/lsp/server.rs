@@ -496,6 +496,12 @@ pub async fn start() {
                     // Rebuild from disk state off-loop; the completion
                     // event republishes (or clears) diagnostics.
                     request_workspace_build(state, &document_url);
+                } else if document_url.scheme() == "untitled" {
+                    // A closed unsaved buffer has no disk state to
+                    // rebuild; drop its synthetic root.
+                    if let Some(root) = analysis_root_for_uri(state, &document_url) {
+                        state.roots.remove(&root);
+                    }
                 }
 
                 std::ops::ControlFlow::Continue(())
@@ -756,7 +762,7 @@ pub async fn start() {
                 }
 
                 let document_url = event.uri;
-                if is_tlk_uri(&document_url) {
+                if is_tlk_uri(&document_url) || document_url.scheme() == "untitled" {
                     // The debounced rebuild runs on the analysis worker;
                     // diagnostics and semantic tokens ride back on the
                     // completion event.
@@ -1064,6 +1070,13 @@ fn analysis_root_for_uri(state: &ServerState, uri: &Url) -> Option<PathBuf> {
             .or_else(|| Some(path.clone()));
     }
 
+    // Non-file URIs (unsaved buffers) anchor their own synthetic root:
+    // a single-document session that never walks a disk tree or
+    // invalidates an unrelated workspace root.
+    if uri.scheme() != "file" {
+        return Some(PathBuf::from(uri.as_str()));
+    }
+
     state
         .workspace_roots
         .first()
@@ -1220,7 +1233,9 @@ fn request_workspace_build(state: &mut ServerState, focus_uri: &Url) {
     let open_docs = state
         .documents
         .iter()
-        .filter(|(uri, _)| is_tlk_uri(uri))
+        // The focus always rides along, even when it is not a .tlk
+        // disk path (an unsaved buffer's single-document session).
+        .filter(|(uri, _)| is_tlk_uri(uri) || *uri == focus_uri)
         .filter(|(uri, _)| *uri == focus_uri || uri_is_under_root(uri, &root))
         .map(|(uri, doc)| OpenDocument {
             uri: uri.clone(),
@@ -1452,6 +1467,13 @@ impl AnalysisBuild {
             stdlib_session_documents(&open_docs, &focus)
         {
             session
+        } else if focus.to_file_path().is_err() {
+            // An unsaved buffer's session is its own text only: no
+            // disk walk, no package context.
+            open_docs
+                .iter()
+                .map(|doc| (doc.uri.clone(), doc.version))
+                .collect()
         } else {
             // The file inventory refreshes only after inventory-affecting
             // events; a burst of edits reuses the last walk.
@@ -3906,7 +3928,7 @@ func foo() 'fizz -> Int {
         let open_docs = state
             .documents
             .iter()
-            .filter(|(uri, _)| super::is_tlk_uri(uri))
+            .filter(|(uri, _)| super::is_tlk_uri(uri) || *uri == focus)
             .filter(|(uri, _)| *uri == focus || super::uri_is_under_root(uri, &root))
             .map(|(uri, doc)| super::OpenDocument {
                 uri: uri.clone(),
@@ -4117,5 +4139,34 @@ func foo() 'fizz -> Int {
             "a watched-file event refreshes the inventory"
         );
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn unsaved_buffers_get_a_single_document_session() {
+        let mut state = state_with_roots(vec![]);
+        let uri = Url::parse("untitled:Untitled-1").expect("untitled uri");
+        state.documents.insert(
+            uri.clone(),
+            super::Document::new(0, "let x = 1\n".to_string()),
+        );
+        let mut build = super::AnalysisBuild::default();
+
+        // The synthetic root keys off the URI, never a workspace folder.
+        let root = super::analysis_root_for_uri(&state, &uri).expect("root");
+        assert_eq!(root, std::path::PathBuf::from("untitled:Untitled-1"));
+
+        let workspace = analyze(&mut build, &state, &uri, true).expect("workspace");
+        let doc_id = super::document_id_for_uri(&uri);
+        assert!(
+            workspace
+                .text_for(&doc_id)
+                .is_some_and(|text| text.contains("let x = 1")),
+            "the unsaved buffer's text is analyzed"
+        );
+        assert_eq!(
+            workspace.file_id_to_document.len(),
+            1,
+            "the session is the buffer alone: no disk walk"
+        );
     }
 }

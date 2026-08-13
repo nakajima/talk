@@ -5,7 +5,6 @@ Here, have some math.
 ```tlk
 2 * 3 / 4 + 10 // I can’t do this in my head
 ```
-
 ok ok, that was exciting, let’s write a function now
 
 ```tlk accumulate(func) norun
@@ -13,19 +12,16 @@ func add(x, y) {
   x + y
 }
 ```
-
 Let's call the function with `Int`s:
 
 ```tlk accumulate(func)
 add(1, 2) // => 3
 ```
-
 Now let's call it with `String`s:
 
 ```tlk accumulate(func)
 add("hello ", "world") // => "hello world"
 ```
-
 Wow functions are polymorphic. What a world!
 
 We can also define functions with labeled params.
@@ -37,7 +33,6 @@ func add_one(x:) {
 
 add_one(x: 1) // => 2 Wow. Imagine that
 ```
-
 "Ok Alonzo Church" you say, "but do you have like, normal *variables*?"
 
 We do! I'm getting to it...
@@ -48,7 +43,6 @@ let b = 2
 let c = a + b
 c // => 3
 ```
-
 ## types
 
 Ok Philip Wadler, maybe you like types? You can specify them if you want.
@@ -57,13 +51,11 @@ Ok Philip Wadler, maybe you like types? You can specify them if you want.
 let a: Int = 1
 let b: Float = 2.0
 ```
-
 They’ll be checked. 
 
 ```tlk accumulate(types)
 let c = a + b // Uh oh, type error!
 ```
-
 But you can also not specify them and types will still be checked:
 
 ```tlk
@@ -71,14 +63,12 @@ let a = 1
 let b = 2.0
 let c = a + b
 ```
-
 Functions can have type annotations as well.
 
 ```tlk norun
 // it's good to be explicit sometimes
 func identity<T>(x: T) -> T { x }
 ```
-
 Functions are values too, and they can capture state.
 
 ```tlk
@@ -109,7 +99,6 @@ twice {
 	print("oh hi")
 }
 ```
-
 ## objects
 
 Ok Alan Kay, maybe you like objects. You know, big bags of state and behavior that are the only correct way to program.
@@ -130,7 +119,6 @@ let person = Person(first_name: "Pat", last_name: "N")
 person.greet()
 person
 ```
-
 By default, structs get constructors generated automatically. But if your struct is special then you can define a custom constructor with `init`.
 
 ```tlk
@@ -148,7 +136,6 @@ struct Dog {
 let dog = Dog(age: 3)
 dog.age
 ```
-
 Ok Chewbacca, maybe you're not one for all this ceremony. You can also just define records.
 
 ```tlk 
@@ -162,7 +149,6 @@ print(rec.fizz)
 print(rec.count)
 print(rec.greeting("pat"))
 ```
-
 ## enums / pattern matching
 
 What about enumerations? With attached values even?
@@ -184,7 +170,6 @@ match response {
     .other(_) -> "uh oh"
 }
 ```
-
 We can pattern match in conditionals too.
 
 ```tlk accumulate(enums)
@@ -194,7 +179,6 @@ if let .ok(message) = response {
    "who even knows"
 }
 ```
-
 Records can be pattern matched too.
 
 ```tlk
@@ -205,7 +189,6 @@ match point {
 	{ y, .. } -> y
 }
 ```
-
 One enum everyone loves is `Optional`. We love it so much there's a shorthand for it: `?`.
 
 Let's see an example of it with `let else`, which lets you bail unless the pattern matches.
@@ -218,7 +201,6 @@ func unwrap_or_zero(_ value: Int?) -> Int {
 
 unwrap_or_zero(.some(42))
 ```
-
 Speaking of bailing early, any two-variant enum can short circuit a function. Think rust's `?` operator but dumber but simpler. Elegant? One might say. But one might say a lot of things so who knows.
 
 ```tlk
@@ -235,45 +217,6 @@ func maybe_increment(x: Option<Int>) -> Option<Int> {
 	return .some(unwrapped_x + 1)
 }
 ```
-
-## gadts
-
-One more enum trick. Cases can refine the generic parameters of the type they build — and they can bring their own type parameters, constraints included, which sounds scary but is just this:
-
-```tlk
-protocol Addable {
-	func add(to other: Self) -> Self
-}
-
-extend Int: Addable {
-	func add(to other: Int) -> Int { self + other }
-}
-
-extend String: Addable {
-	func add(to other: String) -> String { self + other }
-}
-
-enum Expr<ReturnType> 'heap {
-	case int(Int) -> Expr<Int>
-	case string(String) -> Expr<String>
-	case add<T: Addable>(Expr<T>, Expr<T>) -> Expr<T>
-}
-
-func evaluate<T: Addable>(expr: Expr<T>) -> T {
-	match expr {
-		.int(i) -> i,
-		.string(s) -> s,
-		.add(a, b) -> evaluate(expr: a).add(to: evaluate(expr: b))
-	}
-}
-
-print(evaluate(expr: .add(.int(20), .add(.int(19), .int(3)))))
-print(evaluate(expr: .add(.string("hello "), .string("world"))))
-```
-
-In the `.add` arm the case's own `T` is pinned by whatever you're matching on, so the recursive calls return honest values and `add(to:)` dispatches through the constraint. (The `'heap` is there because a case holds the enum itself: recursive values live behind a reference.)
-
-Each arm of the `match` knows what `T` actually is, so `evaluate` hands you an `Int` or a `String`, not some box you have to unwrap. The academics call this a GADT. You can call it "nice".
 
 ## results
 
@@ -316,7 +259,6 @@ protocol Addable {
     func add(to other: Self) -> Self
 }
 ```
-
 How do we make types conform to it? With a lil `extend` declaration. Think rust's `impl Y for X` or swift's `extension X: Y`.
 
 ```tlk accumulate(protocols)
@@ -337,13 +279,6 @@ extend String: Addable {
 print(1.add(to: 2))
 print("world".add(to: "hello "))
 ```
-
-Conformances are verified.
-
-```tlk
-extend Float: Addable {}
-```
-
 Protocols can also have associated types with their own constraints, and default methods that conformers get for free.
 
 ```tlk
@@ -379,7 +314,7 @@ You can even extend a protocol itself, handing a new method to every conformer a
 
 ```tlk accumulate(protocols) norun
 extend Addable {
-	func quadruple() -> Self {
+	pub func quadruple() -> Self {
 		self.add(to: self).add(to: self.add(to: self))
 	}
 }
@@ -388,6 +323,29 @@ extend Addable {
 ```tlk accumulate(protocols)
 1.quadruple()
 ```
+## gadts
+
+Not only can we pronounce "gadts", we can use them.
+
+```tlk accumulate(protocols)
+enum Expr<Returns> 'heap {
+	case int(Int) -> Expr<Int>
+	case string(String) -> Expr<String>
+	case add<T: Addable>(Expr<T>, Expr<T>) -> Expr<T>
+}
+
+func eval<T: Addable>(_ expr: Expr<T>) -> T {
+	match expr {
+		.int(i) -> i,
+		.string(s) -> s,
+		.add(a, b) -> eval(a).add(to: b)
+	}
+}
+
+print(evaluate(expr: .add(.int(20), .add(.int(19), .int(3)))))
+print(evaluate(expr: .add(.string("hello "), .string("world"))))
+```
+Each arm of the `match` knows what `T` actually is, so `evaluate` hands you an honest `Int` or `String`, not some box you have to unwrap. The academics call this a GADT. You can call it "nice".
 
 ## effects
 
@@ -435,7 +393,6 @@ func boom(x) {
 
 boom(0)
 ```
-
 ## collections
 
 Arrays. They do what you think.
@@ -449,7 +406,6 @@ for n in numbers {
 
 numbers.count
 ```
-
 Subscripts work, and yes, you can mutate (more on that in a second).
 
 ```tlk
@@ -459,7 +415,6 @@ print(xs[1])
 xs[0] = 99
 xs
 ```
-
 They're iterable, so you can do the whole lazy dance.
 
 ```tlk
@@ -468,7 +423,6 @@ They're iterable, so you can do the whole lazy dance.
 	.skip(count: 2)
 	.to_array()
 ```
-
 Ranges exist too.
 
 ```tlk
@@ -476,7 +430,6 @@ for i in 0..<3 {
 	print(i)
 }
 ```
-
 There are tuples, with positional access.
 
 ```tlk
@@ -485,7 +438,6 @@ func line_col() -> (Int, Int) { (3, 7) }
 let p = line_col()
 p.0 + p.1
 ```
-
 And the stdlib has a growable string-keyed `Dict`.
 
 ```tlk
@@ -500,7 +452,6 @@ match scores.get(key: "pat") {
 	.none -> "who?"
 }
 ```
-
 ## strings
 
 Strings are unicode-correct. Iteration is by user-perceived character (extended grapheme clusters, UAX #29, etc. etc.), which means emoji can't tear.
@@ -510,7 +461,6 @@ print("héllo 👋🏽".count())       // 7 characters
 print("héllo 👋🏽".utf8().count()) // 15 bytes
 print("👨‍👩‍👧‍👦".count())             // 1. a whole family!
 ```
-
 Looping gives you one `Character` at a time.
 
 ```tlk
@@ -518,9 +468,7 @@ for ch in "héllo" {
 	print(ch)
 }
 ```
-
 The bytes are there when you need them, but you have to ask for them explicitly with `utf8()`. No integer indexing, no surprises.
-
 ## ownership
 
 Ok Rust, maybe you like ownership. Here's the talk take: everything has value semantics, sharing is implicit and cheap (refcounted, copy-on-write), and the compiler figures out the retains and releases. You mostly don't have to think about it.
@@ -534,7 +482,6 @@ original.push(4)
 print(original) // [1, 2, 3, 4]
 print(backup)   // [1, 2, 3], backup got a snapshot
 ```
-
 Mutation happens through `mut func`s, which get exclusive access with write-back.
 
 ```tlk accumulate(ownership) norun
@@ -552,7 +499,6 @@ let account = BankAccount(balance: 100)
 account.deposit(amount: 50)
 account.balance
 ```
-
 Function parameters borrow by default, so calling a function gives nothing up.
 
 ```tlk
@@ -565,7 +511,6 @@ shout(message: greeting)
 shout(message: greeting) // still ours
 greeting
 ```
-
 But sometimes a value really is one of a kind: a ticket, a token, a file handle. Mark the type `'linear` and it must be consumed exactly once. Not zero times, not two times.
 
 ```tlk
@@ -585,9 +530,7 @@ func attend_show() -> Int {
 
 attend_show()
 ```
-
 There's more where that came from (`consume` parameters, the `Copy`/`CheapClone` marker protocols, `Deinit` destructors, exclusive `&mut` loans), but the short version is: value semantics for you, references for the compiler, no lifetime annotations, ever.
-
 ## macros
 
 Talk has hygienic macros. The declarative kind is a token template:
@@ -597,7 +540,6 @@ macro double($x) { $x + $x }
 
 @double(21)
 ```
-
 They can introduce control flow, which functions can't.
 
 ```tlk
@@ -607,10 +549,9 @@ let x = 10
 @unless(x > 5, print("x is beeg"))
 print("still here")
 ```
-
 Names a macro introduces can't capture your variables, and expansions get type-checked like any other code. The fun part is that macros can also be whole programs. The stdlib ships an HTML macro, written in Talk itself, that parses and checks your markup at compile time:
 
-```tlk
+```tlk norun
 use html::{ html }
 
 let name = "<Ada & friends>"
@@ -625,10 +566,11 @@ let page = @html {
 }
 
 print(page.into_string())
+// <main id="content" class="page" data-name="&lt;Ada &amp; friends&gt;">
+//   <h1>Hello, &lt;Ada &amp; friends&gt;</h1><span>1</span><span>2</span><span>3</span>
+// </main>
 ```
-
-Interpolations get escaped, and `@for`/`@if` live right there in the markup. And yes, that one runs in your browser: the macro is compiled to bytecode and executed at compile time, right here in the page.
-
+Interpolations get escaped, and `@for`/`@if` live right there in the markup. This one isn't runnable in the browser (the playground doesn't run procedural macros yet), but it works from the CLI.
 ## tooling
 
 It's a real CLI, with the usual suspects.
@@ -642,7 +584,6 @@ talk lsp              <span class="comment"># language server, at your service</
 </div>
 
 The language server does hover, goto-definition, completion, and rename, and its inlay hints mark every spot where the compiler quietly cloned something for you. `talk setup nvim` installs the Neovim runtime files, including a Neotest adapter so you can run Talk tests from the gutter. There are also packages with lockfiles (`talk new`, `talk install`, `talk update`) if you're building something with more than one file in it.
-
 ## unsafe
 
 If you need to touch raw memory, you can, but you have to say so. Raw pointers and friends carry an `'unsafe` effect that must be discharged lexically with `#unsafe`.
@@ -659,7 +600,6 @@ print("all cleaned up")
 (Leaks are detected, by the way. Free your mallocs.)
 
 There's a `net` module with raw sockets on top of this machinery, and the compiler itself can be embedded in C and Swift hosts — the iOS-flavored XCFramework build is how the playground... just kidding, the playground is wasm. But the embedding thing is real.
-
 ## modules
 
 There are modules too. This one isn't runnable in the browser because it spans multiple files, but it works from the CLI.
@@ -673,7 +613,6 @@ use package::Exports::{ a }
 
 print(a)
 ```
-
 ## http
 
 And yes, there is already some rough little HTTP stuff.

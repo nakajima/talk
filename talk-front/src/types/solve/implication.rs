@@ -47,6 +47,17 @@ impl<'s> Solver<'s> {
 
         let mut floatable = vec![];
         for residual in residuals {
+            // An equation pinning a constructor-local skolem to a type
+            // that mentions it (`U ~ Expr<U>`) is no escape: it is
+            // unsatisfiable on its face, so report the occurs failure
+            // (Robinson 1965) rather than the escape.
+            if let Some(ty) = self.occurs_violation(&residual, &local_params) {
+                self.errors.push((
+                    TypeError::InfiniteType { ty },
+                    residual.origin().node,
+                ));
+                continue;
+            }
             if let Some(param) = self.constraint_mentions_params(&residual, &local_params) {
                 self.errors.push((
                     TypeError::EscapingExistential {
@@ -85,6 +96,41 @@ impl<'s> Solver<'s> {
             };
             if let Some(param) = self.var_value_mentions_params(&value, params) {
                 return Some(param);
+            }
+        }
+        None
+    }
+
+    /// Whether an equality residual pins a constructor-local skolem to a
+    /// type that mentions the same skolem — the occurs-check shape. Such
+    /// an equation is unsatisfiable regardless of scope, so it deserves
+    /// the infinite-type diagnostic, not the existential-escape one.
+    /// Returns the rendered equation for the message.
+    pub(super) fn occurs_violation(
+        &mut self,
+        constraint: &Constraint,
+        params: &[Symbol],
+    ) -> Option<String> {
+        let Constraint::Eq(a, b, _) = constraint else {
+            return None;
+        };
+        for (needle, haystack) in [(a, b), (b, a)] {
+            let Ty::Param(param) = self.store.shallow(needle) else {
+                continue;
+            };
+            if !params.contains(&param) {
+                continue;
+            }
+            let haystack = self.store.shallow(haystack);
+            // The identity equation `U ~ U` is no violation: only a
+            // skolem occurring inside structure makes the type infinite.
+            if matches!(haystack, Ty::Param(other) if other == param) {
+                continue;
+            }
+            if self.ty_mentions_params(&haystack, &[param]).is_some() {
+                let haystack = self.store.render(&haystack);
+                let param = self.store.render(&Ty::Param(param));
+                return Some(format!("{param} = {haystack}"));
             }
         }
         None

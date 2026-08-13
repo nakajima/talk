@@ -1848,8 +1848,13 @@ pub extern "C" fn talk_workspace_goto_definition_utf8(
             let analysis = workspace.ensure_analysis()?.clone();
             let core = workspace.ensure_core();
             Ok(
-                talk::analysis::goto_definition(&analysis, core, &id, byte_offset)
-                    .map(location_record),
+                match talk::analysis::goto_definition(&analysis, core, &id, byte_offset) {
+                    talk::analysis::GotoDefinition::Found { location, .. } => {
+                        Some(location_record(location))
+                    }
+                    talk::analysis::GotoDefinition::NeedsModule(_)
+                    | talk::analysis::GotoDefinition::NotFound => None,
+                },
             )
         },
         TalkLocationResult::ok,
