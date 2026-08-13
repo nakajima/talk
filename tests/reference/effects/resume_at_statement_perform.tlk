@@ -2,7 +2,7 @@ effect 'ping() -> Int
 #handle 'ping {
 	'continue 1
 }
-func go() 'ping -> () {
+func go() '[ping, io] -> () {
 	'ping()
 	print("resumed")
 }

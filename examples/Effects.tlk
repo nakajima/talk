@@ -2,7 +2,7 @@ effect 'throwsies(error) -> Never
 
 #handle 'throwsies { err in print(err) }
 
-func uhoh() 'throwsies -> () {
+func uhoh() '[throwsies, io] -> () {
 	'throwsies("whoops")
 	print("this should not be printed")
 }

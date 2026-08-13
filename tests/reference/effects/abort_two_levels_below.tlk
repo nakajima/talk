@@ -1,10 +1,10 @@
 effect 'oops(error) -> Never
 #handle 'oops { err in print(err) }
-func inner() 'oops -> () {
+func inner() '[oops, io] -> () {
 	'oops("deep")
 	print("inner after")
 }
-func outer() 'oops -> () {
+func outer() '[oops, io] -> () {
 	inner()
 	print("outer after")
 }

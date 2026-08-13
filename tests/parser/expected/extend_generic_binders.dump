@@ -32,76 +32,92 @@ tokens:
   Newline @84..85
   RightBrace @85..86 "}"
   Newline @86..88
-  Newline @154..155
-  Newline @170..171
-  Extend @171..177 "extend"
-  Less @177..178 "<"
-  Identifier @178..179 "T"
-  Colon @179..180 ":"
-  Identifier @181..184 "Foo"
-  Comma @184..185 ","
-  Identifier @186..187 "U"
-  Colon @187..188 ":"
-  Identifier @189..192 "Bar"
-  Greater @192..193 ">"
-  Identifier @194..198 "Pair"
-  Less @198..199 "<"
-  Identifier @199..200 "T"
-  Comma @200..201 ","
-  Identifier @202..203 "U"
-  Greater @203..204 ">"
-  LeftBrace @205..206 "{"
-  Newline @206..207
-  RightBrace @207..208 "}"
-  Newline @208..210
-  Newline @276..277
-  Extend @277..283 "extend"
-  Less @283..284 "<"
-  Identifier @284..285 "T"
-  Colon @285..286 ":"
-  Identifier @287..290 "Foo"
-  Comma @290..291 ","
-  Identifier @292..295 "Bar"
-  Greater @295..296 ">"
-  Identifier @297..301 "Pair"
-  Less @301..302 "<"
-  Identifier @302..303 "T"
-  Comma @303..304 ","
-  Identifier @305..306 "T"
-  Greater @306..307 ">"
-  LeftBrace @308..309 "{"
-  Newline @309..310
-  RightBrace @310..311 "}"
-  Newline @311..313
-  Newline @368..369
-  Func @369..373 "func"
-  Identifier @374..378 "pick"
-  Less @378..379 "<"
-  Identifier @379..380 "T"
-  Colon @380..381 ":"
-  Identifier @382..385 "Foo"
-  Comma @385..386 ","
-  Identifier @387..388 "U"
-  Colon @388..389 ":"
-  Identifier @390..393 "Bar"
-  Greater @393..394 ">"
-  LeftParen @394..395 "("
-  Identifier @395..400 "first"
-  Colon @400..401 ":"
-  Identifier @402..403 "T"
-  Comma @403..404 ","
-  Identifier @405..411 "second"
-  Colon @411..412 ":"
-  Identifier @413..414 "U"
-  RightParen @414..415 ")"
-  Arrow @416..418 "->"
-  Identifier @419..420 "T"
-  LeftBrace @421..422 "{"
-  Newline @422..423
-  Identifier @424..429 "first"
-  Newline @429..430
-  RightBrace @430..431 "}"
-  Newline @431..432
+  Struct @88..94 "struct"
+  Identifier @95..98 "Cat"
+  LeftBrace @99..100 "{"
+  Newline @100..101
+  RightBrace @101..102 "}"
+  Newline @102..104
+  Newline @140..141
+  Extend @141..147 "extend"
+  Less @147..148 "<"
+  Identifier @148..149 "T"
+  Colon @149..150 ":"
+  Identifier @151..154 "Foo"
+  Comma @154..155 ","
+  Identifier @156..157 "U"
+  Colon @157..158 ":"
+  Identifier @159..162 "Bar"
+  Greater @162..163 ">"
+  Identifier @164..168 "Pair"
+  Less @168..169 "<"
+  Identifier @169..170 "T"
+  Comma @170..171 ","
+  Identifier @172..173 "U"
+  Greater @173..174 ">"
+  LeftBrace @175..176 "{"
+  Newline @176..177
+  RightBrace @177..178 "}"
+  Newline @178..180
+  Newline @229..230
+  Extend @230..236 "extend"
+  Less @236..237 "<"
+  Identifier @237..238 "T"
+  Colon @238..239 ":"
+  Identifier @240..243 "Foo"
+  Amp @244..245 "&"
+  Identifier @246..249 "Bar"
+  Greater @249..250 ">"
+  Identifier @251..255 "Pair"
+  Less @255..256 "<"
+  Identifier @256..257 "T"
+  Comma @257..258 ","
+  Identifier @259..260 "T"
+  Greater @260..261 ">"
+  LeftBrace @262..263 "{"
+  Newline @263..264
+  RightBrace @264..265 "}"
+  Newline @265..267
+  Newline @320..321
+  Extend @321..327 "extend"
+  Identifier @328..331 "Cat"
+  Colon @331..332 ":"
+  Identifier @333..336 "Foo"
+  Amp @337..338 "&"
+  Identifier @339..342 "Bar"
+  LeftBrace @343..344 "{"
+  Newline @344..345
+  RightBrace @345..346 "}"
+  Newline @346..348
+  Newline @393..394
+  Func @394..398 "func"
+  Identifier @399..403 "pick"
+  Less @403..404 "<"
+  Identifier @404..405 "T"
+  Colon @405..406 ":"
+  Identifier @407..410 "Foo"
+  Amp @411..412 "&"
+  Identifier @413..416 "Bar"
+  Comma @416..417 ","
+  Identifier @418..419 "U"
+  Greater @419..420 ">"
+  LeftParen @420..421 "("
+  Identifier @421..426 "first"
+  Colon @426..427 ":"
+  Identifier @428..429 "T"
+  Comma @429..430 ","
+  Identifier @431..437 "second"
+  Colon @437..438 ":"
+  Identifier @439..440 "U"
+  RightParen @440..441 ")"
+  Arrow @442..444 "->"
+  Identifier @445..446 "T"
+  LeftBrace @447..448 "{"
+  Newline @448..449
+  Identifier @450..455 "first"
+  Newline @455..456
+  RightBrace @456..457 "}"
+  Newline @457..458
 tree:
   Decl::Protocol @0..16
     Body @13..16
@@ -115,37 +131,43 @@ tree:
         TypeAnnotation::Nominal @68..69 "A"
       Decl::Property @71..84 "let second: B"
         TypeAnnotation::Nominal @83..84 "B"
-  Decl::Extend @171..208
-    GenericDecl @178..184 "T: Foo"
-      TypeAnnotation::Nominal @181..184 "Foo"
-    GenericDecl @186..192 "U: Bar"
-      TypeAnnotation::Nominal @189..192 "Bar"
-    TypeAnnotation::Nominal @199..200 "T"
-    TypeAnnotation::Nominal @202..203 "U"
-    Body @205..208
-  Decl::Extend @277..311
-    GenericDecl @284..295 "T: Foo, Bar"
-      TypeAnnotation::Nominal @287..290 "Foo"
-      TypeAnnotation::Nominal @292..295 "Bar"
-    TypeAnnotation::Nominal @302..303 "T"
-    TypeAnnotation::Nominal @305..306 "T"
-    Body @308..311
-  Decl::Func @369..431
-    Func @421..431 tokens=369..431
-      GenericDecl @379..385 "T: Foo"
-        TypeAnnotation::Nominal @382..385 "Foo"
-      GenericDecl @387..393 "U: Bar"
-        TypeAnnotation::Nominal @390..393 "Bar"
-      Parameter @400..403 ": T"
-        TypeAnnotation::Nominal @402..403 "T"
-      Parameter @411..414 ": U"
-        TypeAnnotation::Nominal @413..414 "U"
-      Block @421..431
-        Stmt::Expr @424..429 "first"
-          Expr::Variable @424..429 "first"
-      TypeAnnotation::Nominal @419..420 "T"
+  Decl::Struct @88..102
+    Body @99..102
+  Decl::Extend @141..178
+    GenericDecl @148..154 "T: Foo"
+      TypeAnnotation::Nominal @151..154 "Foo"
+    GenericDecl @156..162 "U: Bar"
+      TypeAnnotation::Nominal @159..162 "Bar"
+    TypeAnnotation::Nominal @169..170 "T"
+    TypeAnnotation::Nominal @172..173 "U"
+    Body @175..178
+  Decl::Extend @230..265
+    GenericDecl @237..249 "T: Foo & Bar"
+      TypeAnnotation::Nominal @240..243 "Foo"
+      TypeAnnotation::Nominal @246..249 "Bar"
+    TypeAnnotation::Nominal @256..257 "T"
+    TypeAnnotation::Nominal @259..260 "T"
+    Body @262..265
+  Decl::Extend @321..346
+    TypeAnnotation::Nominal @333..336 "Foo"
+    TypeAnnotation::Nominal @339..342 "Bar"
+    Body @343..346
+  Decl::Func @394..457
+    Func @447..457 tokens=394..457
+      GenericDecl @404..416 "T: Foo & Bar"
+        TypeAnnotation::Nominal @407..410 "Foo"
+        TypeAnnotation::Nominal @413..416 "Bar"
+      GenericDecl @418..419 "U"
+      Parameter @426..429 ": T"
+        TypeAnnotation::Nominal @428..429 "T"
+      Parameter @437..440 ": U"
+        TypeAnnotation::Nominal @439..440 "U"
+      Block @447..457
+        Stmt::Expr @450..455 "first"
+          Expr::Variable @450..455 "first"
+      TypeAnnotation::Nominal @445..446 "T"
 comments:
-  @88..154
-  @155..170 "// conformance."
-  @210..276
-  @313..368
+  @104..140 "// A comma always separates binders."
+  @180..229
+  @267..320
+  @348..393

@@ -1,6 +1,6 @@
 effect 'oops(error) -> Never
 #handle 'oops { err in print(err) }
-func boom() 'oops -> () {
+func boom() '[oops, io] -> () {
 	'oops("bang")
 	print("after perform")
 }

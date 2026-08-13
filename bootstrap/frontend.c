@@ -7675,7 +7675,7 @@ static TalkValue talk_fn592(const TalkValue *env, TalkValue p0); /* _retain */
 static TalkValue talk_fn593(const TalkValue *env, TalkValue p0); /* _alloc */
 static TalkValue talk_fn594(const TalkValue *env); /* dummy_generic_decl */
 static TalkValue talk_fn595(const TalkValue *env, TalkL1 p0); /* starts_uppercase */
-static TalkValue talk_fn596(const TalkValue *env, TalkValue p0); /* comma_starts_generic_param */
+static TalkL91 talk_fn596(const TalkValue *env, TalkValue p0); /* conformances_list */
 static TalkL28 talk_fn597(const TalkValue *env, TalkL3 p0, TalkValue p1); /* push */
 static TalkL2 talk_fn598(const TalkValue *env, TalkL3 p0, TalkValue p1); /* allocate_with_capacity */
 static TalkL28 talk_fn599(const TalkValue *env, TalkL3 p0); /* uniqued_storage */
@@ -8021,176 +8021,175 @@ static TalkValue talk_fn938(const TalkValue *env, TalkL3 p0); /* any_pattern_con
 static TalkL28 talk_fn939(const TalkValue *env, TalkValue p0, TalkL3 p1); /* collect_pattern_binders */
 static TalkL28 talk_fn940(const TalkValue *env, TalkL3 p0, TalkL3 p1); /* collect_all_pattern_binders */
 static TalkL10 talk_fn941(const TalkValue *env, TalkValue p0); /* type_application */
-static TalkL91 talk_fn942(const TalkValue *env, TalkValue p0); /* conformances_list */
-static TalkL10 talk_fn943(const TalkValue *env, TalkValue p0, TalkL12 p1); /* body_parse */
-static TalkL28 talk_fn944(const TalkValue *env, TalkL3 p0, TalkL23 p1); /* push */
-static TalkValue talk_fn945(const TalkValue *env, TalkValue p0); /* associated_parse */
-static TalkValue talk_fn946(const TalkValue *env, TalkValue p0, TalkValue p1); /* require_decl */
-static TalkL2 talk_fn947(const TalkValue *env, TalkL3 p0, TalkValue p1); /* allocate_with_capacity */
-static TalkL28 talk_fn948(const TalkValue *env, TalkL3 p0); /* uniqued_storage */
-static TalkL28 talk_fn949(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkL23 p2); /* _init_slot */
-static TalkL2 talk_fn950(const TalkValue *env, TalkValue p0); /* _storage */
-static TalkValue talk_fn951(const TalkValue *env, TalkL23 p0); /* _retain */
-static TalkValue talk_fn952(const TalkValue *env, TalkValue p0); /* _alloc */
-static TalkValue talk_fn953(const TalkValue *env, TalkL1 p0); /* macro_param_is_identifier_shaped */
-static TalkL28 talk_fn954(const TalkValue *env, TalkL3 p0, TalkValue p1); /* push */
-static TalkL2 talk_fn955(const TalkValue *env, TalkL3 p0, TalkValue p1); /* allocate_with_capacity */
-static TalkL28 talk_fn956(const TalkValue *env, TalkL3 p0); /* uniqued_storage */
-static TalkL28 talk_fn957(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkValue p2); /* _init_slot */
-static TalkL2 talk_fn958(const TalkValue *env, TalkValue p0); /* _storage */
-static TalkValue talk_fn959(const TalkValue *env, TalkL3 p0, TalkValue p1); /* get */
-static TalkValue talk_fn960(const TalkValue *env, TalkValue p0); /* _retain */
-static TalkValue talk_fn961(const TalkValue *env, TalkValue p0); /* shared_retain */
-static TalkValue talk_fn962(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _check_index */
-static TalkValue talk_fn963(const TalkValue *env, TalkValue p0); /* _alloc */
-static TalkValue talk_fn964(const TalkValue *env, TalkValue p0); /* module_path */
-static TalkL28 talk_fn965(const TalkValue *env, TalkL3 p0, TalkValue p1); /* push */
-static TalkL2 talk_fn966(const TalkValue *env, TalkL3 p0, TalkValue p1); /* allocate_with_capacity */
-static TalkL28 talk_fn967(const TalkValue *env, TalkL3 p0); /* uniqued_storage */
-static TalkL28 talk_fn968(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkValue p2); /* _init_slot */
-static TalkL2 talk_fn969(const TalkValue *env, TalkValue p0); /* _storage */
-static TalkValue talk_fn970(const TalkValue *env, TalkL3 p0, TalkValue p1); /* get */
-static TalkValue talk_fn971(const TalkValue *env, TalkValue p0); /* _retain */
-static TalkValue talk_fn972(const TalkValue *env, TalkValue p0); /* shared_retain */
-static TalkValue talk_fn973(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _check_index */
-static TalkValue talk_fn974(const TalkValue *env, TalkValue p0); /* _alloc */
-static TalkL10 talk_fn975(const TalkValue *env, TalkValue p0, TalkValue p1, TalkL12 p2); /* check_pub_admitted */
-static TalkL10 talk_fn976(const TalkValue *env, TalkValue p0, TalkL1 p1); /* reject_pub */
-static TalkL10 talk_fn977(const TalkValue *env, TalkValue p0, TalkL12 p1); /* check_pub_context_nominal */
-static TalkL10 talk_fn978(const TalkValue *env, TalkValue p0, TalkL12 p1); /* check_pub_context_top */
-static TalkL10 talk_fn979(const TalkValue *env, TalkValue p0, TalkL12 p1); /* check_pub_context_member */
-static TalkL1 talk_fn980(const TalkValue *env, TalkL1 p0, TalkValue p1, TalkL1 p2); /* lexer_error_message */
-static TalkValue talk_fn981(const TalkValue *env, TalkL7 p0, TalkValue p1, TalkValue p2); /* token */
-static TalkL28 talk_fn982(const TalkValue *env, TalkL3 p0, TalkL72 p1); /* push */
-static TalkValue talk_fn983(const TalkValue *env, TalkValue p0); /* is_digit */
-static TalkValue talk_fn984(const TalkValue *env, TalkValue p0); /* is_alpha */
-static TalkValue talk_fn985(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2); /* ident_end */
-static TalkValue talk_fn986(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2, TalkValue p3, TalkL1 p4); /* scan_escape */
-static TalkValue talk_fn987(const TalkValue *env, TalkValue p0); /* shared_drop */
-static TalkValue talk_fn988(const TalkValue *env, TalkValue p0); /* is_alnum */
-static TalkValue talk_fn989(const TalkValue *env, TalkL7 p0, TalkValue p1, TalkValue p2, TalkValue p3, TalkValue p4); /* token_with_lexeme */
-static TalkValue talk_fn990(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2); /* probe_character */
-static TalkValue talk_fn991(const TalkValue *env, TalkValue p0); /* shared_drop */
-static TalkValue talk_fn992(const TalkValue *env, TalkL7 p0); /* is_operator */
-static TalkL1 talk_fn993(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2); /* describe_scalar */
-static TalkValue talk_fn994(const TalkValue *env, TalkValue p0); /* scalar_byte_length */
-static TalkValue talk_fn995(const TalkValue *env, TalkL112 p0); /* shared_retain */
+static TalkL10 talk_fn942(const TalkValue *env, TalkValue p0, TalkL12 p1); /* body_parse */
+static TalkL28 talk_fn943(const TalkValue *env, TalkL3 p0, TalkL23 p1); /* push */
+static TalkValue talk_fn944(const TalkValue *env, TalkValue p0); /* associated_parse */
+static TalkValue talk_fn945(const TalkValue *env, TalkValue p0, TalkValue p1); /* require_decl */
+static TalkL2 talk_fn946(const TalkValue *env, TalkL3 p0, TalkValue p1); /* allocate_with_capacity */
+static TalkL28 talk_fn947(const TalkValue *env, TalkL3 p0); /* uniqued_storage */
+static TalkL28 talk_fn948(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkL23 p2); /* _init_slot */
+static TalkL2 talk_fn949(const TalkValue *env, TalkValue p0); /* _storage */
+static TalkValue talk_fn950(const TalkValue *env, TalkL23 p0); /* _retain */
+static TalkValue talk_fn951(const TalkValue *env, TalkValue p0); /* _alloc */
+static TalkValue talk_fn952(const TalkValue *env, TalkL1 p0); /* macro_param_is_identifier_shaped */
+static TalkL28 talk_fn953(const TalkValue *env, TalkL3 p0, TalkValue p1); /* push */
+static TalkL2 talk_fn954(const TalkValue *env, TalkL3 p0, TalkValue p1); /* allocate_with_capacity */
+static TalkL28 talk_fn955(const TalkValue *env, TalkL3 p0); /* uniqued_storage */
+static TalkL28 talk_fn956(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkValue p2); /* _init_slot */
+static TalkL2 talk_fn957(const TalkValue *env, TalkValue p0); /* _storage */
+static TalkValue talk_fn958(const TalkValue *env, TalkL3 p0, TalkValue p1); /* get */
+static TalkValue talk_fn959(const TalkValue *env, TalkValue p0); /* _retain */
+static TalkValue talk_fn960(const TalkValue *env, TalkValue p0); /* shared_retain */
+static TalkValue talk_fn961(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _check_index */
+static TalkValue talk_fn962(const TalkValue *env, TalkValue p0); /* _alloc */
+static TalkValue talk_fn963(const TalkValue *env, TalkValue p0); /* module_path */
+static TalkL28 talk_fn964(const TalkValue *env, TalkL3 p0, TalkValue p1); /* push */
+static TalkL2 talk_fn965(const TalkValue *env, TalkL3 p0, TalkValue p1); /* allocate_with_capacity */
+static TalkL28 talk_fn966(const TalkValue *env, TalkL3 p0); /* uniqued_storage */
+static TalkL28 talk_fn967(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkValue p2); /* _init_slot */
+static TalkL2 talk_fn968(const TalkValue *env, TalkValue p0); /* _storage */
+static TalkValue talk_fn969(const TalkValue *env, TalkL3 p0, TalkValue p1); /* get */
+static TalkValue talk_fn970(const TalkValue *env, TalkValue p0); /* _retain */
+static TalkValue talk_fn971(const TalkValue *env, TalkValue p0); /* shared_retain */
+static TalkValue talk_fn972(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _check_index */
+static TalkValue talk_fn973(const TalkValue *env, TalkValue p0); /* _alloc */
+static TalkL10 talk_fn974(const TalkValue *env, TalkValue p0, TalkValue p1, TalkL12 p2); /* check_pub_admitted */
+static TalkL10 talk_fn975(const TalkValue *env, TalkValue p0, TalkL1 p1); /* reject_pub */
+static TalkL10 talk_fn976(const TalkValue *env, TalkValue p0, TalkL12 p1); /* check_pub_context_nominal */
+static TalkL10 talk_fn977(const TalkValue *env, TalkValue p0, TalkL12 p1); /* check_pub_context_top */
+static TalkL10 talk_fn978(const TalkValue *env, TalkValue p0, TalkL12 p1); /* check_pub_context_member */
+static TalkL1 talk_fn979(const TalkValue *env, TalkL1 p0, TalkValue p1, TalkL1 p2); /* lexer_error_message */
+static TalkValue talk_fn980(const TalkValue *env, TalkL7 p0, TalkValue p1, TalkValue p2); /* token */
+static TalkL28 talk_fn981(const TalkValue *env, TalkL3 p0, TalkL72 p1); /* push */
+static TalkValue talk_fn982(const TalkValue *env, TalkValue p0); /* is_digit */
+static TalkValue talk_fn983(const TalkValue *env, TalkValue p0); /* is_alpha */
+static TalkValue talk_fn984(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2); /* ident_end */
+static TalkValue talk_fn985(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2, TalkValue p3, TalkL1 p4); /* scan_escape */
+static TalkValue talk_fn986(const TalkValue *env, TalkValue p0); /* shared_drop */
+static TalkValue talk_fn987(const TalkValue *env, TalkValue p0); /* is_alnum */
+static TalkValue talk_fn988(const TalkValue *env, TalkL7 p0, TalkValue p1, TalkValue p2, TalkValue p3, TalkValue p4); /* token_with_lexeme */
+static TalkValue talk_fn989(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2); /* probe_character */
+static TalkValue talk_fn990(const TalkValue *env, TalkValue p0); /* shared_drop */
+static TalkValue talk_fn991(const TalkValue *env, TalkL7 p0); /* is_operator */
+static TalkL1 talk_fn992(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2); /* describe_scalar */
+static TalkValue talk_fn993(const TalkValue *env, TalkValue p0); /* scalar_byte_length */
+static TalkValue talk_fn994(const TalkValue *env, TalkL112 p0); /* shared_retain */
+static TalkValue talk_fn995(const TalkValue *env, TalkValue p0); /* shared_retain */
 static TalkValue talk_fn996(const TalkValue *env, TalkValue p0); /* shared_retain */
-static TalkValue talk_fn997(const TalkValue *env, TalkValue p0); /* shared_retain */
-static TalkValue talk_fn998(const TalkValue *env, TalkL0 p0, TalkValue p1, TalkValue p2); /* _utf8_decode */
-static TalkValue talk_fn999(const TalkValue *env, TalkValue p0); /* scalar_is_alphanumeric */
-static TalkL1 talk_fn1000(const TalkValue *env, TalkValue p0); /* to_hex */
-static TalkValue talk_fn1001(const TalkValue *env, TalkValue p0); /* scalar_is_alphabetic */
-static TalkValue talk_fn1002(const TalkValue *env, TalkValue p0); /* scalar_is_numeric */
-static TalkValue talk_fn1003(const TalkValue *env, TalkValue p0); /* _character_class */
-static TalkL1 talk_fn1004(const TalkValue *env); /* _character_class_table */
-static TalkValue talk_fn1005(const TalkValue *env, TalkL0 p0, TalkValue p1); /* _entry_value */
-static TalkValue talk_fn1006(const TalkValue *env, TalkValue p0); /* is_space */
-static TalkValue talk_fn1007(const TalkValue *env, TalkValue p0); /* is_hex */
-static TalkValue talk_fn1008(const TalkValue *env, TalkValue p0); /* hex_value */
-static TalkL2 talk_fn1009(const TalkValue *env, TalkL3 p0, TalkValue p1); /* allocate_with_capacity */
-static TalkL28 talk_fn1010(const TalkValue *env, TalkL3 p0); /* uniqued_storage */
-static TalkL28 talk_fn1011(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkL72 p2); /* _init_slot */
-static TalkL2 talk_fn1012(const TalkValue *env, TalkValue p0); /* _storage */
-static TalkValue talk_fn1013(const TalkValue *env, TalkL3 p0, TalkValue p1); /* get */
-static TalkValue talk_fn1014(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _check_index */
-static TalkValue talk_fn1015(const TalkValue *env, TalkValue p0); /* _alloc */
-static TalkL10 talk_fn1016(const TalkValue *env, TalkValue p0); /* parse_type_root */
-static TalkL10 talk_fn1017(const TalkValue *env, TalkValue p0); /* parse_pattern_root */
-static TalkL10 talk_fn1018(const TalkValue *env, TalkValue p0, TalkValue p1); /* parse_items */
-static TalkL10 talk_fn1019(const TalkValue *env, TalkValue p0); /* next_root */
-static TalkValue talk_fn1020(const TalkValue *env, TalkValue p0); /* item_is_import */
-static TalkValue talk_fn1021(const TalkValue *env, TalkL23 p0); /* decl_is_import */
-static TalkValue talk_fn1022(const TalkValue *env, TalkL7 p0); /* is_decl_keyword */
-static TalkL1 talk_fn1023(const TalkValue *env, TalkL1 p0, TalkValue p1); /* render_dump */
-static TalkL28 talk_fn1024(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_item */
-static TalkL78 talk_fn1025(const TalkValue *env, TalkL3 p0); /* iter */
-static TalkL79 talk_fn1026(const TalkValue *env, TalkL78 p0); /* next */
-static TalkL28 talk_fn1027(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* append_snippet */
-static TalkL78 talk_fn1028(const TalkValue *env, TalkL3 p0); /* iter */
-static TalkL79 talk_fn1029(const TalkValue *env, TalkL78 p0); /* next */
-static TalkL9 talk_fn1030(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _index_iterable_get */
-static TalkValue talk_fn1031(const TalkValue *env, TalkL9 p0); /* shared_drop */
-static TalkL9 talk_fn1032(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _index_iterable_get */
-static TalkL28 talk_fn1033(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL23 p2, TalkValue p3); /* render_decl */
-static TalkL28 talk_fn1034(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL26 p2, TalkValue p3); /* render_stmt */
-static TalkL28 talk_fn1035(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL16 p2, TalkValue p3); /* render_expr */
-static TalkL28 talk_fn1036(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_pattern */
-static TalkL28 talk_fn1037(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL13 p2, TalkValue p3); /* render_type */
-static TalkL1 talk_fn1038(const TalkValue *env, TalkValue p0); /* type_label */
-static TalkL28 talk_fn1039(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL1 p2, TalkValue p3, TalkValue p4, TalkValue p5); /* node_line */
-static TalkL28 talk_fn1040(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL3 p2, TalkValue p3); /* render_macro_tokens */
-static TalkL28 talk_fn1041(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_generic_decl */
-static TalkL28 talk_fn1042(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_where_clause */
-static TalkL28 talk_fn1043(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL3 p2, TalkValue p3); /* render_generic_args */
-static TalkL28 talk_fn1044(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_generic_arg */
-static TalkL28 talk_fn1045(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL21 p2, TalkValue p3); /* render_static_expr */
-static TalkL78 talk_fn1046(const TalkValue *env, TalkL3 p0); /* iter */
-static TalkL79 talk_fn1047(const TalkValue *env, TalkL78 p0); /* next */
-static TalkL9 talk_fn1048(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _index_iterable_get */
-static TalkL28 talk_fn1049(const TalkValue *env, TalkL3 p0, TalkValue p1); /* indent */
-static TalkL28 talk_fn1050(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* pattern_line */
-static TalkL1 talk_fn1051(const TalkValue *env, TalkValue p0); /* pattern_label */
-static TalkL1 talk_fn1052(const TalkValue *env, TalkValue p0); /* expr_label */
-static TalkL28 talk_fn1053(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_call_arg */
-static TalkL28 talk_fn1054(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_block */
-static TalkL28 talk_fn1055(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL57 p2, TalkValue p3); /* render_match_arm */
-static TalkL28 talk_fn1056(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_func */
-static TalkL28 talk_fn1057(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_record_field */
-static TalkL28 talk_fn1058(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* func_line */
-static TalkL28 talk_fn1059(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_parameter */
-static TalkL1 talk_fn1060(const TalkValue *env, TalkValue p0); /* stmt_label */
-static TalkL1 talk_fn1061(const TalkValue *env, TalkValue p0); /* decl_label */
-static TalkL28 talk_fn1062(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_func_signature */
-static TalkL28 talk_fn1063(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL9 p2, TalkValue p3); /* render_optional_where */
-static TalkL28 talk_fn1064(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_body */
-static TalkL28 talk_fn1065(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_type_application */
-static TalkValue talk_fn1066(const TalkValue *env, TalkL1 p0); /* parse_expr_source */
-static TalkValue talk_fn1067(const TalkValue *env, TalkValue p0); /* lenient_outcome */
-static TalkValue talk_fn1068(const TalkValue *env, TalkL3 p0); /* capture_token_trees */
-static TalkL1 talk_fn1069(const TalkValue *env, TalkL129 p0); /* token_tree_error_line */
-static TalkL28 talk_fn1070(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL3 p2, TalkValue p3); /* render_trees */
-static TalkValue talk_fn1071(const TalkValue *env, TalkL3 p0); /* shared_drop */
-static TalkValue talk_fn1072(const TalkValue *env, TalkL3 p0); /* deinit */
-static TalkValue talk_fn1073(const TalkValue *env, TalkL133 p0); /* shared_drop */
-static TalkValue talk_fn1074(const TalkValue *env, TalkL3 p0, TalkValue p1); /* get */
-static TalkL28 talk_fn1075(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_leaf */
-static TalkL1 talk_fn1076(const TalkValue *env, TalkL132 p0); /* delimiter_text */
-static TalkL1 talk_fn1077(const TalkValue *env, TalkValue p0, TalkValue p1); /* span_text */
-static TalkL1 talk_fn1078(const TalkValue *env, TalkL7 p0); /* kind_name */
-static TalkValue talk_fn1079(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _check_index */
-static TalkValue talk_fn1080(const TalkValue *env, TalkL7 p0); /* opens */
-static TalkL28 talk_fn1081(const TalkValue *env, TalkL3 p0, TalkValue p1); /* push */
-static TalkL3 talk_fn1082(const TalkValue *env); /* empty_trees */
-static TalkValue talk_fn1083(const TalkValue *env, TalkL7 p0); /* closes */
-static TalkValue talk_fn1084(const TalkValue *env, TalkL3 p0); /* pop */
-static TalkValue talk_fn1085(const TalkValue *env, TalkL132 p0, TalkL132 p1); /* same_delimiter */
-static TalkValue talk_fn1086(const TalkValue *env, TalkL3 p0); /* shared_retain */
-static TalkValue talk_fn1087(const TalkValue *env, TalkL2 p0); /* shared_retain */
-static TalkL28 talk_fn1088(const TalkValue *env, TalkL3 p0, TalkL133 p1); /* push */
-static TalkValue talk_fn1089(const TalkValue *env, TalkL9 p0); /* shared_drop */
-static TalkValue talk_fn1090(const TalkValue *env, TalkL3 p0); /* shared_drop */
-static TalkValue talk_fn1091(const TalkValue *env, TalkL3 p0); /* deinit */
-static TalkL2 talk_fn1092(const TalkValue *env, TalkL3 p0, TalkValue p1); /* allocate_with_capacity */
-static TalkL28 talk_fn1093(const TalkValue *env, TalkL3 p0); /* uniqued_storage */
-static TalkL28 talk_fn1094(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkL133 p2); /* _init_slot */
-static TalkL2 talk_fn1095(const TalkValue *env, TalkValue p0); /* _storage */
-static TalkValue talk_fn1096(const TalkValue *env, TalkL133 p0); /* _retain */
-static TalkValue talk_fn1097(const TalkValue *env, TalkL133 p0); /* shared_retain */
-static TalkValue talk_fn1098(const TalkValue *env, TalkValue p0); /* shared_retain */
-static TalkValue talk_fn1099(const TalkValue *env, TalkValue p0); /* _alloc */
-static TalkL28 talk_fn1100(const TalkValue *env, TalkL3 p0); /* uniqued_storage */
-static TalkL2 talk_fn1101(const TalkValue *env, TalkL3 p0, TalkValue p1); /* allocate_with_capacity */
-static TalkL2 talk_fn1102(const TalkValue *env, TalkValue p0); /* _storage */
-static TalkValue talk_fn1103(const TalkValue *env, TalkL3 p0, TalkValue p1); /* get */
-static TalkValue talk_fn1104(const TalkValue *env, TalkValue p0); /* _retain */
-static TalkValue talk_fn1105(const TalkValue *env, TalkValue p0); /* shared_retain */
-static TalkValue talk_fn1106(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _check_index */
-static TalkValue talk_fn1107(const TalkValue *env, TalkValue p0); /* _alloc */
-static TalkL28 talk_fn1108(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkValue p2); /* _init_slot */
-static TalkValue talk_fn1109(const TalkValue *env, TalkL137 p0); /* _io_host */
-static TalkValue talk_fn1110(const TalkValue *env, TalkValue p0); /* handler_clause */
-static TalkValue talk_fn1111(const TalkValue *env, TalkValue p0, TalkL1 p1); /* write_string */
+static TalkValue talk_fn997(const TalkValue *env, TalkL0 p0, TalkValue p1, TalkValue p2); /* _utf8_decode */
+static TalkValue talk_fn998(const TalkValue *env, TalkValue p0); /* scalar_is_alphanumeric */
+static TalkL1 talk_fn999(const TalkValue *env, TalkValue p0); /* to_hex */
+static TalkValue talk_fn1000(const TalkValue *env, TalkValue p0); /* scalar_is_alphabetic */
+static TalkValue talk_fn1001(const TalkValue *env, TalkValue p0); /* scalar_is_numeric */
+static TalkValue talk_fn1002(const TalkValue *env, TalkValue p0); /* _character_class */
+static TalkL1 talk_fn1003(const TalkValue *env); /* _character_class_table */
+static TalkValue talk_fn1004(const TalkValue *env, TalkL0 p0, TalkValue p1); /* _entry_value */
+static TalkValue talk_fn1005(const TalkValue *env, TalkValue p0); /* is_space */
+static TalkValue talk_fn1006(const TalkValue *env, TalkValue p0); /* is_hex */
+static TalkValue talk_fn1007(const TalkValue *env, TalkValue p0); /* hex_value */
+static TalkL2 talk_fn1008(const TalkValue *env, TalkL3 p0, TalkValue p1); /* allocate_with_capacity */
+static TalkL28 talk_fn1009(const TalkValue *env, TalkL3 p0); /* uniqued_storage */
+static TalkL28 talk_fn1010(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkL72 p2); /* _init_slot */
+static TalkL2 talk_fn1011(const TalkValue *env, TalkValue p0); /* _storage */
+static TalkValue talk_fn1012(const TalkValue *env, TalkL3 p0, TalkValue p1); /* get */
+static TalkValue talk_fn1013(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _check_index */
+static TalkValue talk_fn1014(const TalkValue *env, TalkValue p0); /* _alloc */
+static TalkL10 talk_fn1015(const TalkValue *env, TalkValue p0); /* parse_type_root */
+static TalkL10 talk_fn1016(const TalkValue *env, TalkValue p0); /* parse_pattern_root */
+static TalkL10 talk_fn1017(const TalkValue *env, TalkValue p0, TalkValue p1); /* parse_items */
+static TalkL10 talk_fn1018(const TalkValue *env, TalkValue p0); /* next_root */
+static TalkValue talk_fn1019(const TalkValue *env, TalkValue p0); /* item_is_import */
+static TalkValue talk_fn1020(const TalkValue *env, TalkL23 p0); /* decl_is_import */
+static TalkValue talk_fn1021(const TalkValue *env, TalkL7 p0); /* is_decl_keyword */
+static TalkL1 talk_fn1022(const TalkValue *env, TalkL1 p0, TalkValue p1); /* render_dump */
+static TalkL28 talk_fn1023(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_item */
+static TalkL78 talk_fn1024(const TalkValue *env, TalkL3 p0); /* iter */
+static TalkL79 talk_fn1025(const TalkValue *env, TalkL78 p0); /* next */
+static TalkL28 talk_fn1026(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* append_snippet */
+static TalkL78 talk_fn1027(const TalkValue *env, TalkL3 p0); /* iter */
+static TalkL79 talk_fn1028(const TalkValue *env, TalkL78 p0); /* next */
+static TalkL9 talk_fn1029(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _index_iterable_get */
+static TalkValue talk_fn1030(const TalkValue *env, TalkL9 p0); /* shared_drop */
+static TalkL9 talk_fn1031(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _index_iterable_get */
+static TalkL28 talk_fn1032(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL23 p2, TalkValue p3); /* render_decl */
+static TalkL28 talk_fn1033(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL26 p2, TalkValue p3); /* render_stmt */
+static TalkL28 talk_fn1034(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL16 p2, TalkValue p3); /* render_expr */
+static TalkL28 talk_fn1035(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_pattern */
+static TalkL28 talk_fn1036(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL13 p2, TalkValue p3); /* render_type */
+static TalkL1 talk_fn1037(const TalkValue *env, TalkValue p0); /* type_label */
+static TalkL28 talk_fn1038(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL1 p2, TalkValue p3, TalkValue p4, TalkValue p5); /* node_line */
+static TalkL28 talk_fn1039(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL3 p2, TalkValue p3); /* render_macro_tokens */
+static TalkL28 talk_fn1040(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_generic_decl */
+static TalkL28 talk_fn1041(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_where_clause */
+static TalkL28 talk_fn1042(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL3 p2, TalkValue p3); /* render_generic_args */
+static TalkL28 talk_fn1043(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_generic_arg */
+static TalkL28 talk_fn1044(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL21 p2, TalkValue p3); /* render_static_expr */
+static TalkL78 talk_fn1045(const TalkValue *env, TalkL3 p0); /* iter */
+static TalkL79 talk_fn1046(const TalkValue *env, TalkL78 p0); /* next */
+static TalkL9 talk_fn1047(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _index_iterable_get */
+static TalkL28 talk_fn1048(const TalkValue *env, TalkL3 p0, TalkValue p1); /* indent */
+static TalkL28 talk_fn1049(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* pattern_line */
+static TalkL1 talk_fn1050(const TalkValue *env, TalkValue p0); /* pattern_label */
+static TalkL1 talk_fn1051(const TalkValue *env, TalkValue p0); /* expr_label */
+static TalkL28 talk_fn1052(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_call_arg */
+static TalkL28 talk_fn1053(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_block */
+static TalkL28 talk_fn1054(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL57 p2, TalkValue p3); /* render_match_arm */
+static TalkL28 talk_fn1055(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_func */
+static TalkL28 talk_fn1056(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_record_field */
+static TalkL28 talk_fn1057(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* func_line */
+static TalkL28 talk_fn1058(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_parameter */
+static TalkL1 talk_fn1059(const TalkValue *env, TalkValue p0); /* stmt_label */
+static TalkL1 talk_fn1060(const TalkValue *env, TalkValue p0); /* decl_label */
+static TalkL28 talk_fn1061(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_func_signature */
+static TalkL28 talk_fn1062(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL9 p2, TalkValue p3); /* render_optional_where */
+static TalkL28 talk_fn1063(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_body */
+static TalkL28 talk_fn1064(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_type_application */
+static TalkValue talk_fn1065(const TalkValue *env, TalkL1 p0); /* parse_expr_source */
+static TalkValue talk_fn1066(const TalkValue *env, TalkValue p0); /* lenient_outcome */
+static TalkValue talk_fn1067(const TalkValue *env, TalkL3 p0); /* capture_token_trees */
+static TalkL1 talk_fn1068(const TalkValue *env, TalkL129 p0); /* token_tree_error_line */
+static TalkL28 talk_fn1069(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL3 p2, TalkValue p3); /* render_trees */
+static TalkValue talk_fn1070(const TalkValue *env, TalkL3 p0); /* shared_drop */
+static TalkValue talk_fn1071(const TalkValue *env, TalkL3 p0); /* deinit */
+static TalkValue talk_fn1072(const TalkValue *env, TalkL133 p0); /* shared_drop */
+static TalkValue talk_fn1073(const TalkValue *env, TalkL3 p0, TalkValue p1); /* get */
+static TalkL28 talk_fn1074(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3); /* render_leaf */
+static TalkL1 talk_fn1075(const TalkValue *env, TalkL132 p0); /* delimiter_text */
+static TalkL1 talk_fn1076(const TalkValue *env, TalkValue p0, TalkValue p1); /* span_text */
+static TalkL1 talk_fn1077(const TalkValue *env, TalkL7 p0); /* kind_name */
+static TalkValue talk_fn1078(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _check_index */
+static TalkValue talk_fn1079(const TalkValue *env, TalkL7 p0); /* opens */
+static TalkL28 talk_fn1080(const TalkValue *env, TalkL3 p0, TalkValue p1); /* push */
+static TalkL3 talk_fn1081(const TalkValue *env); /* empty_trees */
+static TalkValue talk_fn1082(const TalkValue *env, TalkL7 p0); /* closes */
+static TalkValue talk_fn1083(const TalkValue *env, TalkL3 p0); /* pop */
+static TalkValue talk_fn1084(const TalkValue *env, TalkL132 p0, TalkL132 p1); /* same_delimiter */
+static TalkValue talk_fn1085(const TalkValue *env, TalkL3 p0); /* shared_retain */
+static TalkValue talk_fn1086(const TalkValue *env, TalkL2 p0); /* shared_retain */
+static TalkL28 talk_fn1087(const TalkValue *env, TalkL3 p0, TalkL133 p1); /* push */
+static TalkValue talk_fn1088(const TalkValue *env, TalkL9 p0); /* shared_drop */
+static TalkValue talk_fn1089(const TalkValue *env, TalkL3 p0); /* shared_drop */
+static TalkValue talk_fn1090(const TalkValue *env, TalkL3 p0); /* deinit */
+static TalkL2 talk_fn1091(const TalkValue *env, TalkL3 p0, TalkValue p1); /* allocate_with_capacity */
+static TalkL28 talk_fn1092(const TalkValue *env, TalkL3 p0); /* uniqued_storage */
+static TalkL28 talk_fn1093(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkL133 p2); /* _init_slot */
+static TalkL2 talk_fn1094(const TalkValue *env, TalkValue p0); /* _storage */
+static TalkValue talk_fn1095(const TalkValue *env, TalkL133 p0); /* _retain */
+static TalkValue talk_fn1096(const TalkValue *env, TalkL133 p0); /* shared_retain */
+static TalkValue talk_fn1097(const TalkValue *env, TalkValue p0); /* shared_retain */
+static TalkValue talk_fn1098(const TalkValue *env, TalkValue p0); /* _alloc */
+static TalkL28 talk_fn1099(const TalkValue *env, TalkL3 p0); /* uniqued_storage */
+static TalkL2 talk_fn1100(const TalkValue *env, TalkL3 p0, TalkValue p1); /* allocate_with_capacity */
+static TalkL2 talk_fn1101(const TalkValue *env, TalkValue p0); /* _storage */
+static TalkValue talk_fn1102(const TalkValue *env, TalkL3 p0, TalkValue p1); /* get */
+static TalkValue talk_fn1103(const TalkValue *env, TalkValue p0); /* _retain */
+static TalkValue talk_fn1104(const TalkValue *env, TalkValue p0); /* shared_retain */
+static TalkValue talk_fn1105(const TalkValue *env, TalkL3 p0, TalkValue p1); /* _check_index */
+static TalkValue talk_fn1106(const TalkValue *env, TalkValue p0); /* _alloc */
+static TalkL28 talk_fn1107(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkValue p2); /* _init_slot */
+static TalkValue talk_fn1108(const TalkValue *env, TalkL137 p0); /* _io_host */
+static TalkValue talk_fn1109(const TalkValue *env, TalkValue p0); /* handler_clause */
+static TalkValue talk_fn1110(const TalkValue *env, TalkValue p0, TalkL1 p1); /* write_string */
 
 /* globals_init */
 static TalkValue talk_fn0(const TalkValue *env) {
@@ -8364,7 +8363,7 @@ b4:
         tmp.m0 = ((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[8]))->m0;
         l[12] = talk_box_l7(tmp);
     }
-    x0 = talk_fn1078(NULL, talk_unbox_l7(l[12]));
+    x0 = talk_fn1077(NULL, talk_unbox_l7(l[12]));
     if (talk_unwinding) {
         goto b17;
     }
@@ -8421,7 +8420,7 @@ b4:
     x5.m2 = x6.m3;
     l[12] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[8]))->m1);
     l[13] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[8]))->m2);
-    x6 = talk_fn1027(NULL, x5, x2, l[12], l[13]);
+    x6 = talk_fn1026(NULL, x5, x2, l[12], l[13]);
     if (talk_unwinding) {
         goto b5;
     }
@@ -8609,7 +8608,7 @@ static TalkValue talk_fn3(const TalkValue *env, TalkValue p0) {
 b0:
     l[1] = talk_cont(frame_depth, frame_id);
     {
-        TalkValue built = talk_closure(1110, 1);
+        TalkValue built = talk_closure(1109, 1);
         built.v.agg->fields[0] = l[1];
         l[2] = built;
     }
@@ -8776,7 +8775,7 @@ b5:
         tmp.m2 = l[1].v.agg->fields[2].v.i;
         l[6] = talk_box_l3(tmp);
     }
-    l[5] = talk_fn1068(NULL, talk_unbox_l3(l[6]));
+    l[5] = talk_fn1067(NULL, talk_unbox_l3(l[6]));
     if (talk_unwinding) {
         goto b14;
     }
@@ -8804,7 +8803,7 @@ b7:
     x3.m0 = x4.m1;
     x3.m1 = x4.m2;
     x3.m2 = x4.m3;
-    x7 = talk_fn1069(NULL, talk_unbox_l129(l[8]));
+    x7 = talk_fn1068(NULL, talk_unbox_l129(l[8]));
     if (talk_unwinding) {
         goto b13;
     }
@@ -8842,7 +8841,7 @@ b7:
         tmp.m2 = l[5].v.agg->fields[2].v.i;
         l[6] = talk_box_l3(tmp);
     }
-    l[8] = talk_fn1071(NULL, talk_unbox_l3(l[6]));
+    l[8] = talk_fn1070(NULL, talk_unbox_l3(l[6]));
     if (talk_unwinding) {
         return (TalkL1){0};
     }
@@ -8875,7 +8874,7 @@ b11:
         tmp.m2 = l[5].v.agg->fields[2].v.i;
         l[8] = talk_box_l3(tmp);
     }
-    x4 = talk_fn1070(NULL, x3, x10, talk_unbox_l3(l[8]), talk_int(INT64_C(1)));
+    x4 = talk_fn1069(NULL, x3, x10, talk_unbox_l3(l[8]), talk_int(INT64_C(1)));
     if (talk_unwinding) {
         goto b12;
     }
@@ -8895,7 +8894,7 @@ b11:
         tmp.m2 = l[5].v.agg->fields[2].v.i;
         l[8] = talk_box_l3(tmp);
     }
-    l[6] = talk_fn1071(NULL, talk_unbox_l3(l[8]));
+    l[6] = talk_fn1070(NULL, talk_unbox_l3(l[8]));
     if (talk_unwinding) {
         return (TalkL1){0};
     }
@@ -8920,7 +8919,7 @@ b13:
         tmp.m2 = l[5].v.agg->fields[2].v.i;
         l[8] = talk_box_l3(tmp);
     }
-    l[5] = talk_fn1071(NULL, talk_unbox_l3(l[8]));
+    l[5] = talk_fn1070(NULL, talk_unbox_l3(l[8]));
     if (talk_unwinding) {
         return (TalkL1){0};
     }
@@ -9001,7 +9000,7 @@ b0:
     if (talk_unwinding) {
         return (TalkL1){0};
     }
-    x2 = talk_fn1023(NULL, x0, l[1]);
+    x2 = talk_fn1022(NULL, x0, l[1]);
     if (talk_unwinding) {
         goto b1;
     }
@@ -9096,7 +9095,7 @@ b0:
     if (talk_unwinding) {
         goto b3;
     }
-    x5 = talk_fn1018(NULL, l[4], talk_bool(1));
+    x5 = talk_fn1017(NULL, l[4], talk_bool(1));
     if (talk_unwinding) {
         goto b2;
     }
@@ -9186,11 +9185,11 @@ b0:
     if (talk_unwinding) {
         return (TalkL1){0};
     }
-    l[2] = talk_fn1067(NULL, l[1]);
+    l[2] = talk_fn1066(NULL, l[1]);
     if (talk_unwinding) {
         return (TalkL1){0};
     }
-    x3 = talk_fn1023(NULL, x0, l[2]);
+    x3 = talk_fn1022(NULL, x0, l[2]);
     if (talk_unwinding) {
         goto b1;
     }
@@ -9269,7 +9268,7 @@ b0:
     if (talk_unwinding) {
         return (TalkL1){0};
     }
-    x2 = talk_fn1023(NULL, x0, l[1]);
+    x2 = talk_fn1022(NULL, x0, l[1]);
     if (talk_unwinding) {
         goto b1;
     }
@@ -9344,11 +9343,11 @@ static TalkL1 talk_fn20(const TalkValue *env, TalkL1 p0) {
     x0 = p0;
     goto b0;
 b0:
-    l[1] = talk_fn1066(NULL, x0);
+    l[1] = talk_fn1065(NULL, x0);
     if (talk_unwinding) {
         return (TalkL1){0};
     }
-    x2 = talk_fn1023(NULL, x0, l[1]);
+    x2 = talk_fn1022(NULL, x0, l[1]);
     if (talk_unwinding) {
         goto b1;
     }
@@ -9427,7 +9426,7 @@ b0:
     if (talk_unwinding) {
         return (TalkL1){0};
     }
-    x2 = talk_fn1023(NULL, x0, l[1]);
+    x2 = talk_fn1022(NULL, x0, l[1]);
     if (talk_unwinding) {
         goto b1;
     }
@@ -9506,7 +9505,7 @@ b0:
     if (talk_unwinding) {
         return (TalkL1){0};
     }
-    x2 = talk_fn1023(NULL, x0, l[1]);
+    x2 = talk_fn1022(NULL, x0, l[1]);
     if (talk_unwinding) {
         goto b1;
     }
@@ -9662,7 +9661,7 @@ b7:
     l[11] = talk_bool(1);
     goto b12;
 b8:
-    l[12] = talk_fn1013(NULL, talk_unbox_l3(l[9]), l[5]);
+    l[12] = talk_fn1012(NULL, talk_unbox_l3(l[9]), l[5]);
     if (talk_unwinding) {
         goto b29;
     }
@@ -9689,24 +9688,24 @@ b14:
     if (l[11].v.i) goto b15; else goto b16;
 b15:
     x15.m0 = 95;
-    l[11] = talk_fn1013(NULL, talk_unbox_l3(l[9]), l[5]);
+    l[11] = talk_fn1012(NULL, talk_unbox_l3(l[9]), l[5]);
     if (talk_unwinding) {
         goto b29;
     }
     l[12] = talk_int(((const TalkL72 *)TALK_NATIVE_PAYLOAD(l[11]))->m0);
-    l[11] = talk_fn1013(NULL, talk_unbox_l3(l[9]), l[5]);
+    l[11] = talk_fn1012(NULL, talk_unbox_l3(l[9]), l[5]);
     if (talk_unwinding) {
         goto b29;
     }
     l[14] = talk_int(((const TalkL72 *)TALK_NATIVE_PAYLOAD(l[11]))->m1);
     x16.m0 = l[12].v.i;
     x16.m1 = l[14].v.i;
-    l[14] = talk_fn1013(NULL, talk_unbox_l3(l[9]), l[5]);
+    l[14] = talk_fn1012(NULL, talk_unbox_l3(l[9]), l[5]);
     if (talk_unwinding) {
         goto b29;
     }
     l[12] = talk_int(((const TalkL72 *)TALK_NATIVE_PAYLOAD(l[14]))->m0);
-    l[14] = talk_fn1013(NULL, talk_unbox_l3(l[9]), l[5]);
+    l[14] = talk_fn1012(NULL, talk_unbox_l3(l[9]), l[5]);
     if (talk_unwinding) {
         goto b29;
     }
@@ -10037,7 +10036,7 @@ b0:
     if (talk_unwinding) {
         goto b3;
     }
-    x5 = talk_fn1018(NULL, l[4], talk_bool(0));
+    x5 = talk_fn1017(NULL, l[4], talk_bool(0));
     if (talk_unwinding) {
         goto b2;
     }
@@ -10143,7 +10142,7 @@ b0:
     if (talk_unwinding) {
         goto b3;
     }
-    x5 = talk_fn1017(NULL, l[4]);
+    x5 = talk_fn1016(NULL, l[4]);
     if (talk_unwinding) {
         goto b2;
     }
@@ -10249,7 +10248,7 @@ b0:
     if (talk_unwinding) {
         goto b3;
     }
-    x5 = talk_fn1016(NULL, l[4]);
+    x5 = talk_fn1015(NULL, l[4]);
     if (talk_unwinding) {
         goto b2;
     }
@@ -10642,7 +10641,7 @@ b9:
     goto b10;
 b10:
     x14.m0 = 20;
-    l[12] = talk_fn981(NULL, x14, l[11], l[8]);
+    l[12] = talk_fn980(NULL, x14, l[11], l[8]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -10792,7 +10791,7 @@ b39:
 b40:
     x21.m0 = l[17].v.i;
     x21.m1 = l[8].v.i;
-    x15 = talk_fn982(NULL, x4, x21);
+    x15 = talk_fn981(NULL, x4, x21);
     if (talk_unwinding) {
         goto b761;
     }
@@ -10803,7 +10802,7 @@ b40:
 b41:
     goto b42;
 b42:
-    l[19] = talk_fn983(NULL, l[10]);
+    l[19] = talk_fn982(NULL, l[10]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -10820,7 +10819,7 @@ b45:
         goto b761;
     }
     l[17] = talk_byte_to_int(l[16]);
-    l[16] = talk_fn983(NULL, l[17]);
+    l[16] = talk_fn982(NULL, l[17]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -10895,7 +10894,7 @@ b57:
         goto b761;
     }
     l[17] = talk_byte_to_int(l[16]);
-    l[16] = talk_fn983(NULL, l[17]);
+    l[16] = talk_fn982(NULL, l[17]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -10924,7 +10923,7 @@ b62:
         goto b761;
     }
     l[24] = talk_byte_to_int(l[17]);
-    l[17] = talk_fn983(NULL, l[24]);
+    l[17] = talk_fn982(NULL, l[24]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -10969,7 +10968,7 @@ b69:
     goto b70;
 b70:
     x14.m0 = 2;
-    l[24] = talk_fn981(NULL, x14, l[19], l[8]);
+    l[24] = talk_fn980(NULL, x14, l[19], l[8]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -10983,7 +10982,7 @@ b70:
     goto b72;
 b71:
     x14.m0 = 1;
-    l[24] = talk_fn981(NULL, x14, l[19], l[8]);
+    l[24] = talk_fn980(NULL, x14, l[19], l[8]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -11000,14 +10999,14 @@ b72:
 b73:
     goto b74;
 b74:
-    l[24] = talk_fn984(NULL, l[10]);
+    l[24] = talk_fn983(NULL, l[10]);
     if (talk_unwinding) {
         goto b761;
     }
     if (l[24].v.i) goto b75; else goto b294;
 b75:
     l[24] = l[8];
-    l[8] = talk_fn985(NULL, x6, l[7], l[8]);
+    l[8] = talk_fn984(NULL, x6, l[7], l[8]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -12251,7 +12250,7 @@ b292:
         goto b293;
     }
 b293:
-    l[29] = talk_fn981(NULL, x14, l[24], l[8]);
+    l[29] = talk_fn980(NULL, x14, l[24], l[8]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -12325,11 +12324,11 @@ b305:
         tmp.m2 = 19;
         l[17] = talk_box_l1(tmp);
     }
-    l[32] = talk_fn986(NULL, x6, l[7], l[24], talk_bool(0), talk_unbox_l1(l[17]));
+    l[32] = talk_fn985(NULL, x6, l[7], l[24], talk_bool(0), talk_unbox_l1(l[17]));
     if (talk_unwinding) {
         goto b761;
     }
-    l[24] = talk_fn997(NULL, l[32]);
+    l[24] = talk_fn996(NULL, l[32]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -12375,13 +12374,13 @@ b308:
 b309:
     goto b310;
 b310:
-    l[33] = talk_fn987(NULL, l[32]);
+    l[33] = talk_fn986(NULL, l[32]);
     if (talk_unwinding) {
         goto b311;
     }
     goto b312;
 b311:
-    l[33] = talk_fn987(NULL, l[32]);
+    l[33] = talk_fn986(NULL, l[32]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -12401,7 +12400,7 @@ b314:
 b315:
     goto b316;
 b316:
-    l[33] = talk_fn987(NULL, l[32]);
+    l[33] = talk_fn986(NULL, l[32]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -12471,7 +12470,7 @@ b331:
     goto b332;
 b332:
     x35.m0 = 3;
-    l[30] = talk_fn981(NULL, x35, l[28], l[8]);
+    l[30] = talk_fn980(NULL, x35, l[28], l[8]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -12501,7 +12500,7 @@ b336:
         goto b761;
     }
     l[33] = talk_byte_to_int(l[30]);
-    l[30] = talk_fn988(NULL, l[33]);
+    l[30] = talk_fn987(NULL, l[33]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -12520,7 +12519,7 @@ b338:
     if (l[30].v.i) goto b339; else goto b346;
 b339:
     l[33] = talk_add(l[8], talk_int(INT64_C(1)));
-    l[31] = talk_fn985(NULL, x6, l[7], l[33]);
+    l[31] = talk_fn984(NULL, x6, l[7], l[33]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -12551,7 +12550,7 @@ b342:
 b343:
     x35.m0 = 92;
     l[32] = talk_add(l[8], talk_int(INT64_C(1)));
-    l[33] = talk_fn989(NULL, x35, l[8], l[31], l[32], l[31]);
+    l[33] = talk_fn988(NULL, x35, l[8], l[31], l[32], l[31]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -12671,7 +12670,7 @@ b369:
 b370:
     x35.m0 = 93;
     l[33] = talk_add(l[8], talk_int(INT64_C(1)));
-    l[38] = talk_fn981(NULL, x35, l[8], l[33]);
+    l[38] = talk_fn980(NULL, x35, l[8], l[33]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -12688,11 +12687,11 @@ b371:
     goto b372;
 b372:
     l[38] = talk_add(l[8], talk_int(INT64_C(1)));
-    l[33] = talk_fn990(NULL, x6, l[7], l[38]);
+    l[33] = talk_fn989(NULL, x6, l[7], l[38]);
     if (talk_unwinding) {
         goto b761;
     }
-    l[38] = talk_fn996(NULL, l[33]);
+    l[38] = talk_fn995(NULL, l[33]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -12738,7 +12737,7 @@ b375:
 b376:
     goto b377;
 b377:
-    l[31] = talk_fn991(NULL, l[33]);
+    l[31] = talk_fn990(NULL, l[33]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -12746,13 +12745,13 @@ b377:
 b378:
     goto b379;
 b379:
-    l[31] = talk_fn991(NULL, l[33]);
+    l[31] = talk_fn990(NULL, l[33]);
     if (talk_unwinding) {
         goto b380;
     }
     goto b381;
 b380:
-    l[31] = talk_fn991(NULL, l[33]);
+    l[31] = talk_fn990(NULL, l[33]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -12768,7 +12767,7 @@ b382:
     goto b383;
 b383:
     x35.m0 = 4;
-    l[37] = talk_fn981(NULL, x35, l[28], l[31]);
+    l[37] = talk_fn980(NULL, x35, l[28], l[31]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -12784,7 +12783,7 @@ b383:
 b384:
     goto b385;
 b385:
-    l[31] = talk_fn991(NULL, l[33]);
+    l[31] = talk_fn990(NULL, l[33]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -12792,7 +12791,7 @@ b385:
 b386:
     x35.m0 = 93;
     l[31] = talk_add(l[8], talk_int(INT64_C(1)));
-    l[37] = talk_fn981(NULL, x35, l[8], l[31]);
+    l[37] = talk_fn980(NULL, x35, l[8], l[31]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -12834,7 +12833,7 @@ b392:
         goto b761;
     }
     l[31] = talk_byte_to_int(l[28]);
-    l[28] = talk_fn983(NULL, l[31]);
+    l[28] = talk_fn982(NULL, l[31]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -12886,7 +12885,7 @@ b400:
         goto b761;
     }
     l[41] = talk_byte_to_int(l[40]);
-    l[40] = talk_fn983(NULL, l[41]);
+    l[40] = talk_fn982(NULL, l[41]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -12931,7 +12930,7 @@ b407:
     goto b408;
 b408:
     x35.m0 = 91;
-    l[41] = talk_fn989(NULL, x35, l[8], l[28], l[31], l[28]);
+    l[41] = talk_fn988(NULL, x35, l[8], l[28], l[31], l[28]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -13163,7 +13162,7 @@ b446:
 b447:
     x35.m0 = 0;
     l[44] = talk_add(l[31], talk_int(INT64_C(1)));
-    l[46] = talk_fn989(NULL, x35, l[8], l[44], l[41], l[31]);
+    l[46] = talk_fn988(NULL, x35, l[8], l[44], l[41], l[31]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -13205,7 +13204,7 @@ b453:
         goto b761;
     }
     l[46] = talk_byte_to_int(l[41]);
-    l[41] = talk_fn988(NULL, l[46]);
+    l[41] = talk_fn987(NULL, l[46]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -13224,13 +13223,13 @@ b455:
     if (l[41].v.i) goto b456; else goto b457;
 b456:
     l[46] = talk_add(l[8], talk_int(INT64_C(1)));
-    l[45] = talk_fn985(NULL, x6, l[7], l[46]);
+    l[45] = talk_fn984(NULL, x6, l[7], l[46]);
     if (talk_unwinding) {
         goto b761;
     }
     x35.m0 = 87;
     l[46] = talk_add(l[8], talk_int(INT64_C(1)));
-    l[44] = talk_fn989(NULL, x35, l[8], l[45], l[46], l[45]);
+    l[44] = talk_fn988(NULL, x35, l[8], l[45], l[46], l[45]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -13272,7 +13271,7 @@ b462:
         goto b761;
     }
     l[44] = talk_byte_to_int(l[46]);
-    l[46] = talk_fn988(NULL, l[44]);
+    l[46] = talk_fn987(NULL, l[44]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -13291,13 +13290,13 @@ b464:
     if (l[46].v.i) goto b465; else goto b466;
 b465:
     l[44] = talk_add(l[8], talk_int(INT64_C(1)));
-    l[47] = talk_fn985(NULL, x6, l[7], l[44]);
+    l[47] = talk_fn984(NULL, x6, l[7], l[44]);
     if (talk_unwinding) {
         goto b761;
     }
     x35.m0 = 89;
     l[44] = talk_add(l[8], talk_int(INT64_C(1)));
-    l[48] = talk_fn989(NULL, x35, l[8], l[47], l[44], l[47]);
+    l[48] = talk_fn988(NULL, x35, l[8], l[47], l[44], l[47]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -13319,7 +13318,7 @@ b467:
 b468:
     x35.m0 = 88;
     l[47] = talk_add(l[8], talk_int(INT64_C(1)));
-    l[48] = talk_fn981(NULL, x35, l[8], l[47]);
+    l[48] = talk_fn980(NULL, x35, l[8], l[47]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -13341,7 +13340,7 @@ b470:
 b471:
     x35.m0 = 90;
     l[48] = talk_add(l[8], talk_int(INT64_C(1)));
-    l[47] = talk_fn981(NULL, x35, l[8], l[48]);
+    l[47] = talk_fn980(NULL, x35, l[8], l[48]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -13415,7 +13414,7 @@ b481:
 b482:
     x35.m0 = 12;
     l[48] = talk_add(l[8], talk_int(INT64_C(3)));
-    l[47] = talk_fn981(NULL, x35, l[8], l[48]);
+    l[47] = talk_fn980(NULL, x35, l[8], l[48]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -13457,7 +13456,7 @@ b486:
 b487:
     x35.m0 = 13;
     l[48] = talk_add(l[8], talk_int(INT64_C(3)));
-    l[47] = talk_fn981(NULL, x35, l[8], l[48]);
+    l[47] = talk_fn980(NULL, x35, l[8], l[48]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -13473,7 +13472,7 @@ b487:
 b488:
     x35.m0 = 11;
     l[47] = talk_add(l[8], talk_int(INT64_C(2)));
-    l[48] = talk_fn981(NULL, x35, l[8], l[47]);
+    l[48] = talk_fn980(NULL, x35, l[8], l[47]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -13493,7 +13492,7 @@ b490:
 b491:
     x35.m0 = 10;
     l[48] = talk_add(l[8], talk_int(INT64_C(1)));
-    l[47] = talk_fn981(NULL, x35, l[8], l[48]);
+    l[47] = talk_fn980(NULL, x35, l[8], l[48]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -14108,14 +14107,14 @@ b598:
         goto b599;
     }
 b599:
-    l[52] = talk_fn992(NULL, x35);
+    l[52] = talk_fn991(NULL, x35);
     if (talk_unwinding) {
         goto b761;
     }
     if (l[52].v.i) goto b600; else goto b601;
 b600:
     l[52] = talk_add(l[8], talk_int(INT64_C(2)));
-    l[51] = talk_fn981(NULL, x35, l[8], l[52]);
+    l[51] = talk_fn980(NULL, x35, l[8], l[52]);
     if (talk_unwinding) {
         goto b761;
     }
@@ -14139,7 +14138,7 @@ b604:
     if (talk_unwinding) {
         goto b761;
     }
-    l[51] = talk_fn995(NULL, x26);
+    l[51] = talk_fn994(NULL, x26);
     if (talk_unwinding) {
         goto b761;
     }
@@ -14970,14 +14969,14 @@ b749:
         goto b750;
     }
 b750:
-    l[52] = talk_fn992(NULL, x55);
+    l[52] = talk_fn991(NULL, x55);
     if (talk_unwinding) {
         goto b760;
     }
     if (l[52].v.i) goto b751; else goto b753;
 b751:
     l[52] = talk_add(l[8], talk_int(INT64_C(1)));
-    l[48] = talk_fn981(NULL, x55, l[8], l[52]);
+    l[48] = talk_fn980(NULL, x55, l[8], l[52]);
     if (talk_unwinding) {
         goto b760;
     }
@@ -15010,7 +15009,7 @@ b755:
         goto b757;
     }
 b756:
-    x0 = talk_fn993(NULL, x6, l[7], l[8]);
+    x0 = talk_fn992(NULL, x6, l[7], l[8]);
     if (talk_unwinding) {
         goto b760;
     }
@@ -15055,7 +15054,7 @@ b757:
         goto b758;
     }
     l[5] = l[34];
-    l[54] = talk_fn994(NULL, l[10]);
+    l[54] = talk_fn993(NULL, l[10]);
     if (talk_unwinding) {
         goto b758;
     }
@@ -15206,7 +15205,7 @@ b1:
     goto b2;
 b2:
     l[3] = l[1].v.agg->fields[10];
-    x5 = talk_fn980(NULL, x0, l[3], talk_unbox_l1(l[4]));
+    x5 = talk_fn979(NULL, x0, l[3], talk_unbox_l1(l[4]));
     if (talk_unwinding) {
         goto b7;
     }
@@ -46154,7 +46153,7 @@ b11:
     goto b12;
 b12:
     l[6] = ((const TalkL23 *)TALK_NATIVE_PAYLOAD(l[7]))->m0;
-    x4 = talk_fn975(NULL, l[0], l[6], x1);
+    x4 = talk_fn974(NULL, l[0], l[6], x1);
     if (talk_unwinding) {
         goto b16;
     }
@@ -46948,7 +46947,7 @@ b0:
         return talk_unit();
     }
     l[5] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[4]))->m1);
-    l[4] = talk_fn964(NULL, l[0]);
+    l[4] = talk_fn963(NULL, l[0]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -47197,7 +47196,7 @@ b31:
         memcpy(built.v.agg->fields + 5, l[18].v.agg->fields, 4 * sizeof(TalkValue));
         l[24] = built;
     }
-    x25 = talk_fn965(NULL, x16, l[24]);
+    x25 = talk_fn964(NULL, x16, l[24]);
     if (talk_unwinding) {
         goto b38;
     }
@@ -47514,7 +47513,7 @@ b18:
     if (talk_unwinding) {
         goto b132;
     }
-    l[12] = talk_fn953(NULL, x14);
+    l[12] = talk_fn952(NULL, x14);
     if (talk_unwinding) {
         goto b24;
     }
@@ -47606,7 +47605,7 @@ b23:
         tmp.m4 = l[12].v.i;
         l[6] = talk_box_l51(tmp);
     }
-    x18 = talk_fn954(NULL, x10, l[6]);
+    x18 = talk_fn953(NULL, x10, l[6]);
     if (talk_unwinding) {
         goto b132;
     }
@@ -49558,7 +49557,7 @@ b33:
 b34:
     if (l[18].v.i) goto b35; else goto b40;
 b35:
-    x10 = talk_fn942(NULL, l[0]);
+    x10 = talk_fn596(NULL, l[0]);
     if (talk_unwinding) {
         goto b62;
     }
@@ -49775,7 +49774,7 @@ b54:
 b55:
     goto b56;
 b56:
-    x4 = talk_fn943(NULL, l[0], x2);
+    x4 = talk_fn942(NULL, l[0], x2);
     if (talk_unwinding) {
         goto b61;
     }
@@ -50157,7 +50156,7 @@ b6:
     l[0] = x12.m1;
     if (l[6].v.i) goto b7; else goto b11;
 b7:
-    x4 = talk_fn942(NULL, l[0]);
+    x4 = talk_fn596(NULL, l[0]);
     if (talk_unwinding) {
         goto b19;
     }
@@ -50256,7 +50255,7 @@ b14:
     goto b15;
 b15:
     x16.m0 = 8;
-    x3 = talk_fn943(NULL, l[0], x16);
+    x3 = talk_fn942(NULL, l[0], x16);
     if (talk_unwinding) {
         goto b18;
     }
@@ -67913,7 +67912,7 @@ static TalkL10 talk_fn586(const TalkValue *env, TalkValue p0) {
     memset(&x19, 0, sizeof x19);
     TalkL91 x24;
     memset(&x24, 0, sizeof x24);
-    TalkL28 x25;
+    TalkL3 x25;
     memset(&x25, 0, sizeof x25);
     talk_frame_enter();
     l[0] = p0;
@@ -68255,13 +68254,13 @@ b30:
     }
     l[21] = talk_fn52(NULL, l[0]);
     if (talk_unwinding) {
-        goto b64;
+        goto b53;
     }
     if (l[21].v.i) goto b31; else goto b32;
 b31:
     l[21] = talk_fn594(NULL);
     if (talk_unwinding) {
-        goto b64;
+        goto b53;
     }
     x5.m0 = l[21];
     x5.m1 = l[0];
@@ -68273,7 +68272,7 @@ b32:
 b33:
     x24 = talk_fn527(NULL, l[0]);
     if (talk_unwinding) {
-        goto b64;
+        goto b53;
     }
     x19.m0 = x24.m0;
     x19.m1 = x24.m1;
@@ -68281,13 +68280,13 @@ b33:
     l[0] = x24.m3;
     l[21] = talk_fn52(NULL, l[0]);
     if (talk_unwinding) {
-        goto b63;
+        goto b52;
     }
     if (l[21].v.i) goto b34; else goto b35;
 b34:
     l[21] = talk_fn594(NULL);
     if (talk_unwinding) {
-        goto b63;
+        goto b52;
     }
     x5.m0 = l[21];
     x5.m1 = l[0];
@@ -68309,40 +68308,34 @@ b36:
     x2.m0 = 78;
     x3 = talk_fn517(NULL, l[0], x2);
     if (talk_unwinding) {
-        goto b62;
+        goto b51;
     }
     l[21] = talk_bool(x3.m0);
     l[0] = x3.m1;
-    if (l[21].v.i) goto b37; else goto b52;
+    if (l[21].v.i) goto b37; else goto b41;
 b37:
-    goto b38;
-b38:
-    goto b39;
-b39:
-    x11 = talk_fn520(NULL, l[0]);
+    x24 = talk_fn596(NULL, l[0]);
     if (talk_unwinding) {
-        goto b62;
+        goto b51;
     }
-    x12.m0 = x11.m0;
-    x12.m1 = x11.m1;
-    x12.m2 = x11.m2;
-    l[0] = x11.m3;
-    x25 = talk_fn530(NULL, x18, x12);
+    x25.m0 = x24.m0;
+    x25.m1 = x24.m1;
+    x25.m2 = x24.m2;
+    l[0] = x24.m3;
+    l[16] = talk_fn96(NULL, x18);
     if (talk_unwinding) {
-        goto b62;
+        goto b51;
     }
-    x18.m0 = x25.m1;
-    x18.m1 = x25.m2;
-    x18.m2 = x25.m3;
+    x18 = x25;
     l[16] = talk_fn52(NULL, l[0]);
     if (talk_unwinding) {
-        goto b62;
+        goto b51;
     }
-    if (l[16].v.i) goto b40; else goto b41;
-b40:
+    if (l[16].v.i) goto b38; else goto b39;
+b38:
     l[16] = talk_fn594(NULL);
     if (talk_unwinding) {
-        goto b62;
+        goto b51;
     }
     x5.m0 = l[16];
     x5.m1 = l[0];
@@ -68357,60 +68350,30 @@ b40:
     l[16] = talk_pointer(x6.m0);
     talk_free(l[16]);
     return x5;
+b39:
+    goto b40;
+b40:
+    goto b42;
 b41:
     goto b42;
 b42:
-    l[16] = talk_fn596(NULL, l[0]);
-    if (talk_unwinding) {
-        goto b62;
-    }
-    if (l[16].v.i) goto b43; else goto b45;
-b43:
-    goto b44;
-b44:
-    goto b49;
-b45:
-    goto b46;
-b46:
-    x2.m0 = 9;
-    x3 = talk_fn517(NULL, l[0], x2);
-    if (talk_unwinding) {
-        goto b62;
-    }
-    l[16] = talk_bool(x3.m0);
-    l[0] = x3.m1;
-    l[7] = talk_cmp_eq(l[16], talk_bool(0));
-    if (l[7].v.i) goto b47; else goto b50;
-b47:
-    goto b48;
-b48:
-    goto b49;
-b49:
-    goto b53;
-b50:
-    goto b51;
-b51:
-    goto b38;
-b52:
-    goto b53;
-b53:
     {
         TalkValue built = talk_agg(47u, 1, 0, 5);
         built.v.agg->fields[0] = talk_int(1);
-        l[7] = built;
+        l[16] = built;
     }
     x2.m0 = 8;
     x3 = talk_fn517(NULL, l[0], x2);
     if (talk_unwinding) {
-        goto b61;
+        goto b50;
     }
-    l[16] = talk_bool(x3.m0);
+    l[7] = talk_bool(x3.m0);
     l[0] = x3.m1;
-    if (l[16].v.i) goto b54; else goto b58;
-b54:
+    if (l[7].v.i) goto b43; else goto b47;
+b43:
     x11 = talk_fn520(NULL, l[0]);
     if (talk_unwinding) {
-        goto b61;
+        goto b50;
     }
     x12.m0 = x11.m0;
     x12.m1 = x11.m1;
@@ -68428,106 +68391,106 @@ b54:
         TalkValue built = talk_agg(47u, 1, 0, 5);
         built.v.agg->fields[0] = talk_int(0);
         memcpy(built.v.agg->fields + 1, l[15].v.agg->fields, 4 * sizeof(TalkValue));
-        l[16] = built;
+        l[22] = built;
     }
-    l[22] = talk_fn139(NULL, l[7]);
+    l[21] = talk_fn139(NULL, l[16]);
     if (talk_unwinding) {
-        goto b61;
+        goto b50;
     }
-    l[7] = l[16];
-    l[16] = talk_fn52(NULL, l[0]);
+    l[16] = l[22];
+    l[22] = talk_fn52(NULL, l[0]);
     if (talk_unwinding) {
-        goto b61;
+        goto b50;
     }
-    if (l[16].v.i) goto b55; else goto b56;
-b55:
-    l[16] = talk_fn594(NULL);
+    if (l[22].v.i) goto b44; else goto b45;
+b44:
+    l[22] = talk_fn594(NULL);
     if (talk_unwinding) {
-        goto b61;
+        goto b50;
     }
-    x5.m0 = l[16];
+    x5.m0 = l[22];
     x5.m1 = l[0];
-    l[16] = talk_fn139(NULL, l[7]);
+    l[22] = talk_fn139(NULL, l[16]);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
-    l[16] = talk_fn96(NULL, x18);
+    l[22] = talk_fn96(NULL, x18);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
-    l[16] = talk_fn106(NULL, x19);
+    l[22] = talk_fn106(NULL, x19);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
-    l[16] = talk_pointer(x6.m0);
-    talk_free(l[16]);
+    l[22] = talk_pointer(x6.m0);
+    talk_free(l[22]);
     return x5;
-b56:
-    goto b57;
-b57:
-    goto b59;
-b58:
-    goto b59;
-b59:
+b45:
+    goto b46;
+b46:
+    goto b48;
+b47:
+    goto b48;
+b48:
     {
         TalkValue built = talk_agg(14u, 1, 0, 4);
         built.v.agg->fields[0] = talk_int(1);
         l[20] = built;
     }
-    l[16] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[23]))->m3);
-    l[22] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[23]))->m4);
-    l[21] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[1]))->m1);
+    l[22] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[23]))->m3);
+    l[21] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[23]))->m4);
+    l[7] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[1]))->m1);
     l[1] = talk_fn490(NULL, l[0]);
     if (talk_unwinding) {
-        goto b60;
+        goto b49;
     }
     {
         TalkValue built = talk_agg(46u, 22, 0, 18);
         built.v.agg->fields[0] = talk_pointer(x6.m0);
         built.v.agg->fields[1] = talk_int(x6.m1);
         built.v.agg->fields[2] = talk_int(x6.m2);
-        built.v.agg->fields[3] = l[16];
-        built.v.agg->fields[4] = l[22];
+        built.v.agg->fields[3] = l[22];
+        built.v.agg->fields[4] = l[21];
         built.v.agg->fields[5] = talk_pointer(x19.m0);
         built.v.agg->fields[6] = talk_int(x19.m1);
         built.v.agg->fields[7] = talk_int(x19.m2);
         built.v.agg->fields[8] = talk_pointer(x18.m0);
         built.v.agg->fields[9] = talk_int(x18.m1);
         built.v.agg->fields[10] = talk_int(x18.m2);
-        built.v.agg->fields[11] = l[7];
+        built.v.agg->fields[11] = l[16];
         memcpy(built.v.agg->fields + 12, l[20].v.agg->fields, 4 * sizeof(TalkValue));
-        built.v.agg->fields[16] = l[21];
+        built.v.agg->fields[16] = l[7];
         built.v.agg->fields[17] = l[1];
         l[26] = built;
     }
     x5.m0 = l[26];
     x5.m1 = l[0];
     return x5;
-b60:
+b49:
     l[26] = talk_fn94(NULL, l[20]);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
-    goto b61;
-b61:
-    l[26] = talk_fn139(NULL, l[7]);
+    goto b50;
+b50:
+    l[26] = talk_fn139(NULL, l[16]);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
-    goto b62;
-b62:
+    goto b51;
+b51:
     l[26] = talk_fn96(NULL, x18);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
-    goto b63;
-b63:
+    goto b52;
+b52:
     l[26] = talk_fn106(NULL, x19);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
-    goto b64;
-b64:
+    goto b53;
+b53:
     l[26] = talk_pointer(x6.m0);
     talk_free(l[26]);
     return (TalkL10){0};
@@ -68951,245 +68914,100 @@ b7:
     return l[3];
 }
 
-/* comma_starts_generic_param */
-static TalkValue talk_fn596(const TalkValue *env, TalkValue p0) {
+/* conformances_list */
+static TalkL91 talk_fn596(const TalkValue *env, TalkValue p0) {
     TalkValue l[11];
     memset(l, 0, sizeof l);
     (void)env;
-    TalkL7 x4;
+    TalkL2 x2;
+    memset(&x2, 0, sizeof x2);
+    TalkL3 x3;
+    memset(&x3, 0, sizeof x3);
+    TalkL90 x4;
     memset(&x4, 0, sizeof x4);
-    _Alignas(TalkValue) unsigned char fx4[sizeof(TalkAgg) + 1 * sizeof(TalkValue)];
-    (void)fx4;
+    TalkL13 x5;
+    memset(&x5, 0, sizeof x5);
+    TalkL28 x6;
+    memset(&x6, 0, sizeof x6);
+    TalkL91 x7;
+    memset(&x7, 0, sizeof x7);
+    TalkL7 x8;
+    memset(&x8, 0, sizeof x8);
+    _Alignas(TalkValue) unsigned char fx8[sizeof(TalkAgg) + 1 * sizeof(TalkValue)];
+    (void)fx8;
+    TalkL89 x9;
+    memset(&x9, 0, sizeof x9);
     talk_frame_enter();
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = l[0].v.agg->fields[9];
+    l[1] = talk_alloc(talk_int(INT64_C(0)));
+    x2.m0 = l[1].v.ptr;
+    x3.m0 = x2.m0;
+    x3.m1 = talk_int(INT64_C(0)).v.i;
+    x3.m2 = talk_int(INT64_C(0)).v.i;
     goto b1;
 b1:
-    l[2] = talk_fn492(NULL, l[0], l[1]);
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    {
-        TalkL7 tmp;
-        tmp.m0 = ((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[2]))->m0;
-        l[3] = talk_box_l7(tmp);
-    }
-    x4.m0 = 20;
     goto b2;
 b2:
-    l[2] = l[3].v.agg->fields[0];
-    l[3] = talk_int(x4.m0);
-    l[5] = talk_cmp_eq(l[2], l[3]);
-    if (l[5].v.i) goto b3; else goto b4;
+    x4 = talk_fn520(NULL, l[0]);
+    if (talk_unwinding) {
+        goto b6;
+    }
+    x5.m0 = x4.m0;
+    x5.m1 = x4.m1;
+    x5.m2 = x4.m2;
+    l[0] = x4.m3;
+    x6 = talk_fn530(NULL, x3, x5);
+    if (talk_unwinding) {
+        goto b6;
+    }
+    x3.m0 = x6.m1;
+    x3.m1 = x6.m2;
+    x3.m2 = x6.m3;
+    l[1] = talk_fn52(NULL, l[0]);
+    if (talk_unwinding) {
+        goto b6;
+    }
+    if (l[1].v.i) goto b3; else goto b4;
 b3:
-    l[5] = talk_bool(1);
-    goto b5;
+    x7.m0 = x3.m0;
+    x7.m1 = x3.m1;
+    x7.m2 = x3.m2;
+    x7.m3 = l[0];
+    return x7;
 b4:
-    l[5] = talk_bool(0);
     goto b5;
 b5:
-    goto b6;
+    x8.m0 = 73;
+    x9 = talk_fn517(NULL, l[0], x8);
+    if (talk_unwinding) {
+        goto b6;
+    }
+    l[1] = talk_bool(x9.m0);
+    l[0] = x9.m1;
+    l[10] = talk_cmp_eq(l[1], talk_bool(0));
+    if (l[10].v.i) goto b7; else goto b10;
 b6:
-    if (l[5].v.i) goto b7; else goto b8;
+    l[10] = talk_fn96(NULL, x3);
+    if (talk_unwinding) {
+        return (TalkL91){0};
+    }
+    return (TalkL91){0};
 b7:
-    l[1] = talk_add(l[1], talk_int(INT64_C(1)));
-    goto b1;
+    goto b8;
 b8:
     goto b9;
 b9:
-    l[3] = talk_fn492(NULL, l[0], l[1]);
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    {
-        TalkL7 tmp;
-        tmp.m0 = ((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[3]))->m0;
-        l[2] = talk_box_l7(tmp);
-    }
-    x4.m0 = 9;
-    goto b10;
+    x7.m0 = x3.m0;
+    x7.m1 = x3.m1;
+    x7.m2 = x3.m2;
+    x7.m3 = l[0];
+    return x7;
 b10:
-    l[3] = l[2].v.agg->fields[0];
-    l[2] = talk_int(x4.m0);
-    l[6] = talk_cmp_eq(l[3], l[2]);
-    if (l[6].v.i) goto b11; else goto b12;
+    goto b11;
 b11:
-    l[6] = talk_bool(1);
-    goto b13;
-b12:
-    l[6] = talk_bool(0);
-    goto b13;
-b13:
-    goto b14;
-b14:
-    if (l[6].v.i) goto b15; else goto b59;
-b15:
-    goto b16;
-b16:
-    l[3] = talk_add(l[1], talk_int(INT64_C(1)));
-    goto b17;
-b17:
-    l[1] = talk_fn492(NULL, l[0], l[3]);
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    {
-        TalkL7 tmp;
-        tmp.m0 = ((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[1]))->m0;
-        l[2] = talk_box_l7(tmp);
-    }
-    x4.m0 = 20;
-    goto b18;
-b18:
-    l[1] = l[2].v.agg->fields[0];
-    l[2] = talk_int(x4.m0);
-    l[7] = talk_cmp_eq(l[1], l[2]);
-    if (l[7].v.i) goto b19; else goto b20;
-b19:
-    l[7] = talk_bool(1);
-    goto b21;
-b20:
-    l[7] = talk_bool(0);
-    goto b21;
-b21:
-    goto b22;
-b22:
-    if (l[7].v.i) goto b23; else goto b24;
-b23:
-    l[3] = talk_add(l[3], talk_int(INT64_C(1)));
-    goto b17;
-b24:
-    goto b25;
-b25:
-    l[2] = talk_fn492(NULL, l[0], l[3]);
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    {
-        TalkL7 tmp;
-        tmp.m0 = ((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[2]))->m0;
-        l[1] = talk_box_l7(tmp);
-    }
-    x4.m0 = 43;
-    goto b26;
-b26:
-    l[8] = l[1].v.agg->fields[0];
-    l[1] = talk_int(x4.m0);
-    l[9] = talk_cmp_eq(l[8], l[1]);
-    if (l[9].v.i) goto b27; else goto b28;
-b27:
-    l[9] = talk_bool(1);
-    goto b29;
-b28:
-    l[9] = talk_bool(0);
-    goto b29;
-b29:
-    goto b30;
-b30:
-    if (l[9].v.i) goto b31; else goto b32;
-b31:
-    return talk_bool(1);
-b32:
-    goto b33;
-b33:
-    {
-        TalkL7 tmp;
-        tmp.m0 = ((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[2]))->m0;
-        l[8] = talk_box_l7(tmp);
-    }
-    x4.m0 = 0;
-    goto b34;
-b34:
-    l[1] = l[8].v.agg->fields[0];
-    l[8] = talk_int(x4.m0);
-    l[2] = talk_cmp_eq(l[1], l[8]);
-    if (l[2].v.i) goto b35; else goto b36;
-b35:
-    l[2] = talk_bool(1);
-    goto b37;
-b36:
-    l[2] = talk_bool(0);
-    goto b37;
-b37:
-    goto b38;
-b38:
-    if (l[2].v.i) goto b39; else goto b57;
-b39:
-    l[8] = talk_add(l[3], talk_int(INT64_C(1)));
-    goto b40;
-b40:
-    l[3] = talk_fn492(NULL, l[0], l[8]);
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    {
-        TalkL7 tmp;
-        tmp.m0 = ((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[3]))->m0;
-        l[1] = talk_box_l7(tmp);
-    }
-    x4.m0 = 20;
-    goto b41;
-b41:
-    l[3] = l[1].v.agg->fields[0];
-    l[1] = talk_int(x4.m0);
-    l[10] = talk_cmp_eq(l[3], l[1]);
-    if (l[10].v.i) goto b42; else goto b43;
-b42:
-    l[10] = talk_bool(1);
-    goto b44;
-b43:
-    l[10] = talk_bool(0);
-    goto b44;
-b44:
-    goto b45;
-b45:
-    if (l[10].v.i) goto b46; else goto b47;
-b46:
-    l[8] = talk_add(l[8], talk_int(INT64_C(1)));
-    goto b40;
-b47:
-    goto b48;
-b48:
-    l[3] = talk_fn492(NULL, l[0], l[8]);
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    {
-        TalkL7 tmp;
-        tmp.m0 = ((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[3]))->m0;
-        l[8] = talk_box_l7(tmp);
-    }
-    x4.m0 = 78;
-    goto b49;
-b49:
-    l[0] = l[8].v.agg->fields[0];
-    l[8] = talk_int(x4.m0);
-    l[1] = talk_cmp_eq(l[0], l[8]);
-    if (l[1].v.i) goto b50; else goto b51;
-b50:
-    l[1] = talk_bool(1);
-    goto b52;
-b51:
-    l[1] = talk_bool(0);
-    goto b52;
-b52:
-    goto b53;
-b53:
-    if (l[1].v.i) goto b54; else goto b55;
-b54:
-    return talk_bool(1);
-b55:
-    goto b56;
-b56:
-    goto b58;
-b57:
-    goto b58;
-b58:
-    return talk_bool(0);
-b59:
-    return talk_bool(0);
+    goto b1;
 }
 
 /* push */
@@ -108732,104 +108550,8 @@ b20:
     return (TalkL10){0};
 }
 
-/* conformances_list */
-static TalkL91 talk_fn942(const TalkValue *env, TalkValue p0) {
-    TalkValue l[11];
-    memset(l, 0, sizeof l);
-    (void)env;
-    TalkL2 x2;
-    memset(&x2, 0, sizeof x2);
-    TalkL3 x3;
-    memset(&x3, 0, sizeof x3);
-    TalkL90 x4;
-    memset(&x4, 0, sizeof x4);
-    TalkL13 x5;
-    memset(&x5, 0, sizeof x5);
-    TalkL28 x6;
-    memset(&x6, 0, sizeof x6);
-    TalkL91 x7;
-    memset(&x7, 0, sizeof x7);
-    TalkL7 x8;
-    memset(&x8, 0, sizeof x8);
-    _Alignas(TalkValue) unsigned char fx8[sizeof(TalkAgg) + 1 * sizeof(TalkValue)];
-    (void)fx8;
-    TalkL89 x9;
-    memset(&x9, 0, sizeof x9);
-    talk_frame_enter();
-    l[0] = p0;
-    goto b0;
-b0:
-    l[1] = talk_alloc(talk_int(INT64_C(0)));
-    x2.m0 = l[1].v.ptr;
-    x3.m0 = x2.m0;
-    x3.m1 = talk_int(INT64_C(0)).v.i;
-    x3.m2 = talk_int(INT64_C(0)).v.i;
-    goto b1;
-b1:
-    goto b2;
-b2:
-    x4 = talk_fn520(NULL, l[0]);
-    if (talk_unwinding) {
-        goto b6;
-    }
-    x5.m0 = x4.m0;
-    x5.m1 = x4.m1;
-    x5.m2 = x4.m2;
-    l[0] = x4.m3;
-    x6 = talk_fn530(NULL, x3, x5);
-    if (talk_unwinding) {
-        goto b6;
-    }
-    x3.m0 = x6.m1;
-    x3.m1 = x6.m2;
-    x3.m2 = x6.m3;
-    l[1] = talk_fn52(NULL, l[0]);
-    if (talk_unwinding) {
-        goto b6;
-    }
-    if (l[1].v.i) goto b3; else goto b4;
-b3:
-    x7.m0 = x3.m0;
-    x7.m1 = x3.m1;
-    x7.m2 = x3.m2;
-    x7.m3 = l[0];
-    return x7;
-b4:
-    goto b5;
-b5:
-    x8.m0 = 9;
-    x9 = talk_fn517(NULL, l[0], x8);
-    if (talk_unwinding) {
-        goto b6;
-    }
-    l[1] = talk_bool(x9.m0);
-    l[0] = x9.m1;
-    l[10] = talk_cmp_eq(l[1], talk_bool(0));
-    if (l[10].v.i) goto b7; else goto b10;
-b6:
-    l[10] = talk_fn96(NULL, x3);
-    if (talk_unwinding) {
-        return (TalkL91){0};
-    }
-    return (TalkL91){0};
-b7:
-    goto b8;
-b8:
-    goto b9;
-b9:
-    x7.m0 = x3.m0;
-    x7.m1 = x3.m1;
-    x7.m2 = x3.m2;
-    x7.m3 = l[0];
-    return x7;
-b10:
-    goto b11;
-b11:
-    goto b1;
-}
-
 /* body_parse */
-static TalkL10 talk_fn943(const TalkValue *env, TalkValue p0, TalkL12 p1) {
+static TalkL10 talk_fn942(const TalkValue *env, TalkValue p0, TalkL12 p1) {
     TalkValue l[16];
     memset(l, 0, sizeof l);
     (void)env;
@@ -108955,7 +108677,7 @@ b15:
         l[12] = talk_box_l23(tmp);
     }
     l[0] = ((const TalkL84 *)TALK_NATIVE_PAYLOAD(l[5]))->m4;
-    x13 = talk_fn944(NULL, x7, talk_unbox_l23(l[12]));
+    x13 = talk_fn943(NULL, x7, talk_unbox_l23(l[12]));
     if (talk_unwinding) {
         goto b47;
     }
@@ -108998,7 +108720,7 @@ b21:
         l[12] = talk_box_l23(tmp);
     }
     l[0] = ((const TalkL84 *)TALK_NATIVE_PAYLOAD(l[5]))->m4;
-    x13 = talk_fn944(NULL, x7, talk_unbox_l23(l[12]));
+    x13 = talk_fn943(NULL, x7, talk_unbox_l23(l[12]));
     if (talk_unwinding) {
         goto b47;
     }
@@ -109062,7 +108784,7 @@ b36:
 b37:
     if (l[12].v.i) goto b38; else goto b39;
 b38:
-    l[5] = talk_fn945(NULL, l[0]);
+    l[5] = talk_fn944(NULL, l[0]);
     if (talk_unwinding) {
         goto b47;
     }
@@ -109075,7 +108797,7 @@ b38:
         l[15] = talk_box_l23(tmp);
     }
     l[0] = ((const TalkL84 *)TALK_NATIVE_PAYLOAD(l[5]))->m4;
-    x13 = talk_fn944(NULL, x7, talk_unbox_l23(l[15]));
+    x13 = talk_fn943(NULL, x7, talk_unbox_l23(l[15]));
     if (talk_unwinding) {
         goto b47;
     }
@@ -109092,7 +108814,7 @@ b40:
     }
     l[15] = x2.m0;
     l[0] = x2.m1;
-    l[5] = talk_fn946(NULL, l[0], l[15]);
+    l[5] = talk_fn945(NULL, l[0], l[15]);
     if (talk_unwinding) {
         goto b47;
     }
@@ -109105,7 +108827,7 @@ b40:
         l[15] = talk_box_l23(tmp);
     }
     l[0] = ((const TalkL84 *)TALK_NATIVE_PAYLOAD(l[5]))->m4;
-    x13 = talk_fn944(NULL, x7, talk_unbox_l23(l[15]));
+    x13 = talk_fn943(NULL, x7, talk_unbox_l23(l[15]));
     if (talk_unwinding) {
         goto b47;
     }
@@ -109159,7 +108881,7 @@ b47:
 }
 
 /* push */
-static TalkL28 talk_fn944(const TalkValue *env, TalkL3 p0, TalkL23 p1) {
+static TalkL28 talk_fn943(const TalkValue *env, TalkL3 p0, TalkL23 p1) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109199,7 +108921,7 @@ b3:
     l[5] = talk_cmp_ge(l[3], l[4]);
     if (l[5].v.i) goto b4; else goto b5;
 b4:
-    x6 = talk_fn947(NULL, x0, l[2]);
+    x6 = talk_fn946(NULL, x0, l[2]);
     if (talk_unwinding) {
         goto b6;
     }
@@ -109209,7 +108931,7 @@ b4:
     x0.m0 = x6.m0;
     goto b7;
 b5:
-    x7 = talk_fn948(NULL, x0);
+    x7 = talk_fn947(NULL, x0);
     if (talk_unwinding) {
         goto b6;
     }
@@ -109226,7 +108948,7 @@ b6:
     return (TalkL28){0};
 b7:
     l[5] = talk_int(x0.m1);
-    x7 = talk_fn949(NULL, x0, l[5], x1);
+    x7 = talk_fn948(NULL, x0, l[5], x1);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
@@ -109244,7 +108966,7 @@ b7:
 }
 
 /* associated_parse */
-static TalkValue talk_fn945(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn944(const TalkValue *env, TalkValue p0) {
     TalkValue l[10];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109391,7 +109113,7 @@ b9:
 }
 
 /* require_decl */
-static TalkValue talk_fn946(const TalkValue *env, TalkValue p0, TalkValue p1) {
+static TalkValue talk_fn945(const TalkValue *env, TalkValue p0, TalkValue p1) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109477,7 +109199,7 @@ b5:
 }
 
 /* allocate_with_capacity */
-static TalkL2 talk_fn947(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkL2 talk_fn946(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109498,7 +109220,7 @@ b1:
 b2:
     goto b3;
 b3:
-    x3 = talk_fn950(NULL, l[1]);
+    x3 = talk_fn949(NULL, l[1]);
     if (talk_unwinding) {
         return (TalkL2){0};
     }
@@ -109522,7 +109244,7 @@ b6:
     if (talk_unwinding) {
         goto b7;
     }
-    l[7] = talk_fn951(NULL, talk_unbox_l23(l[5]));
+    l[7] = talk_fn950(NULL, talk_unbox_l23(l[5]));
     if (talk_unwinding) {
         goto b7;
     }
@@ -109545,7 +109267,7 @@ b11:
 }
 
 /* uniqued_storage */
-static TalkL28 talk_fn948(const TalkValue *env, TalkL3 p0) {
+static TalkL28 talk_fn947(const TalkValue *env, TalkL3 p0) {
     TalkValue l[5];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109571,7 +109293,7 @@ b1:
     return x4;
 b2:
     l[2] = talk_int(x0.m2);
-    x3 = talk_fn947(NULL, x0, l[2]);
+    x3 = talk_fn946(NULL, x0, l[2]);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
@@ -109587,7 +109309,7 @@ b2:
 }
 
 /* _init_slot */
-static TalkL28 talk_fn949(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkL23 p2) {
+static TalkL28 talk_fn948(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkL23 p2) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109615,7 +109337,7 @@ b0:
 }
 
 /* _storage */
-static TalkL2 talk_fn950(const TalkValue *env, TalkValue p0) {
+static TalkL2 talk_fn949(const TalkValue *env, TalkValue p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109625,7 +109347,7 @@ static TalkL2 talk_fn950(const TalkValue *env, TalkValue p0) {
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = talk_fn952(NULL, l[0]);
+    l[1] = talk_fn951(NULL, l[0]);
     if (talk_unwinding) {
         return (TalkL2){0};
     }
@@ -109634,7 +109356,7 @@ b0:
 }
 
 /* _retain */
-static TalkValue talk_fn951(const TalkValue *env, TalkL23 p0) {
+static TalkValue talk_fn950(const TalkValue *env, TalkL23 p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109652,7 +109374,7 @@ b0:
 }
 
 /* _alloc */
-static TalkValue talk_fn952(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn951(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109666,7 +109388,7 @@ b0:
 }
 
 /* macro_param_is_identifier_shaped */
-static TalkValue talk_fn953(const TalkValue *env, TalkL1 p0) {
+static TalkValue talk_fn952(const TalkValue *env, TalkL1 p0) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109731,7 +109453,7 @@ b10:
 }
 
 /* push */
-static TalkL28 talk_fn954(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkL28 talk_fn953(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109769,7 +109491,7 @@ b3:
     l[5] = talk_cmp_ge(l[3], l[4]);
     if (l[5].v.i) goto b4; else goto b5;
 b4:
-    x6 = talk_fn955(NULL, x0, l[2]);
+    x6 = talk_fn954(NULL, x0, l[2]);
     if (talk_unwinding) {
         goto b6;
     }
@@ -109779,7 +109501,7 @@ b4:
     x0.m0 = x6.m0;
     goto b7;
 b5:
-    x7 = talk_fn956(NULL, x0);
+    x7 = talk_fn955(NULL, x0);
     if (talk_unwinding) {
         goto b6;
     }
@@ -109793,7 +109515,7 @@ b6:
     return (TalkL28){0};
 b7:
     l[5] = talk_int(x0.m1);
-    x7 = talk_fn957(NULL, x0, l[5], l[1]);
+    x7 = talk_fn956(NULL, x0, l[5], l[1]);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
@@ -109811,7 +109533,7 @@ b7:
 }
 
 /* allocate_with_capacity */
-static TalkL2 talk_fn955(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkL2 talk_fn954(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109832,7 +109554,7 @@ b1:
 b2:
     goto b3;
 b3:
-    x3 = talk_fn958(NULL, l[1]);
+    x3 = talk_fn957(NULL, l[1]);
     if (talk_unwinding) {
         return (TalkL2){0};
     }
@@ -109852,11 +109574,11 @@ b5:
     l[6] = talk_ptr_add(l[5], l[2], 8);
     if (l[1].v.i) goto b6; else goto b8;
 b6:
-    l[5] = talk_fn959(NULL, x0, l[2]);
+    l[5] = talk_fn958(NULL, x0, l[2]);
     if (talk_unwinding) {
         goto b7;
     }
-    l[7] = talk_fn960(NULL, l[5]);
+    l[7] = talk_fn959(NULL, l[5]);
     if (talk_unwinding) {
         goto b7;
     }
@@ -109879,7 +109601,7 @@ b11:
 }
 
 /* uniqued_storage */
-static TalkL28 talk_fn956(const TalkValue *env, TalkL3 p0) {
+static TalkL28 talk_fn955(const TalkValue *env, TalkL3 p0) {
     TalkValue l[5];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109905,7 +109627,7 @@ b1:
     return x4;
 b2:
     l[2] = talk_int(x0.m2);
-    x3 = talk_fn955(NULL, x0, l[2]);
+    x3 = talk_fn954(NULL, x0, l[2]);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
@@ -109921,7 +109643,7 @@ b2:
 }
 
 /* _init_slot */
-static TalkL28 talk_fn957(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkValue p2) {
+static TalkL28 talk_fn956(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkValue p2) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109947,7 +109669,7 @@ b0:
 }
 
 /* _storage */
-static TalkL2 talk_fn958(const TalkValue *env, TalkValue p0) {
+static TalkL2 talk_fn957(const TalkValue *env, TalkValue p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109957,7 +109679,7 @@ static TalkL2 talk_fn958(const TalkValue *env, TalkValue p0) {
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = talk_fn963(NULL, l[0]);
+    l[1] = talk_fn962(NULL, l[0]);
     if (talk_unwinding) {
         return (TalkL2){0};
     }
@@ -109966,7 +109688,7 @@ b0:
 }
 
 /* get */
-static TalkValue talk_fn959(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkValue talk_fn958(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109977,7 +109699,7 @@ static TalkValue talk_fn959(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     l[1] = p1;
     goto b0;
 b0:
-    l[2] = talk_fn962(NULL, x0, l[1]);
+    l[2] = talk_fn961(NULL, x0, l[1]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -109988,7 +109710,7 @@ b0:
 }
 
 /* _retain */
-static TalkValue talk_fn960(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn959(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -109996,7 +109718,7 @@ static TalkValue talk_fn960(const TalkValue *env, TalkValue p0) {
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = talk_fn961(NULL, l[0]);
+    l[1] = talk_fn960(NULL, l[0]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -110004,7 +109726,7 @@ b0:
 }
 
 /* shared_retain */
-static TalkValue talk_fn961(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn960(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -110027,7 +109749,7 @@ b0:
 }
 
 /* _check_index */
-static TalkValue talk_fn962(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkValue talk_fn961(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -110097,7 +109819,7 @@ b6:
 }
 
 /* _alloc */
-static TalkValue talk_fn963(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn962(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -110111,7 +109833,7 @@ b0:
 }
 
 /* module_path */
-static TalkValue talk_fn964(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn963(const TalkValue *env, TalkValue p0) {
     TalkValue l[16];
     memset(l, 0, sizeof l);
     (void)env;
@@ -110347,7 +110069,7 @@ b21:
 }
 
 /* push */
-static TalkL28 talk_fn965(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkL28 talk_fn964(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -110385,7 +110107,7 @@ b3:
     l[5] = talk_cmp_ge(l[3], l[4]);
     if (l[5].v.i) goto b4; else goto b5;
 b4:
-    x6 = talk_fn966(NULL, x0, l[2]);
+    x6 = talk_fn965(NULL, x0, l[2]);
     if (talk_unwinding) {
         goto b6;
     }
@@ -110395,7 +110117,7 @@ b4:
     x0.m0 = x6.m0;
     goto b7;
 b5:
-    x7 = talk_fn967(NULL, x0);
+    x7 = talk_fn966(NULL, x0);
     if (talk_unwinding) {
         goto b6;
     }
@@ -110411,7 +110133,7 @@ b6:
     return (TalkL28){0};
 b7:
     l[5] = talk_int(x0.m1);
-    x7 = talk_fn968(NULL, x0, l[5], l[1]);
+    x7 = talk_fn967(NULL, x0, l[5], l[1]);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
@@ -110429,7 +110151,7 @@ b7:
 }
 
 /* allocate_with_capacity */
-static TalkL2 talk_fn966(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkL2 talk_fn965(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -110450,7 +110172,7 @@ b1:
 b2:
     goto b3;
 b3:
-    x3 = talk_fn969(NULL, l[1]);
+    x3 = talk_fn968(NULL, l[1]);
     if (talk_unwinding) {
         return (TalkL2){0};
     }
@@ -110470,11 +110192,11 @@ b5:
     l[6] = talk_ptr_add(l[5], l[2], 8);
     if (l[1].v.i) goto b6; else goto b8;
 b6:
-    l[5] = talk_fn970(NULL, x0, l[2]);
+    l[5] = talk_fn969(NULL, x0, l[2]);
     if (talk_unwinding) {
         goto b7;
     }
-    l[7] = talk_fn971(NULL, l[5]);
+    l[7] = talk_fn970(NULL, l[5]);
     if (talk_unwinding) {
         goto b7;
     }
@@ -110497,7 +110219,7 @@ b11:
 }
 
 /* uniqued_storage */
-static TalkL28 talk_fn967(const TalkValue *env, TalkL3 p0) {
+static TalkL28 talk_fn966(const TalkValue *env, TalkL3 p0) {
     TalkValue l[5];
     memset(l, 0, sizeof l);
     (void)env;
@@ -110523,7 +110245,7 @@ b1:
     return x4;
 b2:
     l[2] = talk_int(x0.m2);
-    x3 = talk_fn966(NULL, x0, l[2]);
+    x3 = talk_fn965(NULL, x0, l[2]);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
@@ -110539,7 +110261,7 @@ b2:
 }
 
 /* _init_slot */
-static TalkL28 talk_fn968(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkValue p2) {
+static TalkL28 talk_fn967(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkValue p2) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -110565,7 +110287,7 @@ b0:
 }
 
 /* _storage */
-static TalkL2 talk_fn969(const TalkValue *env, TalkValue p0) {
+static TalkL2 talk_fn968(const TalkValue *env, TalkValue p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -110575,7 +110297,7 @@ static TalkL2 talk_fn969(const TalkValue *env, TalkValue p0) {
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = talk_fn974(NULL, l[0]);
+    l[1] = talk_fn973(NULL, l[0]);
     if (talk_unwinding) {
         return (TalkL2){0};
     }
@@ -110584,7 +110306,7 @@ b0:
 }
 
 /* get */
-static TalkValue talk_fn970(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkValue talk_fn969(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -110595,7 +110317,7 @@ static TalkValue talk_fn970(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     l[1] = p1;
     goto b0;
 b0:
-    l[2] = talk_fn973(NULL, x0, l[1]);
+    l[2] = talk_fn972(NULL, x0, l[1]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -110606,7 +110328,7 @@ b0:
 }
 
 /* _retain */
-static TalkValue talk_fn971(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn970(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -110614,7 +110336,7 @@ static TalkValue talk_fn971(const TalkValue *env, TalkValue p0) {
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = talk_fn972(NULL, l[0]);
+    l[1] = talk_fn971(NULL, l[0]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -110622,7 +110344,7 @@ b0:
 }
 
 /* shared_retain */
-static TalkValue talk_fn972(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn971(const TalkValue *env, TalkValue p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -110650,7 +110372,7 @@ b0:
 }
 
 /* _check_index */
-static TalkValue talk_fn973(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkValue talk_fn972(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -110720,7 +110442,7 @@ b6:
 }
 
 /* _alloc */
-static TalkValue talk_fn974(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn973(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -110734,7 +110456,7 @@ b0:
 }
 
 /* check_pub_admitted */
-static TalkL10 talk_fn975(const TalkValue *env, TalkValue p0, TalkValue p1, TalkL12 p2) {
+static TalkL10 talk_fn974(const TalkValue *env, TalkValue p0, TalkValue p1, TalkL12 p2) {
     TalkValue l[9];
     memset(l, 0, sizeof l);
     (void)env;
@@ -110784,7 +110506,7 @@ b2:
         tmp.m2 = 9;
         l[3] = talk_box_l1(tmp);
     }
-    x4 = talk_fn976(NULL, l[0], talk_unbox_l1(l[3]));
+    x4 = talk_fn975(NULL, l[0], talk_unbox_l1(l[3]));
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -110817,7 +110539,7 @@ b10:
         tmp.m2 = 12;
         l[5] = talk_box_l1(tmp);
     }
-    x4 = talk_fn976(NULL, l[0], talk_unbox_l1(l[5]));
+    x4 = talk_fn975(NULL, l[0], talk_unbox_l1(l[5]));
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -110846,7 +110568,7 @@ b16:
         tmp.m2 = 12;
         l[5] = talk_box_l1(tmp);
     }
-    x4 = talk_fn976(NULL, l[0], talk_unbox_l1(l[5]));
+    x4 = talk_fn975(NULL, l[0], talk_unbox_l1(l[5]));
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -110869,7 +110591,7 @@ b19:
         tmp.m2 = 22;
         l[5] = talk_box_l1(tmp);
     }
-    x4 = talk_fn976(NULL, l[0], talk_unbox_l1(l[5]));
+    x4 = talk_fn975(NULL, l[0], talk_unbox_l1(l[5]));
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -110890,7 +110612,7 @@ b21:
         tmp.m2 = 22;
         l[5] = talk_box_l1(tmp);
     }
-    x4 = talk_fn976(NULL, l[0], talk_unbox_l1(l[5]));
+    x4 = talk_fn975(NULL, l[0], talk_unbox_l1(l[5]));
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -110913,7 +110635,7 @@ b24:
         tmp.m2 = 22;
         l[5] = talk_box_l1(tmp);
     }
-    x4 = talk_fn976(NULL, l[0], talk_unbox_l1(l[5]));
+    x4 = talk_fn975(NULL, l[0], talk_unbox_l1(l[5]));
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -110992,7 +110714,7 @@ b40:
         tmp.m2 = 17;
         l[6] = talk_box_l1(tmp);
     }
-    x4 = talk_fn976(NULL, l[0], talk_unbox_l1(l[6]));
+    x4 = talk_fn975(NULL, l[0], talk_unbox_l1(l[6]));
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -111030,7 +110752,7 @@ b44:
 b45:
     goto b46;
 b46:
-    x4 = talk_fn978(NULL, l[0], x2);
+    x4 = talk_fn977(NULL, l[0], x2);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -111044,7 +110766,7 @@ b46:
 b47:
     goto b48;
 b48:
-    x4 = talk_fn978(NULL, l[0], x2);
+    x4 = talk_fn977(NULL, l[0], x2);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -111058,7 +110780,7 @@ b48:
 b49:
     goto b50;
 b50:
-    x4 = talk_fn978(NULL, l[0], x2);
+    x4 = talk_fn977(NULL, l[0], x2);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -111086,7 +110808,7 @@ b57:
 b58:
     goto b59;
 b59:
-    x4 = talk_fn977(NULL, l[0], x2);
+    x4 = talk_fn976(NULL, l[0], x2);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -111114,7 +110836,7 @@ b66:
 b67:
     goto b68;
 b68:
-    x4 = talk_fn977(NULL, l[0], x2);
+    x4 = talk_fn976(NULL, l[0], x2);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -111140,7 +110862,7 @@ b74:
 b75:
     goto b76;
 b76:
-    x4 = talk_fn977(NULL, l[0], x2);
+    x4 = talk_fn976(NULL, l[0], x2);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -111156,7 +110878,7 @@ b77:
 b78:
     goto b79;
 b79:
-    x4 = talk_fn979(NULL, l[0], x2);
+    x4 = talk_fn978(NULL, l[0], x2);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -111180,7 +110902,7 @@ b84:
 b85:
     goto b86;
 b86:
-    x4 = talk_fn979(NULL, l[0], x2);
+    x4 = talk_fn978(NULL, l[0], x2);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -111198,7 +110920,7 @@ b88:
 b89:
     goto b90;
 b90:
-    x4 = talk_fn979(NULL, l[0], x2);
+    x4 = talk_fn978(NULL, l[0], x2);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -111218,7 +110940,7 @@ b93:
 b94:
     goto b95;
 b95:
-    x4 = talk_fn977(NULL, l[0], x2);
+    x4 = talk_fn976(NULL, l[0], x2);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -111244,7 +110966,7 @@ b101:
 b102:
     goto b103;
 b103:
-    x4 = talk_fn977(NULL, l[0], x2);
+    x4 = talk_fn976(NULL, l[0], x2);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -111276,7 +110998,7 @@ b107:
 }
 
 /* reject_pub */
-static TalkL10 talk_fn976(const TalkValue *env, TalkValue p0, TalkL1 p1) {
+static TalkL10 talk_fn975(const TalkValue *env, TalkValue p0, TalkL1 p1) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -111327,7 +111049,7 @@ b1:
 }
 
 /* check_pub_context_nominal */
-static TalkL10 talk_fn977(const TalkValue *env, TalkValue p0, TalkL12 p1) {
+static TalkL10 talk_fn976(const TalkValue *env, TalkValue p0, TalkL12 p1) {
     TalkValue l[10];
     memset(l, 0, sizeof l);
     (void)env;
@@ -111465,7 +111187,7 @@ b32:
         tmp.m2 = 19;
         l[4] = talk_box_l1(tmp);
     }
-    x9 = talk_fn976(NULL, l[0], talk_unbox_l1(l[4]));
+    x9 = talk_fn975(NULL, l[0], talk_unbox_l1(l[4]));
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -111477,7 +111199,7 @@ b32:
 }
 
 /* check_pub_context_top */
-static TalkL10 talk_fn978(const TalkValue *env, TalkValue p0, TalkL12 p1) {
+static TalkL10 talk_fn977(const TalkValue *env, TalkValue p0, TalkL12 p1) {
     TalkValue l[7];
     memset(l, 0, sizeof l);
     (void)env;
@@ -111525,7 +111247,7 @@ b8:
         tmp.m2 = 19;
         l[4] = talk_box_l1(tmp);
     }
-    x6 = talk_fn976(NULL, l[0], talk_unbox_l1(l[4]));
+    x6 = talk_fn975(NULL, l[0], talk_unbox_l1(l[4]));
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -111537,7 +111259,7 @@ b8:
 }
 
 /* check_pub_context_member */
-static TalkL10 talk_fn979(const TalkValue *env, TalkValue p0, TalkL12 p1) {
+static TalkL10 talk_fn978(const TalkValue *env, TalkValue p0, TalkL12 p1) {
     TalkValue l[9];
     memset(l, 0, sizeof l);
     (void)env;
@@ -111645,7 +111367,7 @@ b24:
         tmp.m2 = 19;
         l[4] = talk_box_l1(tmp);
     }
-    x8 = talk_fn976(NULL, l[0], talk_unbox_l1(l[4]));
+    x8 = talk_fn975(NULL, l[0], talk_unbox_l1(l[4]));
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -111657,7 +111379,7 @@ b24:
 }
 
 /* lexer_error_message */
-static TalkL1 talk_fn980(const TalkValue *env, TalkL1 p0, TalkValue p1, TalkL1 p2) {
+static TalkL1 talk_fn979(const TalkValue *env, TalkL1 p0, TalkValue p1, TalkL1 p2) {
     TalkValue l[13];
     memset(l, 0, sizeof l);
     (void)env;
@@ -111827,7 +111549,7 @@ b15:
 }
 
 /* token */
-static TalkValue talk_fn981(const TalkValue *env, TalkL7 p0, TalkValue p1, TalkValue p2) {
+static TalkValue talk_fn980(const TalkValue *env, TalkL7 p0, TalkValue p1, TalkValue p2) {
     TalkValue l[5];
     memset(l, 0, sizeof l);
     (void)env;
@@ -111860,7 +111582,7 @@ b0:
 }
 
 /* push */
-static TalkL28 talk_fn982(const TalkValue *env, TalkL3 p0, TalkL72 p1) {
+static TalkL28 talk_fn981(const TalkValue *env, TalkL3 p0, TalkL72 p1) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -111900,7 +111622,7 @@ b3:
     l[5] = talk_cmp_ge(l[3], l[4]);
     if (l[5].v.i) goto b4; else goto b5;
 b4:
-    x6 = talk_fn1009(NULL, x0, l[2]);
+    x6 = talk_fn1008(NULL, x0, l[2]);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
@@ -111910,7 +111632,7 @@ b4:
     x0.m0 = x6.m0;
     goto b6;
 b5:
-    x7 = talk_fn1010(NULL, x0);
+    x7 = talk_fn1009(NULL, x0);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
@@ -111920,7 +111642,7 @@ b5:
     goto b6;
 b6:
     l[5] = talk_int(x0.m1);
-    x7 = talk_fn1011(NULL, x0, l[5], x1);
+    x7 = talk_fn1010(NULL, x0, l[5], x1);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
@@ -111938,7 +111660,7 @@ b6:
 }
 
 /* is_digit */
-static TalkValue talk_fn983(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn982(const TalkValue *env, TalkValue p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -111968,7 +111690,7 @@ b3:
 }
 
 /* is_alpha */
-static TalkValue talk_fn984(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn983(const TalkValue *env, TalkValue p0) {
     TalkValue l[5];
     memset(l, 0, sizeof l);
     (void)env;
@@ -112046,7 +111768,7 @@ b12:
 }
 
 /* ident_end */
-static TalkValue talk_fn985(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2) {
+static TalkValue talk_fn984(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -112073,7 +111795,7 @@ b2:
     l[3] = talk_cmp_lt(l[4], talk_int(INT64_C(128)));
     if (l[3].v.i) goto b3; else goto b7;
 b3:
-    l[3] = talk_fn988(NULL, l[4]);
+    l[3] = talk_fn987(NULL, l[4]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -112094,7 +111816,7 @@ b8:
     l[3] = talk_add(l[4], l[2]);
     l[4] = talk_int(x0.m1);
     l[6] = talk_add(l[4], l[1]);
-    l[4] = talk_fn998(NULL, x5, l[3], l[6]);
+    l[4] = talk_fn997(NULL, x5, l[3], l[6]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -112102,7 +111824,7 @@ b8:
     l[3] = talk_div(l[4], talk_int(INT64_C(8)));
     l[7] = talk_mul(l[3], talk_int(INT64_C(8)));
     l[3] = talk_sub(l[4], l[7]);
-    l[7] = talk_fn999(NULL, l[6]);
+    l[7] = talk_fn998(NULL, l[6]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -112122,7 +111844,7 @@ b13:
 }
 
 /* scan_escape */
-static TalkValue talk_fn986(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2, TalkValue p3, TalkL1 p4) {
+static TalkValue talk_fn985(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2, TalkValue p3, TalkL1 p4) {
     TalkValue l[22];
     memset(l, 0, sizeof l);
     (void)env;
@@ -112384,7 +112106,7 @@ b41:
         return talk_unit();
     }
     l[15] = talk_byte_to_int(l[14]);
-    l[14] = talk_fn1007(NULL, l[15]);
+    l[14] = talk_fn1006(NULL, l[15]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -112408,7 +112130,7 @@ b44:
         return talk_unit();
     }
     l[17] = talk_byte_to_int(l[16]);
-    l[16] = talk_fn1008(NULL, l[17]);
+    l[16] = talk_fn1007(NULL, l[17]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -112651,7 +112373,7 @@ b72:
 }
 
 /* shared_drop */
-static TalkValue talk_fn987(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn986(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -112676,7 +112398,7 @@ b3:
 }
 
 /* is_alnum */
-static TalkValue talk_fn988(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn987(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -112684,7 +112406,7 @@ static TalkValue talk_fn988(const TalkValue *env, TalkValue p0) {
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = talk_fn983(NULL, l[0]);
+    l[1] = talk_fn982(NULL, l[0]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -112696,7 +112418,7 @@ b1:
         goto b3;
     }
 b2:
-    l[1] = talk_fn984(NULL, l[0]);
+    l[1] = talk_fn983(NULL, l[0]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -112710,7 +112432,7 @@ b3:
 }
 
 /* token_with_lexeme */
-static TalkValue talk_fn989(const TalkValue *env, TalkL7 p0, TalkValue p1, TalkValue p2, TalkValue p3, TalkValue p4) {
+static TalkValue talk_fn988(const TalkValue *env, TalkL7 p0, TalkValue p1, TalkValue p2, TalkValue p3, TalkValue p4) {
     TalkValue l[7];
     memset(l, 0, sizeof l);
     (void)env;
@@ -112745,7 +112467,7 @@ b0:
 }
 
 /* probe_character */
-static TalkValue talk_fn990(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2) {
+static TalkValue talk_fn989(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2) {
     TalkValue l[11];
     memset(l, 0, sizeof l);
     (void)env;
@@ -112880,11 +112602,11 @@ b18:
         tmp.m2 = 30;
         l[6] = talk_box_l1(tmp);
     }
-    l[8] = talk_fn986(NULL, x0, l[1], l[7], talk_bool(1), talk_unbox_l1(l[6]));
+    l[8] = talk_fn985(NULL, x0, l[1], l[7], talk_bool(1), talk_unbox_l1(l[6]));
     if (talk_unwinding) {
         return talk_unit();
     }
-    l[7] = talk_fn997(NULL, l[8]);
+    l[7] = talk_fn996(NULL, l[8]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -112919,7 +112641,7 @@ b21:
         built.v.agg->fields[4] = l[6];
         l[9] = built;
     }
-    l[10] = talk_fn987(NULL, l[8]);
+    l[10] = talk_fn986(NULL, l[8]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -112927,13 +112649,13 @@ b21:
 b22:
     goto b23;
 b23:
-    l[9] = talk_fn987(NULL, l[8]);
+    l[9] = talk_fn986(NULL, l[8]);
     if (talk_unwinding) {
         goto b24;
     }
     goto b25;
 b24:
-    l[9] = talk_fn987(NULL, l[8]);
+    l[9] = talk_fn986(NULL, l[8]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -112953,7 +112675,7 @@ b27:
 b28:
     goto b29;
 b29:
-    l[9] = talk_fn987(NULL, l[8]);
+    l[9] = talk_fn986(NULL, l[8]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -112964,7 +112686,7 @@ b31:
     goto b32;
 b32:
     l[3] = talk_bool(1);
-    l[9] = talk_fn1006(NULL, l[5]);
+    l[9] = talk_fn1005(NULL, l[5]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -112981,7 +112703,7 @@ b35:
 }
 
 /* shared_drop */
-static TalkValue talk_fn991(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn990(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -113007,7 +112729,7 @@ b3:
 }
 
 /* is_operator */
-static TalkValue talk_fn992(const TalkValue *env, TalkL7 p0) {
+static TalkValue talk_fn991(const TalkValue *env, TalkL7 p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -113043,7 +112765,7 @@ b5:
 }
 
 /* describe_scalar */
-static TalkL1 talk_fn993(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2) {
+static TalkL1 talk_fn992(const TalkValue *env, TalkL83 p0, TalkValue p1, TalkValue p2) {
     TalkValue l[11];
     memset(l, 0, sizeof l);
     (void)env;
@@ -113070,7 +112792,7 @@ b0:
     l[5] = talk_add(l[4], l[2]);
     l[4] = talk_int(x0.m1);
     l[6] = talk_add(l[4], l[1]);
-    l[4] = talk_fn998(NULL, x3, l[5], l[6]);
+    l[4] = talk_fn997(NULL, x3, l[5], l[6]);
     if (talk_unwinding) {
         return (TalkL1){0};
     }
@@ -113078,7 +112800,7 @@ b0:
     l[5] = talk_div(l[4], talk_int(INT64_C(8)));
     l[1] = talk_mul(l[5], talk_int(INT64_C(8)));
     l[5] = talk_sub(l[4], l[1]);
-    l[4] = talk_fn999(NULL, l[6]);
+    l[4] = talk_fn998(NULL, l[6]);
     if (talk_unwinding) {
         return (TalkL1){0};
     }
@@ -113109,7 +112831,7 @@ b4:
         tmp.m2 = 3;
         l[5] = talk_box_l1(tmp);
     }
-    x8 = talk_fn1000(NULL, l[6]);
+    x8 = talk_fn999(NULL, l[6]);
     if (talk_unwinding) {
         return (TalkL1){0};
     }
@@ -113144,7 +112866,7 @@ b6:
 }
 
 /* scalar_byte_length */
-static TalkValue talk_fn994(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn993(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -113177,7 +112899,7 @@ b9:
 }
 
 /* shared_retain */
-static TalkValue talk_fn995(const TalkValue *env, TalkL112 p0) {
+static TalkValue talk_fn994(const TalkValue *env, TalkL112 p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -113198,7 +112920,7 @@ b0:
 }
 
 /* shared_retain */
-static TalkValue talk_fn996(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn995(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -113233,7 +112955,7 @@ b3:
 }
 
 /* shared_retain */
-static TalkValue talk_fn997(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn996(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -113267,7 +112989,7 @@ b3:
 }
 
 /* _utf8_decode */
-static TalkValue talk_fn998(const TalkValue *env, TalkL0 p0, TalkValue p1, TalkValue p2) {
+static TalkValue talk_fn997(const TalkValue *env, TalkL0 p0, TalkValue p1, TalkValue p2) {
     TalkValue l[13];
     memset(l, 0, sizeof l);
     (void)env;
@@ -113630,7 +113352,7 @@ b89:
 }
 
 /* scalar_is_alphanumeric */
-static TalkValue talk_fn999(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn998(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -113638,7 +113360,7 @@ static TalkValue talk_fn999(const TalkValue *env, TalkValue p0) {
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = talk_fn1001(NULL, l[0]);
+    l[1] = talk_fn1000(NULL, l[0]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -113650,7 +113372,7 @@ b1:
         goto b3;
     }
 b2:
-    l[1] = talk_fn1002(NULL, l[0]);
+    l[1] = talk_fn1001(NULL, l[0]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -113664,7 +113386,7 @@ b3:
 }
 
 /* to_hex */
-static TalkL1 talk_fn1000(const TalkValue *env, TalkValue p0) {
+static TalkL1 talk_fn999(const TalkValue *env, TalkValue p0) {
     TalkValue l[7];
     memset(l, 0, sizeof l);
     (void)env;
@@ -113850,7 +113572,7 @@ b24:
 }
 
 /* scalar_is_alphabetic */
-static TalkValue talk_fn1001(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn1000(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -113858,7 +113580,7 @@ static TalkValue talk_fn1001(const TalkValue *env, TalkValue p0) {
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = talk_fn1003(NULL, l[0]);
+    l[1] = talk_fn1002(NULL, l[0]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -113882,7 +113604,7 @@ b3:
 }
 
 /* scalar_is_numeric */
-static TalkValue talk_fn1002(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn1001(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -113890,7 +113612,7 @@ static TalkValue talk_fn1002(const TalkValue *env, TalkValue p0) {
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = talk_fn1003(NULL, l[0]);
+    l[1] = talk_fn1002(NULL, l[0]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -113914,7 +113636,7 @@ b3:
 }
 
 /* _character_class */
-static TalkValue talk_fn1003(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn1002(const TalkValue *env, TalkValue p0) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -113940,7 +113662,7 @@ b4:
 b5:
     goto b6;
 b6:
-    x2 = talk_fn1004(NULL);
+    x2 = talk_fn1003(NULL);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -113957,7 +113679,7 @@ b8:
     l[5] = talk_add(l[3], talk_int(INT64_C(1)));
     l[3] = talk_div(l[5], talk_int(INT64_C(2)));
     x6.m0 = x2.m0;
-    l[5] = talk_fn1005(NULL, x6, l[3]);
+    l[5] = talk_fn1004(NULL, x6, l[3]);
     if (talk_unwinding) {
         goto b14;
     }
@@ -113976,7 +113698,7 @@ b12:
     goto b13;
 b13:
     x6.m0 = x2.m0;
-    l[0] = talk_fn1005(NULL, x6, l[1]);
+    l[0] = talk_fn1004(NULL, x6, l[1]);
     if (talk_unwinding) {
         goto b14;
     }
@@ -113993,7 +113715,7 @@ b14:
 }
 
 /* _character_class_table */
-static TalkL1 talk_fn1004(const TalkValue *env) {
+static TalkL1 talk_fn1003(const TalkValue *env) {
     TalkValue l[1];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114011,7 +113733,7 @@ b0:
 }
 
 /* _entry_value */
-static TalkValue talk_fn1005(const TalkValue *env, TalkL0 p0, TalkValue p1) {
+static TalkValue talk_fn1004(const TalkValue *env, TalkL0 p0, TalkValue p1) {
     TalkValue l[7];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114052,7 +113774,7 @@ b0:
 }
 
 /* is_space */
-static TalkValue talk_fn1006(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn1005(const TalkValue *env, TalkValue p0) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114098,7 +113820,7 @@ b6:
 }
 
 /* is_hex */
-static TalkValue talk_fn1007(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn1006(const TalkValue *env, TalkValue p0) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114106,7 +113828,7 @@ static TalkValue talk_fn1007(const TalkValue *env, TalkValue p0) {
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = talk_fn983(NULL, l[0]);
+    l[1] = talk_fn982(NULL, l[0]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -114178,7 +113900,7 @@ b12:
 }
 
 /* hex_value */
-static TalkValue talk_fn1008(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn1007(const TalkValue *env, TalkValue p0) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114186,7 +113908,7 @@ static TalkValue talk_fn1008(const TalkValue *env, TalkValue p0) {
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = talk_fn983(NULL, l[0]);
+    l[1] = talk_fn982(NULL, l[0]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -114232,7 +113954,7 @@ b6:
 }
 
 /* allocate_with_capacity */
-static TalkL2 talk_fn1009(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkL2 talk_fn1008(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[7];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114253,7 +113975,7 @@ b1:
 b2:
     goto b3;
 b3:
-    x3 = talk_fn1012(NULL, l[1]);
+    x3 = talk_fn1011(NULL, l[1]);
     if (talk_unwinding) {
         return (TalkL2){0};
     }
@@ -114273,7 +113995,7 @@ b5:
     l[6] = talk_ptr_add(l[5], l[2], 8);
     if (l[1].v.i) goto b6; else goto b8;
 b6:
-    l[5] = talk_fn1013(NULL, x0, l[2]);
+    l[5] = talk_fn1012(NULL, x0, l[2]);
     if (talk_unwinding) {
         goto b7;
     }
@@ -114296,7 +114018,7 @@ b11:
 }
 
 /* uniqued_storage */
-static TalkL28 talk_fn1010(const TalkValue *env, TalkL3 p0) {
+static TalkL28 talk_fn1009(const TalkValue *env, TalkL3 p0) {
     TalkValue l[5];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114322,7 +114044,7 @@ b1:
     return x4;
 b2:
     l[2] = talk_int(x0.m2);
-    x3 = talk_fn1009(NULL, x0, l[2]);
+    x3 = talk_fn1008(NULL, x0, l[2]);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
@@ -114338,7 +114060,7 @@ b2:
 }
 
 /* _init_slot */
-static TalkL28 talk_fn1011(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkL72 p2) {
+static TalkL28 talk_fn1010(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkL72 p2) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114366,7 +114088,7 @@ b0:
 }
 
 /* _storage */
-static TalkL2 talk_fn1012(const TalkValue *env, TalkValue p0) {
+static TalkL2 talk_fn1011(const TalkValue *env, TalkValue p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114376,7 +114098,7 @@ static TalkL2 talk_fn1012(const TalkValue *env, TalkValue p0) {
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = talk_fn1015(NULL, l[0]);
+    l[1] = talk_fn1014(NULL, l[0]);
     if (talk_unwinding) {
         return (TalkL2){0};
     }
@@ -114385,7 +114107,7 @@ b0:
 }
 
 /* get */
-static TalkValue talk_fn1013(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkValue talk_fn1012(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114396,7 +114118,7 @@ static TalkValue talk_fn1013(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     l[1] = p1;
     goto b0;
 b0:
-    l[2] = talk_fn1014(NULL, x0, l[1]);
+    l[2] = talk_fn1013(NULL, x0, l[1]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -114407,7 +114129,7 @@ b0:
 }
 
 /* _check_index */
-static TalkValue talk_fn1014(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkValue talk_fn1013(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114477,7 +114199,7 @@ b6:
 }
 
 /* _alloc */
-static TalkValue talk_fn1015(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn1014(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114491,7 +114213,7 @@ b0:
 }
 
 /* parse_type_root */
-static TalkL10 talk_fn1016(const TalkValue *env, TalkValue p0) {
+static TalkL10 talk_fn1015(const TalkValue *env, TalkValue p0) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114581,7 +114303,7 @@ b4:
 }
 
 /* parse_pattern_root */
-static TalkL10 talk_fn1017(const TalkValue *env, TalkValue p0) {
+static TalkL10 talk_fn1016(const TalkValue *env, TalkValue p0) {
     TalkValue l[7];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114663,7 +114385,7 @@ b4:
 }
 
 /* parse_items */
-static TalkL10 talk_fn1018(const TalkValue *env, TalkValue p0, TalkValue p1) {
+static TalkL10 talk_fn1017(const TalkValue *env, TalkValue p0, TalkValue p1) {
     TalkValue l[14];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114801,7 +114523,7 @@ b16:
 b17:
     goto b18;
 b18:
-    x2 = talk_fn1019(NULL, l[0]);
+    x2 = talk_fn1018(NULL, l[0]);
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -114826,7 +114548,7 @@ b21:
     l[4] = talk_cmp_eq(l[1], talk_bool(0));
     if (l[4].v.i) goto b22; else goto b23;
 b22:
-    l[4] = talk_fn1020(NULL, l[6]);
+    l[4] = talk_fn1019(NULL, l[6]);
     if (talk_unwinding) {
         goto b26;
     }
@@ -114903,7 +114625,7 @@ b28:
 }
 
 /* next_root */
-static TalkL10 talk_fn1019(const TalkValue *env, TalkValue p0) {
+static TalkL10 talk_fn1018(const TalkValue *env, TalkValue p0) {
     TalkValue l[9];
     memset(l, 0, sizeof l);
     (void)env;
@@ -114992,7 +114714,7 @@ b8:
         tmp.m0 = ((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[2]))->m0;
         l[1] = talk_box_l7(tmp);
     }
-    l[2] = talk_fn1022(NULL, talk_unbox_l7(l[1]));
+    l[2] = talk_fn1021(NULL, talk_unbox_l7(l[1]));
     if (talk_unwinding) {
         return (TalkL10){0};
     }
@@ -115033,7 +114755,7 @@ b11:
 }
 
 /* item_is_import */
-static TalkValue talk_fn1020(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn1019(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -115061,7 +114783,7 @@ b1:
     }
     goto b2;
 b2:
-    l[0] = talk_fn1021(NULL, talk_unbox_l23(l[1]));
+    l[0] = talk_fn1020(NULL, talk_unbox_l23(l[1]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -115109,7 +114831,7 @@ b12:
 }
 
 /* decl_is_import */
-static TalkValue talk_fn1021(const TalkValue *env, TalkL23 p0) {
+static TalkValue talk_fn1020(const TalkValue *env, TalkL23 p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -115139,7 +114861,7 @@ b5:
 }
 
 /* is_decl_keyword */
-static TalkValue talk_fn1022(const TalkValue *env, TalkL7 p0) {
+static TalkValue talk_fn1021(const TalkValue *env, TalkL7 p0) {
     TalkValue l[20];
     memset(l, 0, sizeof l);
     (void)env;
@@ -115597,7 +115319,7 @@ b128:
 }
 
 /* render_dump */
-static TalkL1 talk_fn1023(const TalkValue *env, TalkL1 p0, TalkValue p1) {
+static TalkL1 talk_fn1022(const TalkValue *env, TalkL1 p0, TalkValue p1) {
     TalkValue l[23];
     memset(l, 0, sizeof l);
     (void)env;
@@ -115821,7 +115543,7 @@ b12:
     l[8] = x17.m1;
     goto b13;
 b13:
-    x6 = talk_fn1024(NULL, x4, x14, l[8], talk_int(INT64_C(1)));
+    x6 = talk_fn1023(NULL, x4, x14, l[8], talk_int(INT64_C(1)));
     if (talk_unwinding) {
         goto b14;
     }
@@ -115888,7 +115610,7 @@ b21:
     if (talk_unwinding) {
         goto b59;
     }
-    x20 = talk_fn1025(NULL, talk_unbox_l3(l[18]));
+    x20 = talk_fn1024(NULL, talk_unbox_l3(l[18]));
     if (talk_unwinding) {
         goto b27;
     }
@@ -115896,7 +115618,7 @@ b21:
 b22:
     goto b23;
 b23:
-    x16 = talk_fn1026(NULL, x20);
+    x16 = talk_fn1025(NULL, x20);
     if (talk_unwinding) {
         goto b26;
     }
@@ -115960,7 +115682,7 @@ b25:
     x4.m2 = x6.m3;
     l[21] = talk_int(((const TalkL72 *)TALK_NATIVE_PAYLOAD(l[19]))->m0);
     l[22] = talk_int(((const TalkL72 *)TALK_NATIVE_PAYLOAD(l[19]))->m1);
-    x6 = talk_fn1027(NULL, x4, x14, l[21], l[22]);
+    x6 = talk_fn1026(NULL, x4, x14, l[21], l[22]);
     if (talk_unwinding) {
         goto b26;
     }
@@ -116059,7 +115781,7 @@ b37:
     if (talk_unwinding) {
         goto b59;
     }
-    x20 = talk_fn1028(NULL, talk_unbox_l3(l[1]));
+    x20 = talk_fn1027(NULL, talk_unbox_l3(l[1]));
     if (talk_unwinding) {
         goto b48;
     }
@@ -116067,7 +115789,7 @@ b37:
 b38:
     goto b39;
 b39:
-    x16 = talk_fn1029(NULL, x20);
+    x16 = talk_fn1028(NULL, x20);
     if (talk_unwinding) {
         goto b47;
     }
@@ -116273,7 +115995,7 @@ b64:
 }
 
 /* render_item */
-static TalkL28 talk_fn1024(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1023(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[7];
     memset(l, 0, sizeof l);
     (void)env;
@@ -116310,7 +116032,7 @@ b1:
     }
     goto b2;
 b2:
-    x5 = talk_fn1033(NULL, x0, x1, talk_unbox_l23(l[4]), l[3]);
+    x5 = talk_fn1032(NULL, x0, x1, talk_unbox_l23(l[4]), l[3]);
     if (talk_unwinding) {
         goto b11;
     }
@@ -116333,7 +116055,7 @@ b3:
     }
     goto b4;
 b4:
-    x5 = talk_fn1034(NULL, x0, x1, talk_unbox_l26(l[6]), l[3]);
+    x5 = talk_fn1033(NULL, x0, x1, talk_unbox_l26(l[6]), l[3]);
     if (talk_unwinding) {
         goto b11;
     }
@@ -116356,7 +116078,7 @@ b5:
     }
     goto b6;
 b6:
-    x5 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[6]), l[3]);
+    x5 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[6]), l[3]);
     if (talk_unwinding) {
         goto b11;
     }
@@ -116373,7 +116095,7 @@ b7:
     l[6] = l[2].v.agg->fields[1];
     goto b8;
 b8:
-    x5 = talk_fn1036(NULL, x0, x1, l[6], l[3]);
+    x5 = talk_fn1035(NULL, x0, x1, l[6], l[3]);
     if (talk_unwinding) {
         goto b11;
     }
@@ -116396,7 +116118,7 @@ b9:
     }
     goto b10;
 b10:
-    x5 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[6]), l[3]);
+    x5 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[6]), l[3]);
     if (talk_unwinding) {
         goto b11;
     }
@@ -116426,7 +116148,7 @@ b13:
 }
 
 /* iter */
-static TalkL78 talk_fn1025(const TalkValue *env, TalkL3 p0) {
+static TalkL78 talk_fn1024(const TalkValue *env, TalkL3 p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -116448,7 +116170,7 @@ b0:
 }
 
 /* next */
-static TalkL79 talk_fn1026(const TalkValue *env, TalkL78 p0) {
+static TalkL79 talk_fn1025(const TalkValue *env, TalkL78 p0) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -116480,7 +116202,7 @@ b2:
 b3:
     l[3] = x0.m0;
     l[2] = talk_int(x0.m1);
-    x4 = talk_fn1032(NULL, talk_unbox_l3(l[3]), l[2]);
+    x4 = talk_fn1031(NULL, talk_unbox_l3(l[3]), l[2]);
     if (talk_unwinding) {
         return (TalkL79){0};
     }
@@ -116517,7 +116239,7 @@ b8:
 }
 
 /* append_snippet */
-static TalkL28 talk_fn1027(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1026(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[10];
     memset(l, 0, sizeof l);
     (void)env;
@@ -116746,7 +116468,7 @@ b30:
 }
 
 /* iter */
-static TalkL78 talk_fn1028(const TalkValue *env, TalkL3 p0) {
+static TalkL78 talk_fn1027(const TalkValue *env, TalkL3 p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -116768,7 +116490,7 @@ b0:
 }
 
 /* next */
-static TalkL79 talk_fn1029(const TalkValue *env, TalkL78 p0) {
+static TalkL79 talk_fn1028(const TalkValue *env, TalkL78 p0) {
     TalkValue l[7];
     memset(l, 0, sizeof l);
     (void)env;
@@ -116802,7 +116524,7 @@ b2:
 b3:
     l[3] = x0.m0;
     l[2] = talk_int(x0.m1);
-    x4 = talk_fn1030(NULL, talk_unbox_l3(l[3]), l[2]);
+    x4 = talk_fn1029(NULL, talk_unbox_l3(l[3]), l[2]);
     if (talk_unwinding) {
         return (TalkL79){0};
     }
@@ -116828,7 +116550,7 @@ b5:
 b6:
     goto b7;
 b7:
-    l[1] = talk_fn1031(NULL, x4);
+    l[1] = talk_fn1030(NULL, x4);
     if (talk_unwinding) {
         return (TalkL79){0};
     }
@@ -116843,7 +116565,7 @@ b8:
 }
 
 /* _index_iterable_get */
-static TalkL9 talk_fn1030(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkL9 talk_fn1029(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -116870,7 +116592,7 @@ b0:
 }
 
 /* shared_drop */
-static TalkValue talk_fn1031(const TalkValue *env, TalkL9 p0) {
+static TalkValue talk_fn1030(const TalkValue *env, TalkL9 p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -116899,7 +116621,7 @@ b3:
 }
 
 /* _index_iterable_get */
-static TalkL9 talk_fn1032(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkL9 talk_fn1031(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -116912,7 +116634,7 @@ static TalkL9 talk_fn1032(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     l[1] = p1;
     goto b0;
 b0:
-    l[2] = talk_fn1013(NULL, x0, l[1]);
+    l[2] = talk_fn1012(NULL, x0, l[1]);
     if (talk_unwinding) {
         return (TalkL9){0};
     }
@@ -116922,7 +116644,7 @@ b0:
 }
 
 /* render_decl */
-static TalkL28 talk_fn1033(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL23 p2, TalkValue p3) {
+static TalkL28 talk_fn1032(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL23 p2, TalkValue p3) {
     TalkValue l[46];
     memset(l, 0, sizeof l);
     (void)env;
@@ -116952,13 +116674,13 @@ static TalkL28 talk_fn1033(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL23 
     goto b0;
 b0:
     l[4] = x2.m0;
-    x5 = talk_fn1061(NULL, l[4]);
+    x5 = talk_fn1060(NULL, l[4]);
     if (talk_unwinding) {
         goto b278;
     }
     l[4] = talk_int(x2.m2);
     l[6] = talk_int(x2.m3);
-    x7 = talk_fn1039(NULL, x0, x1, x5, l[4], l[6], l[3]);
+    x7 = talk_fn1038(NULL, x0, x1, x5, l[4], l[6], l[3]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -117000,7 +116722,7 @@ b2:
 b3:
     goto b4;
 b4:
-    x7 = talk_fn1036(NULL, x0, x1, l[4], l[6]);
+    x7 = talk_fn1035(NULL, x0, x1, l[4], l[6]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -117022,7 +116744,7 @@ b5:
     }
     goto b6;
 b6:
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[10]), l[6]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[10]), l[6]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -117050,7 +116772,7 @@ b10:
     }
     goto b11;
 b11:
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[10]), l[6]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[10]), l[6]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -117089,7 +116811,7 @@ b17:
     l[11] = l[3].v.agg->fields[1];
     goto b18;
 b18:
-    x7 = talk_fn1056(NULL, x0, x1, l[11], l[6]);
+    x7 = talk_fn1055(NULL, x0, x1, l[11], l[6]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -117106,7 +116828,7 @@ b19:
     l[11] = l[3].v.agg->fields[1];
     goto b20;
 b20:
-    x7 = talk_fn1062(NULL, x0, x1, l[11], l[6]);
+    x7 = talk_fn1061(NULL, x0, x1, l[11], l[6]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -117171,7 +116893,7 @@ b32:
     l[17] = x16.m1;
     goto b33;
 b33:
-    x7 = talk_fn1041(NULL, x0, x1, l[17], l[6]);
+    x7 = talk_fn1040(NULL, x0, x1, l[17], l[6]);
     if (talk_unwinding) {
         goto b34;
     }
@@ -117200,14 +116922,14 @@ b38:
 b39:
     goto b40;
 b40:
-    x7 = talk_fn1063(NULL, x0, x1, talk_unbox_l9(l[12]), l[6]);
+    x7 = talk_fn1062(NULL, x0, x1, talk_unbox_l9(l[12]), l[6]);
     if (talk_unwinding) {
         goto b41;
     }
     x0.m0 = x7.m1;
     x0.m1 = x7.m2;
     x0.m2 = x7.m3;
-    x7 = talk_fn1064(NULL, x0, x1, l[13], l[6]);
+    x7 = talk_fn1063(NULL, x0, x1, l[13], l[6]);
     if (talk_unwinding) {
         goto b41;
     }
@@ -117288,7 +117010,7 @@ b55:
     l[20] = x16.m1;
     goto b56;
 b56:
-    x7 = talk_fn1041(NULL, x0, x1, l[20], l[6]);
+    x7 = talk_fn1040(NULL, x0, x1, l[20], l[6]);
     if (talk_unwinding) {
         goto b57;
     }
@@ -117317,14 +117039,14 @@ b61:
 b62:
     goto b63;
 b63:
-    x7 = talk_fn1063(NULL, x0, x1, talk_unbox_l9(l[17]), l[6]);
+    x7 = talk_fn1062(NULL, x0, x1, talk_unbox_l9(l[17]), l[6]);
     if (talk_unwinding) {
         goto b64;
     }
     x0.m0 = x7.m1;
     x0.m1 = x7.m2;
     x0.m2 = x7.m3;
-    x7 = talk_fn1064(NULL, x0, x1, l[19], l[6]);
+    x7 = talk_fn1063(NULL, x0, x1, l[19], l[6]);
     if (talk_unwinding) {
         goto b64;
     }
@@ -117410,7 +117132,7 @@ b77:
     l[24] = x16.m1;
     goto b78;
 b78:
-    x7 = talk_fn1041(NULL, x0, x1, l[24], l[6]);
+    x7 = talk_fn1040(NULL, x0, x1, l[24], l[6]);
     if (talk_unwinding) {
         goto b79;
     }
@@ -117439,14 +117161,14 @@ b83:
 b84:
     goto b85;
 b85:
-    x7 = talk_fn1063(NULL, x0, x1, talk_unbox_l9(l[20]), l[6]);
+    x7 = talk_fn1062(NULL, x0, x1, talk_unbox_l9(l[20]), l[6]);
     if (talk_unwinding) {
         goto b92;
     }
     x0.m0 = x7.m1;
     x0.m1 = x7.m2;
     x0.m2 = x7.m3;
-    x7 = talk_fn1064(NULL, x0, x1, l[22], l[6]);
+    x7 = talk_fn1063(NULL, x0, x1, l[22], l[6]);
     if (talk_unwinding) {
         goto b92;
     }
@@ -117479,7 +117201,7 @@ b88:
     l[24] = x16.m1;
     goto b89;
 b89:
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[24]), l[6]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[24]), l[6]);
     if (talk_unwinding) {
         goto b90;
     }
@@ -117601,7 +117323,7 @@ b112:
     l[28] = x16.m1;
     goto b113;
 b113:
-    x7 = talk_fn1041(NULL, x0, x1, l[28], l[6]);
+    x7 = talk_fn1040(NULL, x0, x1, l[28], l[6]);
     if (talk_unwinding) {
         goto b114;
     }
@@ -117656,7 +117378,7 @@ b123:
     l[28] = x16.m1;
     goto b124;
 b124:
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[28]), l[6]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[28]), l[6]);
     if (talk_unwinding) {
         goto b125;
     }
@@ -117702,7 +117424,7 @@ b132:
     }
     goto b133;
 b133:
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[30]), l[6]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[30]), l[6]);
     if (talk_unwinding) {
         goto b134;
     }
@@ -117813,7 +117535,7 @@ b150:
     l[33] = x16.m1;
     goto b151;
 b151:
-    x7 = talk_fn1041(NULL, x0, x1, l[33], l[6]);
+    x7 = talk_fn1040(NULL, x0, x1, l[33], l[6]);
     if (talk_unwinding) {
         goto b152;
     }
@@ -117842,7 +117564,7 @@ b156:
 b157:
     goto b158;
 b158:
-    x7 = talk_fn1065(NULL, x0, x1, l[28], l[6]);
+    x7 = talk_fn1064(NULL, x0, x1, l[28], l[6]);
     if (talk_unwinding) {
         goto b171;
     }
@@ -117875,7 +117597,7 @@ b161:
     l[33] = x16.m1;
     goto b162;
 b162:
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[33]), l[6]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[33]), l[6]);
     if (talk_unwinding) {
         goto b163;
     }
@@ -117906,14 +117628,14 @@ b167:
 b168:
     goto b169;
 b169:
-    x7 = talk_fn1063(NULL, x0, x1, talk_unbox_l9(l[31]), l[6]);
+    x7 = talk_fn1062(NULL, x0, x1, talk_unbox_l9(l[31]), l[6]);
     if (talk_unwinding) {
         goto b170;
     }
     x0.m0 = x7.m1;
     x0.m1 = x7.m2;
     x0.m2 = x7.m3;
-    x7 = talk_fn1064(NULL, x0, x1, l[32], l[6]);
+    x7 = talk_fn1063(NULL, x0, x1, l[32], l[6]);
     if (talk_unwinding) {
         goto b170;
     }
@@ -117995,7 +117717,7 @@ b180:
     l[35] = x16.m1;
     goto b181;
 b181:
-    x7 = talk_fn1059(NULL, x0, x1, l[35], l[6]);
+    x7 = talk_fn1058(NULL, x0, x1, l[35], l[6]);
     if (talk_unwinding) {
         goto b182;
     }
@@ -118024,7 +117746,7 @@ b186:
 b187:
     goto b188;
 b188:
-    x7 = talk_fn1054(NULL, x0, x1, l[33], l[6]);
+    x7 = talk_fn1053(NULL, x0, x1, l[33], l[6]);
     if (talk_unwinding) {
         goto b189;
     }
@@ -118083,7 +117805,7 @@ b199:
     }
     goto b200;
 b200:
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[37]), l[6]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[37]), l[6]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -118111,7 +117833,7 @@ b204:
     }
     goto b205;
 b205:
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[37]), l[6]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[37]), l[6]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -118146,7 +117868,7 @@ b210:
 b211:
     goto b212;
 b212:
-    x7 = talk_fn1056(NULL, x0, x1, l[37], l[6]);
+    x7 = talk_fn1055(NULL, x0, x1, l[37], l[6]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -118165,7 +117887,7 @@ b213:
 b214:
     goto b215;
 b215:
-    x7 = talk_fn1062(NULL, x0, x1, l[37], l[6]);
+    x7 = talk_fn1061(NULL, x0, x1, l[37], l[6]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -118182,7 +117904,7 @@ b216:
     l[37] = l[3].v.agg->fields[1];
     goto b217;
 b217:
-    x7 = talk_fn1062(NULL, x0, x1, l[37], l[6]);
+    x7 = talk_fn1061(NULL, x0, x1, l[37], l[6]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -118211,7 +117933,7 @@ b220:
 b221:
     goto b222;
 b222:
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[37]), l[6]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[37]), l[6]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -118287,7 +118009,7 @@ b233:
     l[42] = x16.m1;
     goto b234;
 b234:
-    x7 = talk_fn1041(NULL, x0, x1, l[42], l[6]);
+    x7 = talk_fn1040(NULL, x0, x1, l[42], l[6]);
     if (talk_unwinding) {
         goto b235;
     }
@@ -118316,7 +118038,7 @@ b239:
 b240:
     goto b241;
 b241:
-    x7 = talk_fn1063(NULL, x0, x1, talk_unbox_l9(l[39]), l[6]);
+    x7 = talk_fn1062(NULL, x0, x1, talk_unbox_l9(l[39]), l[6]);
     if (talk_unwinding) {
         goto b254;
     }
@@ -118349,7 +118071,7 @@ b244:
     l[42] = x16.m1;
     goto b245;
 b245:
-    x7 = talk_fn1059(NULL, x0, x1, l[42], l[6]);
+    x7 = talk_fn1058(NULL, x0, x1, l[42], l[6]);
     if (talk_unwinding) {
         goto b246;
     }
@@ -118378,7 +118100,7 @@ b250:
 b251:
     goto b252;
 b252:
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[41]), l[6]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[41]), l[6]);
     if (talk_unwinding) {
         goto b253;
     }
@@ -118428,14 +118150,14 @@ b258:
 b259:
     goto b260;
 b260:
-    x7 = talk_fn1041(NULL, x0, x1, l[43], l[6]);
+    x7 = talk_fn1040(NULL, x0, x1, l[43], l[6]);
     if (talk_unwinding) {
         goto b277;
     }
     x0.m0 = x7.m1;
     x0.m1 = x7.m2;
     x0.m2 = x7.m3;
-    x7 = talk_fn1063(NULL, x0, x1, talk_unbox_l9(l[42]), l[6]);
+    x7 = talk_fn1062(NULL, x0, x1, talk_unbox_l9(l[42]), l[6]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -118470,7 +118192,7 @@ b266:
 b267:
     goto b268;
 b268:
-    x7 = talk_fn1040(NULL, x0, x1, talk_unbox_l3(l[44]), l[6]);
+    x7 = talk_fn1039(NULL, x0, x1, talk_unbox_l3(l[44]), l[6]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -118505,7 +118227,7 @@ b274:
 b275:
     goto b276;
 b276:
-    x7 = talk_fn1040(NULL, x0, x1, talk_unbox_l3(l[45]), l[6]);
+    x7 = talk_fn1039(NULL, x0, x1, talk_unbox_l3(l[45]), l[6]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -118541,7 +118263,7 @@ b280:
 }
 
 /* render_stmt */
-static TalkL28 talk_fn1034(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL26 p2, TalkValue p3) {
+static TalkL28 talk_fn1033(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL26 p2, TalkValue p3) {
     TalkValue l[21];
     memset(l, 0, sizeof l);
     (void)env;
@@ -118569,13 +118291,13 @@ static TalkL28 talk_fn1034(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL26 
     goto b0;
 b0:
     l[4] = x2.m0;
-    x5 = talk_fn1060(NULL, l[4]);
+    x5 = talk_fn1059(NULL, l[4]);
     if (talk_unwinding) {
         goto b65;
     }
     l[4] = talk_int(x2.m1);
     l[6] = talk_int(x2.m2);
-    x7 = talk_fn1039(NULL, x0, x1, x5, l[4], l[6], l[3]);
+    x7 = talk_fn1038(NULL, x0, x1, x5, l[4], l[6], l[3]);
     if (talk_unwinding) {
         goto b64;
     }
@@ -118608,7 +118330,7 @@ b1:
     goto b2;
 b2:
     l[8] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[4]), l[8]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[4]), l[8]);
     if (talk_unwinding) {
         goto b64;
     }
@@ -118638,7 +118360,7 @@ b5:
     goto b6;
 b6:
     l[11] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[4]), l[11]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[4]), l[11]);
     if (talk_unwinding) {
         goto b64;
     }
@@ -118646,7 +118368,7 @@ b6:
     x0.m1 = x7.m2;
     x0.m2 = x7.m3;
     l[11] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1054(NULL, x0, x1, l[9], l[11]);
+    x7 = talk_fn1053(NULL, x0, x1, l[9], l[11]);
     if (talk_unwinding) {
         goto b64;
     }
@@ -118663,7 +118385,7 @@ b7:
     goto b8;
 b8:
     l[12] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1054(NULL, x0, x1, l[11], l[12]);
+    x7 = talk_fn1053(NULL, x0, x1, l[11], l[12]);
     if (talk_unwinding) {
         goto b64;
     }
@@ -118710,7 +118432,7 @@ b14:
     goto b15;
 b15:
     l[11] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[12]), l[11]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[12]), l[11]);
     if (talk_unwinding) {
         goto b64;
     }
@@ -118782,7 +118504,7 @@ b25:
     goto b26;
 b26:
     l[12] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[11]), l[12]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[11]), l[12]);
     if (talk_unwinding) {
         goto b27;
     }
@@ -118857,7 +118579,7 @@ b40:
     goto b41;
 b41:
     l[17] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[12]), l[17]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[12]), l[17]);
     if (talk_unwinding) {
         goto b64;
     }
@@ -118871,7 +118593,7 @@ b43:
     goto b44;
 b44:
     l[17] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1054(NULL, x0, x1, l[11], l[17]);
+    x7 = talk_fn1053(NULL, x0, x1, l[11], l[17]);
     if (talk_unwinding) {
         goto b64;
     }
@@ -118903,7 +118625,7 @@ b48:
     goto b49;
 b49:
     l[19] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[12]), l[19]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[12]), l[19]);
     if (talk_unwinding) {
         goto b64;
     }
@@ -118911,7 +118633,7 @@ b49:
     x0.m1 = x7.m2;
     x0.m2 = x7.m3;
     l[19] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1036(NULL, x0, x1, l[17], l[19]);
+    x7 = talk_fn1035(NULL, x0, x1, l[17], l[19]);
     if (talk_unwinding) {
         goto b64;
     }
@@ -118919,7 +118641,7 @@ b49:
     x0.m1 = x7.m2;
     x0.m2 = x7.m3;
     l[19] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1054(NULL, x0, x1, l[18], l[19]);
+    x7 = talk_fn1053(NULL, x0, x1, l[18], l[19]);
     if (talk_unwinding) {
         goto b64;
     }
@@ -118960,7 +118682,7 @@ b54:
     goto b55;
 b55:
     l[19] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[20]), l[19]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[20]), l[19]);
     if (talk_unwinding) {
         goto b64;
     }
@@ -118998,7 +118720,7 @@ b62:
     goto b63;
 b63:
     l[6] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1054(NULL, x0, x1, l[19], l[6]);
+    x7 = talk_fn1053(NULL, x0, x1, l[19], l[6]);
     if (talk_unwinding) {
         goto b64;
     }
@@ -119034,7 +118756,7 @@ b67:
 }
 
 /* render_expr */
-static TalkL28 talk_fn1035(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL16 p2, TalkValue p3) {
+static TalkL28 talk_fn1034(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL16 p2, TalkValue p3) {
     TalkValue l[35];
     memset(l, 0, sizeof l);
     (void)env;
@@ -119068,13 +118790,13 @@ static TalkL28 talk_fn1035(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL16 
     goto b0;
 b0:
     l[4] = x2.m0;
-    x5 = talk_fn1052(NULL, l[4]);
+    x5 = talk_fn1051(NULL, l[4]);
     if (talk_unwinding) {
         goto b464;
     }
     l[4] = talk_int(x2.m1);
     l[6] = talk_int(x2.m2);
-    x7 = talk_fn1039(NULL, x0, x1, x5, l[4], l[6], l[3]);
+    x7 = talk_fn1038(NULL, x0, x1, x5, l[4], l[6], l[3]);
     if (talk_unwinding) {
         goto b463;
     }
@@ -119133,7 +118855,7 @@ b6:
     goto b7;
 b7:
     l[11] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[6]), l[11]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[6]), l[11]);
     if (talk_unwinding) {
         goto b8;
     }
@@ -119239,7 +118961,7 @@ b26:
     goto b27;
 b27:
     l[12] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[11]), l[12]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[11]), l[12]);
     if (talk_unwinding) {
         goto b28;
     }
@@ -119371,7 +119093,7 @@ b48:
     goto b49;
 b49:
     l[16] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[13]), l[16]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[13]), l[16]);
     if (talk_unwinding) {
         goto b50;
     }
@@ -119429,7 +119151,7 @@ b59:
     goto b60;
 b60:
     l[16] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1044(NULL, x0, x1, l[13], l[16]);
+    x7 = talk_fn1043(NULL, x0, x1, l[13], l[16]);
     if (talk_unwinding) {
         goto b61;
     }
@@ -119485,7 +119207,7 @@ b70:
     goto b71;
 b71:
     l[16] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1053(NULL, x0, x1, l[13], l[16]);
+    x7 = talk_fn1052(NULL, x0, x1, l[13], l[16]);
     if (talk_unwinding) {
         goto b72;
     }
@@ -119541,7 +119263,7 @@ b81:
     goto b82;
 b82:
     l[16] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1054(NULL, x0, x1, l[13], l[16]);
+    x7 = talk_fn1053(NULL, x0, x1, l[13], l[16]);
     if (talk_unwinding) {
         goto b83;
     }
@@ -119715,7 +119437,7 @@ b111:
     goto b112;
 b112:
     l[21] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1044(NULL, x0, x1, l[17], l[21]);
+    x7 = talk_fn1043(NULL, x0, x1, l[17], l[21]);
     if (talk_unwinding) {
         goto b113;
     }
@@ -119862,7 +119584,7 @@ b142:
     goto b143;
 b143:
     l[21] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[17]), l[21]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[17]), l[21]);
     if (talk_unwinding) {
         goto b144;
     }
@@ -119970,7 +119692,7 @@ b161:
     goto b162;
 b162:
     l[22] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[21]), l[22]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[21]), l[22]);
     if (talk_unwinding) {
         goto b163;
     }
@@ -120079,7 +119801,7 @@ b180:
     goto b181;
 b181:
     l[22] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[17]), l[22]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[17]), l[22]);
     if (talk_unwinding) {
         goto b182;
     }
@@ -120157,7 +119879,7 @@ b195:
     goto b196;
 b196:
     l[22] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1054(NULL, x0, x1, l[17], l[22]);
+    x7 = talk_fn1053(NULL, x0, x1, l[17], l[22]);
     if (talk_unwinding) {
         goto b463;
     }
@@ -120228,7 +119950,7 @@ b204:
     goto b205;
 b205:
     l[22] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[21]), l[22]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[21]), l[22]);
     if (talk_unwinding) {
         goto b206;
     }
@@ -120340,7 +120062,7 @@ b223:
     goto b224;
 b224:
     l[22] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[17]), l[22]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[17]), l[22]);
     if (talk_unwinding) {
         goto b225;
     }
@@ -120461,7 +120183,7 @@ b244:
     goto b245;
 b245:
     l[24] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[22]), l[24]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[22]), l[24]);
     if (talk_unwinding) {
         goto b246;
     }
@@ -120493,7 +120215,7 @@ b251:
     goto b252;
 b252:
     l[25] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1054(NULL, x0, x1, l[21], l[25]);
+    x7 = talk_fn1053(NULL, x0, x1, l[21], l[25]);
     if (talk_unwinding) {
         goto b253;
     }
@@ -120501,7 +120223,7 @@ b252:
     x0.m1 = x7.m2;
     x0.m2 = x7.m3;
     l[25] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1054(NULL, x0, x1, l[23], l[25]);
+    x7 = talk_fn1053(NULL, x0, x1, l[23], l[25]);
     if (talk_unwinding) {
         goto b253;
     }
@@ -120602,7 +120324,7 @@ b264:
     goto b265;
 b265:
     l[26] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[25]), l[26]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[25]), l[26]);
     if (talk_unwinding) {
         goto b266;
     }
@@ -120660,7 +120382,7 @@ b275:
     goto b276;
 b276:
     l[25] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1055(NULL, x0, x1, talk_unbox_l57(l[26]), l[25]);
+    x7 = talk_fn1054(NULL, x0, x1, talk_unbox_l57(l[26]), l[25]);
     if (talk_unwinding) {
         goto b277;
     }
@@ -120753,7 +120475,7 @@ b292:
     goto b293;
 b293:
     l[27] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1056(NULL, x0, x1, l[26], l[27]);
+    x7 = talk_fn1055(NULL, x0, x1, l[26], l[27]);
     if (talk_unwinding) {
         goto b463;
     }
@@ -120795,7 +120517,7 @@ b297:
     goto b298;
 b298:
     l[27] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1054(NULL, x0, x1, l[26], l[27]);
+    x7 = talk_fn1053(NULL, x0, x1, l[26], l[27]);
     if (talk_unwinding) {
         goto b463;
     }
@@ -120881,7 +120603,7 @@ b307:
     goto b308;
 b308:
     l[28] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[27]), l[28]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[27]), l[28]);
     if (talk_unwinding) {
         goto b309;
     }
@@ -120913,7 +120635,7 @@ b314:
     goto b315;
 b315:
     l[29] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[25]), l[29]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[25]), l[29]);
     if (talk_unwinding) {
         goto b316;
     }
@@ -121007,7 +120729,7 @@ b326:
     goto b327;
 b327:
     l[29] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[27]), l[29]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[27]), l[29]);
     if (talk_unwinding) {
         goto b328;
     }
@@ -121126,7 +120848,7 @@ b345:
     goto b346;
 b346:
     l[27] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[28]), l[27]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[28]), l[27]);
     if (talk_unwinding) {
         goto b347;
     }
@@ -121262,7 +120984,7 @@ b368:
     goto b369;
 b369:
     l[30] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1044(NULL, x0, x1, l[29], l[30]);
+    x7 = talk_fn1043(NULL, x0, x1, l[29], l[30]);
     if (talk_unwinding) {
         goto b370;
     }
@@ -121318,7 +121040,7 @@ b379:
     goto b380;
 b380:
     l[30] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1053(NULL, x0, x1, l[29], l[30]);
+    x7 = talk_fn1052(NULL, x0, x1, l[29], l[30]);
     if (talk_unwinding) {
         goto b381;
     }
@@ -121461,7 +121183,7 @@ b401:
     goto b402;
 b402:
     l[32] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1057(NULL, x0, x1, l[31], l[32]);
+    x7 = talk_fn1056(NULL, x0, x1, l[31], l[32]);
     if (talk_unwinding) {
         goto b403;
     }
@@ -121517,7 +121239,7 @@ b412:
     goto b413;
 b413:
     l[31] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[32]), l[31]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[32]), l[31]);
     if (talk_unwinding) {
         goto b414;
     }
@@ -121656,7 +121378,7 @@ b434:
     goto b435;
 b435:
     l[32] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[31]), l[32]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[31]), l[32]);
     if (talk_unwinding) {
         goto b436;
     }
@@ -121792,7 +121514,7 @@ b459:
     goto b460;
 b460:
     l[32] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[33]), l[32]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[33]), l[32]);
     if (talk_unwinding) {
         goto b461;
     }
@@ -121873,7 +121595,7 @@ b475:
 }
 
 /* render_pattern */
-static TalkL28 talk_fn1036(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1035(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[18];
     memset(l, 0, sizeof l);
     (void)env;
@@ -121898,7 +121620,7 @@ static TalkL28 talk_fn1036(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValu
     l[3] = p3;
     goto b0;
 b0:
-    x4 = talk_fn1050(NULL, x0, x1, l[2], l[3]);
+    x4 = talk_fn1049(NULL, x0, x1, l[2], l[3]);
     if (talk_unwinding) {
         goto b162;
     }
@@ -121945,7 +121667,7 @@ b6:
     goto b7;
 b7:
     l[5] = talk_add(l[3], talk_int(INT64_C(1)));
-    x4 = talk_fn1040(NULL, x0, x1, talk_unbox_l3(l[6]), l[5]);
+    x4 = talk_fn1039(NULL, x0, x1, talk_unbox_l3(l[6]), l[5]);
     if (talk_unwinding) {
         goto b162;
     }
@@ -122009,7 +121731,7 @@ b15:
     goto b16;
 b16:
     l[5] = talk_add(l[3], talk_int(INT64_C(1)));
-    x4 = talk_fn1036(NULL, x0, x1, l[7], l[5]);
+    x4 = talk_fn1035(NULL, x0, x1, l[7], l[5]);
     if (talk_unwinding) {
         goto b17;
     }
@@ -122114,7 +121836,7 @@ b34:
     goto b35;
 b35:
     l[11] = talk_add(l[3], talk_int(INT64_C(1)));
-    x4 = talk_fn1036(NULL, x0, x1, l[5], l[11]);
+    x4 = talk_fn1035(NULL, x0, x1, l[5], l[11]);
     if (talk_unwinding) {
         goto b36;
     }
@@ -122265,7 +121987,7 @@ b63:
     goto b64;
 b64:
     l[14] = talk_add(l[3], talk_int(INT64_C(1)));
-    x4 = talk_fn1044(NULL, x0, x1, l[13], l[14]);
+    x4 = talk_fn1043(NULL, x0, x1, l[13], l[14]);
     if (talk_unwinding) {
         goto b65;
     }
@@ -122357,7 +122079,7 @@ b83:
     goto b84;
 b84:
     l[15] = talk_add(l[3], talk_int(INT64_C(1)));
-    x4 = talk_fn1036(NULL, x0, x1, l[13], l[15]);
+    x4 = talk_fn1035(NULL, x0, x1, l[13], l[15]);
     if (talk_unwinding) {
         goto b85;
     }
@@ -122519,7 +122241,7 @@ b112:
     goto b113;
 b113:
     l[16] = talk_add(l[3], talk_int(INT64_C(1)));
-    x4 = talk_fn1044(NULL, x0, x1, l[11], l[16]);
+    x4 = talk_fn1043(NULL, x0, x1, l[11], l[16]);
     if (talk_unwinding) {
         goto b114;
     }
@@ -122611,7 +122333,7 @@ b132:
     goto b133;
 b133:
     l[17] = talk_add(l[3], talk_int(INT64_C(1)));
-    x4 = talk_fn1036(NULL, x0, x1, l[11], l[17]);
+    x4 = talk_fn1035(NULL, x0, x1, l[11], l[17]);
     if (talk_unwinding) {
         goto b134;
     }
@@ -122750,7 +122472,7 @@ b158:
     goto b159;
 b159:
     l[16] = talk_add(l[3], talk_int(INT64_C(1)));
-    x4 = talk_fn1036(NULL, x0, x1, l[11], l[16]);
+    x4 = talk_fn1035(NULL, x0, x1, l[11], l[16]);
     if (talk_unwinding) {
         goto b160;
     }
@@ -122831,7 +122553,7 @@ b176:
 }
 
 /* render_type */
-static TalkL28 talk_fn1037(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL13 p2, TalkValue p3) {
+static TalkL28 talk_fn1036(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL13 p2, TalkValue p3) {
     TalkValue l[25];
     memset(l, 0, sizeof l);
     (void)env;
@@ -122861,13 +122583,13 @@ static TalkL28 talk_fn1037(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL13 
     goto b0;
 b0:
     l[4] = x2.m0;
-    x5 = talk_fn1038(NULL, l[4]);
+    x5 = talk_fn1037(NULL, l[4]);
     if (talk_unwinding) {
         goto b214;
     }
     l[4] = talk_int(x2.m1);
     l[6] = talk_int(x2.m2);
-    x7 = talk_fn1039(NULL, x0, x1, x5, l[4], l[6], l[3]);
+    x7 = talk_fn1038(NULL, x0, x1, x5, l[4], l[6], l[3]);
     if (talk_unwinding) {
         goto b213;
     }
@@ -122910,7 +122632,7 @@ b6:
     goto b7;
 b7:
     l[6] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1040(NULL, x0, x1, talk_unbox_l3(l[4]), l[6]);
+    x7 = talk_fn1039(NULL, x0, x1, talk_unbox_l3(l[4]), l[6]);
     if (talk_unwinding) {
         goto b213;
     }
@@ -122968,7 +122690,7 @@ b16:
     goto b17;
 b17:
     l[12] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[6]), l[12]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[6]), l[12]);
     if (talk_unwinding) {
         goto b18;
     }
@@ -123065,7 +122787,7 @@ b35:
     goto b36;
 b36:
     l[6] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[12]), l[6]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[12]), l[6]);
     if (talk_unwinding) {
         goto b37;
     }
@@ -123174,7 +122896,7 @@ b56:
     goto b57;
 b57:
     l[14] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[13]), l[14]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[13]), l[14]);
     if (talk_unwinding) {
         goto b58;
     }
@@ -123232,7 +122954,7 @@ b67:
     goto b68;
 b68:
     l[14] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[13]), l[14]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[13]), l[14]);
     if (talk_unwinding) {
         goto b69;
     }
@@ -123357,7 +123079,7 @@ b90:
     goto b91;
 b91:
     l[18] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1041(NULL, x0, x1, l[15], l[18]);
+    x7 = talk_fn1040(NULL, x0, x1, l[15], l[18]);
     if (talk_unwinding) {
         goto b92;
     }
@@ -123396,7 +123118,7 @@ b99:
     goto b100;
 b100:
     l[15] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1042(NULL, x0, x1, l[18], l[15]);
+    x7 = talk_fn1041(NULL, x0, x1, l[18], l[15]);
     if (talk_unwinding) {
         goto b110;
     }
@@ -123436,7 +123158,7 @@ b106:
     goto b107;
 b107:
     l[18] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[15]), l[18]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[15]), l[18]);
     if (talk_unwinding) {
         goto b108;
     }
@@ -123565,7 +123287,7 @@ b131:
     goto b132;
 b132:
     l[20] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[19]), l[20]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[19]), l[20]);
     if (talk_unwinding) {
         goto b133;
     }
@@ -123597,7 +123319,7 @@ b138:
     goto b139;
 b139:
     l[21] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1043(NULL, x0, x1, talk_unbox_l3(l[18]), l[21]);
+    x7 = talk_fn1042(NULL, x0, x1, talk_unbox_l3(l[18]), l[21]);
     if (talk_unwinding) {
         goto b140;
     }
@@ -123654,7 +123376,7 @@ b149:
     goto b150;
 b150:
     l[21] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1043(NULL, x0, x1, talk_unbox_l3(l[20]), l[21]);
+    x7 = talk_fn1042(NULL, x0, x1, talk_unbox_l3(l[20]), l[21]);
     if (talk_unwinding) {
         goto b213;
     }
@@ -123716,7 +123438,7 @@ b158:
     goto b159;
 b159:
     l[19] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[21]), l[19]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[21]), l[19]);
     if (talk_unwinding) {
         goto b160;
     }
@@ -123826,7 +123548,7 @@ b178:
         l[21] = talk_box_l13(tmp);
     }
     l[22] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[21]), l[22]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[21]), l[22]);
     if (talk_unwinding) {
         goto b179;
     }
@@ -123937,7 +123659,7 @@ b197:
     goto b198;
 b198:
     l[23] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[22]), l[23]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[22]), l[23]);
     if (talk_unwinding) {
         goto b199;
     }
@@ -124002,7 +123724,7 @@ b209:
         l[22] = talk_box_l13(tmp);
     }
     l[24] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[22]), l[24]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[22]), l[24]);
     if (talk_unwinding) {
         goto b210;
     }
@@ -124095,7 +123817,7 @@ b226:
 }
 
 /* type_label */
-static TalkL1 talk_fn1038(const TalkValue *env, TalkValue p0) {
+static TalkL1 talk_fn1037(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -124310,7 +124032,7 @@ b40:
 }
 
 /* node_line */
-static TalkL28 talk_fn1039(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL1 p2, TalkValue p3, TalkValue p4, TalkValue p5) {
+static TalkL28 talk_fn1038(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL1 p2, TalkValue p3, TalkValue p4, TalkValue p5) {
     TalkValue l[7];
     memset(l, 0, sizeof l);
     (void)env;
@@ -124331,7 +124053,7 @@ static TalkL28 talk_fn1039(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL1 p
     l[5] = p5;
     goto b0;
 b0:
-    x6 = talk_fn1049(NULL, x0, l[5]);
+    x6 = talk_fn1048(NULL, x0, l[5]);
     if (talk_unwinding) {
         goto b4;
     }
@@ -124412,7 +124134,7 @@ b3:
     x0.m0 = x6.m1;
     x0.m1 = x6.m2;
     x0.m2 = x6.m3;
-    x6 = talk_fn1027(NULL, x0, x1, l[3], l[4]);
+    x6 = talk_fn1026(NULL, x0, x1, l[3], l[4]);
     if (talk_unwinding) {
         goto b4;
     }
@@ -124448,7 +124170,7 @@ b4:
 }
 
 /* render_macro_tokens */
-static TalkL28 talk_fn1040(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL3 p2, TalkValue p3) {
+static TalkL28 talk_fn1039(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL3 p2, TalkValue p3) {
     TalkValue l[12];
     memset(l, 0, sizeof l);
     (void)env;
@@ -124473,7 +124195,7 @@ static TalkL28 talk_fn1040(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL3 p
     l[3] = p3;
     goto b0;
 b0:
-    x4 = talk_fn1046(NULL, x2);
+    x4 = talk_fn1045(NULL, x2);
     if (talk_unwinding) {
         goto b6;
     }
@@ -124481,7 +124203,7 @@ b0:
 b1:
     goto b2;
 b2:
-    x5 = talk_fn1047(NULL, x4);
+    x5 = talk_fn1046(NULL, x4);
     if (talk_unwinding) {
         goto b5;
     }
@@ -124508,7 +124230,7 @@ b4:
     }
     l[9] = talk_int(((const TalkL60 *)TALK_NATIVE_PAYLOAD(l[7]))->m3);
     l[10] = talk_int(((const TalkL60 *)TALK_NATIVE_PAYLOAD(l[7]))->m4);
-    x11 = talk_fn1039(NULL, x0, x1, talk_unbox_l1(l[8]), l[9], l[10], l[3]);
+    x11 = talk_fn1038(NULL, x0, x1, talk_unbox_l1(l[8]), l[9], l[10], l[3]);
     if (talk_unwinding) {
         goto b5;
     }
@@ -124553,7 +124275,7 @@ b12:
 }
 
 /* render_generic_decl */
-static TalkL28 talk_fn1041(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1040(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[16];
     memset(l, 0, sizeof l);
     (void)env;
@@ -124587,7 +124309,7 @@ b0:
     }
     l[5] = l[2].v.agg->fields[16];
     l[6] = l[2].v.agg->fields[17];
-    x7 = talk_fn1039(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
+    x7 = talk_fn1038(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
     if (talk_unwinding) {
         goto b34;
     }
@@ -124633,7 +124355,7 @@ b3:
     goto b4;
 b4:
     l[11] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1041(NULL, x0, x1, l[4], l[11]);
+    x7 = talk_fn1040(NULL, x0, x1, l[4], l[11]);
     if (talk_unwinding) {
         goto b5;
     }
@@ -124701,7 +124423,7 @@ b14:
     goto b15;
 b15:
     l[14] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[12]), l[14]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[12]), l[14]);
     if (talk_unwinding) {
         goto b16;
     }
@@ -124743,7 +124465,7 @@ b23:
     goto b24;
 b24:
     l[15] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1044(NULL, x0, x1, l[12], l[15]);
+    x7 = talk_fn1043(NULL, x0, x1, l[12], l[15]);
     if (talk_unwinding) {
         goto b30;
     }
@@ -124773,7 +124495,7 @@ b28:
     goto b29;
 b29:
     l[15] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[2]), l[15]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[2]), l[15]);
     if (talk_unwinding) {
         goto b30;
     }
@@ -124857,7 +124579,7 @@ b39:
 }
 
 /* render_where_clause */
-static TalkL28 talk_fn1042(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1041(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[20];
     memset(l, 0, sizeof l);
     (void)env;
@@ -124935,14 +124657,14 @@ b5:
 b6:
     goto b7;
 b7:
-    x12 = talk_fn1044(NULL, x0, x1, l[10], l[3]);
+    x12 = talk_fn1043(NULL, x0, x1, l[10], l[3]);
     if (talk_unwinding) {
         goto b21;
     }
     x0.m0 = x12.m1;
     x0.m1 = x12.m2;
     x0.m2 = x12.m3;
-    x12 = talk_fn1044(NULL, x0, x1, l[11], l[3]);
+    x12 = talk_fn1043(NULL, x0, x1, l[11], l[3]);
     if (talk_unwinding) {
         goto b21;
     }
@@ -124959,14 +124681,14 @@ b9:
 b10:
     goto b11;
 b11:
-    x12 = talk_fn1044(NULL, x0, x1, l[13], l[3]);
+    x12 = talk_fn1043(NULL, x0, x1, l[13], l[3]);
     if (talk_unwinding) {
         goto b21;
     }
     x0.m0 = x12.m1;
     x0.m1 = x12.m2;
     x0.m2 = x12.m3;
-    x12 = talk_fn1044(NULL, x0, x1, l[14], l[3]);
+    x12 = talk_fn1043(NULL, x0, x1, l[14], l[3]);
     if (talk_unwinding) {
         goto b21;
     }
@@ -124993,7 +124715,7 @@ b12:
 b13:
     goto b14;
 b14:
-    x12 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[15]), l[3]);
+    x12 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[15]), l[3]);
     if (talk_unwinding) {
         goto b21;
     }
@@ -125026,7 +124748,7 @@ b17:
     l[9] = x8.m1;
     goto b18;
 b18:
-    x12 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[9]), l[3]);
+    x12 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[9]), l[3]);
     if (talk_unwinding) {
         goto b19;
     }
@@ -125139,7 +124861,7 @@ b41:
 }
 
 /* render_generic_args */
-static TalkL28 talk_fn1043(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL3 p2, TalkValue p3) {
+static TalkL28 talk_fn1042(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL3 p2, TalkValue p3) {
     TalkValue l[11];
     memset(l, 0, sizeof l);
     (void)env;
@@ -125190,7 +124912,7 @@ b3:
     l[7] = x6.m1;
     goto b4;
 b4:
-    x8 = talk_fn1044(NULL, x0, x1, l[7], l[3]);
+    x8 = talk_fn1043(NULL, x0, x1, l[7], l[3]);
     if (talk_unwinding) {
         goto b5;
     }
@@ -125247,7 +124969,7 @@ b14:
 }
 
 /* render_generic_arg */
-static TalkL28 talk_fn1044(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1043(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -125284,7 +125006,7 @@ b1:
     }
     goto b2;
 b2:
-    x6 = talk_fn1037(NULL, x0, x1, x5, l[3]);
+    x6 = talk_fn1036(NULL, x0, x1, x5, l[3]);
     if (talk_unwinding) {
         goto b5;
     }
@@ -125307,7 +125029,7 @@ b3:
     }
     goto b4;
 b4:
-    x6 = talk_fn1045(NULL, x0, x1, x7, l[3]);
+    x6 = talk_fn1044(NULL, x0, x1, x7, l[3]);
     if (talk_unwinding) {
         goto b5;
     }
@@ -125337,7 +125059,7 @@ b7:
 }
 
 /* render_static_expr */
-static TalkL28 talk_fn1045(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL21 p2, TalkValue p3) {
+static TalkL28 talk_fn1044(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL21 p2, TalkValue p3) {
     TalkValue l[13];
     memset(l, 0, sizeof l);
     (void)env;
@@ -125383,7 +125105,7 @@ b1:
     }
     goto b2;
 b2:
-    x6 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[5]), l[3]);
+    x6 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[5]), l[3]);
     if (talk_unwinding) {
         goto b28;
     }
@@ -125432,7 +125154,7 @@ b7:
     l[7] = x10.m1;
     goto b8;
 b8:
-    x6 = talk_fn1045(NULL, x0, x1, talk_unbox_l21(l[7]), l[3]);
+    x6 = talk_fn1044(NULL, x0, x1, talk_unbox_l21(l[7]), l[3]);
     if (talk_unwinding) {
         goto b9;
     }
@@ -125522,7 +125244,7 @@ b24:
     l[4] = x10.m1;
     goto b25;
 b25:
-    x6 = talk_fn1045(NULL, x0, x1, talk_unbox_l21(l[4]), l[3]);
+    x6 = talk_fn1044(NULL, x0, x1, talk_unbox_l21(l[4]), l[3]);
     if (talk_unwinding) {
         goto b26;
     }
@@ -125597,7 +125319,7 @@ b39:
 }
 
 /* iter */
-static TalkL78 talk_fn1046(const TalkValue *env, TalkL3 p0) {
+static TalkL78 talk_fn1045(const TalkValue *env, TalkL3 p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -125619,7 +125341,7 @@ b0:
 }
 
 /* next */
-static TalkL79 talk_fn1047(const TalkValue *env, TalkL78 p0) {
+static TalkL79 talk_fn1046(const TalkValue *env, TalkL78 p0) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -125651,7 +125373,7 @@ b2:
 b3:
     l[3] = x0.m0;
     l[2] = talk_int(x0.m1);
-    x4 = talk_fn1048(NULL, talk_unbox_l3(l[3]), l[2]);
+    x4 = talk_fn1047(NULL, talk_unbox_l3(l[3]), l[2]);
     if (talk_unwinding) {
         return (TalkL79){0};
     }
@@ -125688,7 +125410,7 @@ b8:
 }
 
 /* _index_iterable_get */
-static TalkL9 talk_fn1048(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkL9 talk_fn1047(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -125711,7 +125433,7 @@ b0:
 }
 
 /* indent */
-static TalkL28 talk_fn1049(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkL28 talk_fn1048(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[5];
     memset(l, 0, sizeof l);
     (void)env;
@@ -125763,7 +125485,7 @@ b5:
 }
 
 /* pattern_line */
-static TalkL28 talk_fn1050(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1049(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[9];
     memset(l, 0, sizeof l);
     (void)env;
@@ -125783,7 +125505,7 @@ static TalkL28 talk_fn1050(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValu
     goto b0;
 b0:
     l[4] = ((const TalkL40 *)TALK_NATIVE_PAYLOAD(l[2]))->m0;
-    x5 = talk_fn1051(NULL, l[4]);
+    x5 = talk_fn1050(NULL, l[4]);
     if (talk_unwinding) {
         goto b11;
     }
@@ -125793,7 +125515,7 @@ b0:
 b1:
     l[6] = talk_int(((const TalkL40 *)TALK_NATIVE_PAYLOAD(l[2]))->m1);
     l[4] = talk_int(((const TalkL40 *)TALK_NATIVE_PAYLOAD(l[2]))->m2);
-    x7 = talk_fn1039(NULL, x0, x1, x5, l[6], l[4], l[3]);
+    x7 = talk_fn1038(NULL, x0, x1, x5, l[6], l[4], l[3]);
     if (talk_unwinding) {
         goto b10;
     }
@@ -125834,7 +125556,7 @@ b6:
 b7:
     l[8] = talk_int(((const TalkL40 *)TALK_NATIVE_PAYLOAD(l[2]))->m1);
     l[6] = talk_int(((const TalkL40 *)TALK_NATIVE_PAYLOAD(l[2]))->m2);
-    x7 = talk_fn1039(NULL, x0, x1, x5, l[8], l[6], l[3]);
+    x7 = talk_fn1038(NULL, x0, x1, x5, l[8], l[6], l[3]);
     if (talk_unwinding) {
         goto b10;
     }
@@ -125851,7 +125573,7 @@ b7:
 b8:
     goto b9;
 b9:
-    x7 = talk_fn1049(NULL, x0, l[3]);
+    x7 = talk_fn1048(NULL, x0, l[3]);
     if (talk_unwinding) {
         goto b10;
     }
@@ -125955,7 +125677,7 @@ b9:
     x0.m2 = x7.m3;
     l[3] = talk_int(((const TalkL40 *)TALK_NATIVE_PAYLOAD(l[2]))->m1);
     l[8] = talk_int(((const TalkL40 *)TALK_NATIVE_PAYLOAD(l[2]))->m2);
-    x7 = talk_fn1027(NULL, x0, x1, l[3], l[8]);
+    x7 = talk_fn1026(NULL, x0, x1, l[3], l[8]);
     if (talk_unwinding) {
         goto b10;
     }
@@ -125997,7 +125719,7 @@ b11:
 }
 
 /* pattern_label */
-static TalkL1 talk_fn1051(const TalkValue *env, TalkValue p0) {
+static TalkL1 talk_fn1050(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -126270,7 +125992,7 @@ b45:
 }
 
 /* expr_label */
-static TalkL1 talk_fn1052(const TalkValue *env, TalkValue p0) {
+static TalkL1 talk_fn1051(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -126823,7 +126545,7 @@ b89:
 }
 
 /* render_call_arg */
-static TalkL28 talk_fn1053(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1052(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -126849,7 +126571,7 @@ b0:
     }
     l[5] = l[2].v.agg->fields[14];
     l[6] = l[2].v.agg->fields[15];
-    x7 = talk_fn1039(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
+    x7 = talk_fn1038(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
     if (talk_unwinding) {
         goto b1;
     }
@@ -126864,7 +126586,7 @@ b0:
         l[6] = talk_box_l16(tmp);
     }
     l[2] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[6]), l[2]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[6]), l[2]);
     if (talk_unwinding) {
         goto b1;
     }
@@ -126886,7 +126608,7 @@ b1:
 }
 
 /* render_block */
-static TalkL28 talk_fn1054(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1053(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[15];
     memset(l, 0, sizeof l);
     (void)env;
@@ -126920,7 +126642,7 @@ b0:
     }
     l[5] = talk_int(((const TalkL34 *)TALK_NATIVE_PAYLOAD(l[2]))->m6);
     l[6] = talk_int(((const TalkL34 *)TALK_NATIVE_PAYLOAD(l[2]))->m7);
-    x7 = talk_fn1039(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
+    x7 = talk_fn1038(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
     if (talk_unwinding) {
         goto b21;
     }
@@ -126966,7 +126688,7 @@ b3:
     goto b4;
 b4:
     l[11] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1059(NULL, x0, x1, l[4], l[11]);
+    x7 = talk_fn1058(NULL, x0, x1, l[4], l[11]);
     if (talk_unwinding) {
         goto b5;
     }
@@ -127034,7 +126756,7 @@ b14:
     goto b15;
 b15:
     l[13] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1024(NULL, x0, x1, l[4], l[13]);
+    x7 = talk_fn1023(NULL, x0, x1, l[4], l[13]);
     if (talk_unwinding) {
         goto b16;
     }
@@ -127125,7 +126847,7 @@ b29:
 }
 
 /* render_match_arm */
-static TalkL28 talk_fn1055(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL57 p2, TalkValue p3) {
+static TalkL28 talk_fn1054(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL57 p2, TalkValue p3) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -127153,7 +126875,7 @@ b0:
     }
     l[5] = talk_int(x2.m2);
     l[6] = talk_int(x2.m3);
-    x7 = talk_fn1039(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
+    x7 = talk_fn1038(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
     if (talk_unwinding) {
         goto b1;
     }
@@ -127162,7 +126884,7 @@ b0:
     x0.m2 = x7.m3;
     l[6] = x2.m0;
     l[5] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1036(NULL, x0, x1, l[6], l[5]);
+    x7 = talk_fn1035(NULL, x0, x1, l[6], l[5]);
     if (talk_unwinding) {
         goto b1;
     }
@@ -127171,7 +126893,7 @@ b0:
     x0.m2 = x7.m3;
     l[6] = x2.m1;
     l[5] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1054(NULL, x0, x1, l[6], l[5]);
+    x7 = talk_fn1053(NULL, x0, x1, l[6], l[5]);
     if (talk_unwinding) {
         goto b1;
     }
@@ -127193,7 +126915,7 @@ b1:
 }
 
 /* render_func */
-static TalkL28 talk_fn1056(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1055(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[15];
     memset(l, 0, sizeof l);
     (void)env;
@@ -127218,7 +126940,7 @@ static TalkL28 talk_fn1056(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValu
     l[3] = p3;
     goto b0;
 b0:
-    x4 = talk_fn1058(NULL, x0, x1, l[2], l[3]);
+    x4 = talk_fn1057(NULL, x0, x1, l[2], l[3]);
     if (talk_unwinding) {
         goto b34;
     }
@@ -127264,7 +126986,7 @@ b3:
     goto b4;
 b4:
     l[11] = talk_add(l[3], talk_int(INT64_C(1)));
-    x4 = talk_fn1041(NULL, x0, x1, l[7], l[11]);
+    x4 = talk_fn1040(NULL, x0, x1, l[7], l[11]);
     if (talk_unwinding) {
         goto b5;
     }
@@ -127304,7 +127026,7 @@ b12:
     goto b13;
 b13:
     l[11] = talk_add(l[3], talk_int(INT64_C(1)));
-    x4 = talk_fn1042(NULL, x0, x1, l[7], l[11]);
+    x4 = talk_fn1041(NULL, x0, x1, l[7], l[11]);
     if (talk_unwinding) {
         goto b32;
     }
@@ -127356,7 +127078,7 @@ b19:
     goto b20;
 b20:
     l[14] = talk_add(l[3], talk_int(INT64_C(1)));
-    x4 = talk_fn1059(NULL, x0, x1, l[12], l[14]);
+    x4 = talk_fn1058(NULL, x0, x1, l[12], l[14]);
     if (talk_unwinding) {
         goto b21;
     }
@@ -127387,7 +127109,7 @@ b26:
 b27:
     l[14] = l[2].v.agg->fields[17];
     l[12] = talk_add(l[3], talk_int(INT64_C(1)));
-    x4 = talk_fn1054(NULL, x0, x1, l[14], l[12]);
+    x4 = talk_fn1053(NULL, x0, x1, l[14], l[12]);
     if (talk_unwinding) {
         goto b30;
     }
@@ -127411,7 +127133,7 @@ b28:
     goto b29;
 b29:
     l[14] = talk_add(l[3], talk_int(INT64_C(1)));
-    x4 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[2]), l[14]);
+    x4 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[2]), l[14]);
     if (talk_unwinding) {
         goto b30;
     }
@@ -127495,7 +127217,7 @@ b39:
 }
 
 /* render_record_field */
-static TalkL28 talk_fn1057(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1056(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -127521,7 +127243,7 @@ b0:
     }
     l[5] = talk_int(((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[2]))->m8);
     l[6] = talk_int(((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[2]))->m9);
-    x7 = talk_fn1039(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
+    x7 = talk_fn1038(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
     if (talk_unwinding) {
         goto b1;
     }
@@ -127536,7 +127258,7 @@ b0:
         l[6] = talk_box_l16(tmp);
     }
     l[2] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[6]), l[2]);
+    x7 = talk_fn1034(NULL, x0, x1, talk_unbox_l16(l[6]), l[2]);
     if (talk_unwinding) {
         goto b1;
     }
@@ -127558,7 +127280,7 @@ b1:
 }
 
 /* func_line */
-static TalkL28 talk_fn1058(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1057(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[9];
     memset(l, 0, sizeof l);
     (void)env;
@@ -127606,7 +127328,7 @@ b4:
     }
     l[5] = l[2].v.agg->fields[22];
     l[7] = l[2].v.agg->fields[23];
-    x8 = talk_fn1039(NULL, x0, x1, talk_unbox_l1(l[6]), l[5], l[7], l[3]);
+    x8 = talk_fn1038(NULL, x0, x1, talk_unbox_l1(l[6]), l[5], l[7], l[3]);
     if (talk_unwinding) {
         goto b7;
     }
@@ -127621,7 +127343,7 @@ b4:
 b5:
     goto b6;
 b6:
-    x8 = talk_fn1049(NULL, x0, l[3]);
+    x8 = talk_fn1048(NULL, x0, l[3]);
     if (talk_unwinding) {
         goto b7;
     }
@@ -127718,7 +127440,7 @@ b6:
     x0.m2 = x8.m3;
     l[3] = l[2].v.agg->fields[22];
     l[7] = l[2].v.agg->fields[23];
-    x8 = talk_fn1027(NULL, x0, x1, l[3], l[7]);
+    x8 = talk_fn1026(NULL, x0, x1, l[3], l[7]);
     if (talk_unwinding) {
         goto b7;
     }
@@ -127754,7 +127476,7 @@ b7:
 }
 
 /* render_parameter */
-static TalkL28 talk_fn1059(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1058(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -127780,7 +127502,7 @@ b0:
     }
     l[5] = l[2].v.agg->fields[16];
     l[6] = l[2].v.agg->fields[17];
-    x7 = talk_fn1039(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
+    x7 = talk_fn1038(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
     if (talk_unwinding) {
         goto b3;
     }
@@ -127804,7 +127526,7 @@ b1:
     goto b2;
 b2:
     l[6] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[2]), l[6]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[2]), l[6]);
     if (talk_unwinding) {
         goto b3;
     }
@@ -127840,7 +127562,7 @@ b6:
 }
 
 /* stmt_label */
-static TalkL1 talk_fn1060(const TalkValue *env, TalkValue p0) {
+static TalkL1 talk_fn1059(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -128037,7 +127759,7 @@ b31:
 }
 
 /* decl_label */
-static TalkL1 talk_fn1061(const TalkValue *env, TalkValue p0) {
+static TalkL1 talk_fn1060(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -128486,7 +128208,7 @@ b103:
 }
 
 /* render_func_signature */
-static TalkL28 talk_fn1062(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1061(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[15];
     memset(l, 0, sizeof l);
     (void)env;
@@ -128520,7 +128242,7 @@ b0:
     }
     l[5] = l[2].v.agg->fields[16];
     l[6] = l[2].v.agg->fields[17];
-    x7 = talk_fn1039(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
+    x7 = talk_fn1038(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
     if (talk_unwinding) {
         goto b34;
     }
@@ -128566,7 +128288,7 @@ b3:
     goto b4;
 b4:
     l[11] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1059(NULL, x0, x1, l[4], l[11]);
+    x7 = talk_fn1058(NULL, x0, x1, l[4], l[11]);
     if (talk_unwinding) {
         goto b5;
     }
@@ -128634,7 +128356,7 @@ b14:
     goto b15;
 b15:
     l[14] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1041(NULL, x0, x1, l[12], l[14]);
+    x7 = talk_fn1040(NULL, x0, x1, l[12], l[14]);
     if (talk_unwinding) {
         goto b16;
     }
@@ -128674,7 +128396,7 @@ b23:
     goto b24;
 b24:
     l[14] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1042(NULL, x0, x1, l[12], l[14]);
+    x7 = talk_fn1041(NULL, x0, x1, l[12], l[14]);
     if (talk_unwinding) {
         goto b30;
     }
@@ -128704,7 +128426,7 @@ b28:
     goto b29;
 b29:
     l[14] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1037(NULL, x0, x1, talk_unbox_l13(l[2]), l[14]);
+    x7 = talk_fn1036(NULL, x0, x1, talk_unbox_l13(l[2]), l[14]);
     if (talk_unwinding) {
         goto b30;
     }
@@ -128788,7 +128510,7 @@ b39:
 }
 
 /* render_optional_where */
-static TalkL28 talk_fn1063(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL9 p2, TalkValue p3) {
+static TalkL28 talk_fn1062(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL9 p2, TalkValue p3) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -128816,7 +128538,7 @@ b1:
     l[4] = x2.m1;
     goto b2;
 b2:
-    x5 = talk_fn1042(NULL, x0, x1, l[4], l[3]);
+    x5 = talk_fn1041(NULL, x0, x1, l[4], l[3]);
     if (talk_unwinding) {
         goto b3;
     }
@@ -128852,7 +128574,7 @@ b6:
 }
 
 /* render_body */
-static TalkL28 talk_fn1064(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1063(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[12];
     memset(l, 0, sizeof l);
     (void)env;
@@ -128884,7 +128606,7 @@ b0:
     }
     l[5] = talk_int(((const TalkL44 *)TALK_NATIVE_PAYLOAD(l[2]))->m3);
     l[6] = talk_int(((const TalkL44 *)TALK_NATIVE_PAYLOAD(l[2]))->m4);
-    x7 = talk_fn1039(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
+    x7 = talk_fn1038(NULL, x0, x1, talk_unbox_l1(l[4]), l[5], l[6], l[3]);
     if (talk_unwinding) {
         goto b8;
     }
@@ -128930,7 +128652,7 @@ b3:
     goto b4;
 b4:
     l[4] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1033(NULL, x0, x1, talk_unbox_l23(l[5]), l[4]);
+    x7 = talk_fn1032(NULL, x0, x1, talk_unbox_l23(l[5]), l[4]);
     if (talk_unwinding) {
         goto b5;
     }
@@ -128999,7 +128721,7 @@ b15:
 }
 
 /* render_type_application */
-static TalkL28 talk_fn1065(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1064(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[12];
     memset(l, 0, sizeof l);
     (void)env;
@@ -129060,7 +128782,7 @@ b3:
     l[5] = x8.m1;
     goto b4;
 b4:
-    x9 = talk_fn1044(NULL, x0, x1, l[5], l[3]);
+    x9 = talk_fn1043(NULL, x0, x1, l[5], l[3]);
     if (talk_unwinding) {
         goto b5;
     }
@@ -129127,7 +128849,7 @@ b15:
 }
 
 /* parse_expr_source */
-static TalkValue talk_fn1066(const TalkValue *env, TalkL1 p0) {
+static TalkValue talk_fn1065(const TalkValue *env, TalkL1 p0) {
     TalkValue l[7];
     memset(l, 0, sizeof l);
     (void)env;
@@ -129190,7 +128912,7 @@ b3:
 }
 
 /* lenient_outcome */
-static TalkValue talk_fn1067(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn1066(const TalkValue *env, TalkValue p0) {
     TalkValue l[11];
     memset(l, 0, sizeof l);
     (void)env;
@@ -129337,7 +129059,7 @@ b15:
 }
 
 /* capture_token_trees */
-static TalkValue talk_fn1068(const TalkValue *env, TalkL3 p0) {
+static TalkValue talk_fn1067(const TalkValue *env, TalkL3 p0) {
     TalkValue l[18];
     memset(l, 0, sizeof l);
     (void)env;
@@ -129394,7 +129116,7 @@ b2:
         tmp.m0 = ((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[6]))->m0;
         l[5] = talk_box_l7(tmp);
     }
-    l[7] = talk_fn1080(NULL, talk_unbox_l7(l[5]));
+    l[7] = talk_fn1079(NULL, talk_unbox_l7(l[5]));
     if (talk_unwinding) {
         goto b32;
     }
@@ -129419,7 +129141,7 @@ b4:
         }
         l[5] = talk_box_l136(tmp);
     }
-    x9 = talk_fn1081(NULL, talk_unbox_l3(l[1]), l[5]);
+    x9 = talk_fn1080(NULL, talk_unbox_l3(l[1]), l[5]);
     if (talk_unwinding) {
         goto b33;
     }
@@ -129430,7 +129152,7 @@ b4:
         tmp.m2 = x9.m3;
         l[1] = talk_box_l3(tmp);
     }
-    l[3] = talk_box_l3(talk_fn1082(NULL));
+    l[3] = talk_box_l3(talk_fn1081(NULL));
     if (talk_unwinding) {
         goto b33;
     }
@@ -129445,7 +129167,7 @@ b7:
         tmp.m0 = ((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[6]))->m0;
         l[5] = talk_box_l7(tmp);
     }
-    l[7] = talk_fn1083(NULL, talk_unbox_l7(l[5]));
+    l[7] = talk_fn1082(NULL, talk_unbox_l7(l[5]));
     if (talk_unwinding) {
         goto b32;
     }
@@ -129458,7 +129180,7 @@ b8:
     x8 = talk_unbox_l132(talk_slice(l[7], 1, 1, 132u, 37));
     goto b9;
 b9:
-    l[5] = talk_fn1084(NULL, talk_unbox_l3(l[1]));
+    l[5] = talk_fn1083(NULL, talk_unbox_l3(l[1]));
     if (talk_unwinding) {
         goto b32;
     }
@@ -129489,7 +129211,7 @@ b11:
         tmp.m0 = ((const TalkL136 *)TALK_NATIVE_PAYLOAD(l[5]))->m1;
         l[11] = talk_box_l132(tmp);
     }
-    l[12] = talk_fn1085(NULL, talk_unbox_l132(l[11]), x8);
+    l[12] = talk_fn1084(NULL, talk_unbox_l132(l[11]), x8);
     if (talk_unwinding) {
         goto b18;
     }
@@ -129503,7 +129225,7 @@ b12:
         tmp.m2 = ((const TalkL136 *)TALK_NATIVE_PAYLOAD(l[5]))->m4;
         l[11] = talk_box_l3(tmp);
     }
-    l[13] = talk_fn1086(NULL, talk_unbox_l3(l[11]));
+    l[13] = talk_fn1085(NULL, talk_unbox_l3(l[11]));
     if (talk_unwinding) {
         goto b13;
     }
@@ -129524,7 +129246,7 @@ b12:
     }
     x14.m0 = 1;
     x14.m1 = l[13];
-    x9 = talk_fn1088(NULL, talk_unbox_l3(l[3]), x14);
+    x9 = talk_fn1087(NULL, talk_unbox_l3(l[3]), x14);
     if (talk_unwinding) {
         goto b18;
     }
@@ -129537,7 +129259,7 @@ b12:
     }
     goto b15;
 b13:
-    l[11] = talk_fn1071(NULL, talk_unbox_l3(l[12]));
+    l[11] = talk_fn1070(NULL, talk_unbox_l3(l[12]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -129550,7 +129272,7 @@ b14:
         tmp.m2 = ((const TalkL136 *)TALK_NATIVE_PAYLOAD(l[5]))->m4;
         l[12] = talk_box_l3(tmp);
     }
-    l[11] = talk_fn1071(NULL, talk_unbox_l3(l[12]));
+    l[11] = talk_fn1070(NULL, talk_unbox_l3(l[12]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -129563,7 +129285,7 @@ b15:
         tmp.m2 = ((const TalkL136 *)TALK_NATIVE_PAYLOAD(l[5]))->m4;
         l[12] = talk_box_l3(tmp);
     }
-    l[11] = talk_fn1071(NULL, talk_unbox_l3(l[12]));
+    l[11] = talk_fn1070(NULL, talk_unbox_l3(l[12]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -129571,7 +129293,7 @@ b15:
 b16:
     goto b17;
 b17:
-    x15 = talk_fn1082(NULL);
+    x15 = talk_fn1081(NULL);
     if (talk_unwinding) {
         goto b18;
     }
@@ -129602,15 +129324,15 @@ b17:
         tmp.m2 = ((const TalkL136 *)TALK_NATIVE_PAYLOAD(l[5]))->m4;
         l[11] = talk_box_l3(tmp);
     }
-    l[13] = talk_fn1071(NULL, talk_unbox_l3(l[11]));
+    l[13] = talk_fn1070(NULL, talk_unbox_l3(l[11]));
     if (talk_unwinding) {
         return talk_unit();
     }
-    l[13] = talk_fn1071(NULL, talk_unbox_l3(l[3]));
+    l[13] = talk_fn1070(NULL, talk_unbox_l3(l[3]));
     if (talk_unwinding) {
         return talk_unit();
     }
-    l[13] = talk_fn1090(NULL, talk_unbox_l3(l[1]));
+    l[13] = talk_fn1089(NULL, talk_unbox_l3(l[1]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -129623,7 +129345,7 @@ b18:
         tmp.m2 = ((const TalkL136 *)TALK_NATIVE_PAYLOAD(l[5]))->m4;
         l[12] = talk_box_l3(tmp);
     }
-    l[5] = talk_fn1071(NULL, talk_unbox_l3(l[12]));
+    l[5] = talk_fn1070(NULL, talk_unbox_l3(l[12]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -129631,13 +129353,13 @@ b18:
 b19:
     goto b20;
 b20:
-    l[12] = talk_fn1089(NULL, talk_unbox_l9(l[10]));
+    l[12] = talk_fn1088(NULL, talk_unbox_l9(l[10]));
     if (talk_unwinding) {
         goto b32;
     }
     goto b21;
 b21:
-    x15 = talk_fn1082(NULL);
+    x15 = talk_fn1081(NULL);
     if (talk_unwinding) {
         goto b32;
     }
@@ -129659,11 +129381,11 @@ b21:
         memcpy(built.v.agg->fields + 3, l[17].v.agg->fields, 4 * sizeof(TalkValue));
         l[13] = built;
     }
-    l[11] = talk_fn1071(NULL, talk_unbox_l3(l[3]));
+    l[11] = talk_fn1070(NULL, talk_unbox_l3(l[3]));
     if (talk_unwinding) {
         return talk_unit();
     }
-    l[11] = talk_fn1090(NULL, talk_unbox_l3(l[1]));
+    l[11] = talk_fn1089(NULL, talk_unbox_l3(l[1]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -129675,7 +129397,7 @@ b23:
 b24:
     x14.m0 = 0;
     x14.m1 = l[6];
-    x9 = talk_fn1088(NULL, talk_unbox_l3(l[3]), x14);
+    x9 = talk_fn1087(NULL, talk_unbox_l3(l[3]), x14);
     if (talk_unwinding) {
         goto b32;
     }
@@ -129690,7 +129412,7 @@ b24:
 b25:
     goto b26;
 b26:
-    l[4] = talk_fn1084(NULL, talk_unbox_l3(l[1]));
+    l[4] = talk_fn1083(NULL, talk_unbox_l3(l[1]));
     if (talk_unwinding) {
         goto b32;
     }
@@ -129716,7 +129438,7 @@ b27:
     l[4] = l[11].v.agg->fields[1];
     goto b28;
 b28:
-    x0 = talk_fn1082(NULL);
+    x0 = talk_fn1081(NULL);
     if (talk_unwinding) {
         goto b29;
     }
@@ -129746,15 +129468,15 @@ b28:
         tmp.m2 = ((const TalkL136 *)TALK_NATIVE_PAYLOAD(l[4]))->m4;
         l[5] = talk_box_l3(tmp);
     }
-    l[13] = talk_fn1071(NULL, talk_unbox_l3(l[5]));
+    l[13] = talk_fn1070(NULL, talk_unbox_l3(l[5]));
     if (talk_unwinding) {
         return talk_unit();
     }
-    l[13] = talk_fn1071(NULL, talk_unbox_l3(l[3]));
+    l[13] = talk_fn1070(NULL, talk_unbox_l3(l[3]));
     if (talk_unwinding) {
         return talk_unit();
     }
-    l[13] = talk_fn1090(NULL, talk_unbox_l3(l[1]));
+    l[13] = talk_fn1089(NULL, talk_unbox_l3(l[1]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -129767,7 +129489,7 @@ b29:
         tmp.m2 = ((const TalkL136 *)TALK_NATIVE_PAYLOAD(l[4]))->m4;
         l[10] = talk_box_l3(tmp);
     }
-    l[4] = talk_fn1071(NULL, talk_unbox_l3(l[10]));
+    l[4] = talk_fn1070(NULL, talk_unbox_l3(l[10]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -129775,19 +129497,19 @@ b29:
 b30:
     goto b31;
 b31:
-    l[10] = talk_fn1089(NULL, talk_unbox_l9(l[11]));
+    l[10] = talk_fn1088(NULL, talk_unbox_l9(l[11]));
     if (talk_unwinding) {
         goto b32;
     }
     goto b34;
 b32:
-    l[11] = talk_fn1071(NULL, talk_unbox_l3(l[3]));
+    l[11] = talk_fn1070(NULL, talk_unbox_l3(l[3]));
     if (talk_unwinding) {
         return talk_unit();
     }
     goto b33;
 b33:
-    l[11] = talk_fn1090(NULL, talk_unbox_l3(l[1]));
+    l[11] = talk_fn1089(NULL, talk_unbox_l3(l[1]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -129809,7 +129531,7 @@ b34:
         memcpy(built.v.agg->fields + 3, l[17].v.agg->fields, 4 * sizeof(TalkValue));
         l[10] = built;
     }
-    l[4] = talk_fn1090(NULL, talk_unbox_l3(l[1]));
+    l[4] = talk_fn1089(NULL, talk_unbox_l3(l[1]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -129817,7 +129539,7 @@ b34:
 }
 
 /* token_tree_error_line */
-static TalkL1 talk_fn1069(const TalkValue *env, TalkL129 p0) {
+static TalkL1 talk_fn1068(const TalkValue *env, TalkL129 p0) {
     TalkValue l[12];
     memset(l, 0, sizeof l);
     (void)env;
@@ -129857,7 +129579,7 @@ b2:
     }
     l[3] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[1]))->m1);
     l[4] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[1]))->m2);
-    x5 = talk_fn1077(NULL, l[3], l[4]);
+    x5 = talk_fn1076(NULL, l[3], l[4]);
     if (talk_unwinding) {
         return (TalkL1){0};
     }
@@ -129911,7 +129633,7 @@ b8:
     }
     l[1] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[2]))->m1);
     l[8] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[2]))->m2);
-    x5 = talk_fn1077(NULL, l[1], l[8]);
+    x5 = talk_fn1076(NULL, l[1], l[8]);
     if (talk_unwinding) {
         return (TalkL1){0};
     }
@@ -129932,7 +129654,7 @@ b8:
     }
     l[3] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[4]))->m1);
     l[1] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[4]))->m2);
-    x10 = talk_fn1077(NULL, l[3], l[1]);
+    x10 = talk_fn1076(NULL, l[3], l[1]);
     if (talk_unwinding) {
         goto b10;
     }
@@ -129984,7 +129706,7 @@ b15:
     }
     l[8] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[1]))->m1);
     l[11] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[1]))->m2);
-    x5 = talk_fn1077(NULL, l[8], l[11]);
+    x5 = talk_fn1076(NULL, l[8], l[11]);
     if (talk_unwinding) {
         return (TalkL1){0};
     }
@@ -130029,7 +129751,7 @@ b20:
 }
 
 /* render_trees */
-static TalkL28 talk_fn1070(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL3 p2, TalkValue p3) {
+static TalkL28 talk_fn1069(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL3 p2, TalkValue p3) {
     TalkValue l[13];
     memset(l, 0, sizeof l);
     (void)env;
@@ -130061,7 +129783,7 @@ b1:
     l[6] = talk_cmp_lt(l[4], l[5]);
     if (l[6].v.i) goto b2; else goto b18;
 b2:
-    l[6] = talk_fn1074(NULL, x2, l[4]);
+    l[6] = talk_fn1073(NULL, x2, l[4]);
     if (talk_unwinding) {
         goto b13;
     }
@@ -130074,7 +129796,7 @@ b3:
     l[5] = l[6].v.agg->fields[1];
     goto b4;
 b4:
-    x7 = talk_fn1075(NULL, x0, x1, l[5], l[3]);
+    x7 = talk_fn1074(NULL, x0, x1, l[5], l[3]);
     if (talk_unwinding) {
         goto b13;
     }
@@ -130097,7 +129819,7 @@ b8:
     l[5] = l[6].v.agg->fields[1];
     goto b9;
 b9:
-    x7 = talk_fn1049(NULL, x0, l[3]);
+    x7 = talk_fn1048(NULL, x0, l[3]);
     if (talk_unwinding) {
         goto b13;
     }
@@ -130123,7 +129845,7 @@ b9:
         tmp.m0 = ((const TalkL134 *)TALK_NATIVE_PAYLOAD(l[5]))->m0;
         l[6] = talk_box_l132(tmp);
     }
-    x8 = talk_fn1076(NULL, talk_unbox_l132(l[6]));
+    x8 = talk_fn1075(NULL, talk_unbox_l132(l[6]));
     if (talk_unwinding) {
         goto b13;
     }
@@ -130152,7 +129874,7 @@ b9:
     l[9] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[6]))->m1);
     l[6] = ((const TalkL134 *)TALK_NATIVE_PAYLOAD(l[5]))->m1;
     l[10] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[6]))->m2);
-    x11 = talk_fn1077(NULL, l[9], l[10]);
+    x11 = talk_fn1076(NULL, l[9], l[10]);
     if (talk_unwinding) {
         goto b12;
     }
@@ -130181,7 +129903,7 @@ b9:
     l[6] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[9]))->m1);
     l[9] = ((const TalkL134 *)TALK_NATIVE_PAYLOAD(l[5]))->m2;
     l[10] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[9]))->m2);
-    x12 = talk_fn1077(NULL, l[6], l[10]);
+    x12 = talk_fn1076(NULL, l[6], l[10]);
     if (talk_unwinding) {
         goto b11;
     }
@@ -130214,7 +129936,7 @@ b9:
         l[6] = talk_box_l3(tmp);
     }
     l[5] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1070(NULL, x0, x1, talk_unbox_l3(l[6]), l[5]);
+    x7 = talk_fn1069(NULL, x0, x1, talk_unbox_l3(l[6]), l[5]);
     if (talk_unwinding) {
         goto b10;
     }
@@ -130266,7 +129988,7 @@ b19:
 }
 
 /* shared_drop */
-static TalkValue talk_fn1071(const TalkValue *env, TalkL3 p0) {
+static TalkValue talk_fn1070(const TalkValue *env, TalkL3 p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -130276,7 +129998,7 @@ static TalkValue talk_fn1071(const TalkValue *env, TalkL3 p0) {
     x0 = p0;
     goto b0;
 b0:
-    l[1] = talk_fn1072(NULL, x0);
+    l[1] = talk_fn1071(NULL, x0);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -130286,7 +130008,7 @@ b0:
 }
 
 /* deinit */
-static TalkValue talk_fn1072(const TalkValue *env, TalkL3 p0) {
+static TalkValue talk_fn1071(const TalkValue *env, TalkL3 p0) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -130313,7 +130035,7 @@ b3:
     l[2] = talk_add(l[2], talk_int(INT64_C(1)));
     goto b4;
 b4:
-    l[1] = talk_fn1073(NULL, talk_unbox_l133(l[3]));
+    l[1] = talk_fn1072(NULL, talk_unbox_l133(l[3]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -130337,7 +130059,7 @@ b8:
 }
 
 /* shared_drop */
-static TalkValue talk_fn1073(const TalkValue *env, TalkL133 p0) {
+static TalkValue talk_fn1072(const TalkValue *env, TalkL133 p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -130362,7 +130084,7 @@ b1:
         tmp.m2 = ((const TalkL134 *)TALK_NATIVE_PAYLOAD(l[1]))->m5;
         l[2] = talk_box_l3(tmp);
     }
-    l[1] = talk_fn1071(NULL, talk_unbox_l3(l[2]));
+    l[1] = talk_fn1070(NULL, talk_unbox_l3(l[2]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -130374,7 +130096,7 @@ b3:
 }
 
 /* get */
-static TalkValue talk_fn1074(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkValue talk_fn1073(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -130385,7 +130107,7 @@ static TalkValue talk_fn1074(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     l[1] = p1;
     goto b0;
 b0:
-    l[2] = talk_fn1079(NULL, x0, l[1]);
+    l[2] = talk_fn1078(NULL, x0, l[1]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -130396,7 +130118,7 @@ b0:
 }
 
 /* render_leaf */
-static TalkL28 talk_fn1075(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
+static TalkL28 talk_fn1074(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValue p2, TalkValue p3) {
     TalkValue l[7];
     memset(l, 0, sizeof l);
     (void)env;
@@ -130415,7 +130137,7 @@ static TalkL28 talk_fn1075(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkValu
     l[3] = p3;
     goto b0;
 b0:
-    x4 = talk_fn1049(NULL, x0, l[3]);
+    x4 = talk_fn1048(NULL, x0, l[3]);
     if (talk_unwinding) {
         goto b2;
     }
@@ -130427,7 +130149,7 @@ b0:
         tmp.m0 = ((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[2]))->m0;
         l[3] = talk_box_l7(tmp);
     }
-    x5 = talk_fn1078(NULL, talk_unbox_l7(l[3]));
+    x5 = talk_fn1077(NULL, talk_unbox_l7(l[3]));
     if (talk_unwinding) {
         goto b2;
     }
@@ -130484,7 +130206,7 @@ b0:
     x0.m2 = x4.m3;
     l[3] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[2]))->m1);
     l[6] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[2]))->m2);
-    x4 = talk_fn1027(NULL, x0, x1, l[3], l[6]);
+    x4 = talk_fn1026(NULL, x0, x1, l[3], l[6]);
     if (talk_unwinding) {
         goto b1;
     }
@@ -130526,7 +130248,7 @@ b2:
 }
 
 /* delimiter_text */
-static TalkL1 talk_fn1076(const TalkValue *env, TalkL132 p0) {
+static TalkL1 talk_fn1075(const TalkValue *env, TalkL132 p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -130595,7 +130317,7 @@ b8:
 }
 
 /* span_text */
-static TalkL1 talk_fn1077(const TalkValue *env, TalkValue p0, TalkValue p1) {
+static TalkL1 talk_fn1076(const TalkValue *env, TalkValue p0, TalkValue p1) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -130657,7 +130379,7 @@ b3:
 }
 
 /* kind_name */
-static TalkL1 talk_fn1078(const TalkValue *env, TalkL7 p0) {
+static TalkL1 talk_fn1077(const TalkValue *env, TalkL7 p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -132214,7 +131936,7 @@ b194:
 }
 
 /* _check_index */
-static TalkValue talk_fn1079(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkValue talk_fn1078(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -132284,7 +132006,7 @@ b6:
 }
 
 /* opens */
-static TalkValue talk_fn1080(const TalkValue *env, TalkL7 p0) {
+static TalkValue talk_fn1079(const TalkValue *env, TalkL7 p0) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -132382,7 +132104,7 @@ b9:
 }
 
 /* push */
-static TalkL28 talk_fn1081(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkL28 talk_fn1080(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -132420,7 +132142,7 @@ b3:
     l[5] = talk_cmp_ge(l[3], l[4]);
     if (l[5].v.i) goto b4; else goto b5;
 b4:
-    x6 = talk_fn1101(NULL, x0, l[2]);
+    x6 = talk_fn1100(NULL, x0, l[2]);
     if (talk_unwinding) {
         goto b6;
     }
@@ -132430,7 +132152,7 @@ b4:
     x0.m0 = x6.m0;
     goto b7;
 b5:
-    x7 = talk_fn1100(NULL, x0);
+    x7 = talk_fn1099(NULL, x0);
     if (talk_unwinding) {
         goto b6;
     }
@@ -132446,14 +132168,14 @@ b6:
         tmp.m2 = ((const TalkL136 *)TALK_NATIVE_PAYLOAD(l[1]))->m4;
         l[5] = talk_box_l3(tmp);
     }
-    l[4] = talk_fn1071(NULL, talk_unbox_l3(l[5]));
+    l[4] = talk_fn1070(NULL, talk_unbox_l3(l[5]));
     if (talk_unwinding) {
         return (TalkL28){0};
     }
     return (TalkL28){0};
 b7:
     l[5] = talk_int(x0.m1);
-    x7 = talk_fn1108(NULL, x0, l[5], l[1]);
+    x7 = talk_fn1107(NULL, x0, l[5], l[1]);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
@@ -132471,7 +132193,7 @@ b7:
 }
 
 /* empty_trees */
-static TalkL3 talk_fn1082(const TalkValue *env) {
+static TalkL3 talk_fn1081(const TalkValue *env) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -132491,7 +132213,7 @@ b0:
 }
 
 /* closes */
-static TalkValue talk_fn1083(const TalkValue *env, TalkL7 p0) {
+static TalkValue talk_fn1082(const TalkValue *env, TalkL7 p0) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -132590,7 +132312,7 @@ b9:
 }
 
 /* pop */
-static TalkValue talk_fn1084(const TalkValue *env, TalkL3 p0) {
+static TalkValue talk_fn1083(const TalkValue *env, TalkL3 p0) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -132622,7 +132344,7 @@ b1:
 b2:
     goto b3;
 b3:
-    x4 = talk_fn1100(NULL, x0);
+    x4 = talk_fn1099(NULL, x0);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -132650,7 +132372,7 @@ b3:
 }
 
 /* same_delimiter */
-static TalkValue talk_fn1085(const TalkValue *env, TalkL132 p0, TalkL132 p1) {
+static TalkValue talk_fn1084(const TalkValue *env, TalkL132 p0, TalkL132 p1) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -132770,7 +132492,7 @@ b23:
 }
 
 /* shared_retain */
-static TalkValue talk_fn1086(const TalkValue *env, TalkL3 p0) {
+static TalkValue talk_fn1085(const TalkValue *env, TalkL3 p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -132783,7 +132505,7 @@ static TalkValue talk_fn1086(const TalkValue *env, TalkL3 p0) {
     goto b0;
 b0:
     x1.m0 = x0.m0;
-    l[2] = talk_fn1087(NULL, x1);
+    l[2] = talk_fn1086(NULL, x1);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -132791,7 +132513,7 @@ b0:
 }
 
 /* shared_retain */
-static TalkValue talk_fn1087(const TalkValue *env, TalkL2 p0) {
+static TalkValue talk_fn1086(const TalkValue *env, TalkL2 p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -132807,7 +132529,7 @@ b0:
 }
 
 /* push */
-static TalkL28 talk_fn1088(const TalkValue *env, TalkL3 p0, TalkL133 p1) {
+static TalkL28 talk_fn1087(const TalkValue *env, TalkL3 p0, TalkL133 p1) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -132847,7 +132569,7 @@ b3:
     l[5] = talk_cmp_ge(l[3], l[4]);
     if (l[5].v.i) goto b4; else goto b5;
 b4:
-    x6 = talk_fn1092(NULL, x0, l[2]);
+    x6 = talk_fn1091(NULL, x0, l[2]);
     if (talk_unwinding) {
         goto b6;
     }
@@ -132857,7 +132579,7 @@ b4:
     x0.m0 = x6.m0;
     goto b7;
 b5:
-    x7 = talk_fn1093(NULL, x0);
+    x7 = talk_fn1092(NULL, x0);
     if (talk_unwinding) {
         goto b6;
     }
@@ -132866,14 +132588,14 @@ b5:
     x0.m2 = x7.m3;
     goto b7;
 b6:
-    l[5] = talk_fn1073(NULL, x1);
+    l[5] = talk_fn1072(NULL, x1);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
     return (TalkL28){0};
 b7:
     l[5] = talk_int(x0.m1);
-    x7 = talk_fn1094(NULL, x0, l[5], x1);
+    x7 = talk_fn1093(NULL, x0, l[5], x1);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
@@ -132891,7 +132613,7 @@ b7:
 }
 
 /* shared_drop */
-static TalkValue talk_fn1089(const TalkValue *env, TalkL9 p0) {
+static TalkValue talk_fn1088(const TalkValue *env, TalkL9 p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -132915,7 +132637,7 @@ b1:
         tmp.m2 = ((const TalkL136 *)TALK_NATIVE_PAYLOAD(l[1]))->m4;
         l[2] = talk_box_l3(tmp);
     }
-    l[1] = talk_fn1071(NULL, talk_unbox_l3(l[2]));
+    l[1] = talk_fn1070(NULL, talk_unbox_l3(l[2]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -132927,7 +132649,7 @@ b3:
 }
 
 /* shared_drop */
-static TalkValue talk_fn1090(const TalkValue *env, TalkL3 p0) {
+static TalkValue talk_fn1089(const TalkValue *env, TalkL3 p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -132937,7 +132659,7 @@ static TalkValue talk_fn1090(const TalkValue *env, TalkL3 p0) {
     x0 = p0;
     goto b0;
 b0:
-    l[1] = talk_fn1091(NULL, x0);
+    l[1] = talk_fn1090(NULL, x0);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -132947,7 +132669,7 @@ b0:
 }
 
 /* deinit */
-static TalkValue talk_fn1091(const TalkValue *env, TalkL3 p0) {
+static TalkValue talk_fn1090(const TalkValue *env, TalkL3 p0) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -132981,7 +132703,7 @@ b4:
         tmp.m2 = ((const TalkL136 *)TALK_NATIVE_PAYLOAD(l[3]))->m4;
         l[1] = talk_box_l3(tmp);
     }
-    l[3] = talk_fn1071(NULL, talk_unbox_l3(l[1]));
+    l[3] = talk_fn1070(NULL, talk_unbox_l3(l[1]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -133005,7 +132727,7 @@ b8:
 }
 
 /* allocate_with_capacity */
-static TalkL2 talk_fn1092(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkL2 talk_fn1091(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133026,7 +132748,7 @@ b1:
 b2:
     goto b3;
 b3:
-    x3 = talk_fn1095(NULL, l[1]);
+    x3 = talk_fn1094(NULL, l[1]);
     if (talk_unwinding) {
         return (TalkL2){0};
     }
@@ -133046,11 +132768,11 @@ b5:
     l[6] = talk_ptr_add(l[5], l[2], 8);
     if (l[1].v.i) goto b6; else goto b8;
 b6:
-    l[5] = talk_fn1074(NULL, x0, l[2]);
+    l[5] = talk_fn1073(NULL, x0, l[2]);
     if (talk_unwinding) {
         goto b7;
     }
-    l[7] = talk_fn1096(NULL, talk_unbox_l133(l[5]));
+    l[7] = talk_fn1095(NULL, talk_unbox_l133(l[5]));
     if (talk_unwinding) {
         goto b7;
     }
@@ -133073,7 +132795,7 @@ b11:
 }
 
 /* uniqued_storage */
-static TalkL28 talk_fn1093(const TalkValue *env, TalkL3 p0) {
+static TalkL28 talk_fn1092(const TalkValue *env, TalkL3 p0) {
     TalkValue l[5];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133099,7 +132821,7 @@ b1:
     return x4;
 b2:
     l[2] = talk_int(x0.m2);
-    x3 = talk_fn1092(NULL, x0, l[2]);
+    x3 = talk_fn1091(NULL, x0, l[2]);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
@@ -133115,7 +132837,7 @@ b2:
 }
 
 /* _init_slot */
-static TalkL28 talk_fn1094(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkL133 p2) {
+static TalkL28 talk_fn1093(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkL133 p2) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133143,7 +132865,7 @@ b0:
 }
 
 /* _storage */
-static TalkL2 talk_fn1095(const TalkValue *env, TalkValue p0) {
+static TalkL2 talk_fn1094(const TalkValue *env, TalkValue p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133153,7 +132875,7 @@ static TalkL2 talk_fn1095(const TalkValue *env, TalkValue p0) {
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = talk_fn1099(NULL, l[0]);
+    l[1] = talk_fn1098(NULL, l[0]);
     if (talk_unwinding) {
         return (TalkL2){0};
     }
@@ -133162,7 +132884,7 @@ b0:
 }
 
 /* _retain */
-static TalkValue talk_fn1096(const TalkValue *env, TalkL133 p0) {
+static TalkValue talk_fn1095(const TalkValue *env, TalkL133 p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133172,7 +132894,7 @@ static TalkValue talk_fn1096(const TalkValue *env, TalkL133 p0) {
     x0 = p0;
     goto b0;
 b0:
-    l[1] = talk_fn1097(NULL, x0);
+    l[1] = talk_fn1096(NULL, x0);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -133180,7 +132902,7 @@ b0:
 }
 
 /* shared_retain */
-static TalkValue talk_fn1097(const TalkValue *env, TalkL133 p0) {
+static TalkValue talk_fn1096(const TalkValue *env, TalkL133 p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133198,7 +132920,7 @@ b0:
     }
 b1:
     l[1] = x0.m1;
-    l[2] = talk_fn1098(NULL, l[1]);
+    l[2] = talk_fn1097(NULL, l[1]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -133210,7 +132932,7 @@ b3:
 }
 
 /* shared_retain */
-static TalkValue talk_fn1098(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn1097(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133225,7 +132947,7 @@ b0:
         tmp.m2 = ((const TalkL134 *)TALK_NATIVE_PAYLOAD(l[0]))->m5;
         l[1] = talk_box_l3(tmp);
     }
-    l[0] = talk_fn1086(NULL, talk_unbox_l3(l[1]));
+    l[0] = talk_fn1085(NULL, talk_unbox_l3(l[1]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -133233,7 +132955,7 @@ b0:
 }
 
 /* _alloc */
-static TalkValue talk_fn1099(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn1098(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133247,7 +132969,7 @@ b0:
 }
 
 /* uniqued_storage */
-static TalkL28 talk_fn1100(const TalkValue *env, TalkL3 p0) {
+static TalkL28 talk_fn1099(const TalkValue *env, TalkL3 p0) {
     TalkValue l[5];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133273,7 +132995,7 @@ b1:
     return x4;
 b2:
     l[2] = talk_int(x0.m2);
-    x3 = talk_fn1101(NULL, x0, l[2]);
+    x3 = talk_fn1100(NULL, x0, l[2]);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
@@ -133289,7 +133011,7 @@ b2:
 }
 
 /* allocate_with_capacity */
-static TalkL2 talk_fn1101(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkL2 talk_fn1100(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[8];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133310,7 +133032,7 @@ b1:
 b2:
     goto b3;
 b3:
-    x3 = talk_fn1102(NULL, l[1]);
+    x3 = talk_fn1101(NULL, l[1]);
     if (talk_unwinding) {
         return (TalkL2){0};
     }
@@ -133330,11 +133052,11 @@ b5:
     l[6] = talk_ptr_add(l[5], l[2], 8);
     if (l[1].v.i) goto b6; else goto b8;
 b6:
-    l[5] = talk_fn1103(NULL, x0, l[2]);
+    l[5] = talk_fn1102(NULL, x0, l[2]);
     if (talk_unwinding) {
         goto b7;
     }
-    l[7] = talk_fn1104(NULL, l[5]);
+    l[7] = talk_fn1103(NULL, l[5]);
     if (talk_unwinding) {
         goto b7;
     }
@@ -133357,7 +133079,7 @@ b11:
 }
 
 /* _storage */
-static TalkL2 talk_fn1102(const TalkValue *env, TalkValue p0) {
+static TalkL2 talk_fn1101(const TalkValue *env, TalkValue p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133367,7 +133089,7 @@ static TalkL2 talk_fn1102(const TalkValue *env, TalkValue p0) {
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = talk_fn1107(NULL, l[0]);
+    l[1] = talk_fn1106(NULL, l[0]);
     if (talk_unwinding) {
         return (TalkL2){0};
     }
@@ -133376,7 +133098,7 @@ b0:
 }
 
 /* get */
-static TalkValue talk_fn1103(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkValue talk_fn1102(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133387,7 +133109,7 @@ static TalkValue talk_fn1103(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     l[1] = p1;
     goto b0;
 b0:
-    l[2] = talk_fn1106(NULL, x0, l[1]);
+    l[2] = talk_fn1105(NULL, x0, l[1]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -133398,7 +133120,7 @@ b0:
 }
 
 /* _retain */
-static TalkValue talk_fn1104(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn1103(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133406,7 +133128,7 @@ static TalkValue talk_fn1104(const TalkValue *env, TalkValue p0) {
     l[0] = p0;
     goto b0;
 b0:
-    l[1] = talk_fn1105(NULL, l[0]);
+    l[1] = talk_fn1104(NULL, l[0]);
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -133414,7 +133136,7 @@ b0:
 }
 
 /* shared_retain */
-static TalkValue talk_fn1105(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn1104(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133429,7 +133151,7 @@ b0:
         tmp.m2 = ((const TalkL136 *)TALK_NATIVE_PAYLOAD(l[0]))->m4;
         l[1] = talk_box_l3(tmp);
     }
-    l[0] = talk_fn1086(NULL, talk_unbox_l3(l[1]));
+    l[0] = talk_fn1085(NULL, talk_unbox_l3(l[1]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -133437,7 +133159,7 @@ b0:
 }
 
 /* _check_index */
-static TalkValue talk_fn1106(const TalkValue *env, TalkL3 p0, TalkValue p1) {
+static TalkValue talk_fn1105(const TalkValue *env, TalkL3 p0, TalkValue p1) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133507,7 +133229,7 @@ b6:
 }
 
 /* _alloc */
-static TalkValue talk_fn1107(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn1106(const TalkValue *env, TalkValue p0) {
     TalkValue l[2];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133521,7 +133243,7 @@ b0:
 }
 
 /* _init_slot */
-static TalkL28 talk_fn1108(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkValue p2) {
+static TalkL28 talk_fn1107(const TalkValue *env, TalkL3 p0, TalkValue p1, TalkValue p2) {
     TalkValue l[6];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133547,7 +133269,7 @@ b0:
 }
 
 /* _io_host */
-static TalkValue talk_fn1109(const TalkValue *env, TalkL137 p0) {
+static TalkValue talk_fn1108(const TalkValue *env, TalkL137 p0) {
     TalkValue l[48];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133958,7 +133680,7 @@ b86:
 }
 
 /* handler_clause */
-static TalkValue talk_fn1110(const TalkValue *env, TalkValue p0) {
+static TalkValue talk_fn1109(const TalkValue *env, TalkValue p0) {
     TalkValue l[4];
     memset(l, 0, sizeof l);
     (void)env;
@@ -133971,7 +133693,7 @@ static TalkValue talk_fn1110(const TalkValue *env, TalkValue p0) {
     goto b0;
 b0:
     l[1] = env[0];
-    l[1] = talk_fn1111(NULL, talk_int(INT64_C(2)), talk_unbox_l1(l[0]));
+    l[1] = talk_fn1110(NULL, talk_int(INT64_C(2)), talk_unbox_l1(l[0]));
     if (talk_unwinding) {
         goto b2;
     }
@@ -133982,13 +133704,13 @@ b0:
         tmp.m2 = 1;
         l[1] = talk_box_l1(tmp);
     }
-    l[2] = talk_fn1111(NULL, talk_int(INT64_C(2)), talk_unbox_l1(l[1]));
+    l[2] = talk_fn1110(NULL, talk_int(INT64_C(2)), talk_unbox_l1(l[1]));
     if (talk_unwinding) {
         goto b2;
     }
     x3.m0 = 23;
     x3.m1 = talk_int(INT64_C(1));
-    l[2] = talk_fn1109(NULL, x3);
+    l[2] = talk_fn1108(NULL, x3);
     if (talk_unwinding) {
         goto b1;
     }
@@ -134006,7 +133728,7 @@ b4:
 }
 
 /* write_string */
-static TalkValue talk_fn1111(const TalkValue *env, TalkValue p0, TalkL1 p1) {
+static TalkValue talk_fn1110(const TalkValue *env, TalkValue p0, TalkL1 p1) {
     TalkValue l[5];
     memset(l, 0, sizeof l);
     (void)env;
@@ -134622,7 +134344,7 @@ static TalkValue talk_dispatch(uint32_t function, const TalkValue *env, const Ta
     case 593: return talk_fn593(env, args[0]);
     case 594: return talk_fn594(env);
     case 595: return talk_fn595(env, talk_unbox_l1(args[0]));
-    case 596: return talk_fn596(env, args[0]);
+    case 596: return talk_box_l91(talk_fn596(env, args[0]));
     case 597: return talk_box_l28(talk_fn597(env, talk_unbox_l3(args[0]), args[1]));
     case 598: return talk_box_l2(talk_fn598(env, talk_unbox_l3(args[0]), args[1]));
     case 599: return talk_box_l28(talk_fn599(env, talk_unbox_l3(args[0])));
@@ -134968,176 +134690,175 @@ static TalkValue talk_dispatch(uint32_t function, const TalkValue *env, const Ta
     case 939: return talk_box_l28(talk_fn939(env, args[0], talk_unbox_l3(args[1])));
     case 940: return talk_box_l28(talk_fn940(env, talk_unbox_l3(args[0]), talk_unbox_l3(args[1])));
     case 941: return talk_box_l10(talk_fn941(env, args[0]));
-    case 942: return talk_box_l91(talk_fn942(env, args[0]));
-    case 943: return talk_box_l10(talk_fn943(env, args[0], talk_unbox_l12(args[1])));
-    case 944: return talk_box_l28(talk_fn944(env, talk_unbox_l3(args[0]), talk_unbox_l23(args[1])));
-    case 945: return talk_fn945(env, args[0]);
-    case 946: return talk_fn946(env, args[0], args[1]);
-    case 947: return talk_box_l2(talk_fn947(env, talk_unbox_l3(args[0]), args[1]));
-    case 948: return talk_box_l28(talk_fn948(env, talk_unbox_l3(args[0])));
-    case 949: return talk_box_l28(talk_fn949(env, talk_unbox_l3(args[0]), args[1], talk_unbox_l23(args[2])));
-    case 950: return talk_box_l2(talk_fn950(env, args[0]));
-    case 951: return talk_fn951(env, talk_unbox_l23(args[0]));
-    case 952: return talk_fn952(env, args[0]);
-    case 953: return talk_fn953(env, talk_unbox_l1(args[0]));
-    case 954: return talk_box_l28(talk_fn954(env, talk_unbox_l3(args[0]), args[1]));
-    case 955: return talk_box_l2(talk_fn955(env, talk_unbox_l3(args[0]), args[1]));
-    case 956: return talk_box_l28(talk_fn956(env, talk_unbox_l3(args[0])));
-    case 957: return talk_box_l28(talk_fn957(env, talk_unbox_l3(args[0]), args[1], args[2]));
-    case 958: return talk_box_l2(talk_fn958(env, args[0]));
-    case 959: return talk_fn959(env, talk_unbox_l3(args[0]), args[1]);
+    case 942: return talk_box_l10(talk_fn942(env, args[0], talk_unbox_l12(args[1])));
+    case 943: return talk_box_l28(talk_fn943(env, talk_unbox_l3(args[0]), talk_unbox_l23(args[1])));
+    case 944: return talk_fn944(env, args[0]);
+    case 945: return talk_fn945(env, args[0], args[1]);
+    case 946: return talk_box_l2(talk_fn946(env, talk_unbox_l3(args[0]), args[1]));
+    case 947: return talk_box_l28(talk_fn947(env, talk_unbox_l3(args[0])));
+    case 948: return talk_box_l28(talk_fn948(env, talk_unbox_l3(args[0]), args[1], talk_unbox_l23(args[2])));
+    case 949: return talk_box_l2(talk_fn949(env, args[0]));
+    case 950: return talk_fn950(env, talk_unbox_l23(args[0]));
+    case 951: return talk_fn951(env, args[0]);
+    case 952: return talk_fn952(env, talk_unbox_l1(args[0]));
+    case 953: return talk_box_l28(talk_fn953(env, talk_unbox_l3(args[0]), args[1]));
+    case 954: return talk_box_l2(talk_fn954(env, talk_unbox_l3(args[0]), args[1]));
+    case 955: return talk_box_l28(talk_fn955(env, talk_unbox_l3(args[0])));
+    case 956: return talk_box_l28(talk_fn956(env, talk_unbox_l3(args[0]), args[1], args[2]));
+    case 957: return talk_box_l2(talk_fn957(env, args[0]));
+    case 958: return talk_fn958(env, talk_unbox_l3(args[0]), args[1]);
+    case 959: return talk_fn959(env, args[0]);
     case 960: return talk_fn960(env, args[0]);
-    case 961: return talk_fn961(env, args[0]);
-    case 962: return talk_fn962(env, talk_unbox_l3(args[0]), args[1]);
+    case 961: return talk_fn961(env, talk_unbox_l3(args[0]), args[1]);
+    case 962: return talk_fn962(env, args[0]);
     case 963: return talk_fn963(env, args[0]);
-    case 964: return talk_fn964(env, args[0]);
-    case 965: return talk_box_l28(talk_fn965(env, talk_unbox_l3(args[0]), args[1]));
-    case 966: return talk_box_l2(talk_fn966(env, talk_unbox_l3(args[0]), args[1]));
-    case 967: return talk_box_l28(talk_fn967(env, talk_unbox_l3(args[0])));
-    case 968: return talk_box_l28(talk_fn968(env, talk_unbox_l3(args[0]), args[1], args[2]));
-    case 969: return talk_box_l2(talk_fn969(env, args[0]));
-    case 970: return talk_fn970(env, talk_unbox_l3(args[0]), args[1]);
+    case 964: return talk_box_l28(talk_fn964(env, talk_unbox_l3(args[0]), args[1]));
+    case 965: return talk_box_l2(talk_fn965(env, talk_unbox_l3(args[0]), args[1]));
+    case 966: return talk_box_l28(talk_fn966(env, talk_unbox_l3(args[0])));
+    case 967: return talk_box_l28(talk_fn967(env, talk_unbox_l3(args[0]), args[1], args[2]));
+    case 968: return talk_box_l2(talk_fn968(env, args[0]));
+    case 969: return talk_fn969(env, talk_unbox_l3(args[0]), args[1]);
+    case 970: return talk_fn970(env, args[0]);
     case 971: return talk_fn971(env, args[0]);
-    case 972: return talk_fn972(env, args[0]);
-    case 973: return talk_fn973(env, talk_unbox_l3(args[0]), args[1]);
-    case 974: return talk_fn974(env, args[0]);
-    case 975: return talk_box_l10(talk_fn975(env, args[0], args[1], talk_unbox_l12(args[2])));
-    case 976: return talk_box_l10(talk_fn976(env, args[0], talk_unbox_l1(args[1])));
+    case 972: return talk_fn972(env, talk_unbox_l3(args[0]), args[1]);
+    case 973: return talk_fn973(env, args[0]);
+    case 974: return talk_box_l10(talk_fn974(env, args[0], args[1], talk_unbox_l12(args[2])));
+    case 975: return talk_box_l10(talk_fn975(env, args[0], talk_unbox_l1(args[1])));
+    case 976: return talk_box_l10(talk_fn976(env, args[0], talk_unbox_l12(args[1])));
     case 977: return talk_box_l10(talk_fn977(env, args[0], talk_unbox_l12(args[1])));
     case 978: return talk_box_l10(talk_fn978(env, args[0], talk_unbox_l12(args[1])));
-    case 979: return talk_box_l10(talk_fn979(env, args[0], talk_unbox_l12(args[1])));
-    case 980: return talk_box_l1(talk_fn980(env, talk_unbox_l1(args[0]), args[1], talk_unbox_l1(args[2])));
-    case 981: return talk_fn981(env, talk_unbox_l7(args[0]), args[1], args[2]);
-    case 982: return talk_box_l28(talk_fn982(env, talk_unbox_l3(args[0]), talk_unbox_l72(args[1])));
+    case 979: return talk_box_l1(talk_fn979(env, talk_unbox_l1(args[0]), args[1], talk_unbox_l1(args[2])));
+    case 980: return talk_fn980(env, talk_unbox_l7(args[0]), args[1], args[2]);
+    case 981: return talk_box_l28(talk_fn981(env, talk_unbox_l3(args[0]), talk_unbox_l72(args[1])));
+    case 982: return talk_fn982(env, args[0]);
     case 983: return talk_fn983(env, args[0]);
-    case 984: return talk_fn984(env, args[0]);
-    case 985: return talk_fn985(env, talk_unbox_l83(args[0]), args[1], args[2]);
-    case 986: return talk_fn986(env, talk_unbox_l83(args[0]), args[1], args[2], args[3], talk_unbox_l1(args[4]));
+    case 984: return talk_fn984(env, talk_unbox_l83(args[0]), args[1], args[2]);
+    case 985: return talk_fn985(env, talk_unbox_l83(args[0]), args[1], args[2], args[3], talk_unbox_l1(args[4]));
+    case 986: return talk_fn986(env, args[0]);
     case 987: return talk_fn987(env, args[0]);
-    case 988: return talk_fn988(env, args[0]);
-    case 989: return talk_fn989(env, talk_unbox_l7(args[0]), args[1], args[2], args[3], args[4]);
-    case 990: return talk_fn990(env, talk_unbox_l83(args[0]), args[1], args[2]);
-    case 991: return talk_fn991(env, args[0]);
-    case 992: return talk_fn992(env, talk_unbox_l7(args[0]));
-    case 993: return talk_box_l1(talk_fn993(env, talk_unbox_l83(args[0]), args[1], args[2]));
-    case 994: return talk_fn994(env, args[0]);
-    case 995: return talk_fn995(env, talk_unbox_l112(args[0]));
+    case 988: return talk_fn988(env, talk_unbox_l7(args[0]), args[1], args[2], args[3], args[4]);
+    case 989: return talk_fn989(env, talk_unbox_l83(args[0]), args[1], args[2]);
+    case 990: return talk_fn990(env, args[0]);
+    case 991: return talk_fn991(env, talk_unbox_l7(args[0]));
+    case 992: return talk_box_l1(talk_fn992(env, talk_unbox_l83(args[0]), args[1], args[2]));
+    case 993: return talk_fn993(env, args[0]);
+    case 994: return talk_fn994(env, talk_unbox_l112(args[0]));
+    case 995: return talk_fn995(env, args[0]);
     case 996: return talk_fn996(env, args[0]);
-    case 997: return talk_fn997(env, args[0]);
-    case 998: return talk_fn998(env, talk_unbox_l0(args[0]), args[1], args[2]);
-    case 999: return talk_fn999(env, args[0]);
-    case 1000: return talk_box_l1(talk_fn1000(env, args[0]));
+    case 997: return talk_fn997(env, talk_unbox_l0(args[0]), args[1], args[2]);
+    case 998: return talk_fn998(env, args[0]);
+    case 999: return talk_box_l1(talk_fn999(env, args[0]));
+    case 1000: return talk_fn1000(env, args[0]);
     case 1001: return talk_fn1001(env, args[0]);
     case 1002: return talk_fn1002(env, args[0]);
-    case 1003: return talk_fn1003(env, args[0]);
-    case 1004: return talk_box_l1(talk_fn1004(env));
-    case 1005: return talk_fn1005(env, talk_unbox_l0(args[0]), args[1]);
+    case 1003: return talk_box_l1(talk_fn1003(env));
+    case 1004: return talk_fn1004(env, talk_unbox_l0(args[0]), args[1]);
+    case 1005: return talk_fn1005(env, args[0]);
     case 1006: return talk_fn1006(env, args[0]);
     case 1007: return talk_fn1007(env, args[0]);
-    case 1008: return talk_fn1008(env, args[0]);
-    case 1009: return talk_box_l2(talk_fn1009(env, talk_unbox_l3(args[0]), args[1]));
-    case 1010: return talk_box_l28(talk_fn1010(env, talk_unbox_l3(args[0])));
-    case 1011: return talk_box_l28(talk_fn1011(env, talk_unbox_l3(args[0]), args[1], talk_unbox_l72(args[2])));
-    case 1012: return talk_box_l2(talk_fn1012(env, args[0]));
+    case 1008: return talk_box_l2(talk_fn1008(env, talk_unbox_l3(args[0]), args[1]));
+    case 1009: return talk_box_l28(talk_fn1009(env, talk_unbox_l3(args[0])));
+    case 1010: return talk_box_l28(talk_fn1010(env, talk_unbox_l3(args[0]), args[1], talk_unbox_l72(args[2])));
+    case 1011: return talk_box_l2(talk_fn1011(env, args[0]));
+    case 1012: return talk_fn1012(env, talk_unbox_l3(args[0]), args[1]);
     case 1013: return talk_fn1013(env, talk_unbox_l3(args[0]), args[1]);
-    case 1014: return talk_fn1014(env, talk_unbox_l3(args[0]), args[1]);
-    case 1015: return talk_fn1015(env, args[0]);
+    case 1014: return talk_fn1014(env, args[0]);
+    case 1015: return talk_box_l10(talk_fn1015(env, args[0]));
     case 1016: return talk_box_l10(talk_fn1016(env, args[0]));
-    case 1017: return talk_box_l10(talk_fn1017(env, args[0]));
-    case 1018: return talk_box_l10(talk_fn1018(env, args[0], args[1]));
-    case 1019: return talk_box_l10(talk_fn1019(env, args[0]));
-    case 1020: return talk_fn1020(env, args[0]);
-    case 1021: return talk_fn1021(env, talk_unbox_l23(args[0]));
-    case 1022: return talk_fn1022(env, talk_unbox_l7(args[0]));
-    case 1023: return talk_box_l1(talk_fn1023(env, talk_unbox_l1(args[0]), args[1]));
-    case 1024: return talk_box_l28(talk_fn1024(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
-    case 1025: return talk_box_l78(talk_fn1025(env, talk_unbox_l3(args[0])));
-    case 1026: return talk_box_l79(talk_fn1026(env, talk_unbox_l78(args[0])));
-    case 1027: return talk_box_l28(talk_fn1027(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
-    case 1028: return talk_box_l78(talk_fn1028(env, talk_unbox_l3(args[0])));
-    case 1029: return talk_box_l79(talk_fn1029(env, talk_unbox_l78(args[0])));
-    case 1030: return talk_box_l9(talk_fn1030(env, talk_unbox_l3(args[0]), args[1]));
-    case 1031: return talk_fn1031(env, talk_unbox_l9(args[0]));
-    case 1032: return talk_box_l9(talk_fn1032(env, talk_unbox_l3(args[0]), args[1]));
-    case 1033: return talk_box_l28(talk_fn1033(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l23(args[2]), args[3]));
-    case 1034: return talk_box_l28(talk_fn1034(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l26(args[2]), args[3]));
-    case 1035: return talk_box_l28(talk_fn1035(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l16(args[2]), args[3]));
-    case 1036: return talk_box_l28(talk_fn1036(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
-    case 1037: return talk_box_l28(talk_fn1037(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l13(args[2]), args[3]));
-    case 1038: return talk_box_l1(talk_fn1038(env, args[0]));
-    case 1039: return talk_box_l28(talk_fn1039(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l1(args[2]), args[3], args[4], args[5]));
-    case 1040: return talk_box_l28(talk_fn1040(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l3(args[2]), args[3]));
+    case 1017: return talk_box_l10(talk_fn1017(env, args[0], args[1]));
+    case 1018: return talk_box_l10(talk_fn1018(env, args[0]));
+    case 1019: return talk_fn1019(env, args[0]);
+    case 1020: return talk_fn1020(env, talk_unbox_l23(args[0]));
+    case 1021: return talk_fn1021(env, talk_unbox_l7(args[0]));
+    case 1022: return talk_box_l1(talk_fn1022(env, talk_unbox_l1(args[0]), args[1]));
+    case 1023: return talk_box_l28(talk_fn1023(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
+    case 1024: return talk_box_l78(talk_fn1024(env, talk_unbox_l3(args[0])));
+    case 1025: return talk_box_l79(talk_fn1025(env, talk_unbox_l78(args[0])));
+    case 1026: return talk_box_l28(talk_fn1026(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
+    case 1027: return talk_box_l78(talk_fn1027(env, talk_unbox_l3(args[0])));
+    case 1028: return talk_box_l79(talk_fn1028(env, talk_unbox_l78(args[0])));
+    case 1029: return talk_box_l9(talk_fn1029(env, talk_unbox_l3(args[0]), args[1]));
+    case 1030: return talk_fn1030(env, talk_unbox_l9(args[0]));
+    case 1031: return talk_box_l9(talk_fn1031(env, talk_unbox_l3(args[0]), args[1]));
+    case 1032: return talk_box_l28(talk_fn1032(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l23(args[2]), args[3]));
+    case 1033: return talk_box_l28(talk_fn1033(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l26(args[2]), args[3]));
+    case 1034: return talk_box_l28(talk_fn1034(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l16(args[2]), args[3]));
+    case 1035: return talk_box_l28(talk_fn1035(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
+    case 1036: return talk_box_l28(talk_fn1036(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l13(args[2]), args[3]));
+    case 1037: return talk_box_l1(talk_fn1037(env, args[0]));
+    case 1038: return talk_box_l28(talk_fn1038(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l1(args[2]), args[3], args[4], args[5]));
+    case 1039: return talk_box_l28(talk_fn1039(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l3(args[2]), args[3]));
+    case 1040: return talk_box_l28(talk_fn1040(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
     case 1041: return talk_box_l28(talk_fn1041(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
-    case 1042: return talk_box_l28(talk_fn1042(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
-    case 1043: return talk_box_l28(talk_fn1043(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l3(args[2]), args[3]));
-    case 1044: return talk_box_l28(talk_fn1044(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
-    case 1045: return talk_box_l28(talk_fn1045(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l21(args[2]), args[3]));
-    case 1046: return talk_box_l78(talk_fn1046(env, talk_unbox_l3(args[0])));
-    case 1047: return talk_box_l79(talk_fn1047(env, talk_unbox_l78(args[0])));
-    case 1048: return talk_box_l9(talk_fn1048(env, talk_unbox_l3(args[0]), args[1]));
-    case 1049: return talk_box_l28(talk_fn1049(env, talk_unbox_l3(args[0]), args[1]));
-    case 1050: return talk_box_l28(talk_fn1050(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
+    case 1042: return talk_box_l28(talk_fn1042(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l3(args[2]), args[3]));
+    case 1043: return talk_box_l28(talk_fn1043(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
+    case 1044: return talk_box_l28(talk_fn1044(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l21(args[2]), args[3]));
+    case 1045: return talk_box_l78(talk_fn1045(env, talk_unbox_l3(args[0])));
+    case 1046: return talk_box_l79(talk_fn1046(env, talk_unbox_l78(args[0])));
+    case 1047: return talk_box_l9(talk_fn1047(env, talk_unbox_l3(args[0]), args[1]));
+    case 1048: return talk_box_l28(talk_fn1048(env, talk_unbox_l3(args[0]), args[1]));
+    case 1049: return talk_box_l28(talk_fn1049(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
+    case 1050: return talk_box_l1(talk_fn1050(env, args[0]));
     case 1051: return talk_box_l1(talk_fn1051(env, args[0]));
-    case 1052: return talk_box_l1(talk_fn1052(env, args[0]));
+    case 1052: return talk_box_l28(talk_fn1052(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
     case 1053: return talk_box_l28(talk_fn1053(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
-    case 1054: return talk_box_l28(talk_fn1054(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
-    case 1055: return talk_box_l28(talk_fn1055(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l57(args[2]), args[3]));
+    case 1054: return talk_box_l28(talk_fn1054(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l57(args[2]), args[3]));
+    case 1055: return talk_box_l28(talk_fn1055(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
     case 1056: return talk_box_l28(talk_fn1056(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
     case 1057: return talk_box_l28(talk_fn1057(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
     case 1058: return talk_box_l28(talk_fn1058(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
-    case 1059: return talk_box_l28(talk_fn1059(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
+    case 1059: return talk_box_l1(talk_fn1059(env, args[0]));
     case 1060: return talk_box_l1(talk_fn1060(env, args[0]));
-    case 1061: return talk_box_l1(talk_fn1061(env, args[0]));
-    case 1062: return talk_box_l28(talk_fn1062(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
-    case 1063: return talk_box_l28(talk_fn1063(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l9(args[2]), args[3]));
+    case 1061: return talk_box_l28(talk_fn1061(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
+    case 1062: return talk_box_l28(talk_fn1062(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l9(args[2]), args[3]));
+    case 1063: return talk_box_l28(talk_fn1063(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
     case 1064: return talk_box_l28(talk_fn1064(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
-    case 1065: return talk_box_l28(talk_fn1065(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
-    case 1066: return talk_fn1066(env, talk_unbox_l1(args[0]));
-    case 1067: return talk_fn1067(env, args[0]);
-    case 1068: return talk_fn1068(env, talk_unbox_l3(args[0]));
-    case 1069: return talk_box_l1(talk_fn1069(env, talk_unbox_l129(args[0])));
-    case 1070: return talk_box_l28(talk_fn1070(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l3(args[2]), args[3]));
+    case 1065: return talk_fn1065(env, talk_unbox_l1(args[0]));
+    case 1066: return talk_fn1066(env, args[0]);
+    case 1067: return talk_fn1067(env, talk_unbox_l3(args[0]));
+    case 1068: return talk_box_l1(talk_fn1068(env, talk_unbox_l129(args[0])));
+    case 1069: return talk_box_l28(talk_fn1069(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), talk_unbox_l3(args[2]), args[3]));
+    case 1070: return talk_fn1070(env, talk_unbox_l3(args[0]));
     case 1071: return talk_fn1071(env, talk_unbox_l3(args[0]));
-    case 1072: return talk_fn1072(env, talk_unbox_l3(args[0]));
-    case 1073: return talk_fn1073(env, talk_unbox_l133(args[0]));
-    case 1074: return talk_fn1074(env, talk_unbox_l3(args[0]), args[1]);
-    case 1075: return talk_box_l28(talk_fn1075(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
-    case 1076: return talk_box_l1(talk_fn1076(env, talk_unbox_l132(args[0])));
-    case 1077: return talk_box_l1(talk_fn1077(env, args[0], args[1]));
-    case 1078: return talk_box_l1(talk_fn1078(env, talk_unbox_l7(args[0])));
-    case 1079: return talk_fn1079(env, talk_unbox_l3(args[0]), args[1]);
-    case 1080: return talk_fn1080(env, talk_unbox_l7(args[0]));
-    case 1081: return talk_box_l28(talk_fn1081(env, talk_unbox_l3(args[0]), args[1]));
-    case 1082: return talk_box_l3(talk_fn1082(env));
-    case 1083: return talk_fn1083(env, talk_unbox_l7(args[0]));
-    case 1084: return talk_fn1084(env, talk_unbox_l3(args[0]));
-    case 1085: return talk_fn1085(env, talk_unbox_l132(args[0]), talk_unbox_l132(args[1]));
-    case 1086: return talk_fn1086(env, talk_unbox_l3(args[0]));
-    case 1087: return talk_fn1087(env, talk_unbox_l2(args[0]));
-    case 1088: return talk_box_l28(talk_fn1088(env, talk_unbox_l3(args[0]), talk_unbox_l133(args[1])));
-    case 1089: return talk_fn1089(env, talk_unbox_l9(args[0]));
+    case 1072: return talk_fn1072(env, talk_unbox_l133(args[0]));
+    case 1073: return talk_fn1073(env, talk_unbox_l3(args[0]), args[1]);
+    case 1074: return talk_box_l28(talk_fn1074(env, talk_unbox_l3(args[0]), talk_unbox_l83(args[1]), args[2], args[3]));
+    case 1075: return talk_box_l1(talk_fn1075(env, talk_unbox_l132(args[0])));
+    case 1076: return talk_box_l1(talk_fn1076(env, args[0], args[1]));
+    case 1077: return talk_box_l1(talk_fn1077(env, talk_unbox_l7(args[0])));
+    case 1078: return talk_fn1078(env, talk_unbox_l3(args[0]), args[1]);
+    case 1079: return talk_fn1079(env, talk_unbox_l7(args[0]));
+    case 1080: return talk_box_l28(talk_fn1080(env, talk_unbox_l3(args[0]), args[1]));
+    case 1081: return talk_box_l3(talk_fn1081(env));
+    case 1082: return talk_fn1082(env, talk_unbox_l7(args[0]));
+    case 1083: return talk_fn1083(env, talk_unbox_l3(args[0]));
+    case 1084: return talk_fn1084(env, talk_unbox_l132(args[0]), talk_unbox_l132(args[1]));
+    case 1085: return talk_fn1085(env, talk_unbox_l3(args[0]));
+    case 1086: return talk_fn1086(env, talk_unbox_l2(args[0]));
+    case 1087: return talk_box_l28(talk_fn1087(env, talk_unbox_l3(args[0]), talk_unbox_l133(args[1])));
+    case 1088: return talk_fn1088(env, talk_unbox_l9(args[0]));
+    case 1089: return talk_fn1089(env, talk_unbox_l3(args[0]));
     case 1090: return talk_fn1090(env, talk_unbox_l3(args[0]));
-    case 1091: return talk_fn1091(env, talk_unbox_l3(args[0]));
-    case 1092: return talk_box_l2(talk_fn1092(env, talk_unbox_l3(args[0]), args[1]));
-    case 1093: return talk_box_l28(talk_fn1093(env, talk_unbox_l3(args[0])));
-    case 1094: return talk_box_l28(talk_fn1094(env, talk_unbox_l3(args[0]), args[1], talk_unbox_l133(args[2])));
-    case 1095: return talk_box_l2(talk_fn1095(env, args[0]));
+    case 1091: return talk_box_l2(talk_fn1091(env, talk_unbox_l3(args[0]), args[1]));
+    case 1092: return talk_box_l28(talk_fn1092(env, talk_unbox_l3(args[0])));
+    case 1093: return talk_box_l28(talk_fn1093(env, talk_unbox_l3(args[0]), args[1], talk_unbox_l133(args[2])));
+    case 1094: return talk_box_l2(talk_fn1094(env, args[0]));
+    case 1095: return talk_fn1095(env, talk_unbox_l133(args[0]));
     case 1096: return talk_fn1096(env, talk_unbox_l133(args[0]));
-    case 1097: return talk_fn1097(env, talk_unbox_l133(args[0]));
+    case 1097: return talk_fn1097(env, args[0]);
     case 1098: return talk_fn1098(env, args[0]);
-    case 1099: return talk_fn1099(env, args[0]);
-    case 1100: return talk_box_l28(talk_fn1100(env, talk_unbox_l3(args[0])));
-    case 1101: return talk_box_l2(talk_fn1101(env, talk_unbox_l3(args[0]), args[1]));
-    case 1102: return talk_box_l2(talk_fn1102(env, args[0]));
-    case 1103: return talk_fn1103(env, talk_unbox_l3(args[0]), args[1]);
+    case 1099: return talk_box_l28(talk_fn1099(env, talk_unbox_l3(args[0])));
+    case 1100: return talk_box_l2(talk_fn1100(env, talk_unbox_l3(args[0]), args[1]));
+    case 1101: return talk_box_l2(talk_fn1101(env, args[0]));
+    case 1102: return talk_fn1102(env, talk_unbox_l3(args[0]), args[1]);
+    case 1103: return talk_fn1103(env, args[0]);
     case 1104: return talk_fn1104(env, args[0]);
-    case 1105: return talk_fn1105(env, args[0]);
-    case 1106: return talk_fn1106(env, talk_unbox_l3(args[0]), args[1]);
-    case 1107: return talk_fn1107(env, args[0]);
-    case 1108: return talk_box_l28(talk_fn1108(env, talk_unbox_l3(args[0]), args[1], args[2]));
-    case 1109: return talk_fn1109(env, talk_unbox_l137(args[0]));
-    case 1110: return talk_fn1110(env, args[0]);
-    case 1111: return talk_fn1111(env, args[0], talk_unbox_l1(args[1]));
+    case 1105: return talk_fn1105(env, talk_unbox_l3(args[0]), args[1]);
+    case 1106: return talk_fn1106(env, args[0]);
+    case 1107: return talk_box_l28(talk_fn1107(env, talk_unbox_l3(args[0]), args[1], args[2]));
+    case 1108: return talk_fn1108(env, talk_unbox_l137(args[0]));
+    case 1109: return talk_fn1109(env, args[0]);
+    case 1110: return talk_fn1110(env, args[0], talk_unbox_l1(args[1]));
     default: talk_trap("call to an unknown function");
     }
 }
