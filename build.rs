@@ -45,14 +45,14 @@ fn emit_compiler_content_stamp() {
         "src/name_resolution",
         "src/typed_ast",
         "src/desugar",
-        "src/procedural_macros",
         "src/compiling",
+        // The frontend crate owns the cached products' layout and
+        // meaning (Span, FileID, TypedFile, the typed tree): a change
+        // there must invalidate core/stdlib caches just like a change
+        // under src/ does.
+        "talk-front/src",
     ];
-    const STAMP_FILES: &[&str] = &[
-        "src/macro_expansion.rs",
-        "bootstrap/frontend.tbc",
-        "bootstrap/frontend.abi",
-    ];
+    const STAMP_FILES: &[&str] = &["bootstrap/frontend.tbc", "bootstrap/frontend.abi"];
     // The MIR crates feed on TypedProgram; they never change what the
     // frontend cache stores, so mir/ stays out of the stamp.
     const SKIP_DIRS: &[&str] = &["src/compiling/mir"];
