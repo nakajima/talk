@@ -217,15 +217,15 @@ pub func _io_clamp(count: Int, capacity: Int) -> Int {
 	count
 }
 
-pub func write_string(fd: Int, s: String) -> Int {
+pub func write_string(fd: Int, s: String) 'io -> Int {
 	#_ir(fd, s.storage.base, s.byte_count) { %? = io 1 $0 $1 $2 }
 }
 
-pub func print_raw(_ s: String) -> Int {
+pub func print_raw(_ s: String) 'io -> Int {
 	write_string(fd: STDOUT_FD, s: s)
 }
 
-func _print_line(s: String) -> () {
+func _print_line(s: String) 'io -> () {
 	#_ir(STDOUT_FD, s.storage.base, s.byte_count) { %? = io 1 $0 $1 $2 }
 	let nl = "\n"
 	#_ir(STDOUT_FD, nl.storage.base, nl.byte_count) { %? = io 1 $0 $1 $2 }

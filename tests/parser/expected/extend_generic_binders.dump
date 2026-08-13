@@ -1,0 +1,151 @@
+tokens:
+  Protocol @0..8 "protocol"
+  Identifier @9..12 "Foo"
+  LeftBrace @13..14 "{"
+  Newline @14..15
+  RightBrace @15..16 "}"
+  Newline @16..18
+  Protocol @18..26 "protocol"
+  Identifier @27..30 "Bar"
+  LeftBrace @31..32 "{"
+  Newline @32..33
+  RightBrace @33..34 "}"
+  Newline @34..36
+  Struct @36..42 "struct"
+  Identifier @43..47 "Pair"
+  Less @47..48 "<"
+  Identifier @48..49 "A"
+  Comma @49..50 ","
+  Identifier @51..52 "B"
+  Greater @52..53 ">"
+  LeftBrace @54..55 "{"
+  Newline @55..56
+  Let @57..60 "let"
+  Identifier @61..66 "first"
+  Colon @66..67 ":"
+  Identifier @68..69 "A"
+  Newline @69..70
+  Let @71..74 "let"
+  Identifier @75..81 "second"
+  Colon @81..82 ":"
+  Identifier @83..84 "B"
+  Newline @84..85
+  RightBrace @85..86 "}"
+  Newline @86..88
+  Newline @154..155
+  Newline @170..171
+  Extend @171..177 "extend"
+  Less @177..178 "<"
+  Identifier @178..179 "T"
+  Colon @179..180 ":"
+  Identifier @181..184 "Foo"
+  Comma @184..185 ","
+  Identifier @186..187 "U"
+  Colon @187..188 ":"
+  Identifier @189..192 "Bar"
+  Greater @192..193 ">"
+  Identifier @194..198 "Pair"
+  Less @198..199 "<"
+  Identifier @199..200 "T"
+  Comma @200..201 ","
+  Identifier @202..203 "U"
+  Greater @203..204 ">"
+  LeftBrace @205..206 "{"
+  Newline @206..207
+  RightBrace @207..208 "}"
+  Newline @208..210
+  Newline @276..277
+  Extend @277..283 "extend"
+  Less @283..284 "<"
+  Identifier @284..285 "T"
+  Colon @285..286 ":"
+  Identifier @287..290 "Foo"
+  Comma @290..291 ","
+  Identifier @292..295 "Bar"
+  Greater @295..296 ">"
+  Identifier @297..301 "Pair"
+  Less @301..302 "<"
+  Identifier @302..303 "T"
+  Comma @303..304 ","
+  Identifier @305..306 "T"
+  Greater @306..307 ">"
+  LeftBrace @308..309 "{"
+  Newline @309..310
+  RightBrace @310..311 "}"
+  Newline @311..313
+  Newline @368..369
+  Func @369..373 "func"
+  Identifier @374..378 "pick"
+  Less @378..379 "<"
+  Identifier @379..380 "T"
+  Colon @380..381 ":"
+  Identifier @382..385 "Foo"
+  Comma @385..386 ","
+  Identifier @387..388 "U"
+  Colon @388..389 ":"
+  Identifier @390..393 "Bar"
+  Greater @393..394 ">"
+  LeftParen @394..395 "("
+  Identifier @395..400 "first"
+  Colon @400..401 ":"
+  Identifier @402..403 "T"
+  Comma @403..404 ","
+  Identifier @405..411 "second"
+  Colon @411..412 ":"
+  Identifier @413..414 "U"
+  RightParen @414..415 ")"
+  Arrow @416..418 "->"
+  Identifier @419..420 "T"
+  LeftBrace @421..422 "{"
+  Newline @422..423
+  Identifier @424..429 "first"
+  Newline @429..430
+  RightBrace @430..431 "}"
+  Newline @431..432
+tree:
+  Decl::Protocol @0..16
+    Body @13..16
+  Decl::Protocol @18..34
+    Body @31..34
+  Decl::Struct @36..86
+    GenericDecl @48..49 "A"
+    GenericDecl @51..52 "B"
+    Body @54..86
+      Decl::Property @57..69 "let first: A"
+        TypeAnnotation::Nominal @68..69 "A"
+      Decl::Property @71..84 "let second: B"
+        TypeAnnotation::Nominal @83..84 "B"
+  Decl::Extend @171..208
+    GenericDecl @178..184 "T: Foo"
+      TypeAnnotation::Nominal @181..184 "Foo"
+    GenericDecl @186..192 "U: Bar"
+      TypeAnnotation::Nominal @189..192 "Bar"
+    TypeAnnotation::Nominal @199..200 "T"
+    TypeAnnotation::Nominal @202..203 "U"
+    Body @205..208
+  Decl::Extend @277..311
+    GenericDecl @284..295 "T: Foo, Bar"
+      TypeAnnotation::Nominal @287..290 "Foo"
+      TypeAnnotation::Nominal @292..295 "Bar"
+    TypeAnnotation::Nominal @302..303 "T"
+    TypeAnnotation::Nominal @305..306 "T"
+    Body @308..311
+  Decl::Func @369..431
+    Func @421..431 tokens=369..431
+      GenericDecl @379..385 "T: Foo"
+        TypeAnnotation::Nominal @382..385 "Foo"
+      GenericDecl @387..393 "U: Bar"
+        TypeAnnotation::Nominal @390..393 "Bar"
+      Parameter @400..403 ": T"
+        TypeAnnotation::Nominal @402..403 "T"
+      Parameter @411..414 ": U"
+        TypeAnnotation::Nominal @413..414 "U"
+      Block @421..431
+        Stmt::Expr @424..429 "first"
+          Expr::Variable @424..429 "first"
+      TypeAnnotation::Nominal @419..420 "T"
+comments:
+  @88..154
+  @155..170 "// conformance."
+  @210..276
+  @313..368

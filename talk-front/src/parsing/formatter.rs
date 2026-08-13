@@ -1763,7 +1763,7 @@ impl<'a> Formatter<'a> {
                 .collect();
             result = concat(
                 result,
-                concat(text(": "), join(conformances_docs, text(", "))),
+                concat(text(": "), join(conformances_docs, text(" & "))),
             );
         }
 
@@ -1806,7 +1806,7 @@ impl<'a> Formatter<'a> {
                 .collect();
             result = concat(
                 result,
-                concat(text(": "), join(conformances_docs, text(", "))),
+                concat(text(": "), join(conformances_docs, text(" & "))),
             );
         }
 
@@ -2849,7 +2849,7 @@ impl<'a> Formatter<'a> {
                 .collect();
             result = concat(
                 result,
-                concat(text(": "), join(conformance_docs, text(", "))),
+                concat(text(": "), join(conformance_docs, text(" & "))),
             );
         }
 

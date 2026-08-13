@@ -1,0 +1,30 @@
+protocol Foo {
+}
+
+protocol Bar {
+}
+
+struct Pair<A, B> {
+	let first: A
+	let second: B
+}
+
+struct Cat {
+}
+
+// A comma always separates binders.
+extend<T: Foo, U: Bar> Pair<T, U> {
+}
+
+// `&` joins multiple conformances on one binder.
+extend<T: Foo & Bar> Pair<T, T> {
+}
+
+// Extension head conformances are `&`-separated too.
+extend Cat: Foo & Bar {
+}
+
+// The same rules apply to function generics.
+func pick<T: Foo & Bar, U>(first: T, second: U) -> T {
+	first
+}

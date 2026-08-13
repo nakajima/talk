@@ -3811,12 +3811,16 @@ struct Parser {
 		GenericDecl(name: name, name_start: name_tok.lexeme.lower, name_end: name_tok.lexeme.upper, generics: generics, conformances: conformances, default_value: default_value, static_ty: no_static_ty, start: start_tok.span.lower, end: self.span_end())
 	}
 
+	// A conformance list (`T: Foo & Bar`, `extend Box: Foo & Bar`):
+	// `&`-separated, matching where-predicate style. A comma never
+	// appears inside one, so in a generic parameter list it always
+	// separates parameters.
 	mut func conformances_list() -> [TypeAnnotation] {
 		let list: [TypeAnnotation] = []
 		loop true {
 			list.push(self.type_annotation())
 			if self.is_failed() { return list }
-			if self.did_match(kind: .comma) == false { break }
+			if self.did_match(kind: .amp) == false { break }
 		}
 		list
 	}
