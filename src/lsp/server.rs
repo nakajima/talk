@@ -506,7 +506,7 @@ pub async fn start() {
                 let result = if let Some(text) = text {
                     let formatted =
                         recover_lsp(st, Some(&uri), "formatting document", None, || {
-                            Some(crate::formatter::format_string(&text))
+                            Some(crate::compiling::frontend::format_string(&text))
                         });
                     if let Some(formatted) = formatted {
                         let newline_count = text.matches('\n').count();
@@ -1840,6 +1840,7 @@ mod tests {
 
         AnalysisWorkspace {
             local_module_id: ModuleId::Main,
+            facts: Default::default(),
             source_root: uri
                 .to_file_path()
                 .ok()
@@ -1876,7 +1877,7 @@ mod tests {
         let asts_by_source = resolved.phase.asts.clone();
         let typed = resolved.type_check();
         let Driver { phase, .. } = typed;
-        let (resolved_names, types) = phase.program.into_semantic_parts();
+        let (resolved_names, types, facts) = phase.program.into_semantic_parts();
         let diagnostics_any = phase.diagnostics;
         let document_id = super::document_id_for_uri(uri);
         let file_id_to_document = vec![document_id.clone()];
@@ -1912,6 +1913,7 @@ mod tests {
             asts,
             resolved_names,
             types,
+            facts,
             diagnostics,
             stdlib_module_ids: Default::default(),
             importable_modules: Default::default(),
@@ -3502,6 +3504,20 @@ extend Person {
         assert_eq!(target.range.start.line, 0);
     }
 
+    /// 0-indexed line of `needle` in the stdlib source that `uri` points to,
+    /// falling back to the bundled text when it is not a file on disk.
+    fn stdlib_source_line(uri: &Url, needle: &str) -> u32 {
+        let source = uri
+            .to_file_path()
+            .ok()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .unwrap_or_else(|| include_str!("../../stdlib/fs.tlk").to_string());
+        source
+            .lines()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("`{needle}` must exist in stdlib source")) as u32
+    }
+
     #[test]
     fn goto_definition_on_stdlib_imported_symbol_navigates_to_definition() {
         let code = "use fs::{ Directory }\nlet dir: Directory\n";
@@ -3518,7 +3534,10 @@ extend Person {
             "should jump to stdlib fs, got {:?}",
             target.uri
         );
-        assert_eq!(target.range.start.line, 173);
+        assert_eq!(
+            target.range.start.line,
+            stdlib_source_line(&target.uri, "pub struct Directory")
+        );
     }
 
     #[test]
@@ -3537,7 +3556,10 @@ extend Person {
             "should jump to stdlib fs instead of the outer call, got {:?}",
             target.uri
         );
-        assert_eq!(target.range.start.line, 173);
+        assert_eq!(
+            target.range.start.line,
+            stdlib_source_line(&target.uri, "pub struct Directory")
+        );
     }
 
     #[test]
@@ -3557,7 +3579,10 @@ extend Person {
             "should jump to stdlib fs, got {:?}",
             target.uri
         );
-        assert_eq!(target.range.start.line, 173);
+        assert_eq!(
+            target.range.start.line,
+            stdlib_source_line(&target.uri, "pub struct Directory")
+        );
     }
 
     #[test]
@@ -3599,7 +3624,7 @@ extend Person {
     fn format_does_not_add_extra_newlines() {
         // Simulates what LSP formatting does: calculate range, get formatted text, apply edit
         fn apply_format(input: &str) -> String {
-            let formatted = crate::formatter::format_string(input);
+            let formatted = crate::compiling::frontend::format_string(input);
             let newline_count = input.matches('\n').count();
             let ends_with_newline = input.ends_with('\n');
             let last_line = newline_count;

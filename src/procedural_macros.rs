@@ -14,48 +14,26 @@ use crate::node_id::FileID;
 use crate::node_kinds::decl::{DeclKind, ImportPath, ImportedSymbols, Visibility};
 use crate::node_kinds::expr::{Expr, ExprKind};
 
-/// The macro-unit file suffix, also used by the stdlib's embedded
-/// source set (wasm has no directory to scan for it).
-pub(crate) const MACRO_SUFFIX: &str = ".macro.tlk";
+pub use crate::front::macro_artifact::MACRO_SUFFIX;
+pub use crate::front::macro_artifact::ProceduralMacroArtifact;
+
 const MAX_MACRO_INSTRUCTIONS: u64 = 10_000_000;
 const MAX_MACRO_FRAMES: usize = 4_096;
 const MAX_MACRO_MEMORY: usize = 64 * 1024 * 1024;
 
-/// Serializable compile-time portion of a package module. Dependency modules
-/// carry this beside their runtime interface, so macro implementations never
-/// need to be rebuilt in the importing package.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct ProceduralMacroArtifact {
-    image: Vec<u8>,
-    schema: String,
-    wrappers: BTreeMap<String, String>,
-}
-
-impl std::fmt::Debug for ProceduralMacroArtifact {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("ProceduralMacroArtifact")
-            .field("macros", &self.wrappers.keys().collect::<Vec<_>>())
-            .field("image_bytes", &self.image.len())
-            .finish()
-    }
-}
-
-impl ProceduralMacroArtifact {
-    pub fn exported_names(&self) -> impl Iterator<Item = &str> {
-        self.wrappers.keys().map(String::as_str)
-    }
-
-    fn load(&self) -> Result<ProceduralMacroService, String> {
-        let module = talk_vm::Module::decode_bytecode(&self.image)
+/// Load a compiled artifact into an executable service (the VM half the
+/// pure-data artifact type deliberately does not carry, ADR 0057).
+fn load_artifact(artifact: &ProceduralMacroArtifact) -> Result<ProceduralMacroService, String> {
+    {
+        let module = talk_vm::Module::decode_bytecode(&artifact.image)
             .map_err(|error| format!("invalid procedural macro artifact: {error:?}"))?;
         Ok(ProceduralMacroService {
             executable: talk_bytecode::Executable::from_vm_module(
                 module,
                 crate::compiling::mir::string_shape(),
             ),
-            schema: crate::compiling::abi::parse_schema(&self.schema)?,
-            artifact: self.clone(),
+            schema: crate::compiling::abi::parse_schema(&artifact.schema)?,
+            artifact: artifact.clone(),
         })
     }
 }
@@ -417,7 +395,7 @@ impl ProceduralMacroEnvironment {
                 module.name.clone(),
                 ImportedProceduralMacros {
                     module_id,
-                    service: Arc::new(artifact.load()?),
+                    service: Arc::new(load_artifact(artifact)?),
                 },
             );
         }
@@ -583,5 +561,82 @@ mod tests {
             ProceduralMacroService::discover(&root).expect_err("unsafe macro must be rejected");
         assert!(error.contains("#unsafe"), "{error}");
         std::fs::remove_dir_all(root).expect("remove macro fixture");
+    }
+}
+
+// --- The toolchain macro host (ADR 0057 slice 3b) ---------------------
+//
+// Macro expansion is frontend logic behind `front::macro_host::MacroHost`;
+// this is the root crate's implementation over the self-hosted frontend
+// and the compiled procedural-macro services.
+
+use crate::front::macro_host::{
+    BridgedExprMacro, BridgedParse, MacroBindings, MacroHost, MacroResolution, ProceduralMacro,
+};
+
+impl ProceduralMacro for ProceduralMacroBinding {
+    fn expand(
+        &self,
+        source_id: crate::node_id::FileID,
+        source: &str,
+        input_start: u32,
+        input_end: u32,
+        input_tokens: &[crate::node_kinds::expr::MacroToken],
+        expansion_namespace: u64,
+        expansion_ordinal: u64,
+    ) -> Result<BridgedExprMacro, String> {
+        self.service.expand(
+            &self.exported_name,
+            source_id,
+            source,
+            input_start,
+            input_end,
+            input_tokens,
+            self.definition_module,
+            expansion_namespace,
+            expansion_ordinal,
+        )
+    }
+}
+
+impl MacroBindings for ProceduralMacroBindings {
+    fn resolve(&self, name: &str) -> MacroResolution<'_> {
+        match ProceduralMacroBindings::resolve(self, name) {
+            ProceduralMacroResolution::Found(binding) => MacroResolution::Found(binding),
+            ProceduralMacroResolution::Ambiguous(origins) => MacroResolution::Ambiguous(origins),
+            ProceduralMacroResolution::Missing => MacroResolution::Missing,
+        }
+    }
+}
+
+/// The host `Driver` hands macro expansion: token tags and category
+/// parses from the self-hosted frontend, procedural macros from the
+/// compilation's environment (when it has one).
+pub struct ToolchainMacroHost<'a> {
+    pub procedural: Option<&'a ProceduralMacroEnvironment>,
+}
+
+impl MacroHost for ToolchainMacroHost<'_> {
+    fn token_kind_tag(&self, variant: &str) -> Result<u32, String> {
+        crate::compiling::frontend::token_kind_tag(variant)
+    }
+
+    fn parse_category(
+        &self,
+        export: &str,
+        source: &str,
+        file: crate::node_id::FileID,
+    ) -> Result<BridgedParse, String> {
+        crate::compiling::frontend::parse_category_source(export, source, file)
+    }
+
+    fn bindings_for<'host>(
+        &'host self,
+        ast: &crate::parsing::ast::AST<crate::parsing::ast::Parsed>,
+    ) -> Box<dyn MacroBindings + 'host> {
+        match self.procedural {
+            Some(environment) => Box::new(environment.bindings_for(ast)),
+            None => Box::new(crate::front::macro_host::NoProceduralMacros),
+        }
     }
 }

@@ -57,10 +57,12 @@ pub(super) struct Plan {
 pub(super) fn plan(blocks: &[BlockData], records: &[FlowRecord]) -> Plan {
     let n_locals = records
         .iter()
-        .map(|record| {
-            let (FlowEvent::Def(l) | FlowEvent::Use(l) | FlowEvent::Move(l) | FlowEvent::Drop(l)) =
-                record.event;
-            l as usize + 1
+        .filter_map(|record| match record.event {
+            FlowEvent::Def(l) | FlowEvent::Use(l) | FlowEvent::Move(l) | FlowEvent::Drop(l) => {
+                Some(l as usize + 1)
+            }
+            // Flow-analysis events carry no local ownership state.
+            _ => None,
         })
         .max()
         .unwrap_or(0);
@@ -241,7 +243,8 @@ fn apply(event: FlowEvent, state: &mut [u8]) {
         FlowEvent::Move(local) | FlowEvent::Drop(local) => {
             state[local as usize] = verify::DEAD;
         }
-        FlowEvent::Use(_) => {}
+        // Reads and flow-analysis events don't change ownership state.
+        _ => {}
     }
 }
 

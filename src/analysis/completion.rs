@@ -30,6 +30,7 @@ pub struct CompletionAnalysis<'a> {
     pub all_asts: Option<&'a [Option<AST<NameResolved>>]>,
     pub resolved_names: &'a ResolvedNames,
     pub types: &'a TypeOutput,
+    pub facts: &'a crate::typed_ast::facts::NodeFacts,
 }
 
 impl CompletionAnalysis<'_> {
@@ -79,6 +80,7 @@ pub fn complete_in_workspace(
         all_asts: Some(&workspace.asts),
         resolved_names: &workspace.resolved_names,
         types: &workspace.types,
+        facts: &workspace.facts,
     };
 
     let mut items = complete(text.text(), &completion, byte_offset);
@@ -229,7 +231,7 @@ fn member_completions(analysis: &CompletionAnalysis<'_>, dot_offset: u32) -> Vec
     };
     if let Some(symbol) = type_receiver_symbol(&receiver) {
         add_type_member_items(analysis.types, symbol, viewer, &mut items);
-    } else if let Some(receiver_ty) = analysis.types.node_types.get(&receiver.id) {
+    } else if let Some(receiver_ty) = analysis.facts.node_types.get(&receiver.id) {
         add_member_items_for_ty(analysis.types, receiver_ty, viewer, &mut items);
     }
 
@@ -417,7 +419,9 @@ fn add_nominal_member_items(
             };
             let mut substitution = FxHashMap::default();
             for (pattern, actual) in inherent.self_args.iter().zip(args) {
-                crate::types::solve::bind_param_pattern(pattern, actual, &mut substitution);
+                // Head match is already established; only the bindings
+                // matter (the same one-way match probed above).
+                crate::types::ty::match_pattern(pattern, actual, &mut substitution);
             }
             let Some(scheme) = types.schemes.get(&inherent.symbol) else {
                 continue;
@@ -967,6 +971,7 @@ mod tests {
         pub(crate) ast: AST<NameResolved>,
         pub(crate) resolved_names: ResolvedNames,
         pub(crate) types: TypeOutput,
+        pub(crate) facts: crate::typed_ast::facts::NodeFacts,
     }
 
     pub(crate) fn analyze(code: &str) -> Analyzed {
@@ -995,11 +1000,12 @@ mod tests {
             .expect("resolve");
         let ast = resolved.phase.asts.values().next().expect("ast").clone();
         let typed = resolved.type_check();
-        let (resolved_names, types) = typed.phase.program.into_semantic_parts();
+        let (resolved_names, types, facts) = typed.phase.program.into_semantic_parts();
         Analyzed {
             ast,
             resolved_names,
             types,
+            facts,
         }
     }
 
@@ -1009,6 +1015,7 @@ mod tests {
             all_asts: None,
             resolved_names: &analyzed.resolved_names,
             types: &analyzed.types,
+            facts: &analyzed.facts,
         }
     }
 
@@ -1299,6 +1306,7 @@ mod scratch_tests {
                     all_asts: None,
                     resolved_names: &analyzed.resolved_names,
                     types: &analyzed.types,
+                    facts: &analyzed.facts,
                 },
                 dot + 1,
             );

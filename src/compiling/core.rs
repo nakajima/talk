@@ -37,29 +37,7 @@ pub(crate) fn typed_program() -> Arc<crate::compiling::typed_program::TypedProgr
     CORE.get_or_init(_compile).typed.clone()
 }
 
-/// The filenames of all core source files.
-pub const CORE_SOURCE_NAMES: &[&str] = &[
-    "Ownership.tlk",
-    "Optional.tlk",
-    "Result.tlk",
-    "Operators.tlk",
-    "Convert.tlk",
-    "String.tlk",
-    "Memory.tlk",
-    "UnicodeData.tlk",
-    "TextUnicodeData.tlk",
-    "Unicode.tlk",
-    "Array.tlk",
-    "InlineArray.tlk",
-    "Iterable.tlk",
-    "Async.tlk",
-    "IO.tlk",
-    "Showable.tlk",
-    "Range.tlk",
-    "Host.tlk",
-    "StringBuilder.tlk",
-    "Text.tlk",
-];
+pub use crate::front::module::CORE_SOURCE_NAMES;
 
 /// All core source strings, in a fixed order.
 pub fn core_sources() -> Vec<(&'static str, &'static str)> {
@@ -279,8 +257,8 @@ mod tests {
             artifacts.module.types.schemes.len()
         );
         assert_eq!(
-            cached.typed.resolved_names().symbol_names.len(),
-            artifacts.typed.resolved_names().symbol_names.len()
+            cached.typed.symbol_names().len(),
+            artifacts.typed.symbol_names().len()
         );
     }
 

@@ -64,9 +64,9 @@ use rustc_hash::FxHashMap;
 
 use talk_mir::layout::{FieldRepr, Layout, LayoutId, Shape, SlotKind};
 use talk_mir::{
-    CmpKind, Constant, DisplayNames, Function, Inst, MirSymbol, Module as Program, Operand,
-    ScalarOp, Term, TypeKind,
+    CmpKind, Constant, Function, Inst, MirSymbol, Module as Program, Operand, ScalarOp, Term,
 };
+use talk_native_runtime::emit::{Interners, c_escape, needs_identity, symbol_rows, type_table};
 
 /// The generated file's runtime half, emitted verbatim ahead of the
 /// translated functions. Owned by `talk-native-runtime` and shared with
@@ -142,7 +142,7 @@ fn translate(program: &Program, library: bool) -> Result<Translation<'_>, Error>
                 )
             })
             .map(|layout| {
-                let display = emitter.display_id(program.string_symbol);
+                let display = emitter.interners.display_id(program.string_symbol);
                 (u32::try_from(layout).unwrap_or(u32::MAX), display)
             })
     } else {
@@ -157,10 +157,10 @@ fn translate(program: &Program, library: bool) -> Result<Translation<'_>, Error>
     }
     out.push_str(PRELUDE);
     out.push('\n');
-    emit_statics(&mut out, &emitter.statics);
-    emit_type_table(&mut out, &emitter, display);
+    emit_statics(&mut out, &emitter.interners.statics);
+    type_table(&mut out, &emitter.interners, display);
     if library {
-        emit_symbol_rows(&mut out, &emitter);
+        symbol_rows(&mut out, &emitter.interners);
     }
     out.push_str(&layout_data);
     out.push_str(&layout_decls);
@@ -190,28 +190,6 @@ fn translate(program: &Program, library: bool) -> Result<Translation<'_>, Error>
         facts,
         string_ids,
     })
-}
-
-/// The display-id-to-module-symbol table (ADR 0048): one row per type
-/// table entry, so a host bridge can validate record identity against
-/// an ABI descriptor's module symbols.
-fn emit_symbol_rows(out: &mut String, emitter: &Emitter) {
-    out.push_str(talk_native_runtime::library::symbol_row_type());
-    let mut rows = vec![(255u8, 0u32, 0u32); emitter.display_ids.len() + 1];
-    for (symbol, id) in &emitter.display_ids {
-        let kind = match symbol.kind {
-            talk_mir::MirSymbolKind::Struct => 0u8,
-            talk_mir::MirSymbolKind::Enum => 1,
-            talk_mir::MirSymbolKind::Effect => 2,
-            talk_mir::MirSymbolKind::Protocol => 3,
-        };
-        rows[*id as usize] = (kind, u32::from(symbol.module), symbol.local);
-    }
-    out.push_str("static const TalkLibSymbolRow talk_lib_symbols[] = {\n");
-    for (kind, module, local) in rows {
-        let _ = writeln!(out, "    {{ {kind}, {module}, {local} }},");
-    }
-    out.push_str("};\n");
 }
 
 /// Emit one self-contained C translation unit for a finalized MIR
@@ -482,115 +460,26 @@ fn emit_layout_table(out: &mut String, emitter: &mut Emitter, facts: &Facts) -> 
     Ok(())
 }
 
-/// The display table, indexed by the ids handed out while emitting. Slot
-/// zero is the anonymous product, so `symbol` zero renders as a tuple.
-fn emit_type_table(out: &mut String, emitter: &Emitter, display: &DisplayNames) {
-    let mut ordered: Vec<_> = emitter.display_ids.iter().collect();
-    ordered.sort_by_key(|(_, id)| **id);
-    for (symbol, id) in &ordered {
-        let members = display
-            .entries
-            .get(*symbol)
-            .map(|entry| entry.members.as_slice())
-            .unwrap_or_default();
-        if members.is_empty() {
-            continue;
-        }
-        let rendered: Vec<String> = members
-            .iter()
-            .map(|member| format!("\"{}\"", escape(member)))
-            .collect();
-        let _ = writeln!(
-            out,
-            "static const char *const talk_members_{id}[] = {{ {} }};",
-            rendered.join(", ")
-        );
-    }
-    let _ = writeln!(out, "static const TalkTypeInfo talk_type_table[] = {{");
-    let _ = writeln!(out, "    {{ \"\", TALK_TYPE_TUPLE, 0, NULL }},");
-    for (symbol, id) in &ordered {
-        if emitter.existential_ids.contains(id) {
-            let _ = writeln!(out, "    {{ \"\", TALK_TYPE_EXISTENTIAL, 0, NULL }},");
-            continue;
-        }
-        let (name, kind, members) = match display.entries.get(*symbol) {
-            Some(entry) => (&entry.name, entry.kind, &entry.members),
-            // A symbol with no catalog entry renders structurally.
-            None => {
-                let _ = writeln!(out, "    {{ \"\", TALK_TYPE_TUPLE, 0, NULL }},");
-                continue;
-            }
-        };
-        let kind = match kind {
-            TypeKind::Record => "TALK_TYPE_RECORD",
-            TypeKind::Enum => "TALK_TYPE_ENUM",
-            TypeKind::String => "TALK_TYPE_STRING",
-        };
-        let members_ref = if members.is_empty() {
-            "NULL".to_string()
-        } else {
-            format!("talk_members_{id}")
-        };
-        let _ = writeln!(
-            out,
-            "    {{ \"{}\", {kind}, {}, {members_ref} }},",
-            escape(name),
-            members.len()
-        );
-    }
-    let _ = writeln!(out, "}};");
-}
-
 #[derive(Default)]
 struct Emitter {
-    /// Effect symbols numbered densely, the way `lower`'s `EffectPool`
-    /// numbers them for the VM.
-    effects: FxHashMap<MirSymbol, u32>,
-    /// Immortal literal bytes, deduplicated as `lower`'s `StaticsPool`
-    /// deduplicates them.
-    statics: Vec<u8>,
-    static_offsets: FxHashMap<Vec<u8>, u32>,
+    /// The interned identities the shared data tables render (effects,
+    /// statics, display ids), one definition with the LLVM backend.
+    interners: Interners,
     /// The widest arity `talk_dispatch` can reach, which sets the size of
     /// every indirect call's argument array.
     widest_arity: usize,
-    /// Struct and enum symbols numbered densely from one; zero is the
-    /// anonymous product.
-    display_ids: FxHashMap<MirSymbol, u32>,
-    /// Of those, the ids belonging to protocol existentials, which have
-    /// no catalog entry and render as their payload.
-    existential_ids: rustc_hash::FxHashSet<u32>,
 }
 
 impl Emitter {
-    fn effect(&mut self, symbol: MirSymbol) -> u32 {
-        let next = u32::try_from(self.effects.len()).unwrap_or_default();
-        *self.effects.entry(symbol).or_insert(next)
-    }
-
-    fn display_id(&mut self, symbol: MirSymbol) -> u32 {
-        let next = u32::try_from(self.display_ids.len() + 1).unwrap_or(1);
-        *self.display_ids.entry(symbol).or_insert(next)
-    }
-
     /// A construction's rendered identity, read off its layout: the
     /// declared symbol as a display id, or zero for anonymous products.
     fn display_of(&mut self, table: &[Layout], layout: LayoutId) -> u32 {
         match table.get(usize::try_from(layout).unwrap_or(usize::MAX)) {
             Some(Layout::Inline(Some(symbol), _) | Layout::Boxed(Some(symbol), _)) => {
-                self.display_id(*symbol)
+                self.interners.display_id(*symbol)
             }
             _ => 0,
         }
-    }
-
-    fn intern_static(&mut self, bytes: &[u8]) -> u32 {
-        if let Some(offset) = self.static_offsets.get(bytes) {
-            return *offset;
-        }
-        let offset = u32::try_from(self.statics.len()).unwrap_or_default();
-        self.statics.extend_from_slice(bytes);
-        self.static_offsets.insert(bytes.to_vec(), offset);
-        offset
     }
 
     fn function(
@@ -888,7 +777,7 @@ impl Emitter {
                 let _ = writeln!(
                     out,
                     "    talk_push_handler({}, {}, {}, frame_depth, frame_id);",
-                    self.effect(*effect),
+                    self.interners.effect(*effect),
                     frame.value(*clause)?,
                     frame.value(*cont)?
                 );
@@ -902,7 +791,7 @@ impl Emitter {
                 let _ = writeln!(
                     out,
                     "    talk_find_handler({}, &l[{clause}], &l[{cont}], &l[{index}]);",
-                    self.effect(*effect)
+                    self.interners.effect(*effect)
                 );
             }
             Inst::GetFloor { dest } => {
@@ -939,7 +828,7 @@ impl Emitter {
                 layout,
                 storage_layout,
             } => {
-                let offset = self.intern_static(bytes);
+                let offset = self.interners.intern_static(bytes);
                 if frame.facts.boxes_native(*layout) && frame.facts.boxes_native(*storage_layout) {
                     // The native String struct over static bytes: one
                     // box, no per-field tagging.
@@ -953,7 +842,7 @@ impl Emitter {
                 } else {
                     // The tagged fallback carries String's display
                     // identity so it renders as quoted text.
-                    let string_symbol = self.display_id(MirSymbol::STRING);
+                    let string_symbol = self.interners.display_id(MirSymbol::STRING);
                     let _ = writeln!(out, "    {{");
                     let _ = writeln!(
                         out,
@@ -978,7 +867,7 @@ impl Emitter {
                 }
             }
             Inst::BytesLit { dest, bytes } => {
-                let offset = self.intern_static(bytes);
+                let offset = self.interners.intern_static(bytes);
                 let _ = writeln!(
                     out,
                     "    l[{dest}] = talk_pointer(talk_statics + {offset});"
@@ -1014,8 +903,8 @@ impl Emitter {
             } => {
                 // Carries the protocol's display identity so a result
                 // renders as its payload, not as the witness table.
-                let symbol = self.display_id(*protocol);
-                self.existential_ids.insert(symbol);
+                let symbol = self.interners.display_id(*protocol);
+                self.interners.existential_ids.insert(symbol);
                 // Payload first, witnesses after, in one aggregate: slot 0
                 // drop, slot 1 retain, requirements from 2.
                 let _ = writeln!(out, "    {{");
@@ -1927,20 +1816,6 @@ fn untag_kind(kind: SlotKind, value: &str) -> String {
     }
 }
 
-/// Whether the function reifies its own frame. Continuations only ever
-/// name the frame that created them, so a function with no `MakeCont` and
-/// no `PushHandler` can neither be an unwind target nor own a handler.
-fn needs_identity(function: &Function) -> bool {
-    function.blocks.iter().any(|block| {
-        block.insts.iter().any(|inst| {
-            matches!(
-                inst,
-                Inst::MakeCont { .. } | Inst::PushHandler { .. } | Inst::AbortTo { .. }
-            )
-        })
-    })
-}
-
 /// After any call, an in-flight unwind either ends at this frame or keeps
 /// going through this frame's cleanup block.
 fn emit_unwind_check(out: &mut String, unwind: Option<usize>, identified: bool, frame: &Frame) {
@@ -2242,7 +2117,7 @@ fn emit_term(
             emit_return(out, &rendered, identified);
         }
         Term::Trap(message) => {
-            let _ = writeln!(out, "    talk_trap(\"{}\");", escape(message));
+            let _ = writeln!(out, "    talk_trap(\"{}\");", c_escape(message));
         }
         // The end of a cleanup block: this frame is done, and the unwind
         // continues into the caller.
@@ -2454,7 +2329,7 @@ static void talk_native_scan(TalkValue value, struct TalkObject ***out, size_t *
         else {
             return Err(internal("a representable layout without a shape"));
         };
-        let display = symbol.map(|symbol| self.display_id(symbol)).unwrap_or(0);
+        let display = symbol.map(|symbol| self.interners.display_id(symbol)).unwrap_or(0);
         if facts.box_native[usize::try_from(id).unwrap_or(usize::MAX)] {
             return self.native_box_decl(out, id, display, shape);
         }
@@ -2692,8 +2567,4 @@ fn internal(message: &str) -> Error {
 /// Function names reach the output inside `/* */`, which does not nest.
 fn comment(name: &str) -> String {
     name.replace("/*", "/ *").replace("*/", "* /")
-}
-
-fn escape(text: &str) -> String {
-    text.replace('\\', "\\\\").replace('"', "\\\"")
 }

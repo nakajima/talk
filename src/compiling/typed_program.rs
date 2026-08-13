@@ -6,6 +6,7 @@ use rustc_hash::FxHashSet;
 use crate::ast::AST;
 use crate::compiling::driver::Source;
 use crate::name_resolution::name_resolver::ResolvedNames;
+use crate::name_resolution::symbol::Symbol;
 use crate::node_id::FileID;
 use crate::parsing::ast::NameResolved;
 use crate::types::TypeOutput;
@@ -21,6 +22,11 @@ pub struct TypedProgram {
     files: IndexMap<Source, crate::typed_ast::TypedFile>,
     resolved_names: ResolvedNames,
     types: TypeOutput,
+    /// Editor facts for files blocked from the tree build by errors —
+    /// those files have no typed tree, so their per-node facts keep index
+    /// form here (one home per file; see `typed_ast::facts`).
+    #[serde(default)]
+    blocked_facts: crate::typed_ast::facts::NodeFacts,
     /// Canonical local import edges (importer, imported) recorded
     /// during parse discovery (CLEAN-03).
     #[serde(default)]
@@ -32,6 +38,7 @@ impl TypedProgram {
         asts: IndexMap<Source, AST<NameResolved>>,
         resolved_names: ResolvedNames,
         types: TypeOutput,
+        elaboration: crate::types::output::Elaboration,
         blocked_files: &FxHashSet<FileID>,
         file_dependencies: Vec<(FileID, FileID)>,
     ) -> Self {
@@ -40,13 +47,18 @@ impl TypedProgram {
             if blocked_files.contains(&ast.file_id) {
                 continue;
             }
-            let file = build::build_file(&ast, &types);
+            let file = build::build_file(&ast, &types, &elaboration);
             files.insert(source, file);
         }
+        let blocked_facts = crate::typed_ast::facts::NodeFacts::from_blocked_elaboration(
+            &elaboration,
+            blocked_files,
+        );
         Self {
             files: in_initialization_order(files, &file_dependencies),
             resolved_names,
             types,
+            blocked_facts,
             file_dependencies,
         }
     }
@@ -55,16 +67,50 @@ impl TypedProgram {
         &self.types
     }
 
+    /// This module's own declared symbol names (local-only — imported
+    /// names live in `types().display_names`). The naming view MIR debug
+    /// info, the ABI, and the REPL read; the rest of the resolution
+    /// artifacts (scopes, declarations) never leave the frontend, so a
+    /// later phase cannot re-derive a resolution (ADR 0057).
+    pub fn symbol_names(&self) -> &rustc_hash::FxHashMap<Symbol, String> {
+        &self.resolved_names.symbol_names
+    }
+
+    /// Test-only access to the full resolution artifacts; production
+    /// phases get the naming view above and nothing else.
+    #[cfg(any(test, feature = "test-access"))]
     pub fn resolved_names(&self) -> &ResolvedNames {
         &self.resolved_names
     }
 
-    pub(crate) fn files(&self) -> &IndexMap<Source, crate::typed_ast::TypedFile> {
+    pub fn files(&self) -> &IndexMap<Source, crate::typed_ast::TypedFile> {
         &self.files
     }
 
-    pub(crate) fn into_semantic_parts(self) -> (ResolvedNames, TypeOutput) {
-        (self.resolved_names, self.types)
+    /// The per-node facts index collected from the typed tree — the same
+    /// view [`Self::into_semantic_parts`] hands the editor layer, for
+    /// tests that keep the program whole.
+    #[cfg(any(test, feature = "test-access"))]
+    pub fn node_facts(&self) -> crate::typed_ast::facts::NodeFacts {
+        let mut facts = crate::typed_ast::facts::NodeFacts::collect(self.files.values());
+        facts.extend(self.blocked_facts.clone());
+        facts
+    }
+
+    /// Decompose into the editor layer's holdings: resolution artifacts,
+    /// the checker's program-level residue, and the per-node facts index
+    /// collected from the typed tree (the tree is the one authority for
+    /// per-occurrence facts; the index is rebuilt with it, ADR 0057).
+    pub(crate) fn into_semantic_parts(
+        self,
+    ) -> (
+        ResolvedNames,
+        TypeOutput,
+        crate::typed_ast::facts::NodeFacts,
+    ) {
+        let mut facts = crate::typed_ast::facts::NodeFacts::collect(self.files.values());
+        facts.extend(self.blocked_facts);
+        (self.resolved_names, self.types, facts)
     }
 }
 

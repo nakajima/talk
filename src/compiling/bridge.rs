@@ -343,36 +343,9 @@ use crate::parsing::span::Span;
 use crate::parsing::token::Token;
 use crate::token_kind::TokenKind;
 
-/// A frontend parse brought across the ABI: the compiler-side AST plus
-/// the sections the dump renders around it.
-/// A diagnostic that crossed the ABI: the reference code and rendered
-/// message, plus the structured position and expected-token payloads
-/// editor ranges and quick fixes read.
-#[derive(Debug, Clone)]
-pub struct BridgedFail {
-    pub code: String,
-    pub message: String,
-    pub span: Option<Span>,
-    pub expected: Option<TokenKind>,
-}
-
-pub struct BridgedParse {
-    pub roots: Vec<Node>,
-    pub meta: NodeMetaStorage,
-    pub comments: Vec<(u32, u32)>,
-    pub failure: Option<BridgedFail>,
-    pub diags: Vec<BridgedFail>,
-    /// The highest node id minted; consumers continue their own
-    /// minting (desugaring, typing) above it.
-    pub next_node_id: u32,
-}
-
-pub struct BridgedExprMacro {
-    pub source: String,
-    pub parse: Option<BridgedParse>,
-    pub metadata: SyntaxMetadata,
-    pub failure: Option<BridgedFail>,
-}
+// The bridged result types are frontend data (ADR 0057 slice 3b); the
+// bridge constructs them and re-exports the historical paths.
+pub use crate::front::macro_host::{BridgedExprMacro, BridgedFail, BridgedParse};
 
 /// Decode a `lex_tokens` result: the token stream (comments included
 /// as LineComment tokens) and whether the scan completed. A trailing

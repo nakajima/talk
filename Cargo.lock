@@ -1888,7 +1888,7 @@ dependencies = [
 
 [[package]]
 name = "talk"
-version = "0.1.85"
+version = "0.1.86"
 dependencies = [
  "anyhow",
  "async-lsp",
@@ -1913,6 +1913,7 @@ dependencies = [
  "sha2",
  "talk-bytecode",
  "talk-c",
+ "talk-front",
  "talk-mir",
  "talk-vm",
  "tar",
@@ -1952,6 +1953,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "talk-front"
+version = "0.1.0"
+dependencies = [
+ "derive-visitor",
+ "indexmap",
+ "itertools 0.14.0",
+ "num-bigint",
+ "petgraph",
+ "prettydiff",
+ "rustc-hash",
+ "serde",
+ "sha2",
+ "talk",
+ "talk-vm",
+ "tracing",
+]
+
+[[package]]
 name = "talk-llvm"
 version = "0.1.0"
 dependencies = [
@@ -1968,6 +1987,9 @@ version = "0.1.0"
 [[package]]
 name = "talk-native-runtime"
 version = "0.1.0"
+dependencies = [
+ "talk-mir",
+]
 
 [[package]]
 name = "talk-static"

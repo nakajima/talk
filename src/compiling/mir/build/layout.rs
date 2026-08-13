@@ -423,8 +423,7 @@ impl<'a> Layouts<'a> {
         impl crate::types::ty::TyFold for DeepNormalize<'_> {
             fn fold_ty(&mut self, ty: &Ty) -> Ty {
                 let reduced = if matches!(ty, Ty::Proj(_, _, _)) {
-                    let mut scratch = crate::types::solve::VarStore::default();
-                    crate::types::solve::normalize_ty(&mut scratch, self.catalog, ty)
+                    self.catalog.normalize_finished(ty)
                 } else {
                     ty.clone()
                 };

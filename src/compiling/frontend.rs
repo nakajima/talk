@@ -838,3 +838,49 @@ mod tests {
         assert!(dump.contains("Decl::Let"), "unexpected dump:\n{dump}");
     }
 }
+
+/// Format a source string at the default width, via the self-hosted
+/// parser. The parse-free half lives in `parsing::formatter`
+/// (ADR 0057 slice 3).
+pub fn format_string(string: &str) -> String {
+    format_string_with_width(string, 80)
+}
+
+/// Format a source string at `width`, via the self-hosted parser.
+pub fn format_string_with_width(string: &str, width: usize) -> String {
+    match parse_ast_with_comments(string, crate::node_id::FileID(0), "") {
+        Ok((ast, _diagnostics, comments)) => {
+            crate::parsing::formatter::format_parsed(&ast, width, &comments, string)
+        }
+        Err(_err) => string.to_string(),
+    }
+}
+
+/// Highlight a source string, via the self-hosted lexer and parser (a
+/// failed parse degrades to lexed tokens only).
+pub fn highlight(source: &str) -> Vec<crate::parsing::highlighter::HighlightToken> {
+    let ast = parse_ast(source, crate::node_id::FileID(0), "-")
+        .ok()
+        .map(|(ast, _)| ast);
+    highlight_with_ast(source, ast.as_ref())
+}
+
+/// Highlight with a parse the caller already computed (the LSP's
+/// analysis worker reuses the workspace build's cached parse instead of
+/// re-parsing the document for tokens).
+pub fn highlight_with_ast(
+    source: &str,
+    ast: Option<&crate::ast::AST<crate::parsing::ast::Parsed>>,
+) -> Vec<crate::parsing::highlighter::HighlightToken> {
+    // The frontend's lexing surface (ADR 0043 Stage 5): the token
+    // stream with comments included as LineComment tokens.
+    let lexed = lex(source).map(|(tokens, _)| tokens).unwrap_or_default();
+    crate::parsing::highlighter::Higlighter::new(source).highlight_from(&lexed, ast)
+}
+
+/// Highlight a source string to HTML, via the self-hosted frontend.
+pub fn highlight_html(source: &str) -> String {
+    let mut tokens = highlight(source);
+    tokens.sort_by(|a, b| a.start.cmp(&b.start).then_with(|| b.end.cmp(&a.end)));
+    crate::parsing::highlighter::render_html_with_tokens(source, &tokens)
+}

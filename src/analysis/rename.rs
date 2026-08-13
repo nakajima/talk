@@ -373,7 +373,7 @@ impl RenameCollector<'_> {
             PatternKind::Variant {
                 variant_name_span, ..
             } => {
-                if member_resolution_symbol(self.module.types.member_resolutions.get(&pattern.id))
+                if member_resolution_symbol(self.module.facts.member_resolutions.get(&pattern.id))
                     == Some(self.target)
                 {
                     self.push_span(*variant_name_span);
@@ -478,7 +478,7 @@ impl RenameCollector<'_> {
                 }
             }
             ExprKind::Member(_, _, label_span) => {
-                if member_resolution_symbol(self.module.types.member_resolutions.get(&expr.id))
+                if member_resolution_symbol(self.module.facts.member_resolutions.get(&expr.id))
                     == Some(self.target)
                 {
                     self.push_span(*label_span);

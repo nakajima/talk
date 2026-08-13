@@ -274,10 +274,10 @@ pub fn describe(program: &TypedProgram, root: &str) -> Result<String, String> {
     let core = crate::compiling::core::typed_program();
 
     let mut names: HashMap<Symbol, String> = HashMap::new();
-    for (symbol, name) in &core.resolved_names().symbol_names {
+    for (symbol, name) in core.symbol_names() {
         names.insert(*symbol, name.clone());
     }
-    for (symbol, name) in &program.resolved_names().symbol_names {
+    for (symbol, name) in program.symbol_names() {
         names.insert(*symbol, name.clone());
     }
     names.insert(Symbol::Int, "Int".into());
@@ -350,8 +350,7 @@ pub fn describe(program: &TypedProgram, root: &str) -> Result<String, String> {
             // leaf names (`String`), not as schema entries.
             if (catalog.structs.contains_key(&reference) || catalog.enums.contains_key(&reference))
                 && program
-                    .resolved_names()
-                    .symbol_names
+                    .symbol_names()
                     .contains_key(&reference)
                 && !visited.contains(&reference)
             {
@@ -367,8 +366,7 @@ pub fn describe(program: &TypedProgram, root: &str) -> Result<String, String> {
         .enums
         .keys()
         .find(|symbol| {
-            core.resolved_names()
-                .symbol_names
+            core.symbol_names()
                 .get(symbol)
                 .is_some_and(|name| name == "Optional")
         })

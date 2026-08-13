@@ -1,0 +1,29 @@
+# The Talk frontend (ADR 0057 slice 3b): parsing vocabulary, name
+# resolution, desugaring, macro expansion (behind MacroHost), the type
+# checker, and the elaborated typed tree. Depends on NO toolchain or
+# backend code — the `talk` crate implements the host seams and
+# re-exports everything here under its historical paths.
+#
+# The dev-dependency on `talk` is a deliberate Cargo-sanctioned cycle:
+# frontend unit tests drive the full pipeline (parser, driver) while
+# production builds keep the one-way dependency.
+[package]
+name = "talk-front"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+itertools = "0.14.0"
+indexmap = { version = "2.2", features = ["serde"] }
+tracing = "0.1.41"
+serde = { version = "1.0", features = ["derive", "rc"] }
+rustc-hash = "2.1.1"
+derive-visitor = "0.4.0"
+petgraph = "0.8.2"
+sha2 = "0.10.9"
+num-bigint = { version = "0.5.1", features = ["serde"] }
+
+[dev-dependencies]
+talk = { path = "..", features = ["test-access"] }
+prettydiff = "0.8.0"
+talk-vm = { path = "../talk-vm" }

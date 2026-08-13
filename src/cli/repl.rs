@@ -17,7 +17,7 @@ use rustyline::{
 
 use crate::{
     cli::diagnostics::{ColorMode, render_text},
-    highlighter::{Higlighter as TalkHighlighter, Kind as HighlightKind},
+    highlighter::{Kind as HighlightKind},
     repl::{ReplEvalResult, ReplSession},
 };
 
@@ -418,7 +418,7 @@ impl ReplHelper {
     }
 
     fn highlight_line(&self, line: &str) -> String {
-        let mut tokens = TalkHighlighter::new(line).highlight();
+        let mut tokens = crate::compiling::frontend::highlight(line);
         tokens.sort_by_key(|token| (token.start, token.end));
 
         let mut highlighted = String::new();

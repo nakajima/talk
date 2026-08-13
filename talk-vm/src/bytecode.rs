@@ -541,36 +541,7 @@ impl Encoder {
     }
 
     fn io_op(&mut self, op: IoOp) {
-        self.u8(match op {
-            IoOp::Read => 0,
-            IoOp::Write => 1,
-            IoOp::Open => 2,
-            IoOp::Close => 3,
-            IoOp::Sleep => 4,
-            IoOp::Poll => 5,
-            IoOp::Ctl => 6,
-            IoOp::Socket => 7,
-            IoOp::Bind => 8,
-            IoOp::Listen => 9,
-            IoOp::Connect => 10,
-            IoOp::Accept => 11,
-            IoOp::CwdLen => 12,
-            IoOp::CwdCopy => 13,
-            IoOp::GetenvLen => 14,
-            IoOp::GetenvCopy => 15,
-            IoOp::Argc => 16,
-            IoOp::ArgLen => 17,
-            IoOp::ArgCopy => 18,
-            IoOp::DirCount => 19,
-            IoOp::DirEntryKind => 20,
-            IoOp::DirEntryLen => 21,
-            IoOp::DirEntryCopy => 22,
-            IoOp::Exit => 23,
-            IoOp::RealpathLen => 24,
-            IoOp::RealpathCopy => 25,
-            IoOp::Seek => 26,
-            IoOp::FileSize => 27,
-        });
+        self.u8(op.index());
     }
 
     fn symbol(&mut self, symbol: Symbol) {
@@ -1084,37 +1055,7 @@ impl<'a> Decoder<'a> {
 
     fn io_op(&mut self) -> Result<IoOp, DecodeError> {
         let tag = self.u8()?;
-        match tag {
-            0 => Ok(IoOp::Read),
-            1 => Ok(IoOp::Write),
-            2 => Ok(IoOp::Open),
-            3 => Ok(IoOp::Close),
-            4 => Ok(IoOp::Sleep),
-            5 => Ok(IoOp::Poll),
-            6 => Ok(IoOp::Ctl),
-            7 => Ok(IoOp::Socket),
-            8 => Ok(IoOp::Bind),
-            9 => Ok(IoOp::Listen),
-            10 => Ok(IoOp::Connect),
-            11 => Ok(IoOp::Accept),
-            12 => Ok(IoOp::CwdLen),
-            13 => Ok(IoOp::CwdCopy),
-            14 => Ok(IoOp::GetenvLen),
-            15 => Ok(IoOp::GetenvCopy),
-            16 => Ok(IoOp::Argc),
-            17 => Ok(IoOp::ArgLen),
-            18 => Ok(IoOp::ArgCopy),
-            19 => Ok(IoOp::DirCount),
-            20 => Ok(IoOp::DirEntryKind),
-            21 => Ok(IoOp::DirEntryLen),
-            22 => Ok(IoOp::DirEntryCopy),
-            23 => Ok(IoOp::Exit),
-            24 => Ok(IoOp::RealpathLen),
-            25 => Ok(IoOp::RealpathCopy),
-            26 => Ok(IoOp::Seek),
-            27 => Ok(IoOp::FileSize),
-            _ => Err(DecodeError::InvalidTag("io operation", tag)),
-        }
+        IoOp::from_index(tag).ok_or(DecodeError::InvalidTag("io operation", tag))
     }
 
     fn symbol(&mut self) -> Result<Symbol, DecodeError> {
@@ -1702,6 +1643,17 @@ impl Register {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn io_op_indices_are_stable() {
+        // The wire format: each operation's byte is its position in
+        // `IoOp::ALL`, and every byte decodes back to the same operation.
+        for (i, op) in IoOp::ALL.iter().enumerate() {
+            assert_eq!(usize::from(op.index()), i);
+            assert_eq!(IoOp::from_index(op.index()), Some(*op));
+        }
+        assert_eq!(IoOp::from_index(IoOp::ALL.len() as u8), None);
+    }
 
     #[test]
     fn round_trips_checked_indexed_load() {

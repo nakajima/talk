@@ -43,6 +43,19 @@ pub(super) enum FlowEvent {
     Move(LocalId),
     /// A release was emitted for the local's value.
     Drop(LocalId),
+    /// The local holds a frame-anchored closure (its owned captures pin
+    /// it to this frame). Seed for `flow`'s escape analysis; the balance
+    /// replay ignores it.
+    Anchor(LocalId),
+    /// The local flowed into an escape sink only lowering can type — an
+    /// owned func-typed call argument. Checked by `flow`.
+    EscapeSink(LocalId),
+    /// A linear global's slot was consumed. Checked by `flow`.
+    GlobalMove(u32),
+    /// A reassignment restored a moved global slot.
+    GlobalRestore(u32),
+    /// A linear global's slot was read, at this source span.
+    GlobalUse(u32, crate::span::Span),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -98,10 +111,13 @@ fn run(
 ) -> Vec<Option<Vec<u8>>> {
     let n_locals = records
         .iter()
-        .map(|record| {
-            let (FlowEvent::Def(l) | FlowEvent::Use(l) | FlowEvent::Move(l) | FlowEvent::Drop(l)) =
-                record.event;
-            l as usize + 1
+        .filter_map(|record| match record.event {
+            FlowEvent::Def(l) | FlowEvent::Use(l) | FlowEvent::Move(l) | FlowEvent::Drop(l) => {
+                Some(l as usize + 1)
+            }
+            // Flow-analysis events (escapes, globals) carry no local
+            // ownership state; the balance replay ignores them.
+            _ => None,
         })
         .max()
         .unwrap_or(0);
@@ -259,6 +275,12 @@ fn apply(
                 }
             }
         }
+        // Flow-analysis events: not ownership state transitions.
+        FlowEvent::Anchor(_)
+        | FlowEvent::EscapeSink(_)
+        | FlowEvent::GlobalMove(_)
+        | FlowEvent::GlobalRestore(_)
+        | FlowEvent::GlobalUse(..) => {}
     }
 }
 

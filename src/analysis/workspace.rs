@@ -42,9 +42,12 @@ pub struct Workspace {
     pub texts: Vec<crate::common::source_snapshot::SourceSnapshot>,
     pub asts: Vec<Option<AST<NameResolved>>>,
     pub resolved_names: crate::name_resolution::name_resolver::ResolvedNames,
-    /// The checker's output tables (node types, schemes) - hover reads
-    /// them.
+    /// The checker's program-level residue (catalog, schemes, names).
     pub types: crate::types::TypeOutput,
+    /// Per-node facts collected from the typed tree (ADR 0057): hover,
+    /// completion, occurrences, and code actions resolve source NodeIDs
+    /// against this index into the one authority.
+    pub facts: crate::typed_ast::facts::NodeFacts,
     pub diagnostics: FxHashMap<DocumentId, Vec<Diagnostic>>,
     pub stdlib_module_ids: FxHashMap<ModuleId, String>,
     pub importable_modules: FxHashMap<String, Vec<(String, Symbol)>>,
@@ -294,7 +297,7 @@ impl Workspace {
                 None
             };
         let Driver { phase, .. } = typed;
-        let (resolved_names, types) = phase.program.into_semantic_parts();
+        let (resolved_names, types, facts) = phase.program.into_semantic_parts();
         let diagnostics_any = phase.diagnostics;
 
         let _symbol_guard = set_symbol_names(resolved_names.symbol_names.clone());
@@ -394,6 +397,7 @@ impl Workspace {
             asts,
             resolved_names,
             types,
+            facts,
             diagnostics,
             stdlib_module_ids,
             importable_modules,
@@ -595,6 +599,7 @@ impl Workspace {
             // Name resolution only: the core workspace exists for symbol
             // rendering, not hover.
             types: Default::default(),
+            facts: Default::default(),
             diagnostics: FxHashMap::default(),
             stdlib_module_ids: FxHashMap::default(),
             importable_modules: FxHashMap::default(),
@@ -692,6 +697,7 @@ impl Workspace {
             asts,
             resolved_names,
             types: Default::default(),
+            facts: Default::default(),
             diagnostics: FxHashMap::default(),
             stdlib_module_ids: FxHashMap::default(),
             importable_modules: FxHashMap::default(),

@@ -968,7 +968,7 @@ fn call_argument_labels(
     use crate::types::output::MemberResolution;
 
     if let Some(labels) = workspace
-        .types
+        .facts
         .selected_callables
         .get(&expression.id)
         .and_then(|symbol| contract_labels(workspace, *symbol))
@@ -976,7 +976,7 @@ fn call_argument_labels(
         return Some(labels);
     }
     let resolved = [expression.id, callee.id].into_iter().find_map(|id| {
-        match workspace.types.member_resolutions.get(&id) {
+        match workspace.facts.member_resolutions.get(&id) {
             Some(MemberResolution::Direct(symbol)) => Some(*symbol),
             _ => None,
         }
@@ -1555,13 +1555,13 @@ fn invalid_variant_payload_labels_quick_fixes(
                 _ => None,
             };
             std::iter::once(expr.id).chain(callee).find_map(|id| {
-                match workspace.types.member_resolutions.get(&id) {
+                match workspace.facts.member_resolutions.get(&id) {
                     Some(MemberResolution::Direct(symbol)) => Some(*symbol),
                     _ => None,
                 }
             })
         }
-        Node::Pattern(pattern) => match workspace.types.member_resolutions.get(&pattern.id) {
+        Node::Pattern(pattern) => match workspace.facts.member_resolutions.get(&pattern.id) {
             Some(MemberResolution::Direct(symbol)) => Some(*symbol),
             _ => None,
         },
@@ -2636,7 +2636,7 @@ fn missing_patterns_for_match(
     let crate::node_kinds::expr::ExprKind::Match(scrutinee, arms) = &expr.kind else {
         return None;
     };
-    let mut ty = workspace.types.node_types.get(&scrutinee.id)?.clone();
+    let mut ty = workspace.facts.node_types.get(&scrutinee.id)?.clone();
     if let crate::types::ty::Ty::Borrow(_, inner) = ty {
         ty = *inner;
     }

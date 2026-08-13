@@ -238,28 +238,40 @@ func maybe_increment(x: Option<Int>) -> Option<Int> {
 
 ## gadts
 
-One more enum trick. Cases can refine the generic parameters of the type they build, which sounds scary but is just this:
+One more enum trick. Cases can refine the generic parameters of the type they build — and they can bring their own type parameters, constraints included, which sounds scary but is just this:
 
 ```tlk
+protocol Addable {
+	func add(to other: Self) -> Self
+}
+
+extend Int: Addable {
+	func add(to other: Int) -> Int { self + other }
+}
+
+extend String: Addable {
+	func add(to other: String) -> String { self + other }
+}
+
 enum Expr<ReturnType> 'heap {
 	case int(Int) -> Expr<Int>
 	case string(String) -> Expr<String>
-	case add(Expr<Int>, Expr<Int>) -> Expr<Int>
+	case add<T: Addable>(Expr<T>, Expr<T>) -> Expr<T>
 }
 
-func evaluate<T>(expr: Expr<T>) -> T {
+func evaluate<T: Addable>(expr: Expr<T>) -> T {
 	match expr {
 		.int(i) -> i,
 		.string(s) -> s,
-		.add(a, b) -> evaluate(expr: a) + evaluate(expr: b)
+		.add(a, b) -> evaluate(expr: a).add(to: evaluate(expr: b))
 	}
 }
 
 print(evaluate(expr: .add(.int(20), .add(.int(19), .int(3)))))
-print(evaluate(expr: .string("sup")))
+print(evaluate(expr: .add(.string("hello "), .string("world"))))
 ```
 
-In the `.add` arm, `T` is refined to `Int`, so the recursive calls return honest `Int`s and `+` is just integer addition. (The `'heap` is there because a case holds the enum itself: recursive values live behind a reference.)
+In the `.add` arm the case's own `T` is pinned by whatever you're matching on, so the recursive calls return honest values and `add(to:)` dispatches through the constraint. (The `'heap` is there because a case holds the enum itself: recursive values live behind a reference.)
 
 Each arm of the `match` knows what `T` actually is, so `evaluate` hands you an `Int` or a `String`, not some box you have to unwrap. The academics call this a GADT. You can call it "nice".
 

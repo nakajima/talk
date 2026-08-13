@@ -1259,8 +1259,7 @@ fn workspace_edit_records(edit: Option<talk::analysis::WorkspaceEdit>) -> Vec<Do
 }
 
 fn highlight_records(source: &str) -> Vec<HighlightTokenRecord> {
-    let mut highlighter = talk::highlighter::Higlighter::new(source);
-    let mut tokens = highlighter.highlight();
+    let mut tokens = talk::compiling::frontend::highlight(source);
     tokens.sort_by(|a, b| a.start.cmp(&b.start).then_with(|| b.end.cmp(&a.end)));
     tokens
         .into_iter()
@@ -1349,7 +1348,7 @@ pub extern "C" fn talk_version_utf8() -> TalkResult {
 pub extern "C" fn talk_format_utf8(source_ptr: *const u8, source_len: usize) -> TalkResult {
     Boundary::string(|| {
         let source = RawBytes::new(source_ptr, source_len, "source").string()?;
-        Ok(talk::formatter::format_string(&source))
+        Ok(talk::compiling::frontend::format_string(&source))
     })
 }
 
@@ -1372,7 +1371,7 @@ pub extern "C" fn talk_highlight_tokens_utf8(
 pub extern "C" fn talk_highlight_html_utf8(source_ptr: *const u8, source_len: usize) -> TalkResult {
     Boundary::string(|| {
         let source = RawBytes::new(source_ptr, source_len, "source").string()?;
-        Ok(talk::highlighter::highlight_html(&source))
+        Ok(talk::compiling::frontend::highlight_html(&source))
     })
 }
 

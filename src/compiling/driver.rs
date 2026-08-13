@@ -17,16 +17,13 @@ use crate::{
         expr::ExprKind,
         type_annotation::TypeAnnotationKind,
     },
-    parser_error::ParserError,
 };
 use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::{hash::Hash, hash::Hasher};
+use std::hash::Hash;
 use std::{
-    io,
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -55,10 +52,7 @@ pub struct Parsed {
     pub file_dependencies: Vec<(FileID, FileID)>,
 }
 
-/// Exported names, each carrying its full overload set (ADR 0041):
-/// public declarations with one base but different full callable names
-/// must not overwrite one another in the export table.
-pub type Exports = IndexMap<String, Vec<Symbol>>;
+pub use crate::front::source::{CompileError, Exports, SharedCatalog, Source, SourceKind};
 
 impl DriverPhase for NameResolved {}
 pub struct NameResolved {
@@ -79,18 +73,6 @@ pub struct Typed {
     pub procedural_macros: Option<crate::procedural_macros::ProceduralMacroArtifact>,
 }
 
-#[derive(Debug)]
-pub enum CompileError {
-    IO(io::Error),
-    Parsing(ParserError),
-    Macro(String),
-    ImportOutsideWorkspace {
-        source: String,
-        import_path: String,
-        workspace_root: PathBuf,
-    },
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum CompilationMode {
     Executable,
@@ -103,26 +85,6 @@ pub enum ParseMode {
     #[default]
     Strict,
     Lenient,
-}
-
-/// The compilation's one fact table (ADR 0053): every module's typecheck
-/// reads and writes this catalog; imported modules' slices are seeded
-/// exactly once, in import order. Shared across the drivers of one
-/// compilation (package graphs, workspaces) via `DriverConfig::catalog`.
-#[derive(Default)]
-pub struct SharedCatalog {
-    pub types: crate::types::catalog::TypeCatalog,
-    seeded: rustc_hash::FxHashSet<crate::compiling::module::StableModuleId>,
-}
-
-impl SharedCatalog {
-    /// Insert a module's fact slice unless this table has already seen
-    /// it. Slices are own-filtered at export, so inserts are disjoint.
-    pub fn seed(&mut self, module: &crate::compiling::module::Module) {
-        if self.seeded.insert(module.id) {
-            self.types.insert_slice(&module.types.catalog);
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -313,111 +275,6 @@ impl DriverConfig {
     pub fn lenient_parsing(mut self) -> Self {
         self.parse_mode = ParseMode::Lenient;
         self
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub enum SourceKind {
-    File(PathBuf),
-    // Just a string
-    String(Arc<str>),
-    // Used for core, since they're not necessarily going to be on the fs
-    InMemory { path: PathBuf, text: Arc<str> },
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Source {
-    kind: SourceKind,
-}
-
-impl PartialEq for Source {
-    fn eq(&self, other: &Self) -> bool {
-        use SourceKind::*;
-
-        match (&self.kind, &other.kind) {
-            (File(a), File(b)) => a == b,
-            (File(a), InMemory { path: b, .. }) => a == b,
-            (InMemory { path: a, .. }, File(b)) => a == b,
-            (InMemory { path: a, .. }, InMemory { path: b, .. }) => a == b,
-
-            (String(a), String(b)) => a == b,
-
-            _ => false,
-        }
-    }
-}
-
-impl Eq for Source {}
-
-impl Hash for Source {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        use SourceKind::*;
-
-        match &self.kind {
-            File(path) | InMemory { path, .. } => {
-                0u8.hash(state);
-                path.hash(state);
-            }
-            String(s) => {
-                1u8.hash(state);
-                s.hash(state);
-            }
-        }
-    }
-}
-
-impl From<PathBuf> for Source {
-    fn from(value: PathBuf) -> Self {
-        Source {
-            kind: SourceKind::File(value),
-        }
-    }
-}
-
-impl From<&str> for Source {
-    fn from(value: &str) -> Self {
-        Source {
-            kind: SourceKind::String(Arc::from(value)),
-        }
-    }
-}
-
-impl Source {
-    pub fn in_memory(path: PathBuf, text: impl Into<Arc<str>>) -> Self {
-        Self {
-            kind: SourceKind::InMemory {
-                path,
-                text: text.into(),
-            },
-        }
-    }
-
-    pub fn path(&self) -> Cow<'_, str> {
-        match &self.kind {
-            SourceKind::File(path) => path.to_string_lossy(),
-            SourceKind::String(..) => Cow::Borrowed(":memory:"),
-            SourceKind::InMemory { path, .. } => path.to_string_lossy(),
-        }
-    }
-
-    pub fn source_path(&self) -> Option<&Path> {
-        match &self.kind {
-            SourceKind::File(path) | SourceKind::InMemory { path, .. } => Some(path),
-            SourceKind::String(_) => None,
-        }
-    }
-
-    pub fn read(&self) -> Result<Arc<str>, CompileError> {
-        match &self.kind {
-            SourceKind::File(path) => std::fs::read_to_string(path).map(Arc::from).map_err(|e| {
-                CompileError::IO(std::io::Error::new(
-                    e.kind(),
-                    format!("{}: {e}", path.display()),
-                ))
-            }),
-            SourceKind::String(string) => Ok(string.clone()),
-            SourceKind::InMemory { text, .. } => Ok(text.clone()),
-        }
     }
 }
 
@@ -663,8 +520,8 @@ impl Driver {
             next_file_id += 1;
             // For in-memory sources, try to canonicalize if the file
             // exists on disk; string sources have no path to track.
-            if let SourceKind::InMemory { path, .. } = &file.kind {
-                in_memory_ids.insert(path.clone(), file_id);
+            if let Some(path) = file.in_memory_path() {
+                in_memory_ids.insert(path.to_path_buf(), file_id);
             }
             if let Some(path) = file.source_path()
                 && let Ok(canonical) = path.canonicalize()
@@ -900,13 +757,13 @@ impl Driver<Parsed> {
         let procedural_macros = self.phase.procedural_macros.local_artifact();
         let file_dependencies = self.phase.file_dependencies;
         let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
-        self.phase.diagnostics.extend(
-            crate::macro_expansion::expand_macros_with_sources_and_service(
-                &mut asts,
-                &self.phase.source_texts,
-                Some(&self.phase.procedural_macros),
-            ),
-        );
+        self.phase.diagnostics.extend(crate::macro_expansion::expand_macros_with_sources(
+            &mut asts,
+            &self.phase.source_texts,
+            &crate::procedural_macros::ToolchainMacroHost {
+                procedural: Some(&self.phase.procedural_macros),
+            },
+        ));
         crate::desugar::desugar(&mut asts);
         let (asts, resolved) = resolver.resolve(asts);
         let asts = paths.into_iter().zip(asts).collect();
@@ -1023,7 +880,7 @@ impl Driver<NameResolved> {
             file_dependencies,
         } = self.phase;
 
-        let (types, type_diagnostics) = crate::types::generate::check_types(
+        let (types, elaboration, type_diagnostics) = crate::types::generate::check_types(
             &asts,
             &mut symbols,
             &resolved_names,
@@ -1037,6 +894,7 @@ impl Driver<NameResolved> {
             asts,
             resolved_names,
             types,
+            elaboration,
             &blocked_files,
             file_dependencies,
         );
@@ -1295,7 +1153,7 @@ impl Driver<Typed> {
             None => true,
             Some(id) => id == compiled_as,
         };
-        let (resolved_names, types) = self.phase.program.into_semantic_parts();
+        let (resolved_names, types, _) = self.phase.program.into_semantic_parts();
         let exports = resolved_names.exports();
         // Ship the module's fact slice (ADR 0053): its own facts, whole,
         // plus its amendments to foreign entities. Privacy is enforced at

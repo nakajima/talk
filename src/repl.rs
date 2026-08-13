@@ -241,7 +241,7 @@ impl ReplSession {
             return ReplEvalResult::Error(message);
         }
 
-        let resolved_names = typed.phase.program.resolved_names();
+        let symbol_names = typed.phase.program.symbol_names();
         let types = typed.phase.program.types();
         let _names = crate::name_resolution::symbol::set_symbol_names(types.display_names.clone());
 
@@ -249,8 +249,7 @@ impl ReplSession {
         // other expression shows the type of the final statement.
         let trimmed = input.trim();
         if trimmed.chars().all(|c| c.is_alphanumeric() || c == '_') {
-            let scheme = resolved_names
-                .symbol_names
+            let scheme = symbol_names
                 .iter()
                 .find(|(sym, name)| name.as_str() == trimmed && types.schemes.contains_key(sym))
                 .map(|(sym, _)| types.schemes[sym].render());

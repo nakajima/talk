@@ -1,0 +1,12 @@
+# ADR 0057 slice 1: the donation-tier queries are the value-adaptation
+# judgment's private vocabulary (ADR 0054). Sites that need a crossing
+# decided call `types::adapt::{adapt, donation_tier, copy_marker_evidence}`;
+# re-deriving a tier at a use site is how the judgment's eight divergent
+# copies grew. The judgment module and the catalog's own recursion carry
+# `#[allow(clippy::disallowed_methods)]`.
+disallowed-methods = [
+    { path = "talk_front::types::catalog::TypeCatalog::coerce_kind_application", reason = "call types::adapt::donation_tier — the one adaptation judgment (ADR 0054/0057)" },
+    { path = "talk_front::types::catalog::TypeCatalog::bounds_coerce_kind", reason = "call types::adapt::donation_tier — the one adaptation judgment (ADR 0054/0057)" },
+    { path = "talk_front::types::catalog::TypeCatalog::coerce_kind", reason = "call types::adapt::donation_tier — the one adaptation judgment (ADR 0054/0057)" },
+    { path = "talk_front::types::catalog::TypeCatalog::implicitly_duplicable", reason = "call types::adapt::donation_tier — the one adaptation judgment (ADR 0054/0057)" },
+]

@@ -80,7 +80,7 @@ impl<'a> ProgramBuilder<'a> {
         }
         let id = self.reserve(match glue {
             Glue::Drop => "shared_drop",
-            Glue::Retain => "existential_retain",
+            Glue::Retain => "shared_retain",
             Glue::HeapTeardown => unreachable!("heap teardown has its own builder"),
         });
         self.glue.insert((ty.clone(), glue), id);
@@ -145,6 +145,9 @@ impl<'a> ProgramBuilder<'a> {
                 while let Ty::Borrow(_, inner) = retained {
                     retained = *inner;
                 }
+                // The body's root expands structurally; a glue call here
+                // would be the function calling itself.
+                fx.retain_glue_root = Some(retained.clone());
                 fx.retain_value(Operand::Local(0), &retained, Span::SYNTHESIZED)?;
             }
         }
@@ -162,7 +165,7 @@ impl<'a> ProgramBuilder<'a> {
             name: match glue {
                 Glue::HeapTeardown => unreachable!("heap teardown has its own builder"),
                 Glue::Drop => "shared_drop".into(),
-                Glue::Retain => "existential_retain".into(),
+                Glue::Retain => "shared_retain".into(),
             },
             arity: 1,
             locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),

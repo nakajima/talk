@@ -90,12 +90,12 @@ fn hover_for_node(workspace: &Workspace, node: &Node) -> Option<Hover> {
                     symbol,
                     &name.name_str(),
                     TextRange::new(expr.span.start, expr.span.end),
-                    workspace.types.node_types.get(&expr.id),
+                    workspace.facts.node_types.get(&expr.id),
                 )
             {
                 return Some(hover);
             }
-            let ty = workspace.types.node_types.get(&expr.id)?;
+            let ty = workspace.facts.node_types.get(&expr.id)?;
             Some(Hover {
                 contents: ty.render_mono(),
                 range: TextRange::new(expr.span.start, expr.span.end),
@@ -132,7 +132,7 @@ fn hover_for_node(workspace: &Workspace, node: &Node) -> Option<Hover> {
                 None,
             ),
             PatternKind::Variant { .. } => {
-                let resolution = workspace.types.member_resolutions.get(&pattern.id)?;
+                let resolution = workspace.facts.member_resolutions.get(&pattern.id)?;
                 let crate::types::output::MemberResolution::Direct(symbol) = resolution else {
                     return None;
                 };
@@ -278,7 +278,7 @@ fn describe_callable(
         }
     }
 
-    if let Some(instantiation) = workspace.types.instantiations.get(&node) {
+    if let Some(instantiation) = workspace.facts.instantiations.get(&node) {
         let substitutions: Vec<_> = instantiation
             .iter()
             .filter(|(param, ty)| {

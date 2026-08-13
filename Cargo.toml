@@ -1,11 +1,11 @@
 [workspace]
-members = [".", "wasm", "www", "talk-vm", "talk-static", "talk-ffi", "talk-llvm", "talk-mir", "talk-native-runtime", "talk-bytecode", "talk-c"]
+members = [".", "talk-front", "wasm", "www", "talk-vm", "talk-static", "talk-ffi", "talk-llvm", "talk-mir", "talk-native-runtime", "talk-bytecode", "talk-c"]
 default-members = ["."]
 resolver = "2"
 
 [package]
 name = "talk"
-version = "0.1.85"
+version = "0.1.86"
 edition = "2024"
 default-run = "talk"
 
@@ -56,6 +56,7 @@ bincode = "1.3"
 flate2 = "1.1.5"
 tar = { version = "0.4.44", default-features = false }
 ignore = { version = "0.4", optional = true }
+talk-front = { path = "talk-front" }
 talk-vm = { path = "talk-vm" }
 talk-mir = { path = "talk-mir" }
 talk-bytecode = { path = "talk-bytecode" }
@@ -66,6 +67,9 @@ tracy-client = { version = "0.18.4", default-features = false, features = ["time
 
 [features]
 default = ["cli"]
+# Test-only access to sealed frontend artifacts (used by talk-front's
+# dev-dependency cycle; never enabled in production builds).
+test-access = []
 cli = [
   "dep:clap",
   "dep:clap_complete",

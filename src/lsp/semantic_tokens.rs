@@ -1,4 +1,4 @@
-use crate::highlighter::{self, HighlightToken, Higlighter};
+use crate::highlighter::{self, HighlightToken};
 use async_lsp::lsp_types::{Position, Range, SemanticToken, SemanticTokenType};
 
 pub const TOKEN_TYPES: &[SemanticTokenType] = &[
@@ -24,9 +24,11 @@ pub const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::VARIABLE,
 ];
 
-impl highlighter::Kind {
-    fn encode(&self) -> Option<SemanticTokenType> {
-        let kind = match self {
+// `Kind` is a frontend type; the LSP encoding is this crate's concern,
+// so it lives here as a free function (orphan rule).
+fn encode_kind(kind: &highlighter::Kind) -> Option<SemanticTokenType> {
+    {
+        let kind = match kind {
             highlighter::Kind::NAMESPACE => SemanticTokenType::NAMESPACE,
             highlighter::Kind::TYPE => SemanticTokenType::TYPE,
             highlighter::Kind::CLASS => SemanticTokenType::CLASS,
@@ -84,11 +86,13 @@ fn collect_highlight_tokens(
     source: &str,
     ast: Option<&crate::ast::AST<crate::ast::Parsed>>,
 ) -> Vec<HighlightToken> {
-    let mut highlighter = Higlighter::new(source);
-    let mut tokens = match ast {
-        Some(ast) => highlighter.highlight_with_ast(ast),
-        None => highlighter.highlight(),
-    };
+    let mut tokens = crate::compiling::frontend::highlight_with_ast(
+        source,
+        ast.filter(|_| true),
+    );
+    if ast.is_none() {
+        tokens = crate::compiling::frontend::highlight(source);
+    }
     tokens.sort_by(|a, b| a.start.cmp(&b.start));
     tokens
 }
@@ -134,7 +138,7 @@ impl<'a> SemanticTokenCollector<'a> {
                 continue;
             };
 
-            let token_type = tok.kind.encode();
+            let token_type = encode_kind(&tok.kind);
 
             if range.end.character < range.start.character && range.end.line <= range.start.line {
                 tracing::error!("Warning: Invalid range detected: {range:?}");

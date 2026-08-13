@@ -4,7 +4,7 @@ use talk::{
     common::text::{clamp_to_char_boundary, line_info_for_offset_utf16},
     compiling::driver::{Driver, DriverConfig, Source},
     formatter,
-    highlighter::highlight_html as highlight_source_html,
+    compiling::frontend::highlight_html as highlight_source_html,
     repl::{ReplEvalResult, ReplSession},
 };
 use wasm_bindgen::prelude::*;
@@ -16,7 +16,7 @@ fn init() {
 #[wasm_bindgen]
 pub fn format(source: &str) -> String {
     init();
-    formatter::format_string(source)
+    talk::compiling::frontend::format_string(source)
 }
 
 #[wasm_bindgen]

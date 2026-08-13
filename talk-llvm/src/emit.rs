@@ -9,13 +9,13 @@
 //! operation therefore breaks this backend at compile time instead of silently
 //! changing the accepted language.
 
-use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
 use talk_mir::{
     CmpKind, Constant, DisplayNames, FieldRepr, Function, Inst, Layout, LayoutId, MirSymbol,
-    Module, Operand, ScalarOp, Shape, SlotKind, Term, TypeKind,
+    Module, Operand, ScalarOp, Shape, SlotKind, Term,
 };
+use talk_native_runtime::emit::{Interners, needs_identity, symbol_rows, type_table};
 
 use crate::{Artifact, Error, LibraryArtifact};
 
@@ -170,11 +170,7 @@ declare void @talk_llvm_trap(ptr)
 "#;
 
 struct Emitter {
-    effects: HashMap<MirSymbol, u32>,
-    statics: Vec<u8>,
-    static_offsets: HashMap<Vec<u8>, u32>,
-    display_ids: HashMap<MirSymbol, u32>,
-    existential_ids: HashSet<u32>,
+    interners: Interners,
     next_value: u64,
     constant_slot: usize,
     call_width: usize,
@@ -187,11 +183,7 @@ struct Emitter {
 impl Emitter {
     fn new(string_symbol: MirSymbol, storage_symbol: MirSymbol, layouts: Vec<Layout>) -> Self {
         let mut emitter = Self {
-            effects: HashMap::new(),
-            statics: Vec::new(),
-            static_offsets: HashMap::new(),
-            display_ids: HashMap::new(),
-            existential_ids: HashSet::new(),
+            interners: Interners::default(),
             next_value: 0,
             constant_slot: 0,
             call_width: 1,
@@ -209,7 +201,7 @@ impl Emitter {
             })
             .collect();
         for symbol in symbols {
-            emitter.display_id(symbol);
+            emitter.interners.display_id(symbol);
         }
         emitter
     }
@@ -220,16 +212,6 @@ impl Emitter {
         format!("%{prefix}{id}")
     }
 
-    fn effect(&mut self, symbol: MirSymbol) -> u32 {
-        let next = u32::try_from(self.effects.len()).unwrap_or_default();
-        *self.effects.entry(symbol).or_insert(next)
-    }
-
-    fn display_id(&mut self, symbol: MirSymbol) -> u32 {
-        let next = u32::try_from(self.display_ids.len() + 1).unwrap_or(1);
-        *self.display_ids.entry(symbol).or_insert(next)
-    }
-
     fn layout_display(&mut self, layout: LayoutId) -> Result<u32, Error> {
         let index = usize::try_from(layout)
             .map_err(|_| internal("an instruction references an unaddressable layout"))?;
@@ -238,7 +220,9 @@ impl Emitter {
             Some(Layout::Slot | Layout::Opaque) => None,
             None => return Err(internal("an instruction references a missing layout")),
         };
-        Ok(symbol.map(|symbol| self.display_id(symbol)).unwrap_or(0))
+        Ok(symbol
+            .map(|symbol| self.interners.display_id(symbol))
+            .unwrap_or(0))
     }
 
     fn published_display(&self, layout: LayoutId) -> u32 {
@@ -249,7 +233,7 @@ impl Emitter {
                 Layout::Inline(symbol, _) | Layout::Boxed(symbol, _) => *symbol,
                 Layout::Slot | Layout::Opaque => None,
             })
-            .and_then(|symbol| self.display_ids.get(&symbol).copied())
+            .and_then(|symbol| self.interners.display_ids.get(&symbol).copied())
             .unwrap_or(0)
     }
 
@@ -265,16 +249,6 @@ impl Emitter {
                 Layout::Slot | Layout::Opaque => 1,
             })
             .unwrap_or(1)
-    }
-
-    fn intern_static(&mut self, bytes: &[u8]) -> u32 {
-        if let Some(offset) = self.static_offsets.get(bytes) {
-            return *offset;
-        }
-        let offset = u32::try_from(self.statics.len()).unwrap_or_default();
-        self.statics.extend_from_slice(bytes);
-        self.static_offsets.insert(bytes.to_vec(), offset);
-        offset
     }
 
     fn function(&mut self, out: &mut String, id: usize, function: &Function) -> Result<(), Error> {
@@ -552,9 +526,9 @@ impl Emitter {
                 layout,
                 storage_layout,
             } => {
-                let offset = self.intern_static(bytes);
-                let string = self.display_id(self.string_symbol);
-                let storage = self.display_id(self.storage_symbol);
+                let offset = self.interners.intern_static(bytes);
+                let string = self.interners.display_id(self.string_symbol);
+                let storage = self.interners.display_id(self.storage_symbol);
                 let _ = writeln!(
                     out,
                     "  call void @talk_llvm_string(ptr %l{dest}, i32 {offset}, i32 {}, i32 {layout}, i32 {storage_layout}, i32 {string}, i32 {storage})",
@@ -562,7 +536,7 @@ impl Emitter {
                 );
             }
             Inst::BytesLit { dest, bytes } => {
-                let offset = self.intern_static(bytes);
+                let offset = self.interners.intern_static(bytes);
                 let _ = writeln!(
                     out,
                     "  call void @talk_llvm_bytes(ptr %l{dest}, i32 {offset})"
@@ -738,7 +712,7 @@ impl Emitter {
                 clause,
                 cont,
             } => {
-                let effect = self.effect(*effect);
+                let effect = self.interners.effect(*effect);
                 let clause = self.operand(out, *clause);
                 let cont = self.operand(out, *cont);
                 let _ = writeln!(
@@ -752,7 +726,7 @@ impl Emitter {
                 index,
                 effect,
             } => {
-                let effect = self.effect(*effect);
+                let effect = self.interners.effect(*effect);
                 let _ = writeln!(
                     out,
                     "  call void @talk_llvm_find_handler(i32 {effect}, ptr %l{clause}, ptr %l{cont}, ptr %l{index})"
@@ -784,8 +758,8 @@ impl Emitter {
                 payload,
                 witnesses,
             } => {
-                let symbol = self.display_id(*protocol);
-                self.existential_ids.insert(symbol);
+                let symbol = self.interners.display_id(*protocol);
+                self.interners.existential_ids.insert(symbol);
                 let values: Vec<_> = std::iter::once(*payload)
                     .chain(witnesses.iter().copied())
                     .collect();
@@ -1323,9 +1297,9 @@ impl Emitter {
         let mut out = String::from("#include <stddef.h>\n");
         out.push_str(talk_native_runtime::source());
         out.push('\n');
-        emit_statics(&mut out, &self.statics);
+        emit_statics(&mut out, &self.interners.statics);
         emit_layout_table(&mut out, self);
-        emit_type_table(&mut out, self, names);
+        type_table(&mut out, &self.interners, names);
         let _ = writeln!(
             out,
             "static unsigned char talk_globals[{}];",
@@ -1373,16 +1347,16 @@ impl Emitter {
                 )
             })
             .map(|layout| {
-                let display = self.display_id(program.string_symbol);
+                let display = self.interners.display_id(program.string_symbol);
                 (u32::try_from(layout).unwrap_or(u32::MAX), display)
             });
         let mut out = String::from("#define TALK_LIBRARY 1\n#include <stddef.h>\n");
         out.push_str(talk_native_runtime::source());
         out.push('\n');
-        emit_statics(&mut out, &self.statics);
+        emit_statics(&mut out, &self.interners.statics);
         emit_layout_table(&mut out, self);
-        emit_type_table(&mut out, self, &program.display);
-        emit_symbol_rows(&mut out, self);
+        type_table(&mut out, &self.interners, &program.display);
+        symbol_rows(&mut out, &self.interners);
         let _ = writeln!(
             out,
             "static unsigned char talk_globals[{}];",
@@ -1406,28 +1380,6 @@ impl Emitter {
         }
         out
     }
-}
-
-/// The display-id-to-module-symbol table (ADR 0048): one row per type
-/// table entry, so a host bridge can validate record identity against
-/// an ABI descriptor's module symbols.
-fn emit_symbol_rows(out: &mut String, emitter: &Emitter) {
-    out.push_str(talk_native_runtime::library::symbol_row_type());
-    let mut rows = vec![(255u8, 0u32, 0u32); emitter.display_ids.len() + 1];
-    for (symbol, id) in &emitter.display_ids {
-        let kind = match symbol.kind {
-            talk_mir::MirSymbolKind::Struct => 0u8,
-            talk_mir::MirSymbolKind::Enum => 1,
-            talk_mir::MirSymbolKind::Effect => 2,
-            talk_mir::MirSymbolKind::Protocol => 3,
-        };
-        rows[*id as usize] = (kind, u32::from(symbol.module), symbol.local);
-    }
-    out.push_str("static const TalkLibSymbolRow talk_lib_symbols[] = {\n");
-    for (kind, module, local) in rows {
-        let _ = writeln!(out, "    {{ {kind}, {module}, {local} }},");
-    }
-    out.push_str("};\n");
 }
 
 fn emit_statics(out: &mut String, bytes: &[u8]) {
@@ -1527,61 +1479,6 @@ fn emit_layout_table(out: &mut String, emitter: &Emitter) {
     let _ = writeln!(out, "}};");
 }
 
-fn emit_type_table(out: &mut String, emitter: &Emitter, display: &DisplayNames) {
-    let mut ordered: Vec<_> = emitter.display_ids.iter().collect();
-    ordered.sort_by_key(|(_, id)| **id);
-    for (symbol, id) in &ordered {
-        let members = display
-            .entries
-            .get(symbol)
-            .map(|entry| entry.members.as_slice())
-            .unwrap_or_default();
-        if members.is_empty() {
-            continue;
-        }
-        let rendered: Vec<_> = members
-            .iter()
-            .map(|member| format!("\"{}\"", c_escape(member)))
-            .collect();
-        let _ = writeln!(
-            out,
-            "static const char *const talk_members_{id}[] = {{ {} }};",
-            rendered.join(", ")
-        );
-    }
-    let _ = writeln!(out, "static const TalkTypeInfo talk_type_table[] = {{");
-    let _ = writeln!(out, "    {{ \"\", TALK_TYPE_TUPLE, 0, NULL }},");
-    for (symbol, id) in ordered {
-        if emitter.existential_ids.contains(id) {
-            let _ = writeln!(out, "    {{ \"\", TALK_TYPE_EXISTENTIAL, 0, NULL }},");
-            continue;
-        }
-        let Some(entry) = display.entries.get(symbol) else {
-            let _ = writeln!(out, "    {{ \"\", TALK_TYPE_TUPLE, 0, NULL }},");
-            continue;
-        };
-        let kind = match entry.kind {
-            TypeKind::Record => "TALK_TYPE_RECORD",
-            TypeKind::Enum => "TALK_TYPE_ENUM",
-            TypeKind::String => "TALK_TYPE_STRING",
-        };
-        let members = &entry.members;
-        let name = &entry.name;
-        let member_ref = if members.is_empty() {
-            "NULL".into()
-        } else {
-            format!("talk_members_{id}")
-        };
-        let _ = writeln!(
-            out,
-            "    {{ \"{}\", {kind}, {}, {member_ref} }},",
-            c_escape(name),
-            members.len()
-        );
-    }
-    let _ = writeln!(out, "}};");
-}
-
 fn mem_kind(kind: SlotKind) -> u32 {
     match kind {
         SlotKind::Byte => 0,
@@ -1615,22 +1512,8 @@ fn float_predicate(kind: CmpKind) -> &'static str {
     }
 }
 
-fn needs_identity(function: &Function) -> bool {
-    function.blocks.iter().any(|block| {
-        block.insts.iter().any(|inst| {
-            matches!(
-                inst,
-                Inst::MakeCont { .. } | Inst::PushHandler { .. } | Inst::AbortTo { .. }
-            )
-        })
-    })
-}
-
 fn llvm_comment(text: &str) -> String {
     text.replace(['\n', '\r'], " ")
-}
-fn c_escape(text: &str) -> String {
-    text.replace('\\', "\\\\").replace('"', "\\\"")
 }
 fn internal(message: &str) -> Error {
     Error::new(format!("LLVM backend: {message}"))

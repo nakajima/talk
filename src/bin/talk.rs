@@ -1113,20 +1113,18 @@ async fn main() {
         }
         Commands::Html { filename } => {
             init();
-            use talk::highlighter::highlight_html;
+            use talk::compiling::frontend::highlight_html;
 
             let source = input_text(filename.as_deref());
             let html = highlight_html(&source);
             println!("{html}");
         }
         Commands::Format { filename, width } => {
-            use talk::formatter;
-
             init();
             let source = input_text(filename.as_deref());
             print!(
                 "{}",
-                formatter::format_string_with_width(&source, width.unwrap_or(80))
+                talk::compiling::frontend::format_string_with_width(&source, width.unwrap_or(80))
             );
         }
     }

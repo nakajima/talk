@@ -1,0 +1,1093 @@
+use super::*;
+
+impl<'s, 'a> BindingGroupChecker<'s, 'a> {
+    pub(super) fn check(&mut self, collected: Collected<'a>) {
+        let Collected {
+            decls,
+            stmts,
+            destructuring_lets,
+            extends,
+            protocol_defaults,
+            obligations,
+        } = collected;
+
+        // Declaration-level static formation obligations (ADR 0035 §2)
+        // solve first, under the givens their declarations wrapped them
+        // in — collection queued them because it has no solver.
+        if !obligations.is_empty() {
+            let residuals = self.run_solver(obligations);
+            self.report_unresolved_residuals(residuals);
+        }
+
+        // The closed base of every top-level ambient row: exactly the
+        // effects core's `_with_host` wrapper discharges around the
+        // program (ADR 0039), read from its callback's declared row —
+        // the compiler names no effect anywhere. Programs without core
+        // have no wrapper and no ambient effects. Top-level `#handle`s
+        // widen it positionally — a computation sees only the handlers
+        // installed before it in source order, matching what the runtime
+        // will actually have installed when it runs.
+        self.ambient_effects = self
+            .schemes
+            .get(&Symbol::WithHost)
+            .map(|scheme| host_discharged_effects(&scheme.ty))
+            .unwrap_or_default();
+        self.handler_positions = stmts
+            .iter()
+            .filter_map(|stmt| match &stmt.kind {
+                StmtKind::Handling { effect_name, .. } => {
+                    effect_name.symbol().ok().map(|effect| (stmt.id, effect))
+                }
+                _ => None,
+            })
+            .collect();
+
+        for binders in binding_groups(&decls) {
+            self.check_group(&binders, &decls);
+        }
+
+        for work in extends {
+            self.check_extend(work);
+        }
+
+        for (protocol, requirement_symbol, func) in protocol_defaults {
+            self.check_protocol_default(protocol, requirement_symbol, func);
+        }
+
+        self.level = GROUP_LEVEL;
+        let top_ret = Ty::Var(self.store.fresh_ty(OUTER_LEVEL, NodeID::SYNTHESIZED));
+        for decl in destructuring_lets {
+            let eff = self.ambient_row_before(decl.id);
+            let ctx = Ctx::root().with_ret_eff(top_ret.clone(), eff);
+            self.body().check_local_decl(decl, &ctx);
+        }
+        // Statements check under a progressively narrowed extent: each
+        // `#handle` opens a fresh ambient row for the statements after it,
+        // filtered into the previous one — the same label-scoped boundary
+        // the block walkers give it inside functions.
+        let mut top_ctx = Ctx::root().with_ret_eff(top_ret.clone(), self.closed_base());
+        let mut last = StmtValue::Unit;
+        let mut top_level_handler: Option<NodeID> = None;
+        for stmt in stmts {
+            if matches!(stmt.kind, StmtKind::Handling { .. }) {
+                top_level_handler = Some(stmt.id);
+            }
+            last = self.body().infer_stmt(stmt, &top_ctx);
+            if let StmtKind::Handling { effect_name, .. } = &stmt.kind
+                && let Ok(effect) = effect_name.symbol()
+            {
+                let inner = EffectRow::open(self.store.fresh_eff(OUTER_LEVEL, stmt.id));
+                self.wanteds.push(Constraint::HandleEffect {
+                    inner: inner.clone(),
+                    effects: vec![effect],
+                    outer: top_ctx.eff.clone(),
+                    origin: CtOrigin::new(stmt.id, CtReason::Effect),
+                });
+                top_ctx = top_ctx.with_ret_eff(top_ret.clone(), inner);
+            }
+        }
+        // A top-level handler can abort the rest of the program, so the
+        // top-level scope's result (`top_ret`, which the Handling arm
+        // constrained the handler body against) is the program value —
+        // the final statement's.
+        if let Some(handler_id) = top_level_handler {
+            let program_ty = match last {
+                StmtValue::Value(ty) => ty,
+                StmtValue::Divergent { .. } => Ty::Nominal(Symbol::Never, vec![]),
+                StmtValue::Unit => Ty::unit(),
+            };
+            if !program_ty.is_never() {
+                self.body()
+                    .emit_eq(top_ret, program_ty, handler_id, CtReason::Body);
+            }
+        }
+        let wanteds = std::mem::take(self.wanteds);
+        let residuals = self.run_solver(wanteds);
+        self.report_unresolved_residuals(residuals);
+        self.solve_deferred();
+    }
+
+    /// The closed top-level base row: the effects the runtime handles
+    /// implicitly, and nothing else. An occurrence spilling into it is an
+    /// `UnhandledEffect` at the node where it tried to flow in.
+    pub(super) fn closed_base(&self) -> EffectRow {
+        EffectRow::new(
+            self.ambient_effects
+                .iter()
+                .map(|&effect| EffectEntry::label(effect))
+                .collect(),
+            None,
+        )
+    }
+
+    /// The ambient row for top-level computation positioned at `pos`: a
+    /// fresh row whose occurrences of the labels handled by `#handle`s
+    /// BEFORE that point are discharged, the rest spilling into the
+    /// closed base — a `let` running before a handler cannot use it (its
+    /// rhs runs in source order at runtime).
+    pub(super) fn ambient_row_before(&mut self, pos: NodeID) -> EffectRow {
+        let mut labels: Vec<Symbol> = self
+            .handler_positions
+            .iter()
+            .filter(|(id, _)| *id < pos)
+            .map(|(_, effect)| *effect)
+            .collect();
+        labels.sort();
+        labels.dedup();
+        self.filtered_ambient(labels, pos)
+    }
+
+    /// The position-blind ambient row (every top-level handler): for
+    /// bodies with no top-level execution order of their own (extend
+    /// members, protocol defaults). `node` is the declaration the row
+    /// serves — an unhandled effect spilling through it reports there.
+    pub(super) fn ambient_row(&mut self, node: NodeID) -> EffectRow {
+        let mut labels: Vec<Symbol> = self
+            .handler_positions
+            .iter()
+            .map(|(_, effect)| *effect)
+            .collect();
+        labels.sort();
+        labels.dedup();
+        self.filtered_ambient(labels, node)
+    }
+
+    fn filtered_ambient(&mut self, labels: Vec<Symbol>, node: NodeID) -> EffectRow {
+        let base = self.closed_base();
+        if labels.is_empty() {
+            return base;
+        }
+        let inner = EffectRow::open(self.store.fresh_eff(OUTER_LEVEL, node));
+        self.wanteds.push(Constraint::HandleEffect {
+            inner: inner.clone(),
+            effects: labels,
+            outer: base,
+            origin: CtOrigin::new(node, CtReason::Effect),
+        });
+        inner
+    }
+
+    pub(super) fn run_solver(&mut self, wanteds: Vec<Constraint>) -> Vec<Constraint> {
+        let mut residuals = self.run_solver_with(wanteds, false);
+        while self.resolve_pending_force_unwraps(false) > 0 {
+            let mut generated = std::mem::take(self.wanteds);
+            generated.extend(residuals);
+            residuals = self.run_solver_with(generated, false);
+        }
+        residuals
+    }
+
+    fn resolve_pending_force_unwraps(&mut self, final_pass: bool) -> usize {
+        let mut remaining = Vec::new();
+        let mut resolved = 0;
+        for pending in std::mem::take(self.pending_force_unwraps) {
+            let mut head = self.store.shallow(&pending.source_ty);
+            while let Ty::Borrow(_, inner) = head {
+                head = self.store.shallow(&inner);
+            }
+            if matches!(head, Ty::Var(_) | Ty::Proj(..)) {
+                if final_pass {
+                    self.diagnostics.errors.push((
+                        TypeError::InvalidForceUnwrap {
+                            reason: "the operand must identify an enum".into(),
+                        },
+                        pending.expr.id,
+                    ));
+                } else {
+                    remaining.push(pending);
+                }
+                continue;
+            }
+
+            let old_level = self.level;
+            self.level = pending.level;
+            self.body().check_binary_enum_postfix(
+                &pending.expr,
+                &pending.source,
+                Some(&pending.failure),
+                &pending.ctx,
+                pending.source_ty,
+                pending.result,
+            );
+            self.level = old_level;
+            resolved += 1;
+        }
+        self.pending_force_unwraps.extend(remaining);
+        resolved
+    }
+
+    pub(super) fn run_solver_with(
+        &mut self,
+        wanteds: Vec<Constraint>,
+        defaulting: bool,
+    ) -> Vec<Constraint> {
+        let mut solver = Solver {
+            store: &mut *self.store,
+            errors: &mut self.diagnostics.errors,
+            catalog: &*self.catalog,
+            module_id: self.module_id,
+            schemes: &*self.schemes,
+            mono: &*self.mono,
+            instantiations: &mut self.artifacts.instantiations,
+            projection_instantiations: &mut self.artifacts.projection_instantiations,
+            member_resolutions: &mut self.artifacts.member_resolutions,
+            resolved_member_types: &mut self.artifacts.resolved_member_types,
+            member_call_slots: &self.artifacts.member_call_slots,
+            coerce_clones: &mut self.artifacts.coerce_clones,
+            level: self.level,
+            defaulting,
+            givens: vec![],
+            touchable_level: None,
+            local_params: vec![],
+            conformance_edges: Default::default(),
+        };
+        solver.solve(wanteds)
+    }
+
+    /// Residuals in a context that cannot generalize float out to the final
+    /// solve (their heads may be solved by a later group).
+    pub(super) fn report_unresolved_residuals(&mut self, residuals: Vec<Constraint>) {
+        self.deferred.extend(residuals);
+    }
+
+    /// The final solve over everything that floated out of its group. After
+    /// this, a variable-headed predicate really is unsolvable: improvement
+    /// applies one last time (the solver owns every level now), then errors.
+    pub(super) fn solve_deferred(&mut self) {
+        // A stored rank-N closure no projection ever used still compiles
+        // once: instantiate its scheme here so the final solve's
+        // improvement commits what uniqueness forces (a sole candidate
+        // row pins the parameter, exactly like a use would). Genuinely
+        // ambiguous parameters stay rigid, and the backend reports any
+        // witness need honestly.
+        let mut unused_field_wanteds = vec![];
+        let forall_nodes: Vec<(NodeID, crate::types::ty::Scheme)> = self
+            .artifacts
+            .node_types
+            .iter()
+            .filter_map(|(node, ty)| match ty {
+                Ty::Forall(scheme) if !scheme.params.is_empty() => {
+                    Some((*node, scheme.as_ref().clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        for (node, scheme) in forall_nodes {
+            let identity: Vec<Symbol> = scheme.params.iter().map(|param| param.symbol).collect();
+            let projected = self
+                .artifacts
+                .projection_instantiations
+                .iter()
+                .any(|(used, ..)| *used == identity);
+            let instantiated = self.artifacts.instantiations.contains_key(&node);
+            if projected || instantiated {
+                continue;
+            }
+            let ty = self.body().instantiate(&scheme, node);
+            let _ = ty;
+            unused_field_wanteds.extend(self.wanteds.split_off(0));
+        }
+        self.deferred.extend(unused_field_wanteds);
+        let deferred = std::mem::take(self.deferred);
+        if deferred.is_empty() && self.pending_force_unwraps.is_empty() {
+            return;
+        }
+        self.level = OUTER_LEVEL;
+        let mut leftover = self.run_solver_with(deferred, true);
+        while self.resolve_pending_force_unwraps(false) > 0 {
+            let mut generated = std::mem::take(self.wanteds);
+            generated.extend(leftover);
+            leftover = self.run_solver_with(generated, true);
+        }
+        self.resolve_pending_force_unwraps(true);
+        self.level = GROUP_LEVEL;
+        for constraint in leftover {
+            match constraint {
+                Constraint::Conforms {
+                    ty,
+                    protocol,
+                    origin,
+                } => {
+                    let protocol = protocol.to_string();
+                    let diagnostic = if matches!(self.store.shallow(&ty), Ty::Var(_)) {
+                        // The checker never learned the type — usually
+                        // another error kept it open. `_ does not
+                        // conform` would blame the wrong thing.
+                        TypeError::UnconformableUnknown { protocol }
+                    } else {
+                        let rendered = self.store.render(&ty);
+                        TypeError::NotConforming {
+                            ty: rendered,
+                            protocol,
+                        }
+                    };
+                    self.diagnostics.errors.push((diagnostic, origin.node));
+                }
+                Constraint::HasMember {
+                    receiver,
+                    label,
+                    origin,
+                    ..
+                } => {
+                    let label = label.to_string();
+                    let diagnostic = match self.store.shallow(&receiver) {
+                        Ty::Var(var) => {
+                            let inferred_origin = self.store.origin(var.0);
+                            if self
+                                .diagnostics
+                                .errors
+                                .iter()
+                                .any(|(_, id)| *id == inferred_origin)
+                            {
+                                continue;
+                            }
+                            let node = if inferred_origin.0 == crate::node_id::FileID::SYNTHESIZED {
+                                origin.node
+                            } else {
+                                inferred_origin
+                            };
+                            (TypeError::UnknownMemberOnInferred { label }, node)
+                        }
+                        _ => {
+                            let receiver = self.store.render(&receiver);
+                            (TypeError::UnknownMember { receiver, label }, origin.node)
+                        }
+                    };
+                    self.diagnostics.errors.push(diagnostic);
+                }
+                Constraint::HasTypeMember { label, origin, .. } => {
+                    self.diagnostics.errors.push((
+                        TypeError::UnresolvedTypeMember {
+                            label: label.to_string(),
+                        },
+                        origin.node,
+                    ));
+                }
+                Constraint::HasVariant { label, origin, .. } => {
+                    self.diagnostics.errors.push((
+                        TypeError::UnresolvedVariant {
+                            label: label.to_string(),
+                        },
+                        origin.node,
+                    ));
+                }
+                Constraint::Eq(a, b, origin) => {
+                    // A projection equality that never reduced: unprovable.
+                    let expected = self.store.render(&a);
+                    let found = self.store.render(&b);
+                    self.diagnostics.errors.push((
+                        TypeError::Mismatch {
+                            expected,
+                            found,
+                            reason: origin.reason,
+                        },
+                        origin.node,
+                    ));
+                }
+                Constraint::EffEq(a, b, origin) => {
+                    let expected = self.store.render_eff(&a);
+                    let found = self.store.render_eff(&b);
+                    self.diagnostics.errors.push((
+                        TypeError::Mismatch {
+                            expected,
+                            found,
+                            reason: origin.reason,
+                        },
+                        origin.node,
+                    ));
+                }
+                Constraint::EffectSubset {
+                    inferred,
+                    allowed,
+                    origin,
+                } => {
+                    let expected = self.store.render_eff(&allowed);
+                    let found = self.store.render_eff(&inferred);
+                    self.diagnostics.errors.push((
+                        TypeError::Mismatch {
+                            expected,
+                            found,
+                            reason: origin.reason,
+                        },
+                        origin.node,
+                    ));
+                }
+                Constraint::Adapt {
+                    expected,
+                    found,
+                    origin,
+                } => {
+                    let expected = self.store.render(&expected);
+                    let found = self.store.render(&found);
+                    self.diagnostics.errors.push((
+                        TypeError::Mismatch {
+                            expected,
+                            found,
+                            reason: origin.reason,
+                        },
+                        origin.node,
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // ----- Binding groups -------------------------------------------------
+
+    /// Check one binding group: skeletons at the group's level, generate
+    /// every binder's constraints, solve once, then generalize (THIH-style
+    /// per-group quantification, value-restricted).
+    pub(super) fn check_group(
+        &mut self,
+        binders: &[Symbol],
+        decls: &IndexMap<Symbol, TopEntry<'a>>,
+    ) {
+        self.level = GROUP_LEVEL;
+        debug_assert!(self.wanteds.is_empty());
+
+        // (symbol, type, passes value restriction, was annotated, declared generics/predicates)
+        let mut outputs: Vec<(Symbol, Ty, bool, bool, DeclaredSchemeContext)> = vec![];
+        // Nominal member bodies queued behind skeleton creation so members
+        // can reference each other (and Lets in the same group) freely.
+        let mut member_queue: Vec<(Ty, Vec<(Symbol, MemberWork<'a>)>)> = vec![];
+
+        // Skeletons first: annotated binders use their annotation; the rest
+        // get fresh variables at the group level so they generalize. A
+        // variable may already exist if an earlier group referenced this
+        // binder out of dependency order — reuse it (it sits at the outer
+        // level, so this group conservatively won't generalize what it
+        // touches).
+        let mut signature_skeletons: rustc_hash::FxHashSet<Symbol> = Default::default();
+        for binder in binders {
+            match &decls[binder] {
+                TopEntry::Let {
+                    decl,
+                    annotation,
+                    rhs,
+                } => {
+                    if !self.mono.contains_key(binder) {
+                        let skeleton = match (annotation, rhs) {
+                            (Some(annotation), _) => self.lower_annotation(annotation),
+                            // A fully-annotated monomorphic `func`
+                            // binder's in-group uses see its declared
+                            // signature, not a bare variable. Generic
+                            // and partially-annotated funcs keep the
+                            // variable skeleton: their annotations need
+                            // the declared-givens context the definition
+                            // pass sets up.
+                            (
+                                None,
+                                Some(Expr {
+                                    kind: ExprKind::Func(func),
+                                    ..
+                                }),
+                            ) if func.generics.is_empty()
+                                && func.where_clause.is_none()
+                                && func
+                                    .params
+                                    .iter()
+                                    .all(|param| param.type_annotation.is_some()) =>
+                            {
+                                signature_skeletons.insert(*binder);
+                                self.body().func_signature_skeleton(func, decl.id)
+                            }
+                            (None, _) => Ty::Var(self.store.fresh_ty(self.level, decl.id)),
+                        };
+                        self.mono.insert(*binder, skeleton);
+                    }
+                }
+                TopEntry::Struct { decl } | TopEntry::Enum { decl } => {
+                    let work = self.prepare_nominal_members(*binder, decl);
+                    member_queue.push(work);
+                }
+            }
+        }
+
+        // The ambient effect row for top-level right-hand-side computation
+        // is not part of any binder's type: it is the closed top-level
+        // set as of the group's earliest binder — a `let` running before
+        // a top-level `#handle` cannot use it (its rhs runs in source
+        // order at runtime; group checking is otherwise order-blind).
+        let group_pos = binders
+            .iter()
+            .filter_map(|binder| match &decls[binder] {
+                TopEntry::Let { decl, .. } => Some(decl.id),
+                _ => None,
+            })
+            .min();
+        let group_eff = match group_pos {
+            Some(pos) => self.ambient_row_before(pos),
+            None => self.closed_base(),
+        };
+        let group_ret = Ty::Var(self.store.fresh_ty(OUTER_LEVEL, NodeID::SYNTHESIZED));
+        let group_ctx = Ctx::root().with_ret_eff(group_ret, group_eff);
+
+        for binder in binders {
+            if let TopEntry::Let {
+                decl: _,
+                annotation,
+                rhs,
+            } = &decls[binder]
+            {
+                if let Some(rhs) = rhs {
+                    let expected = self.mono[binder].clone();
+                    // A signature skeleton takes the member route —
+                    // infer the definition and equate — so the checking
+                    // path's effect handling is untouched; the skeleton
+                    // exists for in-group USES only.
+                    if signature_skeletons.contains(binder)
+                        && let Expr {
+                            kind: ExprKind::Func(func),
+                            ..
+                        } = rhs
+                    {
+                        let ty = self
+                            .body()
+                            .infer_func(func, &group_ctx.with_binder(*binder));
+                        self.emit_eq(expected, ty, rhs.id, CtReason::Recursion);
+                    } else {
+                        let reason = if annotation.is_some() {
+                            CtReason::Annotation
+                        } else {
+                            CtReason::Recursion
+                        };
+                        self.body().check_expr(
+                            rhs,
+                            &expected,
+                            reason,
+                            &group_ctx.with_binder(*binder),
+                        );
+                    }
+                }
+                // Value restriction (Wright 1995): only syntactic values of
+                // unmutated binders generalize.
+                let is_value = rhs.map(|rhs| rhs.kind.is_syntactic_value()).unwrap_or(true);
+                let passes = is_value && !self.resolved.mutated_symbols.contains(binder);
+                let declared = match rhs {
+                    Some(Expr {
+                        kind: ExprKind::Func(func),
+                        ..
+                    }) => self.declared_scheme_context(&func.generics, func.where_clause.as_ref()),
+                    _ => DeclaredSchemeContext::default(),
+                };
+                outputs.push((
+                    *binder,
+                    self.mono[binder].clone(),
+                    passes,
+                    annotation.is_some(),
+                    declared,
+                ));
+            }
+        }
+
+        for (self_ty, members) in member_queue {
+            let nominal_givens = nominal_predicates_for(self.catalog, &self_ty);
+            let nominal_wanted_start = self.wanteds.len();
+            self.self_types.push(self_ty);
+            let mut first_member_node = None;
+            for (symbol, work) in members {
+                // A method's own declared generics quantify its scheme
+                // (instantiated fresh at each call site, like any other
+                // polymorphic binder).
+                let declared = match &work {
+                    MemberWork::Method(func) => {
+                        self.register_func_bounds(func);
+                        self.declared_scheme_context(&func.generics, func.where_clause.as_ref())
+                    }
+                    MemberWork::Init { .. } => DeclaredSchemeContext::default(),
+                };
+                let member_ctx = group_ctx.with_binder(symbol);
+                let member_node = match &work {
+                    MemberWork::Method(func) => func.id,
+                    MemberWork::Init { node, .. } => *node,
+                };
+                first_member_node.get_or_insert(member_node);
+                let ty = match work {
+                    MemberWork::Method(func) => self.body().infer_func(func, &member_ctx),
+                    MemberWork::Init { params, body, node } => {
+                        self.body()
+                            .infer_callable(params, None, body, node, &member_ctx)
+                    }
+                };
+                let skeleton = self.mono[&symbol].clone();
+                self.emit_eq(skeleton.clone(), ty, member_node, CtReason::Recursion);
+                // Member bodies are function literals: always values.
+                outputs.push((symbol, skeleton, true, false, declared));
+            }
+            if !nominal_givens.is_empty() {
+                let wanteds = self.wanteds.split_off(nominal_wanted_start);
+                if !wanteds.is_empty() {
+                    self.wanteds.push(Constraint::Implic(Box::new(Implication {
+                        node: first_member_node
+                            .expect("non-empty member wanteds imply a member was checked"),
+                        level: self.level,
+                        givens: nominal_givens,
+                        wanteds,
+                        local_params: vec![],
+                        touchable_level: None,
+                    })));
+                }
+            }
+            self.self_types.pop();
+        }
+
+        let wanteds = std::mem::take(self.wanteds);
+        let residuals = self.run_solver(wanteds);
+
+        // THIH's restricted-group rule: one restricted binder makes the
+        // whole group monomorphic.
+        let generalizable = outputs.iter().all(|(_, _, passes, ..)| *passes);
+
+        // Residual variable-headed predicates become the qualified context
+        // on the parameters about to be quantified: THIH section 11.6's
+        // retained predicates, generalized from class predicates to Talk's
+        // unified predicate language.
+        let mut var_predicates: FxHashMap<u32, Vec<Predicate>> = FxHashMap::default();
+        let mut held_members: Vec<(Ty, crate::label::Label, Ty, CtOrigin)> = vec![];
+        // Held equations keep their origins on the side: a scheme predicate
+        // carries none, but one whose root never quantifies is reported
+        // after generalization, and the diagnostic needs the site.
+        let mut held_equations: Vec<(u32, Ty, Ty, CtOrigin)> = vec![];
+        for residual in residuals {
+            match &residual {
+                Constraint::Conforms { ty, protocol, .. } => {
+                    let Ty::Var(v) = self.store.shallow(ty) else {
+                        // A CONCRETE receiver stuck on variable protocol
+                        // arguments (`E: Into<?t>` from a freshened
+                        // member dispatch) is still an obligation: float
+                        // it to the final solve — dropping it here let
+                        // conformance-free calls typecheck and die in
+                        // the backend. Rigid receivers stay dropped: their
+                        // obligations are entailed by the scheme's own
+                        // predicates (this scope's givens), and re-solving
+                        // them outside that scope loses the givens.
+                        let mut head = self.store.shallow(ty);
+                        while let Ty::Borrow(_, inner) = head {
+                            head = self.store.shallow(&inner);
+                        }
+                        if matches!(head, Ty::Nominal(..) | Ty::Any { .. }) {
+                            self.deferred.push(residual);
+                        }
+                        continue;
+                    };
+                    let root = self.store.find(v.0);
+                    if self.store.level(root) <= OUTER_LEVEL || !generalizable {
+                        // A later group may still solve this variable:
+                        // float the obligation out to the final solve.
+                        self.deferred.push(residual);
+                        continue;
+                    }
+                    let receiver = self.store.zonk_ty(ty);
+                    let predicates = var_predicates.entry(root).or_default();
+                    let conformance = Predicate::Conforms {
+                        ty: receiver.clone(),
+                        protocol: protocol.clone(),
+                    };
+                    if !predicates.contains(&conformance) {
+                        predicates.push(conformance);
+                    }
+                }
+                Constraint::HasMember {
+                    receiver,
+                    label,
+                    member,
+                    origin,
+                } => {
+                    // A member use stuck on a variable this group owns
+                    // qualifies the binder's scheme (held here, attached
+                    // after generalization — Jones, *Qualified Types*,
+                    // 1994); anything else may be solved later and floats.
+                    // A borrow of such a variable (an inferred
+                    // borrow-default param's receiver — plan 3.3(b)) is the
+                    // same case: member lookup peels the borrow, so the
+                    // payload variable is what the predicate waits on.
+                    let receiver_var = match self.store.shallow(receiver) {
+                        Ty::Var(v) => Some(v),
+                        Ty::Borrow(_, inner) => match self.store.shallow(&inner) {
+                            Ty::Var(v) => Some(v),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    let group_owned = match receiver_var {
+                        Some(v) => {
+                            let root = self.store.find(v.0);
+                            self.store.level(root) > OUTER_LEVEL
+                        }
+                        None => false,
+                    };
+                    if generalizable && group_owned {
+                        held_members.push((
+                            receiver.clone(),
+                            label.clone(),
+                            member.clone(),
+                            *origin,
+                        ));
+                    } else {
+                        self.deferred.push(residual)
+                    }
+                }
+                Constraint::Eq(a, b, origin) => {
+                    let mut roots = vec![];
+                    self.group_owned_roots(a, &mut roots);
+                    self.group_owned_roots(b, &mut roots);
+                    roots.sort_unstable();
+                    roots.dedup();
+                    if generalizable && let Some(root) = roots.first().copied() {
+                        let a = self.store.zonk_ty(a);
+                        let b = self.store.zonk_ty(b);
+                        let predicate = Predicate::TypeEq(a.clone(), b.clone());
+                        held_equations.push((root, a, b, *origin));
+                        let predicates = var_predicates.entry(root).or_default();
+                        if !predicates.contains(&predicate) {
+                            predicates.push(predicate);
+                        }
+                    } else {
+                        self.deferred.push(residual)
+                    }
+                }
+                Constraint::EffEq(..)
+                | Constraint::EffectSubset { .. }
+                | Constraint::HandleEffect { .. }
+                | Constraint::Adapt { .. } => self.deferred.push(residual),
+                // Leading-dot lookup never qualifies a scheme: lowering
+                // needs one concrete type member or pattern variant per node.
+                // A later group (or the final solve's error) owns it.
+                Constraint::HasTypeMember { .. } | Constraint::HasVariant { .. } => {
+                    self.deferred.push(residual)
+                }
+                _ => {}
+            }
+        }
+
+        if generalizable {
+            let mut generalizer = Generalizer::new(
+                self.store,
+                self.symbols,
+                self.module_id,
+                OUTER_LEVEL,
+                var_predicates,
+            );
+            for (symbol, ty, _, annotated, declared) in &outputs {
+                let mut scheme = if *annotated {
+                    Scheme::mono(generalizer.store.zonk_ty(ty))
+                } else {
+                    generalizer.generalize(ty, &declared.params)
+                };
+                finish_scheme(&mut scheme, declared, self.catalog, self.diagnostics);
+                self.schemes.insert(*symbol, scheme);
+            }
+            publish_inferred_param_names(&generalizer, self.resolved, self.artifacts);
+            // A held equation whose root no binder quantified rides no
+            // scheme and meets no further given: unless its sides already
+            // agree it is unprovable, and dropping it silently was the
+            // hole that let a self-recursive call at a larger
+            // instantiation typecheck against a type-wrong instance.
+            for (root, a, b, origin) in held_equations {
+                if let Some((expected, found)) = generalizer.unproven_equation(root, &a, &b) {
+                    self.diagnostics.errors.push((
+                        TypeError::Mismatch {
+                            expected,
+                            found,
+                            reason: origin.reason,
+                        },
+                        origin.node,
+                    ));
+                }
+            }
+            // Held member uses: quantification turned their receivers'
+            // variables into scheme parameters — attach each constraint
+            // to every scheme of this group that mentions one of them;
+            // constraints over nothing quantified float instead.
+            for (receiver, label, member, origin) in held_members {
+                let receiver = self.store.zonk_ty(&receiver);
+                let member = self.store.zonk_ty(&member);
+                let mut attached = false;
+                for (symbol, ..) in &outputs {
+                    let Some(scheme) = self.schemes.get(symbol) else {
+                        continue;
+                    };
+                    let mentions = scheme.params.iter().any(|p| {
+                        ty_mentions_param(&receiver, p.symbol)
+                            || ty_mentions_param(&member, p.symbol)
+                    });
+                    if mentions {
+                        let predicate = Predicate::HasMember {
+                            receiver: receiver.clone(),
+                            label: label.clone(),
+                            member: member.clone(),
+                        };
+                        if let Some(scheme) = self.schemes.get_mut(symbol)
+                            && !scheme.predicates.contains(&predicate)
+                        {
+                            scheme.predicates.push(predicate);
+                            attached = true;
+                        }
+                    }
+                }
+                if !attached {
+                    self.deferred.push(Constraint::HasMember {
+                        receiver,
+                        label,
+                        member,
+                        origin,
+                    });
+                }
+            }
+        } else {
+            for (symbol, ty, ..) in &outputs {
+                let zonked = self.store.zonk_ty(ty);
+                self.schemes.insert(*symbol, Scheme::mono(zonked));
+            }
+        }
+
+        for (symbol, ..) in &outputs {
+            self.mono.remove(symbol);
+        }
+    }
+
+    pub(super) fn declared_scheme_context(
+        &mut self,
+        generics: &[GenericDecl],
+        where_clause: Option<&WhereClause>,
+    ) -> DeclaredSchemeContext {
+        let mut context = DeclaredSchemeContext::default();
+        context.params = self.declared_params(generics);
+        for generic in generics {
+            if let Ok(symbol) = generic.name.symbol() {
+                context.param_nodes.push((symbol, generic.id));
+            }
+        }
+        context.predicates = self.declared_predicates(generics, where_clause);
+        context
+    }
+
+    pub(super) fn ambiguous_declared_predicate_errors(
+        scheme: &Scheme,
+        declared: &DeclaredSchemeContext,
+    ) -> Vec<(TypeError, NodeID)> {
+        if declared.predicates.is_empty() || declared.params.is_empty() {
+            return vec![];
+        }
+
+        let declared_symbols: FxHashSet<Symbol> =
+            declared.params.iter().map(|param| param.symbol).collect();
+        let static_symbols: FxHashSet<Symbol> = declared
+            .params
+            .iter()
+            .filter(|param| matches!(param.kind, crate::types::ty::ParamKind::Static(_)))
+            .map(|param| param.symbol)
+            .collect();
+        let mut constrained = FxHashSet::default();
+        for predicate in &declared.predicates {
+            collect_predicate_params(predicate, Some(&declared_symbols), &mut constrained);
+        }
+
+        let mut determined = FxHashSet::default();
+        collect_ty_params(&scheme.ty, Some(&declared_symbols), &mut determined);
+
+        // ADR 0035 §5: a static parameter is determined by a BARE argument
+        // occurrence or by unique affine solvability, never by mere
+        // mention inside a compound index (no call can solve `C - A` for
+        // both unknowns). Canonical forms carry one term per atom and the
+        // type walk visits each atom once, so a bare occurrence exists
+        // exactly when mentions exceed form memberships.
+        if !static_symbols.is_empty() {
+            determined.retain(|symbol| !static_symbols.contains(symbol));
+            let mut mentions: FxHashMap<Symbol, usize> = FxHashMap::default();
+            let mut forms: Vec<crate::types::ty::StaticInt> = vec![];
+            let _ = scheme
+                .ty
+                .try_visit(&mut |ty: &Ty| -> std::ops::ControlFlow<()> {
+                    match ty {
+                        Ty::Param(param) if static_symbols.contains(param) => {
+                            *mentions.entry(*param).or_default() += 1;
+                        }
+                        Ty::Static(StaticValue::Int(int)) => forms.push(int.clone()),
+                        _ => {}
+                    }
+                    std::ops::ControlFlow::Continue(())
+                });
+            let mut memberships: FxHashMap<Symbol, usize> = FxHashMap::default();
+            for form in &forms {
+                for (atom, _) in &form.terms {
+                    if let crate::types::ty::StaticAtom::Param(param) = atom
+                        && static_symbols.contains(param)
+                    {
+                        *memberships.entry(*param).or_default() += 1;
+                    }
+                }
+            }
+            let mut solved: FxHashSet<Symbol> = static_symbols
+                .iter()
+                .copied()
+                .filter(|param| {
+                    mentions.get(param).copied().unwrap_or(0)
+                        > memberships.get(param).copied().unwrap_or(0)
+                })
+                .collect();
+            // Declared static equalities are affine equations too
+            // (`lhs - rhs = 0`), usable for solving but not occurrences.
+            for predicate in &declared.predicates {
+                if let Predicate::StaticCmp {
+                    op: crate::types::ty::StaticCmpOp::Eq,
+                    lhs,
+                    rhs,
+                } = predicate
+                    && let (Some(lhs), Some(rhs)) = (
+                        crate::types::ty::StaticInt::from_ty(lhs),
+                        crate::types::ty::StaticInt::from_ty(rhs),
+                    )
+                {
+                    forms.push(lhs.sub(&rhs));
+                }
+            }
+            // Fixpoint: a form whose only unsolved atom is one declared
+            // static param at unit coefficient has a unique integer
+            // solution given the others.
+            let mut changed = true;
+            while changed {
+                changed = false;
+                for form in &forms {
+                    let mut unknowns = form.terms.iter().filter(|(atom, _)| match atom {
+                        crate::types::ty::StaticAtom::Param(param) => {
+                            static_symbols.contains(param) && !solved.contains(param)
+                        }
+                        crate::types::ty::StaticAtom::Var(_) => true,
+                    });
+                    let (first, second) = (unknowns.next(), unknowns.next());
+                    if second.is_none()
+                        && let Some((crate::types::ty::StaticAtom::Param(param), coeff)) = first
+                        && (*coeff == 1.into() || *coeff == (-1).into())
+                    {
+                        changed |= solved.insert(*param);
+                    }
+                }
+            }
+            determined.extend(solved);
+        }
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for predicate in &declared.predicates {
+                let Predicate::TypeEq(lhs, rhs) = predicate else {
+                    continue;
+                };
+                let mut lhs_params = FxHashSet::default();
+                let mut rhs_params = FxHashSet::default();
+                collect_ty_params(lhs, Some(&declared_symbols), &mut lhs_params);
+                collect_ty_params(rhs, Some(&declared_symbols), &mut rhs_params);
+                let lhs_known = lhs_params.iter().any(|param| determined.contains(param));
+                let rhs_known = rhs_params.iter().any(|param| determined.contains(param));
+                // Mention-based propagation is only sound for type
+                // params; statics go through the affine fixpoint above.
+                if lhs_known {
+                    for param in rhs_params {
+                        if !static_symbols.contains(&param) {
+                            changed |= determined.insert(param);
+                        }
+                    }
+                }
+                if rhs_known {
+                    for param in lhs_params {
+                        if !static_symbols.contains(&param) {
+                            changed |= determined.insert(param);
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut errors = vec![];
+        for (symbol, node) in &declared.param_nodes {
+            if constrained.contains(symbol) && !determined.contains(symbol) {
+                errors.push((
+                    TypeError::AmbiguousTypeParameter {
+                        param: symbol.to_string(),
+                    },
+                    *node,
+                ));
+            }
+        }
+        errors
+    }
+
+    /// Create member skeletons for a struct's methods and initializers and
+    /// queue their bodies. Returns (Self type, member work list).
+    pub(super) fn prepare_nominal_members(
+        &mut self,
+        symbol: Symbol,
+        decl: &'a Decl,
+    ) -> (Ty, Vec<(Symbol, MemberWork<'a>)>) {
+        let params = self
+            .catalog
+            .structs
+            .get(&symbol)
+            .map(|info| info.params.clone())
+            .or_else(|| {
+                self.catalog
+                    .enums
+                    .get(&symbol)
+                    .map(|info| info.params.clone())
+            })
+            .unwrap_or_default();
+        let self_ty = Ty::Nominal(symbol, params.iter().map(|p| Ty::Param(p.symbol)).collect());
+
+        let mut work = vec![];
+        let (DeclKind::Struct { body, .. } | DeclKind::Enum { body, .. }) = &decl.kind else {
+            return (self_ty, work);
+        };
+        for member in &body.decls {
+            match &member.kind {
+                DeclKind::Method { func, .. } => {
+                    if let Ok(method) = func.name.symbol() {
+                        work.push((method, MemberWork::Method(func)));
+                    }
+                }
+                DeclKind::Init { name, params, body } => {
+                    if let Ok(init) = name.symbol() {
+                        work.push((
+                            init,
+                            MemberWork::Init {
+                                params,
+                                body,
+                                node: member.id,
+                            },
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (member_symbol, _) in &work {
+            if !self.mono.contains_key(member_symbol) {
+                let var = Ty::Var(self.store.fresh_ty(self.level, decl.id));
+                self.mono.insert(*member_symbol, var);
+            }
+        }
+        (self_ty, work)
+    }
+}
+
+/// The effect labels `_with_host` discharges: the declared row of its
+/// callback parameter (through the borrow-by-default wrapper if the
+/// parameter is not consuming).
+fn host_discharged_effects(scheme_ty: &Ty) -> std::collections::BTreeSet<Symbol> {
+    let empty = std::collections::BTreeSet::new;
+    let Ty::Func(params, _, _) = scheme_ty else {
+        return empty();
+    };
+    let mut body = match params.first() {
+        Some(param) => param,
+        None => return empty(),
+    };
+    while let Ty::Borrow(_, inner) = body {
+        body = inner;
+    }
+    let Ty::Func(_, _, row) = body else {
+        return empty();
+    };
+    row.effects.iter().map(|entry| entry.effect).collect()
+}

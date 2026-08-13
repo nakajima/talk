@@ -16,7 +16,10 @@ use std::path::{Path, PathBuf};
 // 2: ADR 0053 — module images carry uncarved fact slices (private
 // declarations included; amendments to foreign entities travel; derived
 // indexes stripped).
-pub const FORMAT_VERSION: u64 = 2;
+// 3: ADR 0057 — TypeOutput sheds its NodeID tables (facts bake onto the
+// typed tree; blocked-file facts and graft aliases travel with
+// TypedProgram; Expr carries selected_callable).
+pub const FORMAT_VERSION: u64 = 3;
 
 /// How many stamped versions of one stem to retain. Compiler builds
 /// coexist across checkouts; older stamps are cleaned on store.

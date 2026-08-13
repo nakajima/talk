@@ -484,6 +484,50 @@ pub enum IoOp {
     FileSize,
 }
 
+impl IoOp {
+    /// Every operation, in declaration order. This order is the wire
+    /// format: core's `IORequest` variant order, the bytecode encoding,
+    /// and the runtime operation table all index into it.
+    pub const ALL: [IoOp; 28] = [
+        IoOp::Read,
+        IoOp::Write,
+        IoOp::Open,
+        IoOp::Close,
+        IoOp::Sleep,
+        IoOp::Poll,
+        IoOp::Ctl,
+        IoOp::Socket,
+        IoOp::Bind,
+        IoOp::Listen,
+        IoOp::Connect,
+        IoOp::Accept,
+        IoOp::CwdLen,
+        IoOp::CwdCopy,
+        IoOp::GetenvLen,
+        IoOp::GetenvCopy,
+        IoOp::Argc,
+        IoOp::ArgLen,
+        IoOp::ArgCopy,
+        IoOp::DirCount,
+        IoOp::DirEntryKind,
+        IoOp::DirEntryLen,
+        IoOp::DirEntryCopy,
+        IoOp::Exit,
+        IoOp::RealpathLen,
+        IoOp::RealpathCopy,
+        IoOp::Seek,
+        IoOp::FileSize,
+    ];
+
+    pub fn from_index(index: u8) -> Option<IoOp> {
+        Self::ALL.get(usize::from(index)).copied()
+    }
+
+    pub fn index(self) -> u8 {
+        self as u8
+    }
+}
+
 #[derive(Debug)]
 pub struct Chunk {
     pub name: String,

@@ -1201,38 +1201,8 @@ impl Lowering<'_> {
             }
             Inst::Io { dest, op, a, b, c } => {
                 // Core `IORequest` variant order maps one-to-one onto the
-                // runtime operation table.
-                const IO_OPS: [IoOp; 28] = [
-                    IoOp::Read,
-                    IoOp::Write,
-                    IoOp::Open,
-                    IoOp::Close,
-                    IoOp::Sleep,
-                    IoOp::Poll,
-                    IoOp::Ctl,
-                    IoOp::Socket,
-                    IoOp::Bind,
-                    IoOp::Listen,
-                    IoOp::Connect,
-                    IoOp::Accept,
-                    IoOp::CwdLen,
-                    IoOp::CwdCopy,
-                    IoOp::GetenvLen,
-                    IoOp::GetenvCopy,
-                    IoOp::Argc,
-                    IoOp::ArgLen,
-                    IoOp::ArgCopy,
-                    IoOp::DirCount,
-                    IoOp::DirEntryKind,
-                    IoOp::DirEntryLen,
-                    IoOp::DirEntryCopy,
-                    IoOp::Exit,
-                    IoOp::RealpathLen,
-                    IoOp::RealpathCopy,
-                    IoOp::Seek,
-                    IoOp::FileSize,
-                ];
-                let Some(op) = IO_OPS.get(usize::from(*op)).copied() else {
+                // runtime operation table (`IoOp::ALL`).
+                let Some(op) = IoOp::from_index(*op) else {
                     return Err(BackendError::new(
                         "backend bug: io operation out of range".into(),
                     ));

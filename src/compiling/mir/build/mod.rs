@@ -12,6 +12,8 @@ use rustc_hash::FxHashMap;
 use crate::compiling::typed_program::TypedProgram;
 use crate::name::Name;
 mod entries;
+mod flow;
+mod ownership;
 pub(crate) mod escape;
 mod glue;
 pub(crate) mod layout;
@@ -443,10 +445,6 @@ fn contains_object(builder: &ProgramBuilder<'_>, ty: &Ty) -> bool {
     computed
 }
 
-/// Frame-level (depth-0) variable use counts: the liveness source for
-/// last-use borrow tracking and loop-carried move checks. This is
-/// ownership-dataflow input, MIR's own concern — the semantic capture
-/// and cell facts arrive published on frame-root blocks (ADR 0038).
 /// The fail-closed rejection for a frame-anchored closure reaching an
 /// edge that outlives its environment (deferred: emission sites are
 /// infallible instruction sinks).
@@ -456,54 +454,6 @@ fn anchored_escape() -> BackendError {
             .into(),
         Span::SYNTHESIZED,
     )
-}
-
-fn frame_uses(nodes: &[&Node]) -> FxHashMap<Symbol, usize> {
-    use derive_visitor::{Drive, Visitor};
-    #[derive(Visitor)]
-    #[visitor(Expr(enter, exit), Decl(enter, exit))]
-    struct Scan {
-        depth: usize,
-        uses: FxHashMap<Symbol, usize>,
-    }
-    impl Scan {
-        fn enter_expr(&mut self, expr: &Expr) {
-            if matches!(expr.kind, ExprKind::Func(_)) {
-                self.depth += 1;
-            } else if let ExprKind::Variable(Name::Resolved(symbol, _)) = &expr.kind
-                && self.depth == 0
-            {
-                *self.uses.entry(*symbol).or_insert(0) += 1;
-            }
-        }
-        fn exit_expr(&mut self, expr: &Expr) {
-            if matches!(expr.kind, ExprKind::Func(_)) {
-                self.depth -= 1;
-            }
-        }
-        fn enter_decl(&mut self, decl: &Decl) {
-            if matches!(decl.kind, DeclKind::Func(_)) {
-                self.depth += 1;
-            }
-        }
-        fn exit_decl(&mut self, decl: &Decl) {
-            if matches!(decl.kind, DeclKind::Func(_)) {
-                self.depth -= 1;
-            }
-        }
-    }
-    let mut scan = Scan {
-        depth: 0,
-        uses: FxHashMap::default(),
-    };
-    for node in nodes {
-        match node {
-            Node::Expr(expr) => expr.drive(&mut scan),
-            Node::Stmt(stmt) => stmt.drive(&mut scan),
-            Node::Decl(decl) => decl.drive(&mut scan),
-        }
-    }
-    scan.uses
 }
 
 /// The closure-environment contract, bind side (mirror of
@@ -1142,10 +1092,9 @@ fn display_names(programs: &[ProgramInput<'_>]) -> DisplayNames {
     let mut names = DisplayNames::default();
     for input in programs {
         let types = input.program.types();
-        let resolved = input.program.resolved_names();
+        let resolved = input.program.symbol_names();
         let name_of = |symbol: &Symbol| {
             resolved
-                .symbol_names
                 .get(symbol)
                 .cloned()
                 .unwrap_or_else(|| format!("{symbol:?}"))
@@ -1752,7 +1701,7 @@ impl<'a> ProgramBuilder<'a> {
                 self.programs
                     .iter()
                     .find_map(|input| {
-                        input.program.resolved_names().symbol_names.iter().find_map(
+                        input.program.symbol_names().iter().find_map(
                             |(candidate, name)| (*candidate == symbol).then(|| name.clone()),
                         )
                     })
@@ -2103,8 +2052,7 @@ impl<'a> ProgramBuilder<'a> {
             .find_map(|input| {
                 input
                     .program
-                    .resolved_names()
-                    .symbol_names
+                    .symbol_names()
                     .iter()
                     .find_map(|(candidate, name)| (*candidate == symbol).then(|| name.clone()))
             })
@@ -2433,14 +2381,12 @@ impl<'a> ProgramBuilder<'a> {
         // Assignment conversion: mutable locals shared with closures
         // become cells; celled parameters re-bind through a cell. The
         // capture and cell facts come published on the frame root.
-        let body_nodes: Vec<&Node> = body.body.iter().collect();
         let facts = body
             .frame
             .as_ref()
             .expect("typed facts invariant: a function body carries frame facts");
         fx.celled = facts.celled.clone();
         fx.nested_refs = facts.nested_refs.clone();
-        fx.use_counts = frame_uses(&body_nodes);
         fx.cell_celled_params(params);
 
         let width = fx.writeback_params.len();
@@ -2476,25 +2422,11 @@ impl<'a> ProgramBuilder<'a> {
 
 /// One compiled control-flow arm awaiting its join: where it ended, its
 /// value, and the ownership state it finished with.
-/// One live borrow: the view symbol (for liveness), its display name,
-/// the owner's local, and whether the loan is exclusive.
-struct Loan {
-    view_symbol: Symbol,
-    view_name: String,
-    root: LocalId,
-    exclusive: bool,
-    /// Loop depth at creation: inside a deeper loop the view's uses
-    /// recur with the iterations, so the loan stays live through the
-    /// whole loop whatever the syntactic use count says (liveness over
-    /// back edges — the non-lexical-lifetimes lesson, RFC 2094).
-    loop_depth: usize,
-}
 
 struct ArmEnd {
     block: BlockId,
     value: Operand,
     moved: rustc_hash::FxHashSet<LocalId>,
-    moved_globals: rustc_hash::FxHashSet<u32>,
     temps: Vec<LocalId>,
 }
 
@@ -2553,8 +2485,11 @@ struct FunctionBuilder<'p, 'a> {
     blocks: Vec<BlockData>,
     current: BlockId,
     loop_stack: Vec<LoopFrame>,
-    /// Lexical scopes of droppable owned locals, in declaration order
-    /// (structural drops, ADR 0017/0030).
+    /// Lexical scopes of droppable owned locals, in declaration order.
+    /// Read only at block exit: a block whose tail value is one of its
+    /// own scope's bindings hands it to the enclosing statement as a
+    /// temporary instead of stranding it (the drops themselves are the
+    /// release planner's, ADR 0017/0030).
     scopes: Vec<Vec<LocalId>>,
     /// Locals whose value moved out (no scope-exit drop).
     moved: rustc_hash::FxHashSet<LocalId>,
@@ -2598,13 +2533,6 @@ struct FunctionBuilder<'p, 'a> {
     /// until first assignment, and reads while still moved report as
     /// uninitialized rather than moved.
     uninitialized: rustc_hash::FxHashSet<LocalId>,
-    /// Closure values whose environments reference frame-anchored state
-    /// (borrowed receivers, snapshot captures released at scope exit).
-    /// They may be called and passed as borrowed arguments freely, but
-    /// storing or returning one would outlive its environment, so those
-    /// edges fail closed. `push`/`terminate` propagate the mark through
-    /// copies and block-parameter edges.
-    anchored_closures: rustc_hash::FxHashSet<LocalId>,
     /// Symbols this frame assignment-converts to cells (see `cell_scan`).
     celled: rustc_hash::FxHashSet<Symbol>,
     /// Symbols referenced under a nested function value in this frame —
@@ -2613,27 +2541,21 @@ struct FunctionBuilder<'p, 'a> {
     /// Locals holding cell handles: reads go through CellGet, writes
     /// through CellSet, and captures pass the (copyable) handle.
     cell_handles: rustc_hash::FxHashSet<LocalId>,
-    /// Globals whose values were consumed (moved) in this frame: later
-    /// reads reject until a reassignment restores them.
-    moved_globals: rustc_hash::FxHashSet<u32>,
     /// Borrow provenance: a view maps to the frame local it derives
-    /// from, so moving or reassigning the owner invalidates the view
-    /// and returning it out of the owning frame rejects.
+    /// from. The elaborator's liveness aliases views to their roots
+    /// through it, and returning a view of a frame-owned binding
+    /// rejects (CHG-04). Flat by construction: `record_view` resolves
+    /// the root at insert time and keys are always fresh locals.
     borrow_roots: FxHashMap<LocalId, LocalId>,
-    /// Views whose owner moved or was reassigned: reads reject.
-    invalidated_views: rustc_hash::FxHashSet<LocalId>,
     /// Locals whose type is itself a borrowed view: the only ones
     /// invalidation can strike (owned donations carry provenance for
     /// chain derivation but own their copies).
     view_locals: rustc_hash::FxHashSet<LocalId>,
-    /// Frame-level variable use counts, decremented at each compiled
-    /// read: a loan is live while its view has uses remaining
-    /// (last-use liveness, RFC 2094's model in source order).
-    use_counts: FxHashMap<Symbol, usize>,
-    /// Live loans: reading a mut-borrowed owner, mutating a
-    /// shared-borrowed one, or moving any borrowed owner rejects while
-    /// the loan is live.
-    loans: Vec<Loan>,
+    /// Ownership sites awaiting the elaborator (docs/ownership.md): the
+    /// walk records consumes, displacements, writeback bases, loans, and
+    /// owned reads; `ownership::elaborate_ownership` decides them over
+    /// the finished CFG.
+    ownership_sites: ownership::OwnershipSites,
     /// The frame's declared result type: returns donate references for
     /// place reads the frame does not own, like any owned sink.
     return_ty: Option<Ty>,
@@ -2648,6 +2570,9 @@ struct FunctionBuilder<'p, 'a> {
     /// function would call itself forever); nested occurrences of the
     /// same type are real recursion and do share.
     drop_glue_root: Option<Ty>,
+    /// `drop_glue_root`'s retain twin: the type whose `Glue::Retain`
+    /// body this builder is compiling, if any.
+    retain_glue_root: Option<Ty>,
     /// The nominal types whose structural drop expansion is currently
     /// open on this builder's call stack. Concrete recursive types never
     /// appear here (their nested occurrences route through the shared
@@ -2660,13 +2585,6 @@ struct FunctionBuilder<'p, 'a> {
     /// tests are only reachable on paths where no arm body has run,
     /// so one `GetTag` serves the whole match.
     match_tag_cache: FxHashMap<LocalId, LocalId>,
-    /// The frame's unwind cleanup chain, outermost value first: each
-    /// node's block drops one live value and jumps toward the outermost,
-    /// which ends the walk with `UnwindRet`. Call sites reuse the chain
-    /// as long as the live set below them is unchanged; a consumed
-    /// mid-stack value invalidates only the nodes above it. Sound
-    /// without runtime drop flags because `merge_arms` reconciles moves
-    /// at every join — the owned live set is path-independent.
     /// Building an abort-unwind cleanup block: exceptional teardown may
     /// drop linear values (the abort IS their consumption).
     in_unwind_cleanup: bool,
@@ -2733,20 +2651,17 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             param_requirements: rustc_hash::FxHashMap::default(),
             captured_locals: rustc_hash::FxHashSet::default(),
             uninitialized: rustc_hash::FxHashSet::default(),
-            anchored_closures: rustc_hash::FxHashSet::default(),
             celled: rustc_hash::FxHashSet::default(),
             nested_refs: rustc_hash::FxHashSet::default(),
             cell_handles: rustc_hash::FxHashSet::default(),
-            moved_globals: rustc_hash::FxHashSet::default(),
             borrow_roots: FxHashMap::default(),
-            invalidated_views: rustc_hash::FxHashSet::default(),
             view_locals: rustc_hash::FxHashSet::default(),
-            use_counts: FxHashMap::default(),
-            loans: Vec::new(),
+            ownership_sites: ownership::OwnershipSites::default(),
             return_ty: None,
             consuming_receiver: false,
             param_floor: 0,
             drop_glue_root: None,
+            retain_glue_root: None,
             drop_expansion_stack: Vec::new(),
             match_tag_cache: FxHashMap::default(),
             in_unwind_cleanup: false,
@@ -2769,10 +2684,18 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// balance verifier. A terminated block discards instructions in
     /// [`Self::push`]; the log mirrors that, or post-return flushes
     /// would record drops that were never emitted.
+    fn next_ownership_seq(&mut self) -> u32 {
+        let seq = self.ownership_sites.next_seq;
+        self.ownership_sites.next_seq += 1;
+        seq
+    }
+
     fn record_flow(&mut self, event: verify::FlowEvent) {
         if self.terminated() {
             return;
         }
+        let seq = self.next_ownership_seq();
+        self.ownership_sites.event_seqs.push(seq);
         self.flow_events.push(verify::FlowRecord {
             block: self.current,
             index: self.blocks[self.current].insts.len() as u32,
@@ -2950,6 +2873,19 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             self.emit_return(value);
         }
         self.elaborate_and_verify();
+        // The computed flow checks (ADR 0057): escape and linear-global
+        // rules replay over the finished CFG. The drain below surfaces
+        // the LAST pushed error, so push these reversed — the earliest
+        // flow violation is what the old inline checks reported first.
+        let flow_errors = flow::check(&self.blocks, &self.flow_events, |slot| {
+            self.program_builder
+                .global_slots
+                .iter()
+                .find(|(_, bound)| **bound == slot)
+                .map(|(symbol, _)| self.program_builder.display_name(*symbol))
+                .unwrap_or_else(|| format!("global {slot}"))
+        });
+        self.deferred_errors.extend(flow_errors.into_iter().rev());
         self.deferred_error()?;
         let debug_names = self.take_debug_names();
         Ok((
@@ -2990,6 +2926,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // ownership plan rather than any statement, so they carry no
         // source span (a stale one would misattribute them).
         self.current_span = Span::SYNTHESIZED;
+        // Ownership decisions first (docs/ownership.md): the elaborator
+        // fixes every donate/move/displace over the finished CFG and
+        // appends the events the planner and verifier consume.
+        self.elaborate_ownership();
         let plan = release::plan(&self.blocks, &self.flow_events);
         // An equalization edge on an init-field shadow IS divergence:
         // the field was assigned on one join predecessor and not the
@@ -3056,8 +2996,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
     }
 
-    /// Drop every live owned local (all scopes, reverse declaration order)
-    /// except the returned value, then return. `mut` receivers and `mut`
+    /// Return the frame's value (the release planner drops every other
+    /// live owned local on the way out). `mut` receivers and `mut`
     /// parameters return `(result, final values…)` for the caller's
     /// writeback.
     fn emit_return(&mut self, value: Operand) {
@@ -3215,36 +3155,18 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         self.terminate(Term::Trap("unreachable after discontinue"));
     }
 
-    /// Emit scope-exit drops for every scope at depth >= `depth`, without
-    /// popping them (the frames stay for the enclosing structure).
-    /// Release a replaced value — or, while a live view roots at it,
-    /// displace it to scope exit under a fresh anonymous binding so the
-    /// view keeps reading the old value (snapshot semantics; the shape
-    /// of Rust's temporary lifetime extension applied to reassignment).
-    fn displace_or_drop(&mut self, local: LocalId, ty: &Ty) {
-        if self.has_live_view(local) {
-            let displaced = self.fresh_local();
-            self.push(Inst::Copy {
-                dest: displaced,
-                src: Operand::Local(local),
-            });
-            self.record_flow(verify::FlowEvent::Move(local));
-            self.own_local(displaced, ty);
-            // The views now root at the displaced value: the owner's
-            // next value starts with no views of its own.
-            let views: Vec<LocalId> = self
-                .borrow_roots
-                .iter()
-                .filter(|(_, root)| **root == local)
-                .map(|(view, _)| *view)
-                .collect();
-            for view in views {
-                self.borrow_roots.insert(view, displaced);
-            }
-            return;
-        }
-        self.record_flow(verify::FlowEvent::Drop(local));
-        self.drop_value(Operand::Local(local), ty);
+    /// Record a replaced value for the elaborator: it releases the old
+    /// value — or, while a live view roots at it, displaces it to scope
+    /// exit under a fresh anonymous binding so the view keeps reading
+    /// the old value (snapshot semantics; the shape of Rust's temporary
+    /// lifetime extension applied to reassignment).
+    fn record_displacement(&mut self, local: LocalId, ty: &Ty) {
+        self.record_ownership_site(
+            local,
+            ty.clone(),
+            ownership::SiteKind::Displace,
+            Span::SYNTHESIZED,
+        );
     }
 
     /// Structural teardown: RawPtr fields are refcounted buffers and free
@@ -3424,169 +3346,120 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let Some(fields) = self.program_builder.field_types(*symbol, args) else {
                     return;
                 };
+                // Stored slots own: a borrow-typed field releases its
+                // referent (owning stored views). A RawPtr field frees
+                // its allocation instead of recursing.
+                let stripped: Vec<Ty> = fields
+                    .iter()
+                    .map(|field| strip_borrows(field.clone()))
+                    .collect();
                 let container = self.container_layout(&ty);
-                for (index, field_ty) in fields.iter().enumerate().rev() {
-                    // Stored slots own: a borrow-typed field releases
-                    // its referent (owning stored views).
-                    let field_ty = &strip_borrows(field_ty.clone());
-                    let field_is_ptr =
-                        matches!(field_ty, Ty::Nominal(head, _) if *head == Symbol::RawPtr);
-                    if field_is_ptr {
-                        let field = self.fresh_local();
-                        self.push_field(
-                            field,
-                            value,
-                            container,
-                            u16::try_from(index).unwrap_or_default(),
-                            None,
-                        );
-                        self.push(Inst::Free {
-                            src: Operand::Local(field),
-                        });
-                        continue;
-                    }
-                    if !needs_drop(self.program_builder, field_ty) {
-                        continue;
-                    }
-                    let field = self.fresh_local();
-                    self.push_field(
-                        field,
-                        value,
-                        container,
-                        u16::try_from(index).unwrap_or_default(),
-                        None,
-                    );
-                    self.drop_value(Operand::Local(field), field_ty);
-                }
+                let _ = self.each_member(
+                    value,
+                    container,
+                    &stripped,
+                    true,
+                    |this, member| {
+                        matches!(member, Ty::Nominal(head, _) if *head == Symbol::RawPtr)
+                            || needs_drop(this.program_builder, member)
+                    },
+                    |this, member, member_ty| {
+                        if matches!(member_ty, Ty::Nominal(head, _) if *head == Symbol::RawPtr) {
+                            this.push(Inst::Free { src: member });
+                        } else {
+                            this.drop_value(member, member_ty);
+                        }
+                        Ok(())
+                    },
+                );
             }
-            Ty::Tuple(items) => {
+            Ty::Tuple(_) | Ty::Record(_) => {
+                let members: Vec<Ty> = match &ty {
+                    Ty::Tuple(items) => items.clone(),
+                    Ty::Record(row) => row.fields.iter().map(|(_, ty)| ty.clone()).collect(),
+                    _ => unreachable!(),
+                };
+                let stripped: Vec<Ty> = members
+                    .iter()
+                    .map(|member| strip_borrows(member.clone()))
+                    .collect();
                 let container = self.container_layout(&ty);
-                for (index, item_ty) in items.iter().enumerate().rev() {
-                    let item_ty = &strip_borrows(item_ty.clone());
-                    if !needs_drop(self.program_builder, item_ty) {
-                        continue;
-                    }
-                    let item = self.fresh_local();
-                    self.push_field(
-                        item,
-                        value,
-                        container,
-                        u16::try_from(index).unwrap_or_default(),
-                        None,
-                    );
-                    self.drop_value(Operand::Local(item), item_ty);
-                }
-            }
-            Ty::Record(row) => {
-                let container = self.container_layout(&ty);
-                for (index, (_, item_ty)) in row.fields.iter().enumerate().rev() {
-                    let item_ty = &strip_borrows(item_ty.clone());
-                    if !needs_drop(self.program_builder, item_ty) {
-                        continue;
-                    }
-                    let item = self.fresh_local();
-                    self.push_field(
-                        item,
-                        value,
-                        container,
-                        u16::try_from(index).unwrap_or_default(),
-                        None,
-                    );
-                    self.drop_value(Operand::Local(item), item_ty);
-                }
+                let _ = self.each_member(
+                    value,
+                    container,
+                    &stripped,
+                    true,
+                    |this, member| needs_drop(this.program_builder, member),
+                    |this, member, member_ty| {
+                        this.drop_value(member, member_ty);
+                        Ok(())
+                    },
+                );
             }
             _ => {}
         }
         self.drop_expansion_stack.pop();
     }
 
-    /// Enum payload drops dispatch on the tag: one arm per variant with
-    /// owned payloads, joining back after.
-    fn drop_enum_value(
+    /// Visit each member of an aggregate value whose type satisfies
+    /// `relevant`: one `push_field` per selected member, in declaration
+    /// order or reversed. The ONE member-iteration shape the ownership
+    /// walks share (ADR 0057 slice 4) — offset selection lives only
+    /// here, so a forgot-to-visit or offset-by-one bug cannot grow in
+    /// one walk and not another.
+    fn each_member(
         &mut self,
         value: Operand,
         container: layout::LayoutId,
-        payloads: Vec<Vec<Ty>>,
-    ) {
-        // Stored views own: a borrow-typed payload releases its referent
-        // like any other stored reference.
-        let payloads: Vec<Vec<Ty>> = payloads
-            .into_iter()
-            .map(|tys| tys.into_iter().map(strip_borrows).collect())
-            .collect();
-        let any_droppable = payloads.iter().any(|payload_tys| {
-            payload_tys
-                .iter()
-                .any(|payload| needs_drop(self.program_builder, payload))
-        });
-        if !any_droppable {
-            return;
+        members: &[Ty],
+        reverse: bool,
+        relevant: impl Fn(&Self, &Ty) -> bool,
+        mut visit: impl FnMut(&mut Self, Operand, &Ty) -> Result<(), BackendError>,
+    ) -> Result<(), BackendError> {
+        let mut order: Vec<usize> = (0..members.len()).collect();
+        if reverse {
+            order.reverse();
         }
-        let join = self.new_block();
-        let tag = self.fresh_local();
-        self.push(Inst::GetTag {
-            dest: tag,
-            src: value,
-        });
-        for (variant_tag, payload_tys) in payloads.iter().enumerate() {
-            let droppable: Vec<(usize, &Ty)> = payload_tys
-                .iter()
-                .enumerate()
-                .filter(|(_, payload)| needs_drop(self.program_builder, payload))
-                .collect();
-            if droppable.is_empty() {
+        for index in order {
+            let member_ty = &members[index];
+            if !relevant(self, member_ty) {
                 continue;
             }
-            let arm = self.new_block();
-            let next = self.new_block();
-            self.branch_if_equal(
-                ScalarOp::IntCmp(CmpKind::Eq),
-                Operand::Local(tag),
-                Operand::Const(Constant::Int(
-                    i64::try_from(variant_tag).unwrap_or_default(),
-                )),
-                arm,
-                next,
+            let member = self.fresh_local();
+            self.push_field(
+                member,
+                value,
+                container,
+                u16::try_from(index).unwrap_or_default(),
+                None,
             );
-            self.switch_to(arm);
-            for (index, payload_ty) in droppable.iter().rev() {
-                let payload = self.fresh_local();
-                self.push_field(
-                    payload,
-                    value,
-                    container,
-                    u16::try_from(*index).unwrap_or_default(),
-                    Some(u16::try_from(variant_tag).unwrap_or_default()),
-                );
-                self.drop_value(Operand::Local(payload), payload_ty);
-            }
-            self.terminate(Term::Goto(join, Vec::new()));
-            self.switch_to(next);
+            visit(self, Operand::Local(member), member_ty)?;
         }
-        self.terminate(Term::Goto(join, Vec::new()));
-        self.switch_to(join);
+        Ok(())
     }
 
-    /// Enum payload retains dispatch on the tag: one arm per variant with
-    /// buffer-carrying payloads, joining back after (`drop_enum_value`'s
-    /// mirror for CheapClone).
-    fn retain_enum_value(
+    /// Tag-dispatched walk over an enum value's payload elements: one
+    /// arm per variant with elements satisfying `relevant`, joining back
+    /// after. Stored views own, so payload types are borrow-stripped
+    /// before selection. `each_member`'s enum twin — drop and retain
+    /// glue differ only in predicate, per-element action, and order.
+    fn each_enum_payload(
         &mut self,
         value: Operand,
         container: layout::LayoutId,
         payloads: Vec<Vec<Ty>>,
-        span: Span,
+        reverse: bool,
+        relevant: impl Fn(&Self, &Ty) -> bool,
+        mut visit: impl FnMut(&mut Self, Operand, &Ty) -> Result<(), BackendError>,
     ) -> Result<(), BackendError> {
         let payloads: Vec<Vec<Ty>> = payloads
             .into_iter()
             .map(|tys| tys.into_iter().map(strip_borrows).collect())
             .collect();
-        let any_retained = payloads.iter().any(|payload_tys| {
-            payload_tys
-                .iter()
-                .any(|payload| donates(self.program_builder, payload))
-        });
-        if !any_retained {
+        let any_relevant = payloads
+            .iter()
+            .any(|payload_tys| payload_tys.iter().any(|payload| relevant(self, payload)));
+        if !any_relevant {
             return Ok(());
         }
         let join = self.new_block();
@@ -3596,13 +3469,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             src: value,
         });
         for (variant_tag, payload_tys) in payloads.iter().enumerate() {
-            let retained: Vec<(usize, &Ty)> = payload_tys
+            let mut selected: Vec<(usize, &Ty)> = payload_tys
                 .iter()
                 .enumerate()
-                .filter(|(_, payload)| donates(self.program_builder, payload))
+                .filter(|(_, payload)| relevant(self, payload))
                 .collect();
-            if retained.is_empty() {
+            if selected.is_empty() {
                 continue;
+            }
+            if reverse {
+                selected.reverse();
             }
             let arm = self.new_block();
             let next = self.new_block();
@@ -3616,16 +3492,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 next,
             );
             self.switch_to(arm);
-            for (index, payload_ty) in retained.iter() {
+            for (index, payload_ty) in selected {
                 let payload = self.fresh_local();
                 self.push_field(
                     payload,
                     value,
                     container,
-                    u16::try_from(*index).unwrap_or_default(),
+                    u16::try_from(index).unwrap_or_default(),
                     Some(u16::try_from(variant_tag).unwrap_or_default()),
                 );
-                self.retain_value(Operand::Local(payload), payload_ty, span)?;
+                visit(self, Operand::Local(payload), payload_ty)?;
             }
             self.terminate(Term::Goto(join, Vec::new()));
             self.switch_to(next);
@@ -3635,22 +3511,52 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         Ok(())
     }
 
-    /// A consumer takes ownership of an operand: temps stop being
-    /// statement-scoped, owned locals become moved. `'heap` handles have
-    /// reference semantics — consuming a bound handle copies it and takes
-    /// a fresh region claim instead of moving.
-    /// The frame local a view ultimately derives from.
+    /// Enum payload drops dispatch on the tag, reverse declaration
+    /// order within an arm.
+    fn drop_enum_value(
+        &mut self,
+        value: Operand,
+        container: layout::LayoutId,
+        payloads: Vec<Vec<Ty>>,
+    ) {
+        let _ = self.each_enum_payload(
+            value,
+            container,
+            payloads,
+            true,
+            |this, payload| needs_drop(this.program_builder, payload),
+            |this, payload, payload_ty| {
+                this.drop_value(payload, payload_ty);
+                Ok(())
+            },
+        );
+    }
+
+    /// Enum payload retains dispatch on the tag (`drop_enum_value`'s
+    /// retain mirror), declaration order within an arm.
+    fn retain_enum_value(
+        &mut self,
+        value: Operand,
+        container: layout::LayoutId,
+        payloads: Vec<Vec<Ty>>,
+        span: Span,
+    ) -> Result<(), BackendError> {
+        self.each_enum_payload(
+            value,
+            container,
+            payloads,
+            false,
+            |this, payload| donates(this.program_builder, payload),
+            |this, payload, payload_ty| this.retain_value(payload, payload_ty, span),
+        )
+    }
+
+    /// The frame local a view ultimately derives from. One lookup
+    /// suffices: `record_view` resolves the source's root at insert time
+    /// and every key is a fresh local, so the map is flat by
+    /// construction (the elaborator's `view_root_of` relies on this).
     fn borrow_root(&self, local: LocalId) -> LocalId {
-        let mut current = local;
-        let mut hops = 0;
-        while let Some(next) = self.borrow_roots.get(&current) {
-            if *next == current || hops > 64 {
-                break;
-            }
-            current = *next;
-            hops += 1;
-        }
-        current
+        self.borrow_roots.get(&local).copied().unwrap_or(local)
     }
 
     /// Record a view's owner (call results with borrowed types).
@@ -3671,104 +3577,95 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
     }
 
-    /// A loan is live while its view still has uses ahead.
-    /// Whether a live view (a `Borrowed`-classified value whose symbol
-    /// still has uses) roots at this local. Consuming or reassigning
-    /// such an owner must keep the referent alive — snapshot semantics
-    /// (docs/ownership.md, rule 2's frame-local half).
-    fn has_live_view(&self, root: LocalId) -> bool {
-        self.borrow_roots.iter().any(|(view, candidate_root)| {
-            *candidate_root == root
-                && self.view_locals.contains(view)
-                && !self.invalidated_views.contains(view)
-                && self
-                    .locals
-                    .iter()
-                    .find(|(_, local)| *local == view)
-                    .is_some_and(|(symbol, _)| {
-                        self.use_counts.get(symbol).copied().unwrap_or(0) > 0
-                    })
-        })
-    }
-
-    fn live_loan_of(&self, root: LocalId, exclusive_only: bool) -> Option<&Loan> {
-        self.loans.iter().find(|loan| {
-            loan.root == root
-                && (!exclusive_only || loan.exclusive)
-                && (self.use_counts.get(&loan.view_symbol).copied().unwrap_or(0) > 0
-                    || self.loop_stack.len() > loan.loop_depth)
-        })
-    }
-
-    /// Moving or reassigning an owner invalidates its live views —
-    /// only genuinely view-typed locals; owned donations survive.
-    fn invalidate_views_of(&mut self, owner: LocalId) {
-        let views: Vec<LocalId> = self
-            .borrow_roots
-            .iter()
-            .filter(|(view, root)| **root == owner && self.view_locals.contains(*view))
-            .map(|(view, _)| *view)
-            .collect();
-        self.invalidated_views.extend(views);
-    }
-
-    /// Rule 1 (docs/ownership.md): a consume that is not
-    /// the value's last use donates a reference instead of moving —
-    /// ownership is an optimization the compiler discovers at the true
-    /// last use (Perceus: Reinking, Xie, de Moura & Leijen, PLDI 2021),
-    /// never a proof burden. Inside a loop the binding's uses recur, so
-    /// an outer binding always shares. Linear and unique values keep
-    /// move semantics: duplicating one is what those markers exist to
-    /// prevent.
-    fn consume_donates(&self, local: LocalId, ty: &Ty) -> bool {
-        if is_linear(self.program_builder, ty)
-            || self.unique_locals.contains(&local)
-            || self.in_return_consume
-            || !self.can_release(ty)
-        {
-            return false;
+    /// Record an ownership site for the elaborator (discarded on a
+    /// terminated path, mirroring `record_flow`).
+    fn record_ownership_site(
+        &mut self,
+        local: LocalId,
+        ty: Ty,
+        kind: ownership::SiteKind,
+        span: Span,
+    ) {
+        if self.terminated() {
+            return;
         }
-        let remaining = self
-            .locals
-            .iter()
-            .find(|(_, candidate)| **candidate == local)
-            .and_then(|(symbol, _)| self.use_counts.get(symbol))
-            .copied()
-            .unwrap_or(0);
-        let bound_outside_loop = self
-            .frame
-            .get(usize::from(local))
-            .is_some_and(|entry| entry.owned.is_some() && self.loop_stack.len() > entry.loop_depth);
-        remaining > 0 || bound_outside_loop || self.has_live_view(local)
+        let seq = self.next_ownership_seq();
+        self.ownership_sites.sites.push(ownership::OwnershipSite {
+            block: self.current,
+            seq,
+            index: self.blocks[self.current].insts.len() as u32,
+            local,
+            ty,
+            kind,
+            span,
+        });
     }
 
+    fn record_read_site(&mut self, local: LocalId, name: String, span: Span) {
+        if self.terminated() {
+            return;
+        }
+        let seq = self.next_ownership_seq();
+        self.ownership_sites.reads.push(ownership::ReadSite {
+            block: self.current,
+            seq,
+            index: self.blocks[self.current].insts.len() as u32,
+            local,
+            name,
+            span,
+        });
+        if self.owns(local) {
+            self.record_flow(verify::FlowEvent::Use(local));
+        }
+    }
+
+    fn record_loan(&mut self, root: LocalId, view: LocalId, view_name: String, exclusive: bool) {
+        if self.terminated() {
+            return;
+        }
+        let seq = self.next_ownership_seq();
+        self.ownership_sites.loans.push(ownership::LoanSite {
+            block: self.current,
+            seq,
+            root,
+            view,
+            view_name,
+            exclusive,
+        });
+    }
+
+    fn record_loan_kill(&mut self, root: LocalId) {
+        if self.terminated() {
+            return;
+        }
+        let seq = self.next_ownership_seq();
+        self.ownership_sites.loan_kills.push((seq, root));
+    }
+
+    /// A consumer takes ownership of an operand: temps leave the
+    /// statement flush list, owned locals record a consume site for the
+    /// elaborator's donate-vs-move decision (certain moves settle here).
     fn consume_operand(&mut self, operand: Operand) -> bool {
         let Operand::Local(local) = operand else {
             return true;
         };
         if let Some(position) = self.stmt_temps.iter().position(|temp| *temp == local) {
-            // An arm bind registered as a temp is a named binding with
-            // possibly more uses: a non-last-use consume donates here
-            // exactly as below, or later consumes double-spend the one
-            // owned reference (the sequential-if-let double release).
-            if let Some(ty) = self.owned_ty(local).cloned()
-                && needs_drop(self.program_builder, &ty)
-                && self.consume_donates(local, &ty)
-            {
-                if let Err(error) = self.retain_value(operand, &ty, Span::SYNTHESIZED) {
-                    self.deferred_errors.push(error);
-                }
-                self.record_flow(verify::FlowEvent::Use(local));
-                return true;
-            }
-            // Consuming a temp removes it from this path's live list
+            // Consuming a temp removes it from this path's flush list
             // only. owned_tys is a type table shared across sibling
             // control-flow arms (merge restores moved/stmt_temps per
-            // arm, never owned_tys): deleting from it here made a
-            // sibling arm's exit flush skip its own copy's drop — a
-            // real leak, caught by the balance verifier.
+            // arm, never owned_tys). Donate-vs-move is the elaborator's
+            // decision.
             self.stmt_temps.remove(position);
-            self.record_flow(verify::FlowEvent::Move(local));
+            if let Some(ty) = self.owned_ty(local).cloned() {
+                self.record_ownership_site(
+                    local,
+                    ty,
+                    ownership::SiteKind::Consume { forced: None },
+                    Span::SYNTHESIZED,
+                );
+            } else {
+                self.record_flow(verify::FlowEvent::Move(local));
+            }
             return true;
         }
         if let Some(ty) = self.owned_ty(local).cloned() {
@@ -3777,58 +3674,30 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.push(Inst::RegionAcquire { src: operand });
                 return true;
             }
-            // A same-statement re-consume: every read preceded the
-            // first consume, so use counting showed none remaining and
-            // the first consume moved. Later consumes share, exactly as
-            // sequential non-last-use consumes donate (Rule 1); linear
-            // and unique values keep move discipline — a second spend
-            // is the double consume those markers exist to reject.
-            if self.moved.contains(&local) {
-                if is_linear(self.program_builder, &ty) || self.unique_locals.contains(&local) {
-                    self.deferred_errors.push(BackendError::new(
-                        "use of moved value: consumed twice in one call".into(),
-                        Span::SYNTHESIZED,
-                    ));
-                    return true;
-                }
-                if let Err(error) = self.retain_value(operand, &ty, Span::SYNTHESIZED) {
-                    self.deferred_errors.push(error);
-                }
-                // The retain re-establishes an owned reference after
-                // the first consume released the local; this consume
-                // spends it.
-                self.record_flow(verify::FlowEvent::Def(local));
-                self.record_flow(verify::FlowEvent::Move(local));
-                return true;
-            }
-            if self.consume_donates(local, &ty) {
-                if let Err(error) = self.retain_value(operand, &ty, Span::SYNTHESIZED) {
-                    self.deferred_errors.push(error);
-                }
-                self.record_flow(verify::FlowEvent::Use(local));
-                return true;
-            }
-            // Only a live `&mut` loan blocks the move: shared loans
-            // snapshot (the adjudicated exclusivity rule — conflicts
-            // require the in-place-write contract aliasing would break).
-            if let Some(loan) = self.live_loan_of(local, true) {
-                self.deferred_errors.push(BackendError::new(
-                    format!(
-                        "cannot move a value while it is borrowed as `{}`",
-                        loan.view_name
-                    ),
-                    Span::SYNTHESIZED,
-                ));
-                // The loan conflict is the error; keep the view usable
-                // so this diagnostic surfaces instead of a downstream
-                // use-of-borrowed error.
+            // Linear and unique values keep move discipline; a return
+            // moves the frame's value out. Everything else is the
+            // elaborator's donate-vs-move decision over real liveness
+            // (Rule 1, docs/ownership.md; Perceus PLDI 2021).
+            let forced = if is_linear(self.program_builder, &ty) {
+                Some(ownership::Forced::Linear)
+            } else if self.unique_locals.contains(&local) {
+                Some(ownership::Forced::Unique)
+            } else if self.in_return_consume {
+                Some(ownership::Forced::Return)
+            } else {
+                None
+            };
+            if forced.is_some() {
+                // Forced moves settle walk-side bookkeeping the init and
+                // merge machinery still read.
                 self.moved.insert(local);
-                self.record_flow(verify::FlowEvent::Move(local));
-                return true;
             }
-            self.moved.insert(local);
-            self.record_flow(verify::FlowEvent::Move(local));
-            self.invalidate_views_of(local);
+            self.record_ownership_site(
+                local,
+                ty,
+                ownership::SiteKind::Consume { forced },
+                Span::SYNTHESIZED,
+            );
             return true;
         }
         // Consuming a global donates a reference (the runtime is
@@ -3842,11 +3711,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 .get(&slot)
                 .cloned()
                 .unwrap_or(Ty::Error);
-            if is_linear(self.program_builder, &global_ty) && !self.moved_globals.insert(slot) {
-                self.deferred_errors.push(BackendError::new(
-                    "use of moved value: this global was already consumed".into(),
-                    Span::SYNTHESIZED,
-                ));
+            if is_linear(self.program_builder, &global_ty) {
+                self.record_flow(verify::FlowEvent::GlobalMove(slot));
             }
         }
         false
@@ -3920,11 +3786,34 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         span: Span,
     ) -> Result<(), BackendError> {
         if matches!(self.resolved(ty), Ty::Func(..))
-            && matches!(operand, Operand::Local(local) if self.anchored_closures.contains(&local))
+            && let Operand::Local(local) = operand
         {
-            return Err(anchored_escape());
+            self.record_flow(verify::FlowEvent::EscapeSink(local));
         }
         self.consume_into(operand, ty, span)
+    }
+
+    /// Realize the argument half of the value-adaptation judgment at a
+    /// call boundary (ADR 0054): every non-borrow parameter takes
+    /// ownership of the operand paired with it, whichever dispatch path
+    /// found the callee. Callers pass the operand window already aligned
+    /// with `params` (a member callee's type excludes the receiver; an
+    /// indirect callee's operands carry trailing witness blocks) — the
+    /// transfer rule itself lives only here, so a new call path cannot
+    /// skip it for one parameter shape (the 2026-08-09 Identity-glue
+    /// double free).
+    fn consume_owned_arguments(
+        &mut self,
+        params: &[Ty],
+        operands: &[Operand],
+        span: Span,
+    ) -> Result<(), BackendError> {
+        for (operand, param) in operands.iter().zip(params) {
+            if !matches!(param, Ty::Borrow(_, _)) {
+                self.consume_call_argument_into(*operand, param, span)?;
+            }
+        }
+        Ok(())
     }
 
     /// Whether this frame can release a value of `ty` later: every bare
@@ -3992,10 +3881,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
     }
 
-    /// Merge compiled control-flow arms at a join (Ryu-style structural
-    /// path-sensitive cleanup): a local moved on some paths drops at the
-    /// end of every path that still owns it, and reads after the join
-    /// reject as moved.
+    /// Merge compiled control-flow arms at a join. Each arm consumes its
+    /// value into the result under its own end-state (the consumption
+    /// itself can move a local — an arm whose value IS a binding), and
+    /// the arm end-states union into the post-join `moved` set: reads
+    /// after the join reject a local any path certainly moved. The
+    /// reconciling drops on paths that still own such a local are the
+    /// elaborator/release planner's job, decided over the finished CFG.
     fn merge_arms(
         &mut self,
         arms: Vec<ArmEnd>,
@@ -4004,69 +3896,38 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         temps_before: Vec<LocalId>,
         moved_before: rustc_hash::FxHashSet<LocalId>,
     ) {
-        // First pass: each arm consumes its value into the result. The
-        // consumption itself can move a local (an arm whose value IS a
-        // binding), so the union is computed after it.
-        let mut states: Vec<(
-            BlockId,
-            Operand,
-            rustc_hash::FxHashSet<LocalId>,
-            Vec<LocalId>,
-        )> = Vec::new();
-        let mut globals_union: rustc_hash::FxHashSet<u32> = rustc_hash::FxHashSet::default();
-        for arm in arms {
-            self.switch_to(arm.block);
-            self.moved = arm.moved;
-            globals_union.extend(arm.moved_globals.iter().copied());
-            self.stmt_temps = arm.temps;
-            self.consume_operand(arm.value);
-            // The join value inherits any arm's borrow provenance.
-            self.propagate_view(Operand::Local(result), arm.value);
-            states.push((
-                arm.block,
-                arm.value,
-                std::mem::take(&mut self.moved),
-                std::mem::take(&mut self.stmt_temps),
-            ));
-        }
         // The union runs over the arm end-states only: each arm started
         // from the pre-branch state, so a value moved before the branch
         // is still in every arm that did not restore it — and a value
         // reassigned on every path comes back clean.
+        let no_arms = arms.is_empty();
         let mut union: rustc_hash::FxHashSet<LocalId> = rustc_hash::FxHashSet::default();
-        for (_, _, moved, _) in &states {
-            union.extend(moved.iter().copied());
+        for arm in arms {
+            self.switch_to(arm.block);
+            self.moved = arm.moved;
+            self.stmt_temps = arm.temps;
+            self.consume_operand(arm.value);
+            // The join value inherits any arm's borrow provenance.
+            self.propagate_view(Operand::Local(result), arm.value);
+            union.extend(self.moved.drain());
+            self.terminate(Term::Goto(join, vec![arm.value]));
         }
-        if states.is_empty() {
-            union = moved_before.clone();
-        }
-        // Only locals that exist OUTSIDE the arms can diverge: an
-        // arm-declared binding lives and dies inside its own scope.
-        // Second pass: a local another path moved drops at the end of
-        // every path that still owns it; nothing after the join may use it
-        // (path-sensitive structural cleanup).
-        for (block, value, moved, temps) in states {
-            self.switch_to(block);
-            self.moved = moved;
-            self.stmt_temps = temps;
-            self.stmt_temps.truncate(temps_before.len());
-            self.terminate(Term::Goto(join, vec![value]));
+        if no_arms {
+            union = moved_before;
         }
         self.blocks[join].params.push(result);
         self.moved = union;
-        // A global moved on any path stays moved after the join (a
-        // reassignment on every path clears it on every path).
-        self.moved_globals = globals_union;
         self.stmt_temps = temps_before;
         self.switch_to(join);
     }
 
-    /// Drop the current statement's unconsumed temporaries (latest first).
+    /// Retire the current statement's unconsumed temporaries (the release
+    /// planner emits their drops from the recorded flow events).
     fn flush_stmt_temps(&mut self, keep: Option<Operand>) {
         self.flush_stmt_temps_above(0, keep);
     }
 
-    /// Drop the statement temporaries above `floor`, leaving temps that
+    /// Retire the statement temporaries above `floor`, leaving temps that
     /// belong to enclosing statements (a match arm's owned bindings, an
     /// outer statement's operands) to their own boundaries.
     fn flush_stmt_temps_above(&mut self, floor: usize, keep: Option<Operand>) {
@@ -4074,16 +3935,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             Some(Operand::Local(local)) => Some(local),
             _ => None,
         };
-        let mut kept_was_temp = false;
-        while self.stmt_temps.len() > floor {
-            let Some(temp) = self.stmt_temps.pop() else {
-                break;
-            };
-            if Some(temp) == keep {
-                kept_was_temp = true;
-                continue;
-            }
-        }
+        let kept_was_temp = keep.is_some_and(|kept| {
+            self.stmt_temps.get(floor..).is_some_and(|flushed| flushed.contains(&kept))
+        });
+        self.stmt_temps.truncate(floor);
         // A kept TEMP survives to the enclosing statement's boundary. A
         // kept scope binding is not a temp: its scope still owns it.
         if kept_was_temp && let Some(kept) = keep {
@@ -4289,7 +4144,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     }
 
     fn push(&mut self, inst: Inst) {
-        self.track_anchored(&inst);
         if !self.terminated() {
             let origin = if self.program_builder.collect_debug {
                 self.program_builder
@@ -4324,84 +4178,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             .then(|| std::mem::take(&mut self.debug_names))
     }
 
-    /// Propagate the frame-anchored closure mark through value copies,
-    /// and fail closed on any edge that would let an anchored closure
-    /// outlive the frame state its environment references.
-    fn track_anchored(&mut self, inst: &Inst) {
-        if self.anchored_closures.is_empty() {
-            return;
-        }
-        fn hits(set: &rustc_hash::FxHashSet<LocalId>, op: &Operand) -> bool {
-            matches!(op, Operand::Local(local) if set.contains(local))
-        }
-        let set = &self.anchored_closures;
-        let mark = match inst {
-            Inst::Copy { dest, src } if hits(set, src) => Some(*dest),
-            Inst::MakeClosure { dest, env, .. } if env.iter().any(|op| hits(set, op)) => {
-                Some(*dest)
-            }
-            Inst::Aggregate { tag: 0, args, .. } | Inst::ObjectNew { args, .. }
-                if args.iter().any(|op| hits(set, op)) =>
-            {
-                self.deferred_errors.push(anchored_escape());
-                None
-            }
-            Inst::SetField { src, .. }
-            | Inst::ObjectSet { src, .. }
-            | Inst::GlobalStore { src, .. }
-            | Inst::CellSet { src, .. }
-            | Inst::Store { src, .. }
-                if hits(set, src) =>
-            {
-                self.deferred_errors.push(anchored_escape());
-                None
-            }
-            Inst::CellNew { init, .. } if hits(set, init) => {
-                self.deferred_errors.push(anchored_escape());
-                None
-            }
-            Inst::SetFinalizer { closure, .. } if hits(set, closure) => {
-                self.deferred_errors.push(anchored_escape());
-                None
-            }
-            Inst::ExistentialPack {
-                payload, witnesses, ..
-            } if hits(set, payload) || witnesses.iter().any(|op| hits(set, op)) => {
-                self.deferred_errors.push(anchored_escape());
-                None
-            }
-            Inst::AbortTo { value, .. } if hits(set, value) => {
-                self.deferred_errors.push(anchored_escape());
-                None
-            }
-            _ => None,
-        };
-        if let Some(dest) = mark {
-            self.anchored_closures.insert(dest);
-        }
-    }
-
     fn terminate(&mut self, term: Term) {
-        if !self.anchored_closures.is_empty() {
-            match &term {
-                Term::Return(Operand::Local(local)) if self.anchored_closures.contains(local) => {
-                    self.deferred_errors.push(anchored_escape());
-                }
-                Term::Goto(block, args) => {
-                    // Block-parameter SSA edges keep the mark flowing.
-                    let marked: Vec<LocalId> = args
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, arg)| {
-                            matches!(arg, Operand::Local(local) if self.anchored_closures.contains(local))
-                        })
-                        .filter_map(|(ix, _)| self.blocks[*block].params.get(ix).copied())
-                        .collect();
-                    self.anchored_closures.extend(marked);
-                }
-                _ => {}
-            }
-        }
         if !self.terminated() {
             self.blocks[self.current].term = Some(term);
         }
@@ -4572,7 +4349,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 if assign {
                     if let Some(ty) = self.owned_ty(chain.base).cloned() {
                         if !self.moved.contains(&chain.base) {
-                            self.displace_or_drop(chain.base, &ty);
+                            self.record_displacement(chain.base, &ty);
                         }
                         self.moved.remove(&chain.base);
                     }
@@ -5556,8 +5333,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             impl crate::types::ty::TyFold for DeepNormalize<'_> {
                 fn fold_ty(&mut self, ty: &Ty) -> Ty {
                     let reduced = if matches!(ty, Ty::Proj(_, _, _)) {
-                        let mut scratch = crate::types::solve::VarStore::default();
-                        crate::types::solve::normalize_ty(&mut scratch, self.catalog, ty)
+                        self.catalog.normalize_finished(ty)
                     } else {
                         ty.clone()
                     };
@@ -5624,132 +5400,72 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// annotation symbols instantiate through this instance's substitution.
     /// Structurally add one reference per refcounted buffer the value owns
     /// (a RawPtr field IS a buffer; the mirror of structural teardown).
+    /// Donate one reference to `value`: the ONE retain realization,
+    /// shared with the ownership elaborator (`realize_retain`), so
+    /// walk-side retains and replay-decided retains cannot drift —
+    /// scalars need nothing, buffers bump a refcount, `'heap` handles
+    /// take a region claim, and aggregates call their synthesized
+    /// `Glue::Retain` function. Two cases still expand member-wise
+    /// (`each_member`/`each_enum_payload`): the type's own retain glue
+    /// body (`retain_glue_root` — the glue call there would be the
+    /// function calling itself; nested occurrences of the same type are
+    /// real recursion and do share), and types whose rigid parameters
+    /// need witness blocks, whose glue reads witnesses from a closure
+    /// environment a direct call does not carry.
     fn retain_value(&mut self, value: Operand, ty: &Ty, span: Span) -> Result<(), BackendError> {
         let mut ty = ty.clone();
         while let Ty::Borrow(_, inner) = ty {
             ty = *inner;
         }
-        match &ty {
-            Ty::Any { .. } => {
-                let witness = self.fresh_local();
-                self.push(Inst::ExistentialWitness {
-                    dest: witness,
-                    src: value,
-                    index: 1,
-                });
-                let payload = self.fresh_local();
-                self.push(Inst::ExistentialPayload {
-                    dest: payload,
-                    src: value,
-                });
-                let dest = self.fresh_local();
-                self.push(Inst::CallIndirect {
-                    dest,
-                    callee: Operand::Local(witness),
-                    args: vec![Operand::Local(payload)],
-                    unwind: None,
-                });
-                Ok(())
+        let structural = match &ty {
+            Ty::Tuple(_) | Ty::Record(_) => true,
+            Ty::Nominal(symbol, _) => {
+                *symbol != Symbol::RawPtr
+                    && !self
+                        .program_builder
+                        .struct_def(*symbol)
+                        .is_some_and(|def| def.heap)
             }
-            Ty::Param(symbol) => {
-                // Native value; duplicate through the frame's retain
-                // witness (value-witness-table passing).
-                let Some((_, retain_witness)) = self.param_witnesses.get(&*symbol).copied() else {
-                    return Err(BackendError::unsupported(
-                        "a generic value cannot be retained here without its ownership witnesses (not supported yet)"
-                            .into(),
-                        span,
-                    ));
-                };
-                let dest = self.fresh_local();
-                self.push(Inst::CallIndirect {
-                    dest,
-                    callee: Operand::Local(retain_witness),
-                    args: vec![value],
-                    unwind: None,
-                });
-                Ok(())
-            }
-            Ty::Nominal(symbol, _) if *symbol == Symbol::RawPtr => {
-                self.push(Inst::RetainPtr { src: value });
-                Ok(())
-            }
-            Ty::Nominal(symbol, args) => {
-                // A `'heap` handle duplicates as a region claim; its
-                // interior belongs to the region (structural recursion
-                // through a recursive node type would never terminate).
-                if self
-                    .program_builder
-                    .struct_def(*symbol)
-                    .is_some_and(|def| def.heap)
-                {
-                    self.push(Inst::RegionAcquire { src: value });
-                    return Ok(());
-                }
-                let Some(fields) = self.program_builder.field_types(*symbol, args) else {
-                    // Enum retains dispatch on the tag, one arm per variant
-                    // with buffer-carrying payloads; scalars retain nothing.
-                    if let Some(payloads) = self.program_builder.variant_payloads(*symbol, args) {
-                        let container = self.container_layout(&ty);
-                        self.retain_enum_value(value, container, payloads, span)?;
-                    }
-                    return Ok(());
-                };
-                let container = self.container_layout(&ty);
-                for (index, field_ty) in fields.iter().enumerate() {
-                    if !donates(self.program_builder, field_ty) {
-                        continue;
-                    }
-                    let field = self.fresh_local();
-                    self.push_field(
-                        field,
-                        value,
-                        container,
-                        u16::try_from(index).unwrap_or_default(),
-                        None,
-                    );
-                    self.retain_value(Operand::Local(field), field_ty, span)?;
-                }
-                Ok(())
-            }
-            Ty::Tuple(items) => {
-                let container = self.container_layout(&ty);
-                for (index, item_ty) in items.iter().enumerate() {
-                    if !donates(self.program_builder, item_ty) {
-                        continue;
-                    }
-                    let item = self.fresh_local();
-                    self.push_field(
-                        item,
-                        value,
-                        container,
-                        u16::try_from(index).unwrap_or_default(),
-                        None,
-                    );
-                    self.retain_value(Operand::Local(item), item_ty, span)?;
-                }
-                Ok(())
-            }
-            Ty::Record(row) => {
-                let container = self.container_layout(&ty);
-                for (index, (_, item_ty)) in row.fields.iter().enumerate() {
-                    if !donates(self.program_builder, item_ty) {
-                        continue;
-                    }
-                    let item = self.fresh_local();
-                    self.push_field(
-                        item,
-                        value,
-                        container,
-                        u16::try_from(index).unwrap_or_default(),
-                        None,
-                    );
-                    self.retain_value(Operand::Local(item), item_ty, span)?;
-                }
-                Ok(())
-            }
-            _ => Ok(()),
+            _ => false,
+        };
+        let is_root = self.retain_glue_root.as_ref() == Some(&ty);
+        if is_root {
+            self.retain_glue_root = None;
         }
+        if structural && (is_root || !glue_witness_params(&ty).is_empty()) {
+            let members = match &ty {
+                Ty::Nominal(symbol, args) => {
+                    let Some(fields) = self.program_builder.field_types(*symbol, args) else {
+                        // Enum retains dispatch on the tag, one arm per
+                        // variant with buffer-carrying payloads; opaque
+                        // scalars retain nothing.
+                        if let Some(payloads) = self.program_builder.variant_payloads(*symbol, args)
+                        {
+                            let container = self.container_layout(&ty);
+                            self.retain_enum_value(value, container, payloads, span)?;
+                        }
+                        return Ok(());
+                    };
+                    fields
+                }
+                Ty::Tuple(items) => items.clone(),
+                Ty::Record(row) => row.fields.iter().map(|(_, ty)| ty.clone()).collect(),
+                _ => unreachable!("structural covers aggregates only"),
+            };
+            let container = self.container_layout(&ty);
+            return self.each_member(
+                value,
+                container,
+                &members,
+                false,
+                |this, member| donates(this.program_builder, member),
+                |this, member, member_ty| this.retain_value(member, member_ty, span),
+            );
+        }
+        for inst in self.realize_retain(value, &ty, span)? {
+            self.push(inst);
+        }
+        Ok(())
     }
 
     /// Compile a run of nodes; the value is the final expression's, or
@@ -6004,11 +5720,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
 
         if !self.terminated()
             && let Operand::Local(local) = value
-            && let Some(scope) = self.scopes.last_mut()
-            && let Some(position) = scope.iter().position(|owned| *owned == local)
+            && self
+                .scopes
+                .last()
+                .is_some_and(|scope| scope.contains(&local))
         {
             // The value moves out to the enclosing statement.
-            scope.remove(position);
             self.stmt_temps.push(local);
         }
         self.scopes.pop();
@@ -6097,13 +5814,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     self.view_locals.insert(local);
                     if let Operand::Local(source) = value {
                         let root = self.borrow_root(source);
-                        self.loans.push(Loan {
-                            view_symbol: *symbol,
-                            view_name: bind_name.clone(),
-                            root,
-                            exclusive: *mutable,
-                            loop_depth: self.loop_stack.len(),
-                        });
+                        let _ = symbol;
+                        self.record_loan(root, local, bind_name.clone(), *mutable);
                     }
                     self.locals.insert(*symbol, local);
                     self.name_local(local, bind_name);
@@ -6256,13 +5968,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     && let PatternKind::Bind(Name::Resolved(_, bind_name)) = &pattern.kind
                 {
                     let root = self.borrow_root(source);
-                    self.loans.push(Loan {
-                        view_symbol: *symbol,
-                        view_name: bind_name.clone(),
-                        root,
-                        exclusive: false,
-                        loop_depth: self.loop_stack.len(),
-                    });
+                    self.record_loan(root, local, bind_name.clone(), false);
                 }
                 self.own_local(local, value_ty.as_ref().unwrap_or(ty));
                 Ok(())
@@ -6434,7 +6140,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     else_block: else_id,
                 });
                 let moved_before = self.moved.clone();
-                let globals_before = self.moved_globals.clone();
                 let temps_before = self.stmt_temps.clone();
                 let mut arm_ends: Vec<ArmEnd> = Vec::new();
                 let mut arm_tys: Vec<Ty> = Vec::new();
@@ -6447,14 +6152,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         block: self.current,
                         value,
                         moved: std::mem::take(&mut self.moved),
-                        moved_globals: std::mem::take(&mut self.moved_globals),
                         temps: std::mem::take(&mut self.stmt_temps),
                     });
                 }
                 if let Some(else_block) = else_block {
                     self.switch_to(else_id);
                     self.moved = moved_before.clone();
-                    self.moved_globals = globals_before.clone();
                     self.stmt_temps = temps_before.clone();
                     let value = self.compile_block(else_block)?;
                     if !self.terminated() {
@@ -6463,7 +6166,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             block: self.current,
                             value,
                             moved: std::mem::take(&mut self.moved),
-                            moved_globals: std::mem::take(&mut self.moved_globals),
                             temps: std::mem::take(&mut self.stmt_temps),
                         });
                     }
@@ -6474,7 +6176,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         block: else_id,
                         value: Operand::Const(Constant::Unit),
                         moved: moved_before.clone(),
-                        moved_globals: globals_before.clone(),
                         temps: temps_before.clone(),
                     });
                 }
@@ -6519,7 +6220,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let normal_exit = self.new_block();
                 let exit = self.new_block();
                 let moved_before = self.moved.clone();
-                let globals_before = self.moved_globals.clone();
                 let temps_before = self.stmt_temps.clone();
                 self.terminate(Term::Goto(header, Vec::new()));
                 self.switch_to(header);
@@ -6537,8 +6237,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     None => self.terminate(Term::Goto(body_id, Vec::new())),
                 }
                 self.switch_to(body_id);
-                let outer_locals: rustc_hash::FxHashSet<LocalId> =
-                    self.locals.values().copied().collect();
                 self.loop_stack.push(LoopFrame {
                     header,
                     continues_moved: rustc_hash::FxHashSet::default(),
@@ -6557,44 +6255,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.flush_stmt_temps(None);
                 let mut body_end_moved = self.moved.clone();
                 body_end_moved.extend(frame.continues_moved.iter().copied());
-                // Loop-carried moves: a value moved on the looping path
-                // is gone on re-entry; if the body also reads it, the
-                // second iteration uses a moved value.
-                let body_uses = frame_uses(&{
-                    let nodes: Vec<&Node> = body.body.iter().collect();
-                    nodes
-                });
-                for local in body_end_moved.difference(&moved_before) {
-                    // Only values that outlive an iteration can carry:
-                    // body-declared locals are fresh every pass.
-                    if !outer_locals.contains(local) {
-                        continue;
-                    }
-                    if let Some((symbol, _)) = self.locals.iter().find(|(_, bound)| *bound == local)
-                        && body_uses.get(symbol).copied().unwrap_or(0) > 0
-                    {
-                        self.deferred_errors.push(BackendError::new(
-                            "use of moved value: consumed on a previous loop iteration".into(),
-                            body.span,
-                        ));
-                        break;
-                    }
-                }
-                for slot in self.moved_globals.clone().difference(&globals_before) {
-                    let uses_global = self
-                        .program_builder
-                        .global_slots
-                        .iter()
-                        .find(|(_, bound)| *bound == slot)
-                        .is_some_and(|(symbol, _)| body_uses.get(symbol).copied().unwrap_or(0) > 0);
-                    if uses_global {
-                        self.deferred_errors.push(BackendError::new(
-                            "use of moved value: consumed on a previous loop iteration".into(),
-                            body.span,
-                        ));
-                        break;
-                    }
-                }
                 self.terminate(Term::Goto(header, Vec::new()));
                 // Merge every path into the exit: the condition's normal
                 // exit (whose state is conservatively the union of entry
@@ -6604,13 +6264,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     self.switch_to(normal_exit);
                     let mut exit_moved = moved_before.clone();
                     exit_moved.extend(body_end_moved.iter().copied());
-                    let mut exit_moved_globals = globals_before.clone();
-                    exit_moved_globals.extend(self.moved_globals.iter().copied());
                     arm_ends.push(ArmEnd {
                         block: normal_exit,
                         value: Operand::Const(Constant::Unit),
                         moved: exit_moved,
-                        moved_globals: exit_moved_globals,
                         temps: temps_before.clone(),
                     });
                 } else {
@@ -6628,8 +6285,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     "typed facts invariant: `break` reached lowering outside a loop"
                 );
                 // Record this path's end state for the loop-exit merge
-                // (the relay block is where the merge appends this
-                // path's divergent drops).
+                // (the relay block gives the merge a distinct edge for
+                // this path's join consumption and release planning).
                 let relay = self.new_block();
                 self.terminate(Term::Goto(relay, Vec::new()));
                 let moved = self.moved.clone();
@@ -6639,7 +6296,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         block: relay,
                         value: Operand::Const(Constant::Unit),
                         moved,
-                        moved_globals: self.moved_globals.clone(),
                         temps,
                     });
                 }
@@ -6690,7 +6346,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 .cloned()
                                 .unwrap_or(Ty::Error);
                             // Reassignment restores a moved global.
-                            self.moved_globals.remove(&slot);
+                            self.record_flow(verify::FlowEvent::GlobalRestore(slot));
                             if self.needs_release(&ty) {
                                 let old = self.fresh_local();
                                 self.push(Inst::GlobalLoad {
@@ -6748,7 +6404,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         // displaced to scope exit while a view is live.
                         if let Some(ty) = self.owned_ty(local).cloned() {
                             if !self.moved.contains(&local) {
-                                self.displace_or_drop(local, &ty);
+                                self.record_displacement(local, &ty);
                             }
                         }
                         // Also clears the born-moved state of an
@@ -7016,12 +6672,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             ExprKind::Variable(Name::Resolved(symbol, name)) => {
                 if let Some(local) = self.locals.get(symbol).copied() {
-                    // Last-use liveness: this read spends one use.
-                    if let Some(count) = self.use_counts.get_mut(symbol)
-                        && *count > 0
-                    {
-                        *count -= 1;
-                    }
+                    // `moved` now holds only walk-certain moves (forced
+                    // consumes, capture moves, init shadows) — a hit is
+                    // a definite use-after-move even for untracked
+                    // (drop-free) values the event replay cannot see.
                     if self.moved.contains(&local) {
                         if self.uninitialized.contains(&local) {
                             return Err(BackendError::new(
@@ -7034,21 +6688,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             expr.span,
                         ));
                     }
-                    if self.invalidated_views.contains(&local) {
-                        return Err(BackendError::new(
-                            format!("use of borrowed value `{name}` after its owner moved"),
-                            expr.span,
-                        ));
-                    }
-                    if let Some(loan) = self.live_loan_of(local, true) {
-                        return Err(BackendError::new(
-                            format!(
-                                "`{name}` is already mutable borrowed as `{}`",
-                                loan.view_name
-                            ),
-                            expr.span,
-                        ));
-                    }
+                    // Use-after-move, view-after-owner-move, and
+                    // read-while-mut-borrowed are the elaborator's
+                    // judgments now: it replays this site against the
+                    // decided consume outcomes and computed liveness.
+                    self.record_read_site(local, name.clone(), expr.span);
                     if self.cell_handles.contains(&local) {
                         let dest = self.fresh_local();
                         self.push(Inst::CellGet {
@@ -7057,16 +6701,16 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         });
                         return Ok(Operand::Local(dest));
                     }
-                    if self.owns(local) {
-                        self.record_flow(verify::FlowEvent::Use(local));
-                    }
                     Ok(Operand::Local(local))
                 } else if let Some(slot) = self.program_builder.global_slots.get(symbol).copied() {
-                    if self.moved_globals.contains(&slot) {
-                        return Err(BackendError::new(
-                            format!("use of moved value `{name}`"),
-                            expr.span,
-                        ));
+                    let global_ty = self
+                        .program_builder
+                        .global_tys
+                        .get(&slot)
+                        .cloned()
+                        .unwrap_or(Ty::Error);
+                    if is_linear(self.program_builder, &global_ty) {
+                        self.record_flow(verify::FlowEvent::GlobalUse(slot, expr.span));
                     }
                     let dest = self.fresh_local();
                     self.push(Inst::GlobalLoad { dest, global: slot });
@@ -7772,7 +7416,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let outer_tag_cache = std::mem::take(&mut self.match_tag_cache);
 
         let moved_before = self.moved.clone();
-        let globals_before = self.moved_globals.clone();
         let temps_before = self.stmt_temps.clone();
         let mut arm_ends: Vec<ArmEnd> = Vec::new();
         for arm in arms {
@@ -7783,11 +7426,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
 
             self.switch_to(matched);
             self.moved = moved_before.clone();
-            self.moved_globals = globals_before.clone();
             self.stmt_temps = temps_before.clone();
             if owning {
                 // The matched arm settles the consumed scrutinee: binds
-                // become arm-owned temporaries (the merge machinery drops
+                // become arm-owned temporaries (the release planner drops
                 // the unconsumed ones path-sensitively) and unbound owned
                 // payloads release here, re-extracted from the intact
                 // scrutinee register.
@@ -7802,7 +7444,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     block: self.current,
                     value,
                     moved: std::mem::take(&mut self.moved),
-                    moved_globals: std::mem::take(&mut self.moved_globals),
                     temps: std::mem::take(&mut self.stmt_temps),
                 });
             }
@@ -8962,11 +8603,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
         let callee_ty = self.resolved(&callee.ty);
         if let Ty::Func(params, _, _) = &callee_ty {
-            for (operand, param) in operands.iter().zip(params) {
-                if !matches!(param, Ty::Borrow(_, _)) {
-                    self.consume_call_argument_into(*operand, param, expr.span)?;
-                }
-            }
+            // Left-aligned: witness blocks trail the declared arguments.
+            self.consume_owned_arguments(params, &operands, expr.span)?;
         }
         let (targets, writeback_tys) =
             self.writeback_targets(&callee_ty, operands.len(), None, &mut_arg_places, args, 0)?;
@@ -9198,20 +8836,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         let mut mut_arg_places: Vec<(usize, PlaceChain)> = Vec::new();
                         self.compile_call_args(args, &mut operands, &mut mut_arg_places)?;
                         let callee_ty = self.resolved(&callee.ty);
-                        // Owned arguments transfer to the callee, the same
-                        // as direct calls (offset-aligned: member callee
-                        // types exclude the receiver).
+                        // Right-aligned: member callee types exclude the
+                        // receiver at the front.
                         if let Ty::Func(params, _, _) = &callee_ty {
                             let offset = operands.len().saturating_sub(params.len());
-                            for (ix, param) in params.iter().enumerate() {
-                                if !matches!(param, Ty::Borrow(_, _)) {
-                                    self.consume_call_argument_into(
-                                        operands[offset + ix],
-                                        param,
-                                        expr.span,
-                                    )?;
-                                }
-                            }
+                            self.consume_owned_arguments(params, &operands[offset..], expr.span)?;
                         }
                         let (targets, writeback_tys) = self.writeback_targets(
                             &callee_ty,
@@ -9388,20 +9017,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             let mut mut_arg_places: Vec<(usize, PlaceChain)> = Vec::new();
                             self.compile_call_args(args, &mut operands, &mut mut_arg_places)?;
                             let callee_ty = self.resolved(&callee.ty);
-                            // Owned arguments transfer to the callee, the
-                            // same as direct calls (offset-aligned: member
-                            // callee types exclude the receiver).
+                            // Right-aligned: member callee types exclude
+                            // the receiver at the front.
                             if let Ty::Func(params, _, _) = &callee_ty {
                                 let offset = operands.len().saturating_sub(params.len());
-                                for (ix, param) in params.iter().enumerate() {
-                                    if !matches!(param, Ty::Borrow(_, _)) {
-                                        self.consume_call_argument_into(
-                                            operands[offset + ix],
-                                            param,
-                                            expr.span,
-                                        )?;
-                                    }
-                                }
+                                self.consume_owned_arguments(
+                                    params,
+                                    &operands[offset..],
+                                    expr.span,
+                                )?;
                             }
                             let args_operand_offset = usize::from(value_receiver.is_some());
                             let (targets, writeback_tys) = self.writeback_targets(
@@ -9557,11 +9181,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         if let Ty::Func(params, _, _) = &self.resolved(&callee.ty) {
             let params = params.clone();
             let offset = operands.len().saturating_sub(params.len());
-            for (operand, param) in operands[offset..].to_vec().iter().zip(&params) {
-                if !matches!(param, Ty::Borrow(_, _)) {
-                    self.consume_call_argument_into(*operand, param, expr.span)?;
-                }
-            }
+            let window = operands[offset..].to_vec();
+            self.consume_owned_arguments(&params, &window, expr.span)?;
             if offset == 1
                 && self
                     .program_builder
@@ -9639,29 +9260,19 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             // displaced one dies at scope exit). Without a live view
             // the old invalidation is simply unnecessary bookkeeping —
             // there is nobody left to invalidate.
-            if let Some(ty) = self.owned_ty(base).cloned()
-                && self.has_live_view(base)
-            {
-                if let Err(error) = self.retain_value(Operand::Local(base), &ty, expr.span) {
-                    self.deferred_errors.push(error);
-                }
-                let displaced = self.fresh_local();
-                self.push(Inst::Copy {
-                    dest: displaced,
-                    src: Operand::Local(base),
-                });
-                self.own_local(displaced, &ty);
-                let views: Vec<LocalId> = self
-                    .borrow_roots
+            if let Some(ty) = self.owned_ty(base).cloned() {
+                // Mutating the base is a use of it: an exclusive loan by
+                // another view conflicts here (the elaborator's check).
+                let name = self
+                    .locals
                     .iter()
-                    .filter(|(_, root)| **root == base)
-                    .map(|(view, _)| *view)
-                    .collect();
-                for view in views {
-                    self.borrow_roots.insert(view, displaced);
-                }
+                    .find(|(_, local)| **local == base)
+                    .map(|(symbol, _)| self.program_builder.display_name(*symbol))
+                    .unwrap_or_else(|| "value".into());
+                self.record_read_site(base, name, expr.span);
+                self.record_ownership_site(base, ty, ownership::SiteKind::Writeback, expr.span);
             }
-            self.loans.retain(|loan| loan.root != base);
+            self.record_loan_kill(base);
         }
         let func = self.demand_specialized(target, subst, expr.span)?;
         self.program_builder
@@ -9807,7 +9418,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         body: &Block,
         contract: &crate::types::output::EffectContract,
     ) -> Result<(), BackendError> {
-        let body_nodes: Vec<&Node> = body.body.iter().collect();
         let captured = self.live_captures(body);
         let captured_names: Vec<Option<String>> = captured
             .iter()
@@ -9846,7 +9456,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // Clause bodies read last-use liveness like any frame: seed
         // their use counts (cell conversion stays the enclosing
         // frame's concern).
-        fx.use_counts = frame_uses(&body_nodes);
         let declared_arity = u16::try_from(body.args.len())
             .map_err(|_| BackendError::new("too many clause parameters".into(), body.span))?;
         // The perform site appends each generic's hidden block ([drop,
@@ -10092,7 +9701,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// (handler-extent shared borrows in v1). The chunk's prologue reads
     /// each capture back out of the environment.
     fn compile_closure(&mut self, func: &Func) -> Result<Operand, BackendError> {
-        let body_nodes: Vec<&Node> = func.body.body.iter().collect();
         let captured = self.live_captures(&func.body);
         let (overrides, mut anchored) = if func.captures.is_empty() {
             // Implicit captures: celled handles are copyable by
@@ -10141,7 +9749,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             .expect("typed facts invariant: a closure body carries frame facts");
         fx.celled = facts.celled.clone();
         fx.nested_refs = facts.nested_refs.clone();
-        fx.use_counts = frame_uses(&body_nodes);
         let declared_arity = u16::try_from(func.params.len())
             .map_err(|_| BackendError::new("too many parameters".into(), func.body.span))?;
         // A stored rank-N closure that stayed rigid (no unique concrete
@@ -10221,7 +9828,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             env,
         });
         if anchored {
-            self.anchored_closures.insert(dest);
+            self.record_flow(verify::FlowEvent::Anchor(dest));
         }
         Ok(Operand::Local(dest))
     }

@@ -145,7 +145,7 @@ pub fn occurrence_at(
                     if !span_contains(*variant_name_span, byte_offset) {
                         None
                     } else {
-                        member_resolution_symbol(module.types.member_resolutions.get(&pattern.id))
+                        member_resolution_symbol(module.facts.member_resolutions.get(&pattern.id))
                             .map(|symbol| {
                                 Occurrence::span(symbol, *variant_name_span, OccurrenceKind::Member)
                             })
@@ -187,7 +187,7 @@ fn occurrence_from_expr(
             if !span_contains(*label_span, byte_offset) {
                 return None;
             }
-            member_resolution_symbol(module.types.member_resolutions.get(&expr.id))
+            member_resolution_symbol(module.facts.member_resolutions.get(&expr.id))
                 .map(|symbol| Occurrence::span(symbol, *label_span, OccurrenceKind::Member))
         }
         ExprKind::CallEffect {

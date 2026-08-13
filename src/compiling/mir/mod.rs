@@ -23,6 +23,7 @@ pub(crate) fn runtime_symbol(
 }
 mod build;
 mod regalloc;
+mod structure;
 
 pub(crate) use build::{Entry, ProgramInput};
 
@@ -89,6 +90,18 @@ pub(crate) fn compile_mir(
 ) -> Result<(build::Program, OptimizationStats), BackendError> {
     let mut program = build::build(programs, entry, false, false)?;
     let optimizations = finalize(&mut program);
+    // The publication trust contract (ADR 0047): adapters compile the
+    // module without validating it, so debug builds prove the structure
+    // here — the balance verifier covers ownership, this covers shape.
+    #[cfg(debug_assertions)]
+    {
+        let findings = structure::verify_structure(&program);
+        assert!(
+            findings.is_empty(),
+            "structural MIR verification failed:\n{}",
+            findings.join("\n")
+        );
+    }
     Ok((program, optimizations))
 }
 

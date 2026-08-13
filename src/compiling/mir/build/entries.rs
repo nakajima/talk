@@ -203,9 +203,8 @@ impl<'a> ProgramBuilder<'a> {
                         { contains_borrow_classified(fx.program_builder, &initializer_ty) };
                     if initializer_is_view
                         && let Operand::Local(view) = initializer
-                        && fx.borrow_roots.contains_key(&view)
+                        && let Some(&root) = fx.borrow_roots.get(&view)
                     {
-                        let root = fx.borrow_root(view);
                         if !fx.global_loads.contains_key(&root) && fx.owns(root) {
                             return Err(BackendError::new(
                                 "a borrowed value cannot be stored in a global binding".into(),
@@ -526,8 +525,7 @@ impl<'a> ProgramBuilder<'a> {
         self.programs.iter().find_map(|input| {
             input
                 .program
-                .resolved_names()
-                .symbol_names
+                .symbol_names()
                 .get(&symbol)
                 .cloned()
         })

@@ -119,6 +119,7 @@ macro_rules! assert_match_capture {
     }};
 }
 
+#[cfg(test)]
 pub mod trace {
     use tracing::{Metadata, Subscriber};
     use tracing_subscriber::{
