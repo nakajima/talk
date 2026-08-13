@@ -37,44 +37,16 @@ const {
   hover,
 } = await import(`/pkg/talk_wasm.js${wasmCacheKey}`);
 
-function createTooltip() {
+function createHoverTooltips() {
   const tooltipEl = document.createElement("div");
   tooltipEl.className = "code-hover-popover";
   tooltipEl.hidden = true;
   document.body.appendChild(tooltipEl);
 
-  return {
-    showAt: (rect, content) => {
-      tooltipEl.textContent = content;
-      tooltipEl.style.left = "0px";
-      tooltipEl.style.top = "0px";
-      tooltipEl.style.transform = "none";
-      tooltipEl.hidden = false;
-
-      const pop = tooltipEl.getBoundingClientRect();
-      const centerX = Math.min(
-        Math.max(rect.left + rect.width / 2, pop.width / 2 + 4),
-        window.innerWidth - pop.width / 2 - 4,
-      );
-      const above = rect.top - 8 - pop.height >= 0;
-      tooltipEl.style.left = `${centerX}px`;
-      tooltipEl.style.top = above ? `${rect.top - 8}px` : `${rect.bottom + 8}px`;
-      tooltipEl.style.transform = above
-        ? "translate(-50%, -100%)"
-        : "translate(-50%, 0)";
-    },
-    hide: () => {
-      tooltipEl.hidden = true;
-    },
-  };
-}
-
-function initHoverTooltips(el, highlightEl) {
-  const tooltip = createTooltip();
   const encoder = new TextEncoder();
-
   let pending = false;
   let lastPointer = null;
+  let currentEditor = null;
   let currentToken = null;
   let hoverTimer = null;
 
@@ -84,15 +56,37 @@ function initHoverTooltips(el, highlightEl) {
     hoverTimer = null;
   };
 
-  const hideTooltip = () => {
+  const hide = () => {
     cancelHoverTimer();
+    lastPointer = null;
+    currentEditor = null;
     currentToken = null;
-    tooltip.hide();
+    tooltipEl.hidden = true;
+  };
+
+  const showAt = (rect, content) => {
+    tooltipEl.textContent = content;
+    tooltipEl.style.left = "0px";
+    tooltipEl.style.top = "0px";
+    tooltipEl.style.transform = "none";
+    tooltipEl.hidden = false;
+
+    const pop = tooltipEl.getBoundingClientRect();
+    const centerX = Math.min(
+      Math.max(rect.left + rect.width / 2, pop.width / 2 + 4),
+      window.innerWidth - pop.width / 2 - 4,
+    );
+    const above = rect.top - 8 - pop.height >= 0;
+    tooltipEl.style.left = `${centerX}px`;
+    tooltipEl.style.top = above ? `${rect.top - 8}px` : `${rect.bottom + 8}px`;
+    tooltipEl.style.transform = above
+      ? "translate(-50%, -100%)"
+      : "translate(-50%, 0)";
   };
 
   const utf8Length = (text) => encoder.encode(text).length;
 
-  const charOffsetForToken = (tokenEl) => {
+  const charOffsetForToken = (highlightEl, tokenEl) => {
     const walker = document.createTreeWalker(
       highlightEl,
       NodeFilter.SHOW_TEXT,
@@ -107,13 +101,14 @@ function initHoverTooltips(el, highlightEl) {
     return offset;
   };
 
-  const showHover = (tokenEl) => {
+  const showHover = (editor, highlightEl, tokenEl) => {
     if (!tokenEl.isConnected) return;
 
-    const { source, currentSource } = getAccumulatedSource(el);
+    const { source, currentSource } = getAccumulatedSource(editor);
     const tokenText = tokenEl.textContent || "";
     const charOffset =
-      charOffsetForToken(tokenEl) + Math.floor(tokenText.length / 2);
+      charOffsetForToken(highlightEl, tokenEl) +
+      Math.floor(tokenText.length / 2);
     const byteOffset =
       utf8Length(source) -
       utf8Length(currentSource) +
@@ -128,26 +123,32 @@ function initHoverTooltips(el, highlightEl) {
     }
 
     const contents = result?.hover?.contents;
-    if (!contents || currentToken !== tokenEl) return;
-    tooltip.showAt(tokenEl.getBoundingClientRect(), contents);
+    if (
+      !contents ||
+      currentEditor !== editor ||
+      currentToken !== tokenEl
+    ) {
+      return;
+    }
+    showAt(tokenEl.getBoundingClientRect(), contents);
   };
 
-  const scheduleHover = (tokenEl) => {
+  const scheduleHover = (editor, highlightEl, tokenEl) => {
     cancelHoverTimer();
     hoverTimer = setTimeout(() => {
       hoverTimer = null;
-      showHover(tokenEl);
+      showHover(editor, highlightEl, tokenEl);
     }, 200);
   };
 
-  const tokenFromPoint = (x, y) => {
-    const previousPointerEvents = el.style.pointerEvents;
-    el.style.pointerEvents = "none";
+  const tokenFromPoint = (editor, highlightEl, x, y) => {
+    const previousPointerEvents = editor.style.pointerEvents;
+    editor.style.pointerEvents = "none";
     const elementsFromPoint = document.elementsFromPoint
       ? document.elementsFromPoint(x, y)
       : null;
     const topElement = document.elementFromPoint(x, y);
-    el.style.pointerEvents = previousPointerEvents;
+    editor.style.pointerEvents = previousPointerEvents;
 
     if (Array.isArray(elementsFromPoint)) {
       for (const element of elementsFromPoint) {
@@ -158,17 +159,15 @@ function initHoverTooltips(el, highlightEl) {
       }
     }
 
-    if (topElement instanceof HTMLElement) {
-      if (
-        topElement.tagName === "SPAN" &&
-        topElement.closest(".code-highlight") === highlightEl
-      ) {
-        return topElement;
-      }
+    if (
+      topElement instanceof HTMLElement &&
+      topElement.tagName === "SPAN" &&
+      topElement.closest(".code-highlight") === highlightEl
+    ) {
+      return topElement;
     }
 
-    const spans = highlightEl.querySelectorAll("span");
-    for (const span of spans) {
+    for (const span of highlightEl.querySelectorAll("span")) {
       const rect = span.getBoundingClientRect();
       if (
         x >= rect.left &&
@@ -183,58 +182,82 @@ function initHoverTooltips(el, highlightEl) {
     return null;
   };
 
-  const updateTooltip = () => {
+  const update = () => {
     if (!lastPointer) return;
-    if (typeof lastPointer.buttons === "number" && lastPointer.buttons !== 0) {
-      hideTooltip();
+    const { editor, x, y, buttons } = lastPointer;
+    if (!editor?.isConnected || buttons !== 0) {
+      hide();
       return;
     }
+
+    const highlightEl = editor
+      .closest(".runnable")
+      ?.querySelector(".code-highlight");
+    if (!highlightEl) {
+      hide();
+      return;
+    }
+
     const highlightRect = highlightEl.getBoundingClientRect();
     if (
-      lastPointer.x < highlightRect.left ||
-      lastPointer.x > highlightRect.right ||
-      lastPointer.y < highlightRect.top ||
-      lastPointer.y > highlightRect.bottom
+      x < highlightRect.left ||
+      x > highlightRect.right ||
+      y < highlightRect.top ||
+      y > highlightRect.bottom
     ) {
-      hideTooltip();
+      hide();
       return;
     }
-    const token = tokenFromPoint(lastPointer.x, lastPointer.y);
+
+    const token = tokenFromPoint(editor, highlightEl, x, y);
     if (!token) {
-      hideTooltip();
+      hide();
       return;
     }
-    if (token === currentToken) return;
+    if (editor === currentEditor && token === currentToken) return;
+
+    currentEditor = editor;
     currentToken = token;
-    tooltip.hide();
-    scheduleHover(token);
+    tooltipEl.hidden = true;
+    scheduleHover(editor, highlightEl, token);
   };
 
-  const scheduleUpdate = (event) => {
-    lastPointer = {
-      x: event.clientX,
-      y: event.clientY,
-      buttons: event.buttons,
-    };
-    if (pending) return;
-    pending = true;
-    requestAnimationFrame(() => {
-      pending = false;
-      updateTooltip();
-    });
-  };
+  document.addEventListener(
+    "pointermove",
+    (event) => {
+      const editor =
+        event.target instanceof Element
+          ? event.target.closest(".code-editable")
+          : null;
+      if (!editor) {
+        hide();
+        return;
+      }
 
-  el.addEventListener("pointermove", scheduleUpdate);
-  el.addEventListener("mousemove", scheduleUpdate);
-  window.addEventListener("pointermove", scheduleUpdate, { passive: true });
-  window.addEventListener("mousemove", scheduleUpdate, { passive: true });
-  el.addEventListener("pointerleave", hideTooltip);
-  el.addEventListener("mouseleave", hideTooltip);
-  el.addEventListener("pointerdown", hideTooltip);
-  el.addEventListener("scroll", hideTooltip);
-  el.addEventListener("blur", hideTooltip);
+      lastPointer = {
+        editor,
+        x: event.clientX,
+        y: event.clientY,
+        buttons: event.buttons,
+      };
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(() => {
+        pending = false;
+        update();
+      });
+    },
+    { passive: true },
+  );
+  document.addEventListener("pointerdown", hide, { passive: true });
+  document.addEventListener("scroll", hide, {
+    capture: true,
+    passive: true,
+  });
+  document.documentElement.addEventListener("pointerleave", hide);
+  window.addEventListener("blur", hide);
 
-  return { hide: hideTooltip };
+  return { hide };
 }
 
 const diagnosticsMeasureCache = new WeakMap();
@@ -409,6 +432,7 @@ export async function loadTalk() {
 }
 
 const talk = await loadTalk();
+const hoverTooltips = createHoverTooltips();
 const editorRenderers = new WeakMap();
 
 for (const el of document.querySelectorAll(".actions .run")) {
@@ -629,7 +653,6 @@ function initEditable(el) {
   let diagnosticsLayer = getDiagnosticsLayer(container);
 
   let isComposing = false;
-  let hoverTooltips = initHoverTooltips(el, highlight);
 
   let resizeEditor = () => {
     el.style.height = "auto";
@@ -695,7 +718,4 @@ function initEditable(el) {
   });
 
   resizeEditor();
-  renderHighlight();
 }
-
-console.log(await talk.runProgram("1 + 2 + 3"));
