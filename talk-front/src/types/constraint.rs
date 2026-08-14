@@ -167,6 +167,13 @@ pub enum Constraint {
     Adapt {
         expected: Ty,
         found: Ty,
+        /// Whether `origin.node` IS the crossed value expression — the
+        /// node a committed `Into` conversion wraps. Crossings surfaced
+        /// from member dispatch or function-type decomposition blame the
+        /// member or callee node instead, so the Convert tier demotes
+        /// them to the plain equality rather than wrapping the wrong
+        /// node. Borrow adaptations ignore the flag.
+        node_is_value: bool,
         origin: CtOrigin,
     },
     /// The type one pattern occurrence checks against, with a borrow at that

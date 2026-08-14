@@ -547,7 +547,7 @@ impl<'a> TypecheckSession<'a> {
             self.level = groups.level;
         }
 
-        self.check_recursive_declarations(asts);
+        self.check_recursive_linear_declarations(asts);
         self.check_matches(asts);
         self.check_member_references(asts);
         self.check_call_labels(asts);
@@ -625,30 +625,38 @@ impl<'a> TypecheckSession<'a> {
         }
     }
 
-    /// ADR 0045 rule 2: a declaration whose layout contains itself must
-    /// live behind a reference, and `'heap` is how a declaration says
-    /// so — recursion is the case where indirection is not optional.
-    /// Runs after collection, when the whole catalog can answer the
-    /// cycle walk; only this module's own declarations are judged
-    /// (imports were judged when their module compiled). One direction
-    /// only: `'heap` on a non-recursive type stays an ordinary choice.
-    fn check_recursive_declarations(&mut self, asts: &IndexMap<Source, AST<NameResolved>>) {
-        fn walk(decl: &Decl, out: &mut Vec<(NodeID, Symbol, String, bool)>) {
+    /// Recursive layouts infer shared reference semantics. Preserve the
+    /// declaration-level incompatibility with `'linear`, which the parser can
+    /// otherwise only enforce when both attributes are written explicitly.
+    fn check_recursive_linear_declarations(
+        &mut self,
+        asts: &IndexMap<Source, AST<NameResolved>>,
+    ) {
+        fn walk(decl: &Decl, out: &mut Vec<(NodeID, Symbol, String)>) {
             match &decl.kind {
                 DeclKind::Struct {
-                    name, body, heap, ..
+                    name,
+                    body,
+                    linear: true,
+                    ..
                 }
                 | DeclKind::Enum {
-                    name, body, heap, ..
+                    name,
+                    body,
+                    linear: true,
+                    ..
                 } => {
                     if let Ok(symbol) = name.symbol() {
-                        out.push((decl.id, symbol, name.name_str(), *heap));
+                        out.push((decl.id, symbol, name.name_str()));
                     }
                     for member in &body.decls {
                         walk(member, out);
                     }
                 }
-                DeclKind::Protocol { body, .. } | DeclKind::Extend { body, .. } => {
+                DeclKind::Struct { body, .. }
+                | DeclKind::Enum { body, .. }
+                | DeclKind::Protocol { body, .. }
+                | DeclKind::Extend { body, .. } => {
                     for member in &body.decls {
                         walk(member, out);
                     }
@@ -656,19 +664,22 @@ impl<'a> TypecheckSession<'a> {
                 _ => {}
             }
         }
-        let mut declared = vec![];
+
+        let mut linear = vec![];
         for ast in asts.values() {
             for root in &ast.roots {
                 if let Node::Decl(decl) = root {
-                    walk(decl, &mut declared);
+                    walk(decl, &mut linear);
                 }
             }
         }
-        for (node, symbol, name, heap) in declared {
-            if !heap && self.catalog.layout_recursive(symbol) {
+        for (node, symbol, name) in linear {
+            if self.catalog.heap_origin(symbol)
+                == Some(crate::types::catalog::HeapOrigin::RecursiveLayout)
+            {
                 self.diagnostics
                     .errors
-                    .push((TypeError::RecursiveTypeNeedsHeap { name }, node));
+                    .push((TypeError::RecursiveLinearType { name }, node));
             }
         }
     }

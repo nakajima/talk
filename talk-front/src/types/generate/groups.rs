@@ -234,6 +234,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
             resolved_member_types: &mut self.artifacts.resolved_member_types,
             member_call_slots: &self.artifacts.member_call_slots,
             coerce_clones: &mut self.artifacts.coerce_clones,
+            into_coercions: &mut self.artifacts.into_coercions,
             level: self.level,
             defaulting,
             givens: vec![],
@@ -416,6 +417,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     expected,
                     found,
                     origin,
+                    ..
                 } => {
                     let expected = self.store.render(&expected);
                     let found = self.store.render(&found);

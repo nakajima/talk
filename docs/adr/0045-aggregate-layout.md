@@ -138,21 +138,20 @@ A type whose layout contains itself has no finite width. Such a type is
 boxed at the recursive edge. The cycle is detected on the nominal type
 graph, so the decision is a property of the declaration, not of a site.
 
-The indirection is *required* to be named in source: a recursive type
-without it is a diagnostic, never a silent allocation. This matches the
-language's grain — ownership transfer, borrows, and effects are already
-explicit, and a hidden allocation at a recursive edge would be the odd
-one out.
+Recursive indirection is inferred catalog-wide after every nominal shape is
+known. Discovery runs against one immutable catalog snapshot before any heap
+flags are changed, so all members of a mutual cycle receive the same result.
+The catalog records whether heap semantics were explicit or inferred from a
+recursive layout; editor tooling presents inferred `'heap` even though the
+source AST remains unchanged.
 
-The marker is `'heap` (implemented 2026-08-01), not a new keyword:
-`'heap` already means "this declaration's values live behind a
-reference," heap values are value-like in use (matched, structurally
-compared, deterministically dropped), and recursion is simply the case
-where that indirection is not optional. Enums accept `'heap` for this —
-at runtime a heap enum is exactly the boxed variant both backends
-already build, so the declaration is pure published truth. The rule is
-one-directional: recursive-and-not-`'heap` errors; `'heap` on a
-non-recursive type remains an ordinary choice.
+The semantic marker is `'heap`, not a separate recursive-boxing mode:
+`'heap` means "this declaration's values live behind a reference," heap
+values are value-like in use (matched, structurally compared,
+deterministically dropped), and recursion is simply the case where that
+indirection is not optional. Enums receive the same semantics — at runtime a
+heap enum is exactly the boxed variant both backends already build. Explicit
+`'heap` on a non-recursive type remains an ordinary choice.
 
 Precision is part of the rule: `[Node]` does not make `Node` recursive,
 because array elements live behind `Storage`'s raw pointer. Recursion is

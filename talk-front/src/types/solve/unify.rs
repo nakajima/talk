@@ -87,6 +87,7 @@ impl<'s> Solver<'s> {
                     worklist.push(Constraint::Adapt {
                         expected: a.clone(),
                         found: b.clone(),
+                        node_is_value: true,
                         origin,
                     });
                 } else {
@@ -105,6 +106,7 @@ impl<'s> Solver<'s> {
                 worklist.push(Constraint::Adapt {
                     expected: a.clone(),
                     found: b.clone(),
+                    node_is_value: true,
                     origin,
                 });
             }
@@ -463,6 +465,13 @@ impl<'s> Solver<'s> {
             | Adapted::Mismatch { expected, found } => {
                 worklist.push(Constraint::Eq(expected, found, origin))
             }
+            // Per-argument identity is gone by decomposition time (the
+            // callee's Func bundled the inferred argument types), so an
+            // implicit conversion has no node to wrap. Demote to the
+            // equality (the ordinary mismatch).
+            Adapted::Convert { expected, found } => {
+                worklist.push(Constraint::Eq(expected, found, origin))
+            }
             // Donation and its refusals are the `Adapt` dispatcher's to
             // realize (evidence recording, diagnostics); unification only
             // flags the crossing. An undecided pair with no borrow in
@@ -475,6 +484,7 @@ impl<'s> Solver<'s> {
             } => worklist.push(Constraint::Adapt {
                 expected: expected.clone(),
                 found: found.clone(),
+                node_is_value: false,
                 origin,
             }),
             Adapted::Unresolved {

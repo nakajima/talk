@@ -879,6 +879,7 @@ mod tests {
         let mut def = Enum {
             linear: false,
             heap: false,
+            heap_inferred: false,
             params,
             variants: IndexMap::new(),
             methods: IndexMap::new(),

@@ -45,10 +45,12 @@ use crate::name_resolution::symbol::{Symbol, Symbols};
 use crate::node_id::NodeID;
 use crate::types::Level;
 use crate::types::adapt::{Adapted, Donation, Site, adapt};
-use crate::types::catalog::{MemberOwner, ProtocolApplication, Requirement, TypeCatalog};
+use crate::types::catalog::{
+    DictionaryEntry, MemberOwner, ProtocolApplication, Requirement, TypeCatalog,
+};
 use crate::types::constraint::{Constraint, CtOrigin, CtReason, Implication};
 use crate::types::error::TypeError;
-use crate::types::output::MemberResolution;
+use crate::types::output::{IntoCoercion, MemberResolution};
 use crate::types::ty::{
     EffTail, EffVar, EffectEntry, EffectRow, Perm, PermVar, Predicate, ProtocolRef, Row, RowTail,
     RowVar, Scheme, SchemeParam, StaticAtom, StaticCmpOp, StaticInt, StaticValue, Ty, TyFold,
@@ -88,6 +90,9 @@ pub struct Solver<'s> {
     /// Argument nodes where a borrowed value satisfied an owned CheapClone
     /// parameter by cloning (an O(1) buffer retain, emitted by lowering).
     pub coerce_clones: &'s mut FxHashSet<NodeID>,
+    /// Expression nodes the final solve committed to an implicit `Into`
+    /// conversion (the typed-tree build wraps each in a `.into()` call).
+    pub into_coercions: &'s mut FxHashMap<NodeID, IntoCoercion>,
     pub level: Level,
     /// True only in the final solve: committing a member constraint to its
     /// single nominal owner is defaulting, sound only once no later group
@@ -206,8 +211,11 @@ impl<'s> Solver<'s> {
                     Constraint::Adapt {
                         expected,
                         found,
+                        node_is_value,
                         origin,
-                    } => self.solve_adapt(expected, found, origin, &mut queue, &mut stuck),
+                    } => {
+                        self.solve_adapt(expected, found, node_is_value, origin, &mut queue, &mut stuck)
+                    }
                     Constraint::Conforms {
                         ty,
                         protocol,
@@ -499,6 +507,7 @@ impl<'s> Solver<'s> {
         &mut self,
         expected: Ty,
         found: Ty,
+        node_is_value: bool,
         origin: CtOrigin,
         queue: &mut Vec<Constraint>,
         stuck: &mut Vec<Constraint>,
@@ -509,6 +518,7 @@ impl<'s> Solver<'s> {
             stuck.push(Constraint::Adapt {
                 expected,
                 found,
+                node_is_value,
                 origin,
             });
             return;
@@ -541,16 +551,100 @@ impl<'s> Solver<'s> {
                 self.errors
                     .push((TypeError::CannotDonate { ty: rendered }, origin.node));
             }
+            // The conversion is forced (one declared row, both sides
+            // resolved), but committing mints a call — that waits for the
+            // final solve, when every witness scheme exists and no group
+            // generalization is in flight. Group solves — and crossings
+            // whose arguments are still variables — park; they float out
+            // with the other Adapt residuals and re-judge on progress.
+            Adapted::Convert { expected, found } => {
+                if !node_is_value {
+                    // The crossing blames a member or callee node, not the
+                    // value expression: there is nothing sound to wrap, so
+                    // the pair equates and reports the ordinary mismatch.
+                    queue.push(Constraint::Eq(expected, found, origin));
+                } else if self.defaulting
+                    && !expected.has_unification_vars()
+                    && !found.has_unification_vars()
+                {
+                    self.commit_into_conversion(expected, found, origin, queue);
+                } else {
+                    stuck.push(Constraint::Adapt {
+                        expected,
+                        found,
+                        node_is_value,
+                        origin,
+                    });
+                }
+            }
             // A projection surviving normalization is stuck; wait with it
             // like any unresolved side.
             Adapted::Unresolved { .. } | Adapted::PeelableProjection { .. } => {
                 stuck.push(Constraint::Adapt {
                     expected,
                     found,
+                    node_is_value,
                     origin,
                 })
             }
             Adapted::Silent => {}
+        }
+    }
+
+    /// Commit an implicit `Into` conversion at a value crossing: record
+    /// the coercion fact the typed-tree build wraps into a real `.into()`
+    /// call. Every gate re-checks here — the final solve may know more
+    /// than the deciding site did — and a failed gate falls back to the
+    /// plain equality, whose mismatch is today's diagnostic.
+    fn commit_into_conversion(
+        &mut self,
+        expected: Ty,
+        found: Ty,
+        origin: CtOrigin,
+        queue: &mut Vec<Constraint>,
+    ) {
+        let committed = self
+            .catalog
+            .into_conversion_row(&found, &expected)
+            .and_then(|row| {
+                let (_, requirement) = self.catalog.requirement_in(Symbol::Into, "into")?;
+                let requirement = requirement.symbol;
+                let slot = self
+                    .catalog
+                    .requirement_slot_index(Symbol::Into, requirement)?;
+                let entry = self.catalog.conformance(row)?.dictionary.get(slot)?;
+                // The inserted call must not smuggle effects: the
+                // enclosing function's row was inferred without it. A
+                // witness with concrete effect entries disqualifies the
+                // conversion (a polymorphic tail instantiates empty).
+                let effect_free = match entry {
+                    DictionaryEntry::Implementation { symbol, .. } => {
+                        self.schemes.get(symbol).is_some_and(|scheme| {
+                            matches!(&scheme.ty, Ty::Func(_, _, effects) if effects.effects.is_empty())
+                        })
+                    }
+                    DictionaryEntry::Derived(_) => true,
+                };
+                effect_free.then_some(requirement)
+            });
+        match committed {
+            Some(requirement) => {
+                self.into_coercions.insert(
+                    origin.node,
+                    IntoCoercion {
+                        target: expected.clone(),
+                        resolution: MemberResolution::ViaRequirement {
+                            protocol: ProtocolRef {
+                                protocol: Symbol::Into,
+                                args: vec![expected],
+                            },
+                            requirement,
+                            self_ty: found,
+                        },
+                    },
+                );
+            }
+            None => queue.push(Constraint::Eq(expected, found, origin)),
         }
     }
 
@@ -581,6 +675,7 @@ impl<'s> Solver<'s> {
                     expected,
                     found,
                     origin,
+                    ..
                 } if self.defaulting
                     && (matches!(self.store.shallow(&found), Ty::Var(_) | Ty::Proj(..))
                         || matches!(self.store.shallow(&expected), Ty::Var(_)))

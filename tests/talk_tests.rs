@@ -531,6 +531,113 @@ fn stuck_into_targets_default_to_the_unique_declared_conversion() {
 }
 
 #[test]
+fn implicit_into_coercion_at_annotated_lets() {
+    // A value crossing into a slot of a different monotype converts
+    // through the unique declared `Into` row: the checker inserts the
+    // `.into()` the programmer would have written.
+    assert_runs(
+        b"struct Word {}\n\
+          extend Word: Into<String> {\n\tconsuming func into() -> String { \"word\" }\n}\n\
+          let s: String = Word()\n\
+          print(s)\n",
+        &[],
+        b"word\n",
+    );
+}
+
+#[test]
+fn implicit_into_coercion_at_call_arguments() {
+    assert_runs(
+        b"struct Word {}\n\
+          extend Word: Into<String> {\n\tconsuming func into() -> String { \"arg\" }\n}\n\
+          func shout(_ s: String) -> String { s + \"!\" }\n\
+          print(shout(Word()))\n",
+        &[],
+        b"arg!\n",
+    );
+}
+
+#[test]
+fn implicit_into_coercion_at_returns() {
+    // Both the body-tail and the explicit `return` crossing convert.
+    assert_runs(
+        b"struct Word {}\n\
+          extend Word: Into<String> {\n\tconsuming func into() -> String { \"ret\" }\n}\n\
+          func tail() -> String { Word() }\n\
+          func explicit() -> String { return Word() }\n\
+          print(tail() + explicit())\n",
+        &[],
+        b"retret\n",
+    );
+}
+
+#[test]
+fn implicit_into_coercion_through_generic_rows() {
+    // The conversion dispatches through a generic conformance row: the
+    // committed dictionary entry is a generic witness, made concrete at
+    // the crossing's instantiation.
+    assert_runs(
+        b"struct BoxOf<T> {\n\tlet value: T\n}\n\
+          extend<T> BoxOf<T>: Into<Array<T>> {\n\tconsuming func into() -> Array<T> { [self.value] }\n}\n\
+          let xs: [Int] = BoxOf(value: 7)\n\
+          print(xs[0])\n",
+        &[],
+        b"7\n",
+    );
+}
+
+#[test]
+fn implicit_into_coercion_transfers_ownership() {
+    // `into` is consuming: the coerced value moves into the witness and
+    // its heap payload passes through to the result — double ownership
+    // would double-free at teardown.
+    assert_runs(
+        b"struct Word {\n\tlet inner: String\n}\n\
+          extend Word: Into<String> {\n\tconsuming func into() -> String { self.inner }\n}\n\
+          let s: String = Word(inner: \"own\" + \"ed\")\n\
+          print(s)\n",
+        &[],
+        b"owned\n",
+    );
+}
+
+#[test]
+fn implicit_conversions_require_a_declared_into_row() {
+    // No declared row (the synthesized reflexive `Into` rows never
+    // convert between distinct types): the crossing stays an ordinary
+    // type mismatch.
+    let output = check_source(b"struct A {}\nstruct B {}\nlet b: B = A()\nprint(\"nope\")\n");
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Type mismatch in annotated expression"),
+        "expected the ordinary mismatch diagnostic: {stdout}"
+    );
+}
+
+#[test]
+fn implicit_conversions_stay_out_of_late_resolved_member_arguments() {
+    // A member call's arguments meet their parameters through
+    // function-type decomposition, where the argument's node identity is
+    // gone (the constraint blames the callee). With nothing sound to
+    // wrap, the crossing demotes to the ordinary mismatch instead of
+    // converting at the wrong node.
+    let output = check_source(
+        b"struct Word {}\n\
+          extend Word: Into<String> {\n\tconsuming func into() -> String { \"w\" }\n}\n\
+          struct Holder {}\n\
+          extend Holder {\n\tfunc take(_ s: String) -> String { s }\n}\n\
+          func main() {\n\tprint(Holder().take(Word()))\n}\n",
+    );
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Type mismatch"),
+        "expected the ordinary mismatch diagnostic: {stdout}"
+    );
+}
+
+#[test]
 fn protocol_extension_supplies_out_of_line_default_bodies() {
     // The Swift idiom: declare the requirement in the protocol body,
     // supply its default in an extension. A conformer may omit the
@@ -5639,32 +5746,21 @@ fn parity_programs_still_pass_frontend_checking() {
 /// call silently reuses the enclosing instance — an open checker bug
 /// tracked in the ADR 0045 notes. `INSTANTIATION_DEPTH_LIMIT` in
 /// `mir::demand` backstops any route that does demand growing instances.
-/// ADR 0045 rule 2: a type whose layout contains itself must live
-/// behind a reference, and `'heap` is how the declaration says so.
-/// Recursion through an array does NOT count — elements already live
-/// behind `Storage`'s pointer — which is what keeps the frontend's own
-/// AST enums unannotated.
+/// ADR 0045 rule 2: a type whose layout contains itself is inferred to
+/// live behind a reference. Recursion through an array does NOT count —
+/// elements already live behind `Storage`'s pointer — which is what keeps
+/// the frontend's own AST enums inline.
 #[test]
-fn recursive_types_require_heap() {
-    let output = check_source(
+fn recursive_types_infer_heap() {
+    assert_checks(
         b"enum Tree {\n\
           \tcase leaf(Int)\n\
           \tcase node(Tree, Tree)\n\
           }\n\
           func main() {}\n",
     );
-    assert!(!output.status.success());
-    let printed = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        printed.contains("must be declared 'heap"),
-        "diagnostics:\n{printed}"
-    );
 
-    // Array-mediated recursion needs no marker...
+    // Array-mediated recursion needs no inferred heap semantics...
     assert_checks(
         b"enum Node {\n\
           \tcase leaf(Int)\n\
@@ -5672,9 +5768,9 @@ fn recursive_types_require_heap() {
           }\n\
           func main() {}\n",
     );
-    // ...and a marked recursive enum builds and runs.
+    // ...and an unmarked recursive enum builds and runs as a heap value.
     assert_runs(
-        b"enum Tree 'heap {\n\
+        b"enum Tree {\n\
           \tcase leaf(Int)\n\
           \tcase node(Tree, Tree)\n\
           }\n\

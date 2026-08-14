@@ -24,6 +24,8 @@ jobs:
         run: cargo build --workspace --verbose --locked
       - name: Run tests
         run: cargo test --workspace --all-targets --verbose --locked
+      - name: Check WASM core artifact
+        run: cargo run --locked -- core-artifact --check
 
   c-backend:
     name: C backend differential

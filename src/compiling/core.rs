@@ -3,9 +3,18 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
+#[cfg(target_family = "wasm")]
+use flate2::read::GzDecoder;
+#[cfg(not(target_family = "wasm"))]
+use flate2::{Compression, write::GzEncoder};
+#[cfg(not(target_family = "wasm"))]
+use std::io::Write;
+
+use crate::compiling::module::Module;
+#[cfg(not(target_family = "wasm"))]
 use crate::compiling::{
     driver::{CompilationMode, Driver, DriverConfig, Source},
-    module::{Module, ModuleId},
+    module::ModuleId,
 };
 
 const TALK_CORE_PATH_ENV: &str = "TALK_CORE_PATH";
@@ -27,19 +36,48 @@ struct CoreArtifacts {
 static CORE: OnceLock<CoreArtifacts> = OnceLock::new();
 
 pub fn compile() -> Arc<Module> {
-    CORE.get_or_init(_compile).module.clone()
+    CORE.get_or_init(initialize).module.clone()
 }
 
 /// The typed bodies behind the core interface. The backend compiles the
 /// reachable source graph as one unit, so core callables supply their
 /// bodies from here.
 pub(crate) fn typed_program() -> Arc<crate::compiling::typed_program::TypedProgram> {
-    CORE.get_or_init(_compile).typed.clone()
+    CORE.get_or_init(initialize).typed.clone()
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub fn artifact_bytes() -> Result<Vec<u8>, String> {
+    let artifacts = CORE.get_or_init(initialize);
+    let payload = bincode::serialize(&(artifacts.module.as_ref(), artifacts.typed.as_ref()))
+        .map_err(|error| format!("failed to serialize core artifact: {error}"))?;
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+    encoder
+        .write_all(&payload)
+        .map_err(|error| format!("failed to compress core artifact: {error}"))?;
+    encoder
+        .finish()
+        .map_err(|error| format!("failed to finish core artifact: {error}"))
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub fn artifact_manifest(bytes: &[u8]) -> Result<String, String> {
+    let compiler_stamp = compiler_stamp().ok_or("compiler stamp is unavailable")?;
+    Ok(format!(
+        "format_version: {ARTIFACT_FORMAT_VERSION}\ncompiler_stamp: {compiler_stamp}\nartifact_digest: {}\n",
+        crate::compiling::manifest::artifact_digest(bytes),
+    ))
 }
 
 pub use crate::front::module::CORE_SOURCE_NAMES;
 
-/// All core source strings, in a fixed order.
+pub const ARTIFACT_FORMAT_VERSION: u32 = 1;
+pub const ARTIFACT_PATH: &str = "bootstrap/core.bin.gz";
+pub const ARTIFACT_MANIFEST_PATH: &str = "bootstrap/core.manifest";
+
+/// All core source strings, in a fixed order. Browser builds consume the
+/// checked-in compiled artifact and deliberately carry no core source text.
+#[cfg(not(target_family = "wasm"))]
 pub fn core_sources() -> Vec<(&'static str, &'static str)> {
     vec![
         ("Ownership.tlk", include_str!("../../core/Ownership.tlk")),
@@ -77,6 +115,12 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
+#[cfg(target_family = "wasm")]
+pub fn core_sources() -> Vec<(&'static str, &'static str)> {
+    Vec::new()
+}
+
+#[cfg(not(target_family = "wasm"))]
 fn compilation_sources() -> Vec<Source> {
     if let Some(core_dir) = path_override() {
         assert!(
@@ -97,10 +141,32 @@ fn compilation_sources() -> Vec<Source> {
         .collect()
 }
 
-fn _compile() -> CoreArtifacts {
+#[cfg(not(target_family = "wasm"))]
+fn initialize() -> CoreArtifacts {
     if let Some(cached) = load_cached() {
         return cached;
     }
+    compile_from_sources()
+}
+
+#[cfg(target_family = "wasm")]
+fn initialize() -> CoreArtifacts {
+    let compressed = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/bootstrap/core.bin.gz"
+    ));
+    let decoder = GzDecoder::new(compressed.as_slice());
+    let (module, typed): (Module, crate::compiling::typed_program::TypedProgram) =
+        bincode::deserialize_from(decoder)
+            .unwrap_or_else(|error| panic!("invalid embedded core artifact: {error}"));
+    CoreArtifacts {
+        module: Arc::new(module),
+        typed: Arc::new(typed),
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn compile_from_sources() -> CoreArtifacts {
     let _s = tracing::trace_span!("compile_prelude", prelude = true).entered();
     let mut config = DriverConfig::new("Core");
     config.module_id = ModuleId::Core;
@@ -160,6 +226,7 @@ pub(crate) fn compiler_stamp() -> Option<&'static str> {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn cache_key() -> Option<[u8; 32]> {
     // The bundled source set is fixed for the process: hash it once.
     // An override directory can change between runs, so its key stays
@@ -171,6 +238,7 @@ fn cache_key() -> Option<[u8; 32]> {
     cache_key_dynamic()
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn cache_key_dynamic() -> Option<[u8; 32]> {
     let sources: Vec<(String, String)> = if let Some(core_dir) = path_override() {
         CORE_SOURCE_NAMES
@@ -194,10 +262,12 @@ fn cache_key_dynamic() -> Option<[u8; 32]> {
     super::cache::key("core", &refs, compiler_stamp())
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn load_cached() -> Option<CoreArtifacts> {
     load_cached_in(&super::cache::cache_root()?)
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn load_cached_in(root: &std::path::Path) -> Option<CoreArtifacts> {
     let key = cache_key()?;
     let payload = super::cache::load_in(root, "core", &key)?;
@@ -209,6 +279,7 @@ fn load_cached_in(root: &std::path::Path) -> Option<CoreArtifacts> {
     })
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn store_cached(module: &Module, typed: &crate::compiling::typed_program::TypedProgram) {
     let Some(root) = super::cache::cache_root() else {
         return;
@@ -216,6 +287,7 @@ fn store_cached(module: &Module, typed: &crate::compiling::typed_program::TypedP
     store_cached_in(&root, module, typed);
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn store_cached_in(
     root: &std::path::Path,
     module: &Module,
@@ -243,7 +315,7 @@ mod tests {
     /// cache.
     #[test]
     fn core_cache_round_trips() {
-        let artifacts = CORE.get_or_init(_compile);
+        let artifacts = CORE.get_or_init(initialize);
         let root =
             std::env::temp_dir().join(format!("talk-core-cache-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -263,9 +335,23 @@ mod tests {
     }
 
     #[test]
+    fn checked_in_artifact_matches_compiled_core() {
+        let bytes = artifact_bytes().expect("serialize core artifact");
+        let manifest = artifact_manifest(&bytes).expect("render core manifest");
+        assert_eq!(
+            bytes,
+            std::fs::read(ARTIFACT_PATH).expect("read checked-in core artifact")
+        );
+        assert_eq!(
+            manifest,
+            std::fs::read_to_string(ARTIFACT_MANIFEST_PATH).expect("read checked-in core manifest")
+        );
+    }
+
+    #[test]
     fn core_resolves_without_errors() {
-        // _compile() asserts there are no error diagnostics.
-        let module = _compile().module;
+        // compile_from_sources() asserts there are no error diagnostics.
+        let module = compile_from_sources().module;
         assert_eq!(module.name, "Core");
         assert!(!module.exports.is_empty());
         assert!(!module.types.schemes.is_empty());
@@ -273,7 +359,7 @@ mod tests {
 
     #[test]
     fn core_exports_use_well_known_symbols() {
-        let module = _compile().module;
+        let module = compile_from_sources().module;
 
         assert_eq!(
             module
@@ -337,7 +423,7 @@ mod tests {
 
     #[test]
     fn core_iterator_into_array_conformance_is_exported() {
-        let module = _compile().module;
+        let module = compile_from_sources().module;
         let array_into_iterator = module.exports["ArrayIntoIterator"][0];
         let into = module.exports["Into"][0];
         let target = crate::types::ty::ProtocolRef {

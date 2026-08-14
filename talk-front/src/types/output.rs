@@ -52,6 +52,22 @@ pub struct ExistentialPack {
     pub payload: Ty,
 }
 
+/// A checker-committed implicit conversion at a value crossing: the
+/// expression node converts into its slot through the one declared
+/// `Into` row. The typed-tree build wraps the node in a synthesized
+/// `.into()` member call carrying this resolution; downstream phases see
+/// an ordinary call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IntoCoercion {
+    /// The type the inserted call produces — the slot the value crossed
+    /// into.
+    pub target: Ty,
+    /// How the `.into()` dispatches, committed like any member call's
+    /// resolution (finalize upgrades the requirement operation to its
+    /// concrete witness exactly as it does for source-written calls).
+    pub resolution: MemberResolution,
+}
+
 /// The checked contract of one effect site — a perform or a handler
 /// (ADR 0038). Declared parameter types keep rigid generics as
 /// `Ty::Param`; the type-generic list fixes the hidden witness-block
@@ -334,6 +350,9 @@ pub struct Elaboration {
     pub coerce_clones: rustc_hash::FxHashSet<NodeID>,
     /// Expression nodes implicitly packed into an existential expected type.
     pub existential_packs: FxHashMap<NodeID, ExistentialPack>,
+    /// Expression nodes implicitly converted into their slot through a
+    /// declared `Into` row (wrapped in a synthesized `.into()` call).
+    pub into_coercions: FxHashMap<NodeID, IntoCoercion>,
     /// Checked inline-IR operation per `#_ir` expression (ADR 0038).
     pub checked_ir: FxHashMap<NodeID, CheckedIrKind>,
     /// Checked effect contract per perform expression and handler

@@ -36,6 +36,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 resolved_member_types: &mut self.artifacts.resolved_member_types,
                 member_call_slots: &self.artifacts.member_call_slots,
                 coerce_clones: &mut self.artifacts.coerce_clones,
+                into_coercions: &mut self.artifacts.into_coercions,
                 level: self.level,
                 defaulting: false,
                 givens: vec![],

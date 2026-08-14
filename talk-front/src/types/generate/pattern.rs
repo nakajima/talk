@@ -128,10 +128,12 @@ impl PatternRefinement {
             Constraint::Adapt {
                 expected,
                 found,
+                node_is_value,
                 origin,
             } => Constraint::Adapt {
                 expected: expected.substitute(&tys, &effs, &rows),
                 found: found.substitute(&tys, &effs, &rows),
+                node_is_value,
                 origin,
             },
             Constraint::PatternView {

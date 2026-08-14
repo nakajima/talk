@@ -228,6 +228,66 @@ impl TypedTreeBuilder<'_> {
     // ----- Expressions -----------------------------------------------------
 
     fn expr(&self, e: &expr::Expr) -> typed_ast::Expr {
+        let built = self.expr_unconverted(e);
+        self.apply_into_coercion(e.id, built)
+    }
+
+    /// Wrap a checker-coerced expression in its synthesized `.into()`
+    /// call (implicit `Into` conversion): the value crossed into a slot
+    /// of a different monotype and typing committed the one declared
+    /// row. The wrapper is an ordinary member call at fresh elaborated
+    /// ids — MIR dispatches it exactly like a source-written `.into()`.
+    fn apply_into_coercion(
+        &self,
+        id: crate::node_id::NodeID,
+        built: typed_ast::Expr,
+    ) -> typed_ast::Expr {
+        let Some(coercion) = self.elaboration.into_coercions.get(&id) else {
+            return built;
+        };
+        let span = built.span;
+        let file = id.0;
+        let target = coercion.target.erase_eff_args();
+        let callee = typed_ast::Expr {
+            id: self.syn_id(file),
+            kind: typed_ast::ExprKind::Member(
+                Some(Box::new(built)),
+                crate::label::Label::Named("into".into()),
+            ),
+            span,
+            ownership: Default::default(),
+            ty: crate::types::ty::Ty::Func(
+                vec![],
+                Box::new(target.clone()),
+                crate::types::ty::EffectRow::pure(),
+            ),
+            member_resolution: Some(coercion.resolution.clone()),
+            specialization: None,
+            witness_layout: None,
+            instantiation: None,
+            existential_pack: None,
+            selected_callable: None,
+        };
+        typed_ast::Expr {
+            id: self.syn_id(file),
+            kind: typed_ast::ExprKind::Call {
+                callee: Box::new(callee),
+                type_args: vec![],
+                args: vec![],
+            },
+            span,
+            ownership: Default::default(),
+            ty: target,
+            member_resolution: None,
+            specialization: None,
+            witness_layout: None,
+            instantiation: None,
+            existential_pack: None,
+            selected_callable: None,
+        }
+    }
+
+    fn expr_unconverted(&self, e: &expr::Expr) -> typed_ast::Expr {
         // Coercion erasure: `inner as T` did its work in the checker; the
         // value is the inner expression. Likewise a parenthesized
         // expression, which parses as a 1-tuple. The outer node's

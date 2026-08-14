@@ -24,6 +24,7 @@ struct Harness {
     member_resolutions: FxHashMap<NodeID, MemberResolution>,
     resolved_member_types: FxHashMap<NodeID, Ty>,
     coerce_clones: rustc_hash::FxHashSet<NodeID>,
+    into_coercions: FxHashMap<NodeID, crate::types::output::IntoCoercion>,
 }
 
 impl Harness {
@@ -38,6 +39,7 @@ impl Harness {
             member_resolutions: FxHashMap::default(),
             resolved_member_types: FxHashMap::default(),
             coerce_clones: rustc_hash::FxHashSet::default(),
+            into_coercions: FxHashMap::default(),
             projection_instantiations: vec![],
         }
     }
@@ -56,6 +58,7 @@ impl Harness {
             resolved_member_types: &mut self.resolved_member_types,
             member_call_slots: &Default::default(),
             coerce_clones: &mut self.coerce_clones,
+            into_coercions: &mut self.into_coercions,
             level: Level(1),
             defaulting: false,
             givens: vec![],
@@ -138,6 +141,7 @@ fn adaptation_clones_borrowed_cheap_clone_argument() {
     let owned = Ty::Nominal(cheap, vec![]);
     let borrowed = Ty::Borrow(Perm::Shared, Box::new(owned.clone()));
     let residual = h.solve(vec![Constraint::Adapt {
+        node_is_value: true,
         expected: owned,
         found: borrowed,
         origin: origin(),
@@ -737,6 +741,7 @@ fn instantiation_substitutes_perms_into_predicates() {
         resolved_member_types: &mut h.resolved_member_types,
         member_call_slots: &Default::default(),
         coerce_clones: &mut h.coerce_clones,
+        into_coercions: &mut h.into_coercions,
         level: Level(1),
         defaulting: false,
         givens: vec![],

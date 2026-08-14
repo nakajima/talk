@@ -7145,6 +7145,113 @@ case nest(Chain<T, true>)
     }
 
     #[test]
+    fn recursive_heap_is_inferred_with_provenance() {
+        use talk_front::types::catalog::HeapOrigin;
+
+        let t = super::tests::check(
+            "// no-core
+enum Tree {
+case leaf(Int)
+case branch(Tree, Tree)
+}",
+        );
+        super::tests::assert_clean(&t);
+        let tree = t
+            .phase
+            .program
+            .resolved_names()
+            .symbol_names
+            .iter()
+            .find_map(|(symbol, name)| (name == "Tree").then_some(*symbol))
+            .expect("Tree symbol");
+        let catalog = &t.phase.program.types().catalog;
+        assert!(catalog.is_heap(tree));
+        assert_eq!(catalog.heap_origin(tree), Some(HeapOrigin::RecursiveLayout));
+    }
+
+    #[test]
+    fn explicit_heap_keeps_explicit_provenance() {
+        use talk_front::types::catalog::HeapOrigin;
+
+        let t = super::tests::check("// no-core\nstruct Box 'heap { let value: Int }");
+        super::tests::assert_clean(&t);
+        let boxed = t
+            .phase
+            .program
+            .resolved_names()
+            .symbol_names
+            .iter()
+            .find_map(|(symbol, name)| (name == "Box").then_some(*symbol))
+            .expect("Box symbol");
+        assert_eq!(
+            t.phase.program.types().catalog.heap_origin(boxed),
+            Some(HeapOrigin::Explicit)
+        );
+    }
+
+    #[test]
+    fn mutual_recursive_heap_inference_marks_every_member() {
+        use talk_front::types::catalog::HeapOrigin;
+
+        let t = super::tests::check(
+            "// no-core
+struct A { let b: B }
+struct B { let a: A }",
+        );
+        super::tests::assert_clean(&t);
+        let catalog = &t.phase.program.types().catalog;
+        for wanted in ["A", "B"] {
+            let symbol = t
+                .phase
+                .program
+                .resolved_names()
+                .symbol_names
+                .iter()
+                .find_map(|(symbol, name)| (name == wanted).then_some(*symbol))
+                .unwrap_or_else(|| panic!("{wanted} symbol"));
+            assert_eq!(catalog.heap_origin(symbol), Some(HeapOrigin::RecursiveLayout));
+        }
+    }
+
+    #[test]
+    fn recursive_linear_type_is_rejected_after_heap_inference() {
+        let t = super::tests::check(
+            "// no-core
+enum List 'linear {
+case nil
+case cons(List)
+}",
+        );
+        let errors = super::tests::type_errors(&t);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("inferred 'heap") && error.contains("'linear")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn array_recursion_is_not_inferred_heap() {
+        let t = super::tests::check(
+            "// no-core
+enum Node {
+case branch([Node])
+}",
+        );
+        super::tests::assert_clean(&t);
+        let node = t
+            .phase
+            .program
+            .resolved_names()
+            .symbol_names
+            .iter()
+            .find_map(|(symbol, name)| (name == "Node").then_some(*symbol))
+            .expect("Node symbol");
+        assert!(!t.phase.program.types().catalog.is_heap(node));
+    }
+
+    #[test]
     fn struct_field_may_apply_static_argument_to_own_head() {
         let t = super::tests::check(
             "// no-core

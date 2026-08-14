@@ -24,7 +24,8 @@ fn main() {
         println!("cargo:rustc-env=TALK_BUILD_SHA={sha}");
     }
 
-    emit_compiler_content_stamp();
+    let compiler_stamp = emit_compiler_content_stamp();
+    verify_wasm_core_artifact(&compiler_stamp);
     compile_native_frontend();
 }
 
@@ -34,7 +35,7 @@ fn main() {
 /// serialized layout. Cache keys use it instead of the executable's
 /// mtime and length, so relinking after an unrelated change (editor,
 /// CLI, MIR, VM) no longer invalidates frontend artifacts.
-fn emit_compiler_content_stamp() {
+fn emit_compiler_content_stamp() -> String {
     use sha2::Digest as _;
 
     const STAMP_DIRS: &[&str] = &[
@@ -98,9 +99,52 @@ fn emit_compiler_content_stamp() {
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR");
     std::fs::write(
         std::path::Path::new(&out_dir).join("compiler_stamp.txt"),
-        stamp,
+        &stamp,
     )
     .expect("write compiler stamp");
+    stamp
+}
+
+fn verify_wasm_core_artifact(compiler_stamp: &str) {
+    use sha2::Digest as _;
+
+    if std::env::var("CARGO_CFG_TARGET_FAMILY").as_deref() != Ok("wasm") {
+        return;
+    }
+
+    const FORMAT_VERSION: &str = "1";
+    let manifest_path = "bootstrap/core.manifest";
+    let artifact_path = "bootstrap/core.bin.gz";
+    println!("cargo:rerun-if-changed={manifest_path}");
+    println!("cargo:rerun-if-changed={artifact_path}");
+
+    let manifest = std::fs::read_to_string(manifest_path)
+        .expect("bootstrap/core.manifest is missing; run `talk core-artifact`");
+    let value = |key: &str| {
+        manifest.lines().find_map(|line| {
+            let (candidate, value) = line.split_once(':')?;
+            (candidate.trim() == key).then(|| value.trim())
+        })
+    };
+    assert_eq!(
+        value("format_version"),
+        Some(FORMAT_VERSION),
+        "bootstrap/core.bin.gz has an unsupported format; run `talk core-artifact`"
+    );
+    assert_eq!(
+        value("compiler_stamp"),
+        Some(compiler_stamp),
+        "bootstrap/core.bin.gz is stale; run `talk core-artifact`"
+    );
+
+    let artifact = std::fs::read(artifact_path)
+        .expect("bootstrap/core.bin.gz is missing; run `talk core-artifact`");
+    let digest = format!("{:x}", sha2::Sha256::digest(&artifact));
+    assert_eq!(
+        value("artifact_digest"),
+        Some(digest.as_str()),
+        "bootstrap/core.bin.gz does not match its manifest; run `talk core-artifact`"
+    );
 }
 
 /// Compile the checked-in native frontend translation unit for the

@@ -125,6 +125,12 @@ async fn main() {
             #[arg(long)]
             keep_c: bool,
         },
+        /// Regenerate the compiled core artifact embedded by WASM builds.
+        CoreArtifact {
+            /// Verify the checked-in artifact instead of writing it.
+            #[arg(long)]
+            check: bool,
+        },
         /// Regenerates the self-hosted frontend artifact (bootstrap/frontend.tbc)
         Bootstrap {
             /// Directory of .tlk sources (non-recursive); omit for the
@@ -877,6 +883,63 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        Commands::CoreArtifact { check } => {
+            let bytes = talk::compiling::core::artifact_bytes().unwrap_or_else(|error| {
+                eprintln!("error: {error}");
+                std::process::exit(1);
+            });
+            let artifact_path = std::path::Path::new(talk::compiling::core::ARTIFACT_PATH);
+            let manifest_path = std::path::Path::new(talk::compiling::core::ARTIFACT_MANIFEST_PATH);
+
+            if *check {
+                let manifest =
+                    talk::compiling::core::artifact_manifest(&bytes).unwrap_or_else(|error| {
+                        eprintln!("error: {error}");
+                        std::process::exit(1);
+                    });
+                let current = std::fs::read(artifact_path)
+                    .ok()
+                    .is_some_and(|existing| existing == bytes)
+                    && std::fs::read_to_string(manifest_path)
+                        .ok()
+                        .is_some_and(|existing| existing == manifest);
+                if !current {
+                    eprintln!(
+                        "error: {} is stale; regenerate with `talk core-artifact`",
+                        artifact_path.display()
+                    );
+                    std::process::exit(1);
+                }
+                println!("{} is up to date", artifact_path.display());
+            } else {
+                let manifest =
+                    talk::compiling::core::artifact_manifest(&bytes).unwrap_or_else(|error| {
+                        eprintln!("error: {error}");
+                        std::process::exit(1);
+                    });
+                if let Some(parent) = artifact_path.parent()
+                    && let Err(error) = std::fs::create_dir_all(parent)
+                {
+                    eprintln!("error: failed to create {}: {error}", parent.display());
+                    std::process::exit(1);
+                }
+                if let Err(error) = std::fs::write(artifact_path, bytes) {
+                    eprintln!(
+                        "error: failed to write {}: {error}",
+                        artifact_path.display()
+                    );
+                    std::process::exit(1);
+                }
+                if let Err(error) = std::fs::write(manifest_path, manifest) {
+                    eprintln!(
+                        "error: failed to write {}: {error}",
+                        manifest_path.display()
+                    );
+                    std::process::exit(1);
+                }
+                println!("wrote {}", artifact_path.display());
+            }
+        }
         Commands::Bootstrap {
             dir,
             output,
@@ -1363,7 +1426,7 @@ Ordinary structs, enums, arrays, strings, tuples, records, and functions have va
 
 Plain parameters and methods borrow by default. `consume` is a callee ownership contract: if a shareable caller value has later uses, the compiler retains it automatically; the final use can move. Returning, capturing, or storing a view generally retains the referent so the escaped value owns its snapshot. A bare borrow return rooted in a frame-owned local is rejected because ownership cannot travel in that `&T` representation.
 
-`struct Name 'linear` and `enum Name 'linear` declare values that must be consumed exactly once on every finite path and cannot be implicitly copied or dropped. `struct Name 'heap`/`enum Name 'heap` use aliased, region-allocated reference semantics; recursive nominal layouts require heap indirection. `*T` is a statically unique value. Marker protocols such as `Copy`, `CheapClone`, `Borrowed`, `Owner`, and `Deinit` express library ownership roles; payload-free enums are `Copy` automatically.
+`struct Name 'linear` and `enum Name 'linear` declare values that must be consumed exactly once on every finite path and cannot be implicitly copied or dropped. `struct Name 'heap`/`enum Name 'heap` use aliased, region-allocated reference semantics; recursive nominal layouts infer the same heap indirection automatically. `*T` is a statically unique value. Marker protocols such as `Copy`, `CheapClone`, `Borrowed`, `Owner`, and `Deinit` express library ownership roles; payload-free enums are `Copy` automatically.
 
 Static ownership errors are limited to real invariants: overlapping access involving a live `&mut` loan, duplication/drop misuse of linear or unique values, declaration well-formedness (including invalid borrowed fields or parameter modes), unsupported heap placement, definite initialization, and use of unsafe operations outside an unsafe boundary.
 

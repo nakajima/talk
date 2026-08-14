@@ -1528,6 +1528,7 @@ impl<'s> Solver<'s> {
                     queue.push(Constraint::Adapt {
                         expected: expected.clone(),
                         found: found.clone(),
+                        node_is_value: false,
                         origin,
                     });
                 } else {
@@ -2015,6 +2016,13 @@ impl<'s> Solver<'s> {
             | Adapted::Mismatch { expected, found } => {
                 queue.push(Constraint::Eq(expected, found, origin))
             }
+            // Receiver binding and leading-dot payload crossings: the
+            // origin names the member, not the argument, so an implicit
+            // conversion has no node to wrap. Demote to the equality
+            // (the ordinary mismatch).
+            Adapted::Convert { expected, found } => {
+                queue.push(Constraint::Eq(expected, found, origin))
+            }
             Adapted::Donate { .. }
             | Adapted::NoEvidence { .. }
             | Adapted::Unresolved {
@@ -2023,6 +2031,7 @@ impl<'s> Solver<'s> {
             | Adapted::PeelableProjection { .. } => queue.push(Constraint::Adapt {
                 expected,
                 found,
+                node_is_value: false,
                 origin,
             }),
             Adapted::Unresolved {

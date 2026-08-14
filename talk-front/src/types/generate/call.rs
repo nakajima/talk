@@ -52,6 +52,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                             self.wanteds.push(Constraint::Adapt {
                                 expected: param.clone(),
                                 found,
+                                node_is_value: true,
                                 origin: CtOrigin::new(arg.value.id, CtReason::Apply),
                             });
                         } else {

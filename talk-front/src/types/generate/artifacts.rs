@@ -36,6 +36,9 @@ pub(super) struct TypeArtifacts {
     pub(super) for_plans: FxHashMap<NodeID, ForPlan>,
     pub(super) propagation_plans: FxHashMap<NodeID, PropagationPlan>,
     pub(super) coerce_clones: FxHashSet<NodeID>,
+    /// Expression nodes the final solve committed to an implicit `Into`
+    /// conversion (the typed-tree build wraps each in a `.into()` call).
+    pub(super) into_coercions: FxHashMap<NodeID, crate::types::output::IntoCoercion>,
     /// Mode-marked call arguments awaiting the post-solve marker checks
     /// (ADR 0038): `copy` demands Copy or CheapClone evidence; `mut` and
     /// `borrow` must agree with the callee's parameter mode.

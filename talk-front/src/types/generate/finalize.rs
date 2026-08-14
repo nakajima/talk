@@ -68,6 +68,81 @@ impl<'a> TypecheckSession<'a> {
         zonk_predicate(&mut self.store, &self.catalog, predicate)
     }
 
+    /// Finalize a requirement operation: zonk its types and, when the
+    /// (now concrete) receiver selects exactly one conformance row with
+    /// a real witness, upgrade to the committed `ViaConformance` —
+    /// typing commits everything decidable at typing time (ADR 0036).
+    /// A recipe-backed row or a still-rigid receiver stays a
+    /// requirement operation for the backend's forced dictionary
+    /// dereference.
+    fn finalize_requirement_resolution(
+        &mut self,
+        protocol: ProtocolRef,
+        requirement: Symbol,
+        self_ty: Ty,
+    ) -> MemberResolution {
+        let protocol = ProtocolRef {
+            protocol: protocol.protocol,
+            args: protocol.args.iter().map(|arg| self.final_ty(arg)).collect(),
+        };
+        let protocol = self.catalog.canonical_protocol_ref(protocol);
+        let self_ty = self.final_ty(&self_ty);
+        let mut matches = match &self_ty {
+            Ty::Nominal(head, args) => {
+                self.catalog.matching_conformances(*head, args, &protocol)
+            }
+            _ => Vec::new(),
+        };
+        if matches.is_empty() && matches!(self_ty, Ty::Nominal(..)) {
+            matches = self
+                .catalog
+                .matching_protocol_head_conformances(&self_ty, &protocol);
+        }
+        let selected = match matches.as_slice() {
+            [selected] => Some(selected),
+            _ => None,
+        };
+        let commitment = selected.and_then(|selected| {
+            let info = self.catalog.protocols.get(&protocol.protocol)?;
+            let (label, candidate) = info
+                .requirements
+                .iter()
+                .flat_map(|(label, set)| set.iter().map(move |req| (label, req)))
+                .find(|(_, candidate)| candidate.symbol == requirement)?;
+            let key = self
+                .catalog
+                .witness_key(protocol.protocol, label, candidate.symbol);
+            // A row without a witness for the label is recipe-backed (a
+            // synthesized derivation) unless the requirement carries a
+            // default body; the recipe case stays ViaRequirement so the
+            // backend dereferences the committed dictionary entry.
+            let witness = match selected.conformance.witnesses.get(&key).copied() {
+                Some(witness) => witness,
+                None if candidate.has_default => candidate.default_symbol.unwrap_or(requirement),
+                None => return None,
+            };
+            let mut substitution = selected.evidence_substitution();
+            substitution.push((protocol.protocol, self_ty.clone()));
+            substitution.extend(
+                info.params
+                    .iter()
+                    .zip(&protocol.args)
+                    .map(|(param, arg)| (param.symbol, arg.clone())),
+            );
+            Some(MemberResolution::ViaConformance {
+                row: selected.id,
+                protocol: protocol.clone(),
+                witness,
+                substitution,
+            })
+        });
+        commitment.unwrap_or(MemberResolution::ViaRequirement {
+            protocol,
+            requirement,
+            self_ty,
+        })
+    }
+
     /// The borrowed-to-owned judgment for an implicit existential pack's
     /// payload: the pack accepts only the value-copy tiers of the one
     /// donation judgment — a borrow of a Copy payload is a value copy, a
@@ -374,73 +449,27 @@ impl<'a> TypecheckSession<'a> {
                     protocol,
                     requirement,
                     self_ty,
-                } => {
-                    let protocol = ProtocolRef {
-                        protocol: protocol.protocol,
-                        args: protocol.args.iter().map(|arg| self.final_ty(arg)).collect(),
-                    };
-                    let protocol = self.catalog.canonical_protocol_ref(protocol);
-                    let self_ty = self.final_ty(&self_ty);
-                    let mut matches = match &self_ty {
-                        Ty::Nominal(head, args) => {
-                            self.catalog.matching_conformances(*head, args, &protocol)
-                        }
-                        _ => Vec::new(),
-                    };
-                    if matches.is_empty() && matches!(self_ty, Ty::Nominal(..)) {
-                        matches = self
-                            .catalog
-                            .matching_protocol_head_conformances(&self_ty, &protocol);
-                    }
-                    let selected = match matches.as_slice() {
-                        [selected] => Some(selected),
-                        _ => None,
-                    };
-                    let commitment = selected.and_then(|selected| {
-                        let info = self.catalog.protocols.get(&protocol.protocol)?;
-                        let (label, candidate) = info
-                            .requirements
-                            .iter()
-                            .flat_map(|(label, set)| set.iter().map(move |req| (label, req)))
-                            .find(|(_, candidate)| candidate.symbol == requirement)?;
-                        let key =
-                            self.catalog
-                                .witness_key(protocol.protocol, label, candidate.symbol);
-                        // A row without a witness for the label is
-                        // recipe-backed (a synthesized derivation) unless
-                        // the requirement carries a default body; the
-                        // recipe case stays ViaRequirement so the backend
-                        // dereferences the committed dictionary entry.
-                        let witness = match selected.conformance.witnesses.get(&key).copied() {
-                            Some(witness) => witness,
-                            None if candidate.has_default => {
-                                candidate.default_symbol.unwrap_or(requirement)
-                            }
-                            None => return None,
-                        };
-                        let mut substitution = selected.evidence_substitution();
-                        substitution.push((protocol.protocol, self_ty.clone()));
-                        substitution.extend(
-                            info.params
-                                .iter()
-                                .zip(&protocol.args)
-                                .map(|(param, arg)| (param.symbol, arg.clone())),
-                        );
-                        Some(MemberResolution::ViaConformance {
-                            row: selected.id,
-                            protocol: protocol.clone(),
-                            witness,
-                            substitution,
-                        })
-                    });
-                    commitment.unwrap_or(MemberResolution::ViaRequirement {
-                        protocol,
-                        requirement,
-                        self_ty,
-                    })
-                }
+                } => self.finalize_requirement_resolution(protocol, requirement, self_ty),
             };
             member_resolutions.insert(node, resolution);
+        }
+        let mut into_coercions = FxHashMap::default();
+        for (node, coercion) in std::mem::take(&mut self.artifacts.into_coercions) {
+            let resolution = match coercion.resolution {
+                MemberResolution::ViaRequirement {
+                    protocol,
+                    requirement,
+                    self_ty,
+                } => self.finalize_requirement_resolution(protocol, requirement, self_ty),
+                committed => committed,
+            };
+            into_coercions.insert(
+                node,
+                crate::types::output::IntoCoercion {
+                    target: self.final_ty(&coercion.target),
+                    resolution,
+                },
+            );
         }
         let mut for_plans = FxHashMap::default();
         for (node, plan) in std::mem::take(&mut self.artifacts.for_plans) {
@@ -652,6 +681,7 @@ impl<'a> TypecheckSession<'a> {
                 synthetic_floors: self.artifacts.synthetic_next,
                 coerce_clones: self.artifacts.coerce_clones,
                 existential_packs,
+                into_coercions,
                 checked_ir,
                 effect_contracts: self.artifacts.effect_contracts,
                 pattern_tys,

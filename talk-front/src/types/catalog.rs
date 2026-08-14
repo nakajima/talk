@@ -38,14 +38,34 @@ pub enum CoerceKind {
     CheapClone,
 }
 
+/// Why a nominal has heap-backed reference semantics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum HeapOrigin {
+    Explicit,
+    RecursiveLayout,
+}
+
+impl HeapOrigin {
+    fn from_flags(heap: bool, inferred: bool) -> Option<Self> {
+        match (heap, inferred) {
+            (true, true) => Some(Self::RecursiveLayout),
+            (true, false) => Some(Self::Explicit),
+            (false, _) => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct StructInfo {
     /// Declared with the `linear` modifier: must be consumed exactly once.
     #[serde(default)]
     pub linear: bool,
-    /// Declared `'heap`: reference semantics, region-allocated.
+    /// Effective `'heap` semantics: reference semantics, region-allocated.
     #[serde(default)]
     pub heap: bool,
+    /// True when `heap` was inferred because the declared layout is recursive.
+    #[serde(default)]
+    pub heap_inferred: bool,
     /// Declared generic parameters — the canonical records: symbol, kind
     /// (type or ADR 0035 static value), and declared default.
     pub params: Vec<SchemeParam>,
@@ -86,10 +106,12 @@ pub struct Enum {
     /// Declared with the `linear` modifier: must be consumed exactly once.
     #[serde(default)]
     pub linear: bool,
-    /// Declared `'heap`: values live behind a reference. Required when
-    /// the layout contains itself (ADR 0045 rule 2).
+    /// Effective `'heap` semantics: values live behind a reference.
     #[serde(default)]
     pub heap: bool,
+    /// True when `heap` was inferred because the declared layout is recursive.
+    #[serde(default)]
+    pub heap_inferred: bool,
     /// Declared generic parameters (see `StructInfo::params`).
     pub params: Vec<SchemeParam>,
     pub variants: IndexMap<String, Variant>,
@@ -614,10 +636,58 @@ impl TypeCatalog {
     /// for scalars, payload-free enums (bare tags at runtime), and explicit
     /// `Copy` conformances, `Affine` otherwise (including unknown heads;
     /// affine is the safe default for both).
-    /// Declared `'heap`: values are region-allocated objects with
-    /// reference semantics.
+    /// Whether a nominal has effective `'heap` semantics. This includes
+    /// both explicit annotations and recursive-layout inference.
     pub fn is_heap(&self, symbol: Symbol) -> bool {
-        self.structs.get(&symbol).is_some_and(|info| info.heap)
+        self.structs
+            .get(&symbol)
+            .map(|info| info.heap)
+            .or_else(|| self.enums.get(&symbol).map(|info| info.heap))
+            .unwrap_or(false)
+    }
+
+    /// The provenance of a nominal's effective `'heap` semantics.
+    pub fn heap_origin(&self, symbol: Symbol) -> Option<HeapOrigin> {
+        self.structs
+            .get(&symbol)
+            .and_then(|info| HeapOrigin::from_flags(info.heap, info.heap_inferred))
+            .or_else(|| {
+                self.enums
+                    .get(&symbol)
+                    .and_then(|info| HeapOrigin::from_flags(info.heap, info.heap_inferred))
+            })
+    }
+
+    /// Infer heap-backed reference semantics for every currently inline
+    /// nominal whose declaration-level layout is recursive. Discovery uses
+    /// one immutable catalog snapshot and mutation happens only afterward,
+    /// so every member of a mutual recursion cycle is inferred together.
+    pub fn infer_recursive_heaps(&mut self) -> Vec<Symbol> {
+        let structs: rustc_hash::FxHashMap<Symbol, &StructInfo> =
+            self.structs.iter().map(|(symbol, info)| (*symbol, info)).collect();
+        let enums: rustc_hash::FxHashMap<Symbol, &Enum> =
+            self.enums.iter().map(|(symbol, info)| (*symbol, info)).collect();
+        let expands = expandable_params(&structs, &enums);
+        let inferred: Vec<Symbol> = structs
+            .keys()
+            .chain(enums.keys())
+            .copied()
+            .filter(|symbol| !self.is_heap(*symbol))
+            .filter(|symbol| is_layout_recursive(*symbol, &structs, &enums, &expands))
+            .collect();
+
+        drop(structs);
+        drop(enums);
+        for symbol in &inferred {
+            if let Some(info) = self.structs.get_mut(symbol) {
+                info.heap = true;
+                info.heap_inferred = true;
+            } else if let Some(info) = self.enums.get_mut(symbol) {
+                info.heap = true;
+                info.heap_inferred = true;
+            }
+        }
+        inferred
     }
 
     /// Whether a value of this type may be implicitly duplicated by a
@@ -2059,6 +2129,44 @@ impl TypeCatalog {
         self.matching_conformances_at(head, self_args, target, 0)
     }
 
+    /// Whether this head declares any `Into` conversion at all (directly
+    /// or through a super-protocol) — the cheap gate deciding if an
+    /// unresolvable crossing is worth parking for a later
+    /// [`Self::into_conversion_row`] selection.
+    pub fn head_declares_into_conversions(&self, head: Symbol) -> bool {
+        self.conformances_for_head(head).any(|(_, row)| {
+            !row.synthesized
+                && self
+                    .protocol_and_supers(&row.protocol)
+                    .iter()
+                    .any(|candidate| candidate.protocol == Symbol::Into)
+        })
+    }
+
+    /// The one declared conformance row that converts `found` into
+    /// `target` — the implicit-coercion selector: a `found: Into<target>`
+    /// row that is not a synthesized reflexive twin and whose context
+    /// provably holds. `None` when no declared row matches, or when more
+    /// than one does: ambiguity is an error, never a guess, so an
+    /// ambiguous crossing keeps the ordinary mismatch.
+    pub fn into_conversion_row(&self, found: &Ty, target: &Ty) -> Option<ConformanceId> {
+        let Ty::Nominal(head, self_args) = found else {
+            return None;
+        };
+        let goal = ProtocolRef {
+            protocol: Symbol::Into,
+            args: vec![target.clone()],
+        };
+        let mut rows = self
+            .matching_conformances_at(*head, self_args, &goal, 0)
+            .into_iter()
+            .filter(|matched| {
+                !matched.conformance.synthesized && self.row_context_holds(matched, 0)
+            });
+        let row = rows.next()?;
+        rows.next().is_none().then_some(row.id)
+    }
+
     fn matching_conformances_at<'a>(
         &'a self,
         head: Symbol,
@@ -2569,9 +2677,9 @@ mod tests {
 /// (ADR 0045): `Wrap<T> { value: T }` expands its parameter; `Array<T>`
 /// does not — elements live behind `Storage`'s raw pointer. A fixpoint
 /// over all declarations, so expansion threads through applications.
-/// Shared by the checker's recursion rule and the backend's layout
-/// classifier: the two must agree exactly, or a declaration would be
-/// required to say `'heap` for a layout the classifier keeps inline.
+/// Shared by recursive-heap inference and the backend's layout classifier:
+/// the two must agree exactly, or typing and lowering would assign different
+/// reference semantics to the same declaration.
 pub fn expandable_params(
     structs: &rustc_hash::FxHashMap<Symbol, &StructInfo>,
     enums: &rustc_hash::FxHashMap<Symbol, &Enum>,
@@ -2680,7 +2788,7 @@ pub fn expandable_params(
 
 /// Whether `symbol`'s declared layout reaches itself through inline
 /// positions only — the declaration-level cycle the layout classifier
-/// boxes and the checker requires `'heap` for.
+/// boxes and the catalog infers as `'heap`.
 pub fn is_layout_recursive(
     symbol: Symbol,
     structs: &rustc_hash::FxHashMap<Symbol, &StructInfo>,

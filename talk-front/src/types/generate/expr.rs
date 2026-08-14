@@ -442,6 +442,18 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             Adapted::Mismatch { expected, found } => {
                 self.emit_eq(expected, found, node, reason)
             }
+            // A convertible crossing defers like a donation (the argument
+            // node here is exactly the node the conversion wraps); the
+            // solver's dispatcher re-judges and the final solve commits
+            // the inserted `.into()`.
+            Adapted::Convert { .. } => {
+                self.wanteds.push(Constraint::Adapt {
+                    expected: expected.clone(),
+                    found,
+                    node_is_value: true,
+                    origin: CtOrigin::new(node, reason),
+                });
+            }
             // Donation evidence and its diagnostics belong to the solver's
             // `Adapt` dispatcher; generation only flags the crossing. An
             // unresolved found with a borrow in sight waits with it
@@ -455,6 +467,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 self.wanteds.push(Constraint::Adapt {
                     expected: expected.clone(),
                     found,
+                    node_is_value: true,
                     origin: CtOrigin::new(node, reason),
                 });
             }
@@ -534,6 +547,22 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             self.wanteds.push(Constraint::Adapt {
                 expected: expected.clone(),
                 found,
+                node_is_value: true,
+                origin: CtOrigin::new(node, reason),
+            });
+            return;
+        }
+        // A convertible crossing — distinct resolved monotypes with
+        // exactly one declared `Into` row — defers to the solver's Adapt
+        // dispatcher; the final solve commits the inserted `.into()`.
+        // Everything reaching this funnel is a checking-mode value
+        // position, so the coercion-eligible sites are exactly the
+        // callers': no reason filter is needed.
+        if crate::types::adapt::conversion(self.store, self.catalog, expected, &found).is_some() {
+            self.wanteds.push(Constraint::Adapt {
+                expected: expected.clone(),
+                found,
+                node_is_value: true,
                 origin: CtOrigin::new(node, reason),
             });
             return;

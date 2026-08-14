@@ -239,9 +239,8 @@ pub enum DeclKind {
         /// Declared `linear`: values must be consumed exactly once.
         #[drive(skip)]
         linear: bool,
-        /// Declared `'heap`: values live behind a reference. Required
-        /// when the layout contains itself (ADR 0045 rule 2) — recursion
-        /// is the case where indirection is not optional.
+        /// Explicitly declared `'heap`: values live behind a reference.
+        /// Recursive layouts receive the same semantics by catalog inference.
         #[drive(skip)]
         heap: bool,
     },

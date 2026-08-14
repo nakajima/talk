@@ -142,6 +142,11 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         self.register_catalog_type_aliases();
         self.collect_explicit_conformance_claims(&top_decls, &struct_decls);
 
+        // Recursive layout is a declaration-wide semantic fact. Infer every
+        // member of a cycle from one complete, immutable catalog snapshot
+        // before marker validation, derivation, or body checking observes it.
+        self.catalog.infer_recursive_heaps();
+
         // Default-only protocol extensions register before conforming extends so their
         // requirements are witnessable regardless of declaration order. Protocol-head
         // conformance extends use the normal conformance-row path below.

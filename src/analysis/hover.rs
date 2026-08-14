@@ -101,6 +101,38 @@ fn hover_for_node(workspace: &Workspace, node: &Node) -> Option<Hover> {
                 range: TextRange::new(expr.span.start, expr.span.end),
             })
         }
+        Node::Decl(decl) => {
+            let (name, name_span) = match &decl.kind {
+                crate::node_kinds::decl::DeclKind::Struct {
+                    name, name_span, ..
+                }
+                | crate::node_kinds::decl::DeclKind::Enum {
+                    name, name_span, ..
+                } => (name, name_span),
+                _ => return None,
+            };
+            let symbol = name.symbol().ok()?;
+            heap_hover(workspace, symbol, name.name_str(), *name_span)
+        }
+        Node::TypeAnnotation(annotation) => {
+            use crate::node_kinds::type_annotation::TypeAnnotationKind;
+            let (symbol, name, range) = match &annotation.kind {
+                TypeAnnotationKind::Nominal {
+                    name, name_span, ..
+                } => (
+                    name.symbol().ok()?,
+                    name.name_str(),
+                    TextRange::new(name_span.start, name_span.end),
+                ),
+                TypeAnnotationKind::SelfType(name) => (
+                    name.symbol().ok()?,
+                    name.name_str(),
+                    TextRange::new(annotation.span.start, annotation.span.end),
+                ),
+                _ => return None,
+            };
+            heap_hover_for_range(workspace, symbol, name, range)
+        }
         Node::Func(func) => {
             let symbol = func.name.symbol().ok()?;
             let scheme = workspace.types.schemes.get(&symbol)?;
@@ -171,6 +203,39 @@ fn hover_for_node(workspace: &Workspace, node: &Node) -> Option<Hover> {
         },
         _ => None,
     }
+}
+
+fn heap_hover(
+    workspace: &Workspace,
+    symbol: crate::name_resolution::symbol::Symbol,
+    name: String,
+    span: crate::span::Span,
+) -> Option<Hover> {
+    heap_hover_for_range(
+        workspace,
+        symbol,
+        name,
+        TextRange::new(span.start, span.end),
+    )
+}
+
+fn heap_hover_for_range(
+    workspace: &Workspace,
+    symbol: crate::name_resolution::symbol::Symbol,
+    name: String,
+    range: TextRange,
+) -> Option<Hover> {
+    let origin = workspace.types.catalog.heap_origin(symbol)?;
+    let qualifier = match origin {
+        crate::types::catalog::HeapOrigin::Explicit => "'heap",
+        crate::types::catalog::HeapOrigin::RecursiveLayout => {
+            "'heap (inferred from recursive layout)"
+        }
+    };
+    Some(Hover {
+        contents: format!("{name} {qualifier}\n\nreference semantics, region-allocated"),
+        range,
+    })
 }
 
 fn hover_for_name(
@@ -392,6 +457,47 @@ mod tests {
             .expect("a node id that hovers as Int");
         let hover = hover_for_node_id(&ws, &doc, node_id).expect("hover");
         assert_eq!(hover.contents, "Int");
+    }
+
+    #[test]
+    fn hover_shows_inferred_recursive_heap_provenance() {
+        let source = "// no-core\nenum Tree {\n\tcase leaf(Int)\n\tcase branch(Tree, Tree)\n}";
+        let declaration = hover(source, "Tree {").expect("declaration hover");
+        assert!(
+            declaration
+                .contents
+                .contains("'heap (inferred from recursive layout)"),
+            "{}",
+            declaration.contents
+        );
+        assert!(
+            declaration
+                .contents
+                .contains("reference semantics, region-allocated"),
+            "{}",
+            declaration.contents
+        );
+
+        let occurrence = hover(source, "Tree, Tree").expect("type occurrence hover");
+        assert!(
+            occurrence
+                .contents
+                .contains("'heap (inferred from recursive layout)"),
+            "{}",
+            occurrence.contents
+        );
+    }
+
+    #[test]
+    fn hover_shows_explicit_heap_provenance() {
+        let source = "// no-core\nstruct Box 'heap {\n\tlet value: Int\n}";
+        let declaration = hover(source, "Box 'heap").expect("declaration hover");
+        assert!(declaration.contents.contains("Box 'heap"), "{}", declaration.contents);
+        assert!(
+            !declaration.contents.contains("inferred"),
+            "{}",
+            declaration.contents
+        );
     }
 
     #[test]

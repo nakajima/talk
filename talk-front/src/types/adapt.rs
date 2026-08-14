@@ -85,6 +85,18 @@ pub(crate) enum Adapted {
     /// generation emitters requeue as `Constraint::Adapt` and take the
     /// solver's normalized view.
     PeelableProjection { expected_inner: Ty, found: Ty },
+    /// The slots differ as fully resolved monotypes, but exactly one
+    /// declared `Into` row carries `found` into `expected`: the value
+    /// crosses by an implicit conversion — the checker inserts the
+    /// `.into()` the programmer would have written. The generation
+    /// emitters defer the crossing as `Constraint::Adapt`; the solver's
+    /// dispatcher commits it in the final solve (once every witness
+    /// scheme exists), recording the coercion for the typed-tree build.
+    /// Sites that cannot name the coerced node — receiver binding,
+    /// function-type decomposition — demote to the plain equality, which
+    /// reports the ordinary mismatch. Both types are zonked and
+    /// variable-free.
+    Convert { expected: Ty, found: Ty },
     /// An error operand: emit nothing, recovery already reported.
     Silent,
 }
@@ -164,11 +176,15 @@ pub(crate) fn adapt(
                 }
             }
             Ty::Error => Adapted::Silent,
-            found => Adapted::Eq {
+            // Auto-borrow: an owned value fills the slot by peeling — and
+            // a convertible value converts first (the inserted `.into()`
+            // builds the owned target the boundary then borrows), exactly
+            // what writing `.into()` at the argument would do.
+            found => conversion(store, catalog, &expected_inner, &found).unwrap_or(Adapted::Eq {
                 expected: *expected_inner,
                 found,
                 peeled: true,
-            },
+            }),
         },
         // An unresolved or irreducible slot fed a borrow: the donation
         // tier needs the slot's head, so the crossing waits for it.
@@ -213,13 +229,54 @@ pub(crate) fn adapt(
                 }
             }
             Ty::Error => Adapted::Silent,
-            _ => Adapted::Eq {
+            _ => conversion(store, catalog, expected, found).unwrap_or(Adapted::Eq {
                 expected: expected.clone(),
                 found: found.clone(),
                 peeled: false,
-            },
+            }),
         },
     }
+}
+
+/// The Convert tier's decision, shared by [`adapt`] and the generation
+/// funnel's eager path: `Some(Convert)` when the crossing converts (or
+/// may yet — a still-variable argument parks the crossing rather than
+/// failing it) — the found head is nominal and declares conversions, and
+/// the expected side is a concrete-headed slot of a different shape.
+/// Once both sides zonk variable-free the catalog must select exactly
+/// one declared `Into` row; the solver's commit re-checks that and falls
+/// back to the plain equality otherwise. Zonking resolves without
+/// binding, so the judgment stays pure.
+pub(crate) fn conversion(
+    store: &mut VarStore,
+    catalog: &TypeCatalog,
+    expected: &Ty,
+    found: &Ty,
+) -> Option<Adapted> {
+    let Ty::Nominal(found_head, _) = store.shallow(found) else {
+        return None;
+    };
+    // Only a concrete-headed slot is a conversion target: an unsolved
+    // slot must keep the eager equality that drives inference, and a
+    // rigid parameter's crossing is generic code's, not a conversion.
+    match store.shallow(expected) {
+        Ty::Nominal(head, _) if head == found_head => return None,
+        Ty::Nominal(..) | Ty::Tuple(..) | Ty::Record(..) | Ty::Func(..) | Ty::Any { .. } => {}
+        _ => return None,
+    }
+    let expected = store.zonk_ty(expected);
+    let found = store.zonk_ty(found);
+    if expected.has_unification_vars() || found.has_unification_vars() {
+        // The shapes already differ, so the equality can only fail — but
+        // a conversion may still apply once the arguments resolve. Park
+        // the crossing when the head declares conversions at all.
+        return catalog
+            .head_declares_into_conversions(found_head)
+            .then_some(Adapted::Convert { expected, found });
+    }
+    catalog
+        .into_conversion_row(&found, &expected)
+        .map(|_| Adapted::Convert { expected, found })
 }
 
 /// The donation-tier lookup behind [`adapt`]'s borrow-into-owned arm and
@@ -474,6 +531,112 @@ mod tests {
                 found_inner: expected,
                 donation: Donation::Share,
             }
+        );
+    }
+
+    #[test]
+    fn convert_tier_fires_on_the_unique_declared_into_row() {
+        use crate::types::ty::ProtocolRef;
+        let mut store = VarStore::default();
+        let mut catalog = TypeCatalog::default();
+        let word = Symbol::Struct(StructId::new(crate::front::module::ModuleId::Current, 0));
+        catalog.structs.insert(word, StructInfo::default());
+        let word_ty = Ty::Nominal(word, vec![]);
+        let string_ty = Ty::Nominal(Symbol::String, vec![]);
+        // No row: the crossing stays a plain (failing) equality.
+        assert_eq!(
+            adapt(&mut store, &catalog, &string_ty, &word_ty, Site::Argument),
+            eq(string_ty.clone(), word_ty.clone(), false)
+        );
+        // A synthesized reflexive row never converts.
+        let mut reflexive = crate::types::catalog::Conformance::new(
+            word,
+            ProtocolRef {
+                protocol: Symbol::Into,
+                args: vec![word_ty.clone()],
+            },
+        );
+        reflexive.synthesized = true;
+        catalog.insert_conformance(crate::front::module::ModuleId::Current, reflexive);
+        assert_eq!(
+            adapt(&mut store, &catalog, &string_ty, &word_ty, Site::Argument),
+            eq(string_ty.clone(), word_ty.clone(), false)
+        );
+        // The declared `Word: Into<String>` row commits the conversion —
+        // through an owned slot and through the auto-borrow peel alike.
+        catalog.insert_conformance(
+            crate::front::module::ModuleId::Current,
+            crate::types::catalog::Conformance::new(
+                word,
+                ProtocolRef {
+                    protocol: Symbol::Into,
+                    args: vec![string_ty.clone()],
+                },
+            ),
+        );
+        let converted = Adapted::Convert {
+            expected: string_ty.clone(),
+            found: word_ty.clone(),
+        };
+        assert_eq!(
+            adapt(&mut store, &catalog, &string_ty, &word_ty, Site::Argument),
+            converted
+        );
+        assert_eq!(
+            adapt(
+                &mut store,
+                &catalog,
+                &borrow(Perm::Shared, string_ty.clone()),
+                &word_ty,
+                Site::Argument
+            ),
+            converted
+        );
+        // An unsolved slot keeps the eager equality that drives inference.
+        let var = Ty::Var(store.fresh_ty(Level(1), NodeID::ANY));
+        assert_eq!(
+            adapt(&mut store, &catalog, &var, &word_ty, Site::Argument),
+            eq(var, word_ty, false)
+        );
+    }
+
+    #[test]
+    fn convert_tier_parks_while_row_arguments_are_variables() {
+        use crate::types::ty::ProtocolRef;
+        let mut store = VarStore::default();
+        let mut catalog = TypeCatalog::default();
+        let boxof = Symbol::Struct(StructId::new(crate::front::module::ModuleId::Current, 1));
+        catalog.structs.insert(boxof, StructInfo::default());
+        catalog.insert_conformance(
+            crate::front::module::ModuleId::Current,
+            crate::types::catalog::Conformance::new(
+                boxof,
+                ProtocolRef {
+                    protocol: Symbol::Into,
+                    args: vec![Ty::Nominal(Symbol::String, vec![])],
+                },
+            ),
+        );
+        // The head declares conversions and the shapes already differ:
+        // a still-variable argument parks the crossing (Convert with the
+        // variable in place) instead of failing it eagerly.
+        let var = Ty::Var(store.fresh_ty(Level(1), NodeID::ANY));
+        let found = Ty::Nominal(boxof, vec![var.clone()]);
+        let expected = Ty::Nominal(Symbol::String, vec![]);
+        assert_eq!(
+            adapt(&mut store, &catalog, &expected, &found, Site::Argument),
+            Adapted::Convert {
+                expected: expected.clone(),
+                found: found.clone(),
+            }
+        );
+        // A conversion-free head keeps today's eager equality.
+        let plain = Symbol::Struct(StructId::new(crate::front::module::ModuleId::Current, 2));
+        catalog.structs.insert(plain, StructInfo::default());
+        let plain_found = Ty::Nominal(plain, vec![var]);
+        assert_eq!(
+            adapt(&mut store, &catalog, &expected, &plain_found, Site::Argument),
+            eq(expected, plain_found, false)
         );
     }
 
