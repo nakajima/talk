@@ -1,0 +1,20 @@
+// ADR 0058/0067: structured parallelism over plain closures — one
+// Send-checked worker per job, outputs in argument order, no futures.
+use task::{ parallel_run }
+
+func square(consume n: Int) -> Int {
+	n * n
+}
+
+let jobs: [Int] = []
+let i = 1
+loop i <= 8 {
+	jobs.push(i * 3)
+	i = i + 1
+}
+let outputs = parallel_run(jobs: jobs, worker: square)
+let j = 0
+loop j < outputs.count {
+	print(outputs.get(j))
+	j = j + 1
+}

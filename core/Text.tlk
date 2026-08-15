@@ -685,7 +685,11 @@ extend String {
 	pub func split(where_separator predicate: (Character) -> Bool) -> [Substring] {
 		self.split_where_separator(predicate)
 	}
-	pub func split(separator value: String, maximum_splits: Int, omitting_empty: Bool) -> [Substring] {
+	pub func split(
+		separator value: String,
+		maximum_splits: Int,
+		omitting_empty: Bool
+	) -> [Substring] {
 		self.split_text(
 			value,
 			maximum_splits: maximum_splits,
@@ -731,7 +735,11 @@ extend Substring {
 	pub func split(where_separator predicate: (Character) -> Bool) -> [Substring] {
 		self.split_where_separator(predicate)
 	}
-	pub func split(separator value: String, maximum_splits: Int, omitting_empty: Bool) -> [Substring] {
+	pub func split(
+		separator value: String,
+		maximum_splits: Int,
+		omitting_empty: Bool
+	) -> [Substring] {
 		self.split_text(
 			value,
 			maximum_splits: maximum_splits,
@@ -939,7 +947,12 @@ func _unicode_words(view: Substring) -> [Substring] {
 	result
 }
 
-func _split_text(view: Substring, separator: String, maximum_splits: Int, omitting_empty: Bool) -> [Substring] {
+func _split_text(
+	view: Substring,
+	separator: String,
+	maximum_splits: Int,
+	omitting_empty: Bool
+) -> [Substring] {
 	let result: [Substring] = []
 	let field_start = view.start
 	let scan = view.start

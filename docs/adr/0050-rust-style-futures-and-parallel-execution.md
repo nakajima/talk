@@ -1,6 +1,9 @@
 # 0050 - Rust-style futures and data-race-free parallel execution
 
-Status: proposed
+Status: superseded at the async surface by ADR 0064's first-class one-shot
+resumptions and ADR 0067's direct-style concurrency. The polling design in
+this ADR is retained as historical context; its `Send`/`Sync`, worker-isolation,
+atomic-ownership, and parallel-execution groundwork remains in force.
 
 ## Context
 

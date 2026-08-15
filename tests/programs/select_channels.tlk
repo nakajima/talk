@@ -1,0 +1,53 @@
+// ADR 0061/0067: select races two receivers directly; the first ready
+// side wins, ties go left, a parked select wakes when either producer
+// sends, and the losing side's value stays queued for a later receive.
+use task::{ channel, select_recv, run_blocking, Sender, Either }
+
+func produce(consume sender: Sender<Int>, value: Int) -> Int {
+	sender.send(value: value)
+	0
+}
+
+// Ready-vs-pending: the filled side wins whichever slot it sits in.
+let (filled_sender, filled_receiver) = channel<Int>()
+let (empty_sender, empty_receiver) = channel<Int>()
+filled_sender.send(value: 41)
+match select_recv(a: filled_receiver, b: empty_receiver) {
+	.left(payload) -> {
+		if let .some(value) = payload { print(value) } else { print(0 - 1) }
+	},
+	.right(payload) -> print(0 - 2)
+}
+filled_sender.send(value: 43)
+match select_recv(a: empty_receiver, b: filled_receiver) {
+	.left(payload) -> print(0 - 3),
+	.right(payload) -> {
+		if let .some(value) = payload { print(value) } else { print(0 - 4) }
+	}
+}
+
+// Tie: both sides ready resolves left.
+filled_sender.send(value: 45)
+empty_sender.send(value: 46)
+match select_recv(a: filled_receiver, b: empty_receiver) {
+	.left(payload) -> {
+		if let .some(value) = payload { print(value) } else { print(0 - 5) }
+	},
+	.right(payload) -> print(0 - 6)
+}
+// The losing side's value was never claimed: it is still queued.
+if let .some(kept) = empty_receiver.recv() { print(kept) } else { print(0 - 7) }
+
+// Parked select: both channels empty, a worker sends to one side.
+let (quiet_sender, quiet_receiver) = channel<Int>()
+let (busy_sender, busy_receiver) = channel<Int>()
+let handle = _task_spawn(arg: busy_sender, worker: func(consume sender: Sender<Int>) -> Int {
+			produce(sender: sender, value: 47)
+		})
+match select_recv(a: quiet_receiver, b: busy_receiver) {
+	.left(payload) -> print(0 - 8),
+	.right(payload) -> {
+		if let .some(value) = payload { print(value) } else { print(0 - 9) }
+	}
+}
+print(_task_join<Int>(handle: handle))

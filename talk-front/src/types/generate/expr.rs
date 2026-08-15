@@ -74,7 +74,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
             level: self.level,
             givens: scheme.predicates.clone(),
             wanteds,
-            local_params: scheme.params.iter().map(|param| param.symbol).collect(),
+            gadt: GadtLocals {
+                params: scheme.params.iter().map(|param| param.symbol).collect(),
+                determined: vec![],
+            },
             touchable_level: None,
         })));
         let ty = Ty::Forall(Box::new(scheme.clone()));
@@ -785,7 +788,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     level: arm_level,
                     givens: refinement.givens,
                     wanteds,
-                    local_params: refinement.local_params,
+                    gadt: refinement.gadt,
                     touchable_level: Some(arm_level),
                 })));
             }
@@ -1524,8 +1527,19 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                             .filter(|param| matches!(param.kind, crate::types::ty::ParamKind::Type))
                             .map(|param| param.symbol)
                             .collect(),
+                        suspending: sig.suspending,
                     },
                 );
+                if sig.suspending
+                    && args
+                        .iter()
+                        .any(|arg| matches!(arg.mode, Some(crate::node_kinds::call_arg::ArgMode::Mut)))
+                {
+                    self.unsupported(
+                        expr.id,
+                        "`mut` arguments on a suspending effect",
+                    );
+                }
                 // A generic effect instantiates fresh at each perform
                 // (Damas-Milner instantiation, exactly like schemes);
                 // explicit type arguments equate positionally by the
@@ -1883,6 +1897,37 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     c: self.ir_operand(node, instruction, c)?,
                 }
             }
+            K::TaskSpawn { arg, worker, .. } => C::TaskSpawn {
+                arg: self.ir_operand(node, instruction, arg)?,
+                worker: self.ir_operand(node, instruction, worker)?,
+            },
+            K::TaskJoin { ty, handle, .. } => C::TaskJoin {
+                ty: self.ir_annotation_ty(node, ty)?,
+                handle: self.ir_operand(node, instruction, handle)?,
+            },
+            K::TaskWidth { .. } => C::TaskWidth,
+            K::ChanSend { handle, value } => C::ChanSend {
+                handle: self.ir_operand(node, instruction, handle)?,
+                value: self.ir_operand(node, instruction, value)?,
+            },
+            K::ChanTake { ty, handle, .. } => C::ChanTake {
+                ty: self.ir_annotation_ty(node, ty)?,
+                handle: self.ir_operand(node, instruction, handle)?,
+            },
+            K::ChanCtl { handle, op, .. } => C::ChanCtl {
+                handle: self.ir_operand(node, instruction, handle)?,
+                op: self.ir_operand(node, instruction, op)?,
+            },
+            K::Resume {
+                ty, cont, value, ..
+            } => C::Resume {
+                ty: self.ir_annotation_ty(node, ty)?,
+                cont: self.ir_operand(node, instruction, cont)?,
+                value: self.ir_operand(node, instruction, value)?,
+            },
+            K::Cancel { cont } => C::Cancel {
+                cont: self.ir_operand(node, instruction, cont)?,
+            },
         })
     }
 

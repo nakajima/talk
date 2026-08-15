@@ -274,6 +274,59 @@ fn assert_agrees(name: &str, source: &str) {
 }
 
 #[test]
+fn suspension_crossing_a_resumption_boundary_traps_on_c() {
+    // ADR 0065's documented divergence: a resumed extent performing a
+    // suspending effect whose handler sits below the resume call works
+    // on the VM but fails closed here — effect rows cannot mark
+    // resume() callers, so no static resumable set can include them.
+    let dir = scratch("suspend_crossing");
+    let program = dir.join("crossing.tlk");
+    std::fs::write(
+        &program,
+        "effect 'inner() -> Int 'suspending\neffect 'outer() -> Int 'suspending\nenum Held {\n\tcase parked(Resumption<Int, Held>)\n\tcase done(Int)\n}\nfunc inner_body() -> Int {\n\tlet x = 'inner()\n\tlet y = 'outer()\n\tx + y\n}\nfunc stash_inner() -> Held {\n\t#handle 'inner { k in\n\t\tHeld.parked(k)\n\t}\n\tHeld.done(inner_body())\n}\nfunc run_all() -> Int {\n\t#handle 'outer { k in\n\t\tresume(k: k, value: 50)\n\t}\n\tlet held = stash_inner()\n\tmatch held {\n\t\t.parked(k) -> {\n\t\t\tmatch resume(k: k, value: 7) {\n\t\t\t\t.done(value) -> value,\n\t\t\t\t.parked(again) -> {\n\t\t\t\t\tlet dropped = cancel(k: again)\n\t\t\t\t\t0 - 1\n\t\t\t\t}\n\t\t\t}\n\t\t},\n\t\t.done(value) -> value\n\t}\n}\nprint(run_all())\n",
+    )
+    .expect("write program");
+    let emitted = talk(&["c", &program.to_string_lossy()]);
+    assert!(emitted.status.success(), "emission must succeed");
+    let source = dir.join("crossing.c");
+    std::fs::write(&source, &emitted.stdout).expect("write C");
+    let binary = dir.join("crossing.bin");
+    let compile = std::process::Command::new("cc")
+        .args(["-O2", "-std=c11", "-Wall", "-Werror"])
+        .arg(&source)
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .expect("run cc");
+    assert!(
+        compile.status.success(),
+        "emitted C failed to compile:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = std::process::Command::new(&binary)
+        .output()
+        .expect("run binary");
+    assert!(!run.status.success(), "the crossing must fail closed");
+    assert!(
+        String::from_utf8_lossy(&run.stderr)
+            .contains("crossed a resumption boundary"),
+        "expected the crossing trap, got:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
+#[test]
+fn suspending_handlers_run_on_the_c_target() {
+    // ADR 0065: suspending handlers compile natively as resumable
+    // functions — the clause resumes with a value and the extent's
+    // answer returns through the whole chain.
+    assert_agrees(
+        "suspend_roundtrip",
+        "effect 'ping() -> Int 'suspending\nfunc body() -> Int {\n\t'ping() + 5\n}\nfunc driver() -> Int {\n\t#handle 'ping { k in\n\t\tresume(k: k, value: 100)\n\t}\n\tbody()\n}\npub func bench() -> () {\n\tprint(driver())\n}\n",
+    );
+}
+
+#[test]
 fn scalar_loop_agrees_with_the_interpreter() {
     assert_agrees("arith", ARITH);
 }
@@ -964,4 +1017,117 @@ fn library_artifact_serves_the_shared_c_harness() {
         run.status.code(),
         String::from_utf8_lossy(&run.stderr)
     );
+}
+
+/// ADR 0050 validation item 12: managed-buffer ownership must balance
+/// under concurrent clone (retain), release, and uniqueness stress. The
+/// harness hammers one shared allocation from many threads with balanced
+/// retain/free pairs, then churns private allocations on every thread;
+/// non-atomic owner transitions lose updates and fail the final balance
+/// checks (or trap on a phantom double free).
+const OWNERSHIP_STRESS_HARNESS: &str = r#"
+#include <pthread.h>
+
+enum { TALK_STRESS_THREADS = 8, TALK_STRESS_ITERS = 200000 };
+
+static unsigned char *talk_stress_shared;
+
+static void *talk_stress_shared_churn(void *arg) {
+    (void)arg;
+    TalkValue value = talk_pointer(talk_stress_shared);
+    for (int i = 0; i < TALK_STRESS_ITERS; i++) {
+        talk_retain(value);
+        if (talk_is_unique(value).v.i) {
+            /* The owner plus this thread's retain are always live, so a
+             * unique observation means the count lost updates. */
+            fprintf(stderr, "uniqueness observed through a shared count\n");
+            exit(1);
+        }
+        talk_free(value);
+    }
+    return NULL;
+}
+
+static void *talk_stress_private_churn(void *arg) {
+    (void)arg;
+    for (int i = 0; i < TALK_STRESS_ITERS / 10; i++) {
+        TalkValue buffer = talk_alloc(talk_int(32));
+        talk_retain(buffer);
+        talk_free(buffer);
+        talk_free(buffer);
+    }
+    return NULL;
+}
+
+static int talk_stress_run(void *(*worker)(void *)) {
+    pthread_t threads[TALK_STRESS_THREADS];
+    for (int i = 0; i < TALK_STRESS_THREADS; i++) {
+        if (pthread_create(&threads[i], NULL, worker, NULL) != 0) {
+            return 1;
+        }
+    }
+    for (int i = 0; i < TALK_STRESS_THREADS; i++) {
+        if (pthread_join(threads[i], NULL) != 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int main(void) {
+    TalkValue shared = talk_alloc(talk_int(64));
+    talk_stress_shared = shared.v.ptr;
+    if (talk_stress_run(talk_stress_shared_churn) != 0) {
+        return 1;
+    }
+    if (!talk_is_unique(shared).v.i) {
+        fprintf(stderr, "shared count corrupted after balanced churn\n");
+        return 1;
+    }
+    talk_free(shared);
+    if (talk_stress_run(talk_stress_private_churn) != 0) {
+        return 1;
+    }
+    if (talk_live_allocations != 0) {
+        fprintf(stderr, "allocation balance corrupted\n");
+        return 1;
+    }
+    printf("ok\n");
+    return 0;
+}
+"#;
+
+#[test]
+fn native_runtime_ownership_balances_under_concurrent_stress() {
+    let dir = scratch("atomic_ownership_stress");
+    let mut source = String::from(talk_native_runtime::source());
+    source.push_str(OWNERSHIP_STRESS_HARNESS);
+    let path = dir.join("stress.c");
+    std::fs::write(&path, source).expect("write stress harness");
+
+    let binary = dir.join("stress.bin");
+    let compile = Command::new("cc")
+        .arg("-O2")
+        .arg("-std=c11")
+        .arg("-pthread")
+        .arg("-Wno-unused-function")
+        .arg(&path)
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .expect("run `cc`");
+    assert!(
+        compile.status.success(),
+        "runtime + stress harness did not compile:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&binary).output().expect("run stress harness");
+    assert!(
+        run.status.success(),
+        "ownership stress failed (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "ok\n");
 }

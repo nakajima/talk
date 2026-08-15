@@ -4690,17 +4690,17 @@ fn run_shares_captured_assignments_with_the_frame() {
 #[test]
 fn run_unhandled_ambient_performs_reach_the_host_fallback() {
     // With no user handler live, an 'ambient perform routes to the host
-    // fallback the entry wrapper installed (ADR 0039): for 'async the
+    // fallback the entry wrapper installed (ADR 0039): for 'yield_now the
     // reference host resumes with unit.
-    assert_runs(b"'async()\nprint(1)\n", &[], b"1\n");
+    assert_runs(b"'yield_now()\nprint(1)\n", &[], b"1\n");
 }
 
 #[test]
 fn run_user_handlers_intercept_ambient_effects() {
-    // 'async is 'ambient (ADR 0039): a live user handler intercepts its
+    // 'yield_now is 'ambient (ADR 0039): a live user handler intercepts its
     // performs through the ordinary handler stack.
     assert_runs(
-        b"#handle 'async {\n\tprint(\"yield\")\n\t'continue\n}\n'async()\nprint(1)\n",
+        b"#handle 'yield_now {\n\tprint(\"yield\")\n\t'continue\n}\n'yield_now()\nprint(1)\n",
         &[],
         b"yield\n1\n",
     );
@@ -4712,7 +4712,7 @@ fn run_ambient_clause_performs_delegate_to_the_fallback() {
     // perform inside it reaches the next handler out — here the host
     // fallback, which resumes with unit.
     assert_runs(
-        b"#handle 'async {\n\tprint(\"seen\")\n\t'async()\n\t'continue\n}\n'async()\nprint(1)\n",
+        b"#handle 'yield_now {\n\tprint(\"seen\")\n\t'yield_now()\n\t'continue\n}\n'yield_now()\nprint(1)\n",
         &[],
         b"seen\n1\n",
     );
@@ -4723,7 +4723,7 @@ fn run_nested_ambient_handlers_delegate_outward_to_the_fallback() {
     // inner user handler -> outer user handler -> host fallback: the
     // ordinary routing order for an ambient effect (ADR 0039 §4).
     assert_runs(
-        b"#handle 'async {\n\tprint(\"outer\")\n\t'async()\n\t'continue\n}\n#handle 'async {\n\tprint(\"inner\")\n\t'async()\n\t'continue\n}\n'async()\nprint(1)\n",
+        b"#handle 'yield_now {\n\tprint(\"outer\")\n\t'yield_now()\n\t'continue\n}\n#handle 'yield_now {\n\tprint(\"inner\")\n\t'yield_now()\n\t'continue\n}\n'yield_now()\nprint(1)\n",
         &[],
         b"inner\nouter\n1\n",
     );
@@ -4735,7 +4735,7 @@ fn run_ambient_handlers_may_discontinue() {
     // a clause that completes without resuming aborts the handled scope
     // (with its value, which must match the scope's — unit here).
     assert_runs(
-        b"#handle 'async {\n\tprint(\"abort\")\n}\n'async()\nprint(99)\n",
+        b"#handle 'yield_now {\n\tprint(\"abort\")\n}\n'yield_now()\nprint(99)\n",
         &[],
         b"abort\n",
     );
@@ -4746,7 +4746,7 @@ fn run_function_values_reach_the_fallback_without_a_user_handler() {
     // An ambient effect with no nearer user handler reaches the host
     // fallback active when the function value runs.
     assert_runs(
-        b"let f = func() {\n\t'async()\n\t7\n}\nprint(f())\n",
+        b"let f = func() {\n\t'yield_now()\n\t7\n}\nprint(f())\n",
         &[],
         b"7\n",
     );
@@ -4755,7 +4755,7 @@ fn run_function_values_reach_the_fallback_without_a_user_handler() {
 #[test]
 fn run_function_values_use_ambient_handlers_at_invocation() {
     assert_runs(
-        b"#handle 'async {\n\tprint(\"captured\")\n\t'continue\n}\nlet f = func() {\n\t'async()\n\t7\n}\nprint(f())\n",
+        b"#handle 'yield_now {\n\tprint(\"captured\")\n\t'continue\n}\nlet f = func() {\n\t'yield_now()\n\t7\n}\nprint(f())\n",
         &[],
         b"captured\n7\n",
     );
@@ -4764,7 +4764,7 @@ fn run_function_values_use_ambient_handlers_at_invocation() {
 #[test]
 fn run_named_entry_without_globals_reaches_the_host_fallback() {
     assert_runs(
-        b"pub func go() -> () {\n\t'async()\n\tprint(7)\n}\n",
+        b"pub func go() -> () {\n\t'yield_now()\n\tprint(7)\n}\n",
         &["--entry", "go"],
         b"7\n",
     );
@@ -4773,7 +4773,7 @@ fn run_named_entry_without_globals_reaches_the_host_fallback() {
 #[test]
 fn run_implicit_main_without_globals_reaches_the_host_fallback() {
     assert_runs(
-        b"func main() -> () {\n\t'async()\n\tprint(7)\n}\n",
+        b"func main() -> () {\n\t'yield_now()\n\tprint(7)\n}\n",
         &[],
         b"7\n",
     );
@@ -4785,10 +4785,248 @@ fn run_module_initialization_may_perform_ambient_effects() {
     // top-level binding's initializer can perform an ambient effect under a
     // named entry too, where lets still initialize first.
     assert_runs(
-        b"func f() -> Int {\n\t'async()\n\t3\n}\nlet ready = f()\npub func go() -> () {\n\tprint(ready)\n}\n",
+        b"func f() -> Int {\n\t'yield_now()\n\t3\n}\nlet ready = f()\npub func go() -> () {\n\tprint(ready)\n}\n",
         &["--entry", "go"],
         b"3\n",
     );
+}
+
+#[test]
+fn run_parallel_string_transfer_matches_pin() {
+    // Trusted core transfer contracts (ADR 0050/0058): String-carrying
+    // futures and String outputs cross worker boundaries — the VM's
+    // copier images boxed buffers, native moves over atomic counts.
+    assert_parity_program("parallel_strings");
+}
+
+#[test]
+fn run_parallel_nested_scopes_match_pin() {
+    // ADR 0058: nested structured scopes across the pooled runtime — a
+    // joining worker helps run queued tasks instead of sleeping, so
+    // width outer tasks cannot starve their inner scopes.
+    assert_parity_program("parallel_nested");
+}
+
+#[test]
+fn suspending_handlers_enforce_their_static_rules() {
+    // ADR 0064: one-shot is a linear fact (double resume is a moved
+    // value, an unconsumed resumption is a linearity error), `'continue`
+    // is replaced by the binder, the binder count includes the
+    // resumption, and a suspending handler cannot install in a function
+    // with borrowed parameters (phase 1's conservative rule).
+    for (source, fragment) in [
+        (
+            b"effect 'ping() -> Int 'suspending
+func body() -> Int {
+	'ping()
+}
+func driver() -> Int {
+	#handle 'ping { k in
+		let first = resume(k: k, value: 1)
+		resume(k: k, value: 2)
+	}
+	body()
+}
+print(driver())
+" as &[u8],
+            "use of moved value",
+        ),
+        (
+            b"effect 'ping() -> Int 'suspending
+func body() -> Int {
+	'ping()
+}
+func driver() -> Int {
+	#handle 'ping { k in
+		7
+	}
+	body()
+}
+print(driver())
+",
+            "must be consumed exactly once",
+        ),
+        (
+            b"effect 'ping() -> Int 'suspending
+func body() -> Int {
+	'ping()
+}
+func driver() -> Int {
+	#handle 'ping { k in
+		let done = cancel(k: k)
+		'continue 3
+	}
+	body()
+}
+print(driver())
+",
+            "consume the bound resumption",
+        ),
+        (
+            b"effect 'ping() -> Int 'suspending
+func body() -> Int {
+	'ping()
+}
+func driver() -> Int {
+	#handle 'ping {
+		7
+	}
+	body()
+}
+print(driver())
+",
+            "expects 1 argument",
+        ),
+        (
+            b"effect 'nap() -> Int 'suspending
+func with_view(view: &String) -> Int {
+	#handle 'nap { k in
+		let done = cancel(k: k)
+		0
+	}
+	view.count()
+}
+print(with_view(view: \"hello\"))
+",
+            "borrowed parameters",
+        ),
+    ] {
+        let output = run_source(source, &[]);
+        assert!(
+            !output.status.success(),
+            "expected rejection containing `{fragment}`, but the program ran"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(fragment),
+            "expected `{fragment}` in:\n{stderr}"
+        );
+    }
+}
+
+#[test]
+fn run_suspending_corpus_matches_pins() {
+    // ADR 0064/0065: the suspension programs are a VM <-> C invariant —
+    // generator roundtrip, cancel-releases (leak accounting included),
+    // and the stepper interleave with its recursive answer type. The C
+    // sweep replays the same programs against the interpreter.
+    assert_parity_program("suspending_generator_roundtrip");
+    assert_parity_program("suspending_cancel_releases");
+    assert_parity_program("suspending_stepper_interleaves");
+}
+
+#[test]
+fn run_parallel_workers_corpus_matches_pin() {
+    // ADR 0058/0067: structured parallelism over plain closures —
+    // Send-checked worker per job, outputs in argument order.
+    assert_parity_program("parallel_workers");
+}
+
+#[test]
+fn run_coop_scheduler_interleaves_matches_pin() {
+    // ADR 0067: cooperative tasks interleave over 'pause and a channel
+    // on one worker; the same program runs through the C sweep.
+    assert_parity_program("coop_interleave");
+}
+
+#[test]
+fn run_parallel_channel_pipeline_matches_pin() {
+    // ADR 0059: producers on parallel workers feed one consumer through
+    // an MPSC channel. The consumer parks between sends instead of
+    // reporting deadlock, a single producer's values arrive in send
+    // order, and recv resolves `none` once every sender is gone. The
+    // same program runs through the C and LLVM corpus sweeps.
+    assert_parity_program("parallel_channels");
+}
+
+#[test]
+fn run_select_races_resolve_and_cancel_cleanly() {
+    // ADR 0061: ready-vs-pending resolves to the ready side, both-ready
+    // ties resolve left, an unclaimed losing value stays queued, and a
+    // select parked on two empty channels wakes on a cross-worker send.
+    // Runs through the C and LLVM corpus sweeps against this pin.
+    assert_parity_program("select_channels");
+}
+
+#[test]
+fn run_bounded_channel_backpressure_matches_pin() {
+    // ADR 0062: capacity-1 sends park until the cross-worker consumer
+    // makes room and every value arrives in order; a same-worker
+    // fill/drain cycle stays in bounds; a send to a dead receiver
+    // resolves false and frees its value (C leak accounting enforces
+    // it). Runs through the C and LLVM corpus sweeps against this pin.
+    assert_parity_program("bounded_channel");
+}
+
+#[test]
+fn run_timers_sleep_park_and_compose_with_select() {
+    // ADR 0063: block_on(sleep) takes at least its duration of
+    // monotonic time, select against a quiet channel times out, and a
+    // worker's send well inside a generous timeout beats it. Runs
+    // through the C and LLVM corpus sweeps against this pin.
+    assert_parity_program("timers");
+}
+
+#[test]
+fn run_send_after_receiver_drop_is_a_clean_no_op() {
+    // ADR 0059 validation items 2 and 5: sends to a dead receiver drop
+    // their value through typed glue instead of enqueueing, and the
+    // receiver's final drop drains the queue the same way — the C
+    // backend's exit-time leak accounting enforces both (this program
+    // runs through the C and LLVM corpus sweeps).
+    assert_parity_program("channel_dropped_receiver");
+}
+
+#[test]
+fn run_closed_channel_recv_resolves_none() {
+    // ADR 0059 validation item 2: recv-after-all-senders-drop resolves
+    // `none`, never traps or hangs; an unpolled Recv future dropped
+    // before registering is inert (validation item 5's safe half).
+    let output = run_source(
+        b"use task::{ channel, Sender }\n\
+          func drop_sender(consume sender: Sender<Int>) -> Int {\n\t0\n}\n\
+          let (sender, receiver) = channel<Int>()\n\
+          sender.send(value: 5)\n\
+          print(drop_sender(sender: sender))\n\
+          if let .some(value) = receiver.recv() { print(value) } else { print(-1) }\n\
+          if let .some(value) = receiver.recv() { print(value) } else { print(-99) }\n",
+        &[],
+    );
+    assert!(
+        output.status.success(),
+        "closed-channel drain failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "0\n5\n-99\n",
+        "closed-channel drain diverged"
+    );
+}
+
+#[test]
+fn run_non_send_channel_payloads_reject() {
+    // ADR 0059 validation item 4: `channel<T>` requires `T: Send`, so a
+    // function-typed payload rejects at compile time.
+    for source in [
+        b"use task::{ channel }\n\
+          let (sender, receiver) = channel<(Int) -> Int>()\n\
+          print(0)\n" as &[u8],
+        b"use task::{ channel_bounded }\n\
+          let (sender, receiver) = channel_bounded<(Int) -> Int>(capacity: 1)\n\
+          print(0)\n",
+    ] {
+        let output = run_source(source, &[]);
+        assert!(
+            !output.status.success(),
+            "a non-Send channel payload must reject"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("Send"),
+            "expected a Send conformance failure, got: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]
@@ -5820,6 +6058,31 @@ fn gadt_existential_recursive_evaluator_runs() {
           }\n\
           print(evaluate(expr: .add(.int(20), .add(.int(19), .int(3)))))\n\
           print(evaluate(expr: .add(.string(\"hello \"), .string(\"world\"))))\n",
+        &[],
+        b"42\nhello world\n",
+    );
+}
+
+/// The built-in `Add<RHS>` keeps its result associated, so the evaluator's
+/// body infers `T.Ret == T`. The GADT arm rebases its case-local obligation
+/// through the result refinement, and concrete Int/String calls discharge it.
+#[test]
+fn gadt_evaluator_infers_same_add_result() {
+    assert_runs(
+        b"enum Expr<Returns> {\n\
+          \tcase int(Int) -> Expr<Int>\n\
+          \tcase string(String) -> Expr<String>\n\
+          \tcase add<T: Add<T>>(Expr<T>, Expr<T>) -> Expr<T>\n\
+          }\n\
+          func eval<T: Add<T>>(_ expr: Expr<T>) -> T {\n\
+          \tmatch expr {\n\
+          \t\t.int(i) -> i,\n\
+          \t\t.string(s) -> s,\n\
+          \t\t.add(a, b) -> eval(a) + eval(b)\n\
+          \t}\n\
+          }\n\
+          print(eval(.add(.int(20), .add(.int(19), .int(3)))))\n\
+          print(eval(.add(.string(\"hello \"), .string(\"world\"))))\n",
         &[],
         b"42\nhello world\n",
     );

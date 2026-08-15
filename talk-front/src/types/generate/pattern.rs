@@ -2,7 +2,7 @@ use super::*;
 
 impl PatternRefinement {
     pub(super) fn is_empty(&self) -> bool {
-        self.givens.is_empty() && self.local_params.is_empty()
+        self.givens.is_empty() && self.gadt.params.is_empty()
     }
 
     pub(super) fn extend(&mut self, other: PatternRefinement) {
@@ -11,27 +11,37 @@ impl PatternRefinement {
                 self.givens.push(given);
             }
         }
-        for param in other.local_params {
-            if !self.local_params.contains(&param) {
-                self.local_params.push(param);
+        for param in other.gadt.params {
+            if !self.gadt.params.contains(&param) {
+                self.gadt.params.push(param);
+            }
+        }
+        for (param, outer) in other.gadt.determined {
+            if !self
+                .gadt
+                .determined
+                .iter()
+                .any(|(existing, _)| *existing == param)
+            {
+                self.gadt.determined.push((param, outer));
             }
         }
     }
 
     pub(super) fn equivalent_to(&self, other: &Self) -> bool {
         if self.givens.len() != other.givens.len()
-            || self.local_params.len() != other.local_params.len()
+            || self.gadt.params.len() != other.gadt.params.len()
         {
             return false;
         }
         self.givens.iter().zip(&other.givens).all(|(left, right)| {
-            Self::predicate_equivalent(left, right, &self.local_params, &other.local_params)
+            Self::predicate_equivalent(left, right, &self.gadt.params, &other.gadt.params)
         })
     }
 
     pub(super) fn types_equivalent_to(&self, other: &Self, left: &Ty, right: &Ty) -> bool {
-        self.local_params.len() == other.local_params.len()
-            && Self::ty_equivalent(left, right, &self.local_params, &other.local_params)
+        self.gadt.params.len() == other.gadt.params.len()
+            && Self::ty_equivalent(left, right, &self.gadt.params, &other.gadt.params)
     }
 
     pub(super) fn substitute_constraint_from(
@@ -40,10 +50,11 @@ impl PatternRefinement {
         constraint: Constraint,
     ) -> Constraint {
         let tys: FxHashMap<Symbol, Ty> = source
-            .local_params
+            .gadt
+            .params
             .iter()
             .copied()
-            .zip(self.local_params.iter().copied().map(Ty::Param))
+            .zip(self.gadt.params.iter().copied().map(Ty::Param))
             .collect();
         let effs = FxHashMap::default();
         let rows = FxHashMap::default();
@@ -878,14 +889,43 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         }
         let mut refinement = PatternRefinement {
             givens: instantiation.givens.clone(),
-            local_params,
+            gadt: GadtLocals {
+                params: local_params,
+                determined: vec![],
+            },
         };
         let scrutinee_result = Ty::Nominal(enum_symbol, theta);
+        let mut result_givens = vec![];
         self.collect_refinement_type_equalities(
             scrutinee_result,
             instantiation.result_type.clone(),
-            &mut refinement.givens,
+            &mut result_givens,
         );
+        for given in &result_givens {
+            let Predicate::TypeEq(left, right) = given else {
+                continue;
+            };
+            for (candidate, outer) in [(left, right), (right, left)] {
+                let Ty::Param(param) = candidate else {
+                    continue;
+                };
+                if refinement.gadt.params.contains(param)
+                    && !refinement
+                        .gadt
+                        .params
+                        .iter()
+                        .any(|local| ty_mentions_param(outer, *local))
+                    && !refinement
+                        .gadt
+                        .determined
+                        .iter()
+                        .any(|(existing, _)| existing == param)
+                {
+                    refinement.gadt.determined.push((*param, outer.clone()));
+                }
+            }
+        }
+        refinement.givens.extend(result_givens);
         for (sub, payload) in fields.iter().zip(&instantiation.argument_types) {
             refinement.extend(self.check_pattern(sub, payload));
         }

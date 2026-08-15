@@ -288,6 +288,69 @@ pub enum Inst {
         b: Operand,
         c: Operand,
     },
+    /// ADR 0058 task runtime: start a worker running the `worker`
+    /// closure (a `() -> T` function value, consumed) and produce an
+    /// executor-internal handle. Whether the worker runs on another OS
+    /// thread or inline is runtime policy, never semantics.
+    TaskSpawn {
+        dest: LocalId,
+        arg: Operand,
+        worker: Operand,
+    },
+    /// ADR 0058 task runtime: join the worker behind `handle`,
+    /// transferring its output to `dest`. Joining an invalid or
+    /// already-joined handle is a trap.
+    TaskJoin {
+        dest: LocalId,
+        handle: Operand,
+    },
+    /// ADR 0058 task runtime: the host's available parallelism (>= 1).
+    TaskWidth {
+        dest: LocalId,
+    },
+    /// ADR 0059: enqueue a transferred value on the channel behind
+    /// `handle` and wake its waiter. The value moves; `Send` was checked
+    /// upstream.
+    ChanSend {
+        handle: Operand,
+        value: Operand,
+    },
+    /// ADR 0059: take a queued value off the channel behind `handle`
+    /// (trap when none — callers gate on status first).
+    ChanTake {
+        dest: LocalId,
+        handle: Operand,
+    },
+    /// ADR 0059: scalar channel/park control (create, status, side
+    /// retain/drop, external-wait register/unregister, park).
+    ChanCtl {
+        dest: LocalId,
+        handle: Operand,
+        op: Operand,
+    },
+    /// ADR 0064: perform a suspending effect — capture the extent from
+    /// the installing frame through this site into a stored one-shot
+    /// resumption and run the handler clause in the installer's place.
+    /// `dest` receives the value a later `Resume` supplies.
+    Suspend {
+        dest: LocalId,
+        effect: MirSymbol,
+        args: Vec<Operand>,
+        /// Cleanup block for an abort or cancellation unwinding through
+        /// the suspended frame (ADR 0027's per-call machinery; the
+        /// release planner backfills it like a call's).
+        unwind: Option<BlockId>,
+    },
+    /// ADR 0064: resume a stored resumption with a value; `dest`
+    /// receives the extent's answer when it finishes or aborts.
+    Resume {
+        dest: LocalId,
+        cont: Operand,
+        value: Operand,
+    },
+    /// ADR 0064: cancel a stored resumption, unwinding its captured
+    /// frames through their cleanup entries (ADR 0027's machinery).
+    Cancel { cont: Operand },
     /// Allocate a `'heap` object (its own fresh region, one claim).
     ObjectNew {
         dest: LocalId,

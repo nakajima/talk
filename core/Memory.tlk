@@ -1,5 +1,5 @@
 // no-core
-use package::Ownership::{ CheapClone, Owner }
+use package::Ownership::{ CheapClone, Owner, Send }
 
 pub enum Allocation {
 	case allocate(Int)
@@ -86,6 +86,13 @@ extend<Element> Storage<Element>: Owner {}
 
 extend<Element> Storage<Element>: CheapClone {}
 
+// Trusted transfer contract (ADR 0050/0058): moving a buffer between
+// workers is sound because owner transitions are thread-safe — atomic
+// counts on native targets, whole-buffer images on the VM's isolated
+// workers. The element condition stays structural: moving the buffer
+// moves its elements.
+extend<Element> Storage<Element>: Send where Element: Send {}
+
 pub func _storage<Element>(capacity: Int) 'alloc -> Storage<Element> {
 	Storage<Element>(base: _alloc<Element>(count: capacity))
 }
@@ -107,6 +114,10 @@ pub struct ByteStorage {
 extend ByteStorage: Owner {}
 
 extend ByteStorage: CheapClone {}
+
+// Trusted transfer contract (ADR 0050/0058): see Storage above; bytes
+// carry no further conditions.
+extend ByteStorage: Send {}
 
 pub func _byte_storage(capacity: Int) 'alloc -> ByteStorage {
 	ByteStorage(base: _alloc<Byte>(count: capacity))

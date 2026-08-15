@@ -2972,7 +2972,11 @@ struct Parser {
 				self.did_match(kind: .comma)
 			}
 		}
-		let has_effects = self.peek_is(kind: .single_quote) || self.peek_is(kind: .effect_name)
+		// `'suspending` after a paren type is the effect-declaration
+		// attribute (ADR 0064), never a bare row entry — reserving the
+		// lexeme here keeps `effect 'park() -> () 'suspending`
+		// unambiguous; bracketed rows are unaffected.
+		let has_effects = self.peek_is(kind: .single_quote) || (self.peek_is(kind: .effect_name) && self.lexeme(token: self.current()) != "suspending")
 		let effects = self.effect_set()
 		if self.is_failed() { return dummy_type() }
 		if self.did_match(kind: .arrow) {
@@ -3072,7 +3076,7 @@ struct Parser {
 			}
 			return EffectSet(names: names, name_starts: name_starts, name_ends: name_ends, open: open)
 		}
-		if self.peek_is(kind: .effect_name) {
+		if self.peek_is(kind: .effect_name) && self.lexeme(token: self.current()) != "suspending" {
 			let cur = self.current()
 			self.advance()
 			names.push(self.lexeme(token: cur))
@@ -3687,7 +3691,16 @@ struct Parser {
 		if self.is_failed() { return dummy_decl() }
 		let wc = self.where_clause()
 		if self.is_failed() { return dummy_decl() }
-		Decl(kind: .effect_decl(name, name_tok.lexeme.lower, name_tok.lexeme.upper, generics, wc, params, ret), is_public: false, start: start_tok.span.lower, end: self.span_end())
+		// Tick-suffix declaration attribute (ADR 0064): a suspending
+		// effect's performs capture their extent for a stored
+		// resumption. Matched by lexeme so a perform statement opening
+		// the next top-level item is not eaten as an attribute.
+		let suspending = false
+		loop self.peek_is(kind: .effect_name) && self.lexeme(token: self.current()) == "suspending" {
+			self.advance()
+			suspending = true
+		}
+		Decl(kind: .effect_decl(name, name_tok.lexeme.lower, name_tok.lexeme.upper, generics, wc, params, ret, suspending), is_public: false, start: start_tok.span.lower, end: self.span_end())
 	}
 
 	mut func associated_parse() -> Decl {
@@ -4147,8 +4160,16 @@ struct Parser {
 			if instr == "gep" || instr == "inline_get" { has_ty = true; value_count = 2 }
 			if instr == "io" { value_count = 4 }
 			if instr == "trunc" || instr == "is_unique" || instr == "itof" || instr == "btoi" || instr == "itob" { value_count = 1 }
+			if instr == "task_spawn" { value_count = 2 }
+			if instr == "task_join" { has_ty = true; value_count = 1 }
+			if instr == "task_width" { value_count = 0 }
+			if instr == "chan_take" { has_ty = true; value_count = 1 }
+			if instr == "chan_ctl" { value_count = 2 }
+			if instr == "resume" { has_ty = true; value_count = 2 }
 		} else {
 			if instr == "store" || instr == "swap" { has_ty = true; value_count = 2 }
+			if instr == "chan_send" { value_count = 2 }
+			if instr == "cancel" { value_count = 1 }
 			if instr == "retain" { has_ty = true; value_count = 1 }
 			if instr == "copy" { has_ty = true; value_count = 3 }
 			if instr == "free" { value_count = 1 }
@@ -4396,7 +4417,7 @@ struct Parser {
 					.enum_decl(_, _, _, _, _, _, _, _) -> self.check_pub_context_nominal(context: context),
 					.protocol_decl(_, _, _, _, _, _, _) -> self.check_pub_context_nominal(context: context),
 					.typealias_decl(_, _, _, _) -> self.check_pub_context_nominal(context: context),
-					.effect_decl(_, _, _, _, _, _, _) -> self.check_pub_context_nominal(context: context),
+					.effect_decl(_, _, _, _, _, _, _, _) -> self.check_pub_context_nominal(context: context),
 					.func_decl(_) -> self.check_pub_context_top(context: context),
 					.func_signature(_) -> self.check_pub_context_top(context: context),
 					.let_decl(_, _, _) -> self.check_pub_context_top(context: context),
@@ -5099,7 +5120,7 @@ func meta_decl(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: 
 			meta_func_signature(ctx: ctx, metas: metas, claimed: claimed, live: live, sig: sig)
 		},
 		.typealias_decl(_, _, _, rhs) -> meta_type(ctx: ctx, metas: metas, claimed: claimed, live: live, annotation: rhs),
-		.effect_decl(_, _, _, generics, wc, params, ret) -> {
+		.effect_decl(_, _, _, generics, wc, params, ret, _) -> {
 			for generic in generics {
 				meta_generic_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, generic: generic)
 			}

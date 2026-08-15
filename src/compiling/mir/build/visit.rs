@@ -47,6 +47,45 @@ pub(crate) fn visit_inst(inst: &mut Inst, visit: &mut impl FnMut(Slot, &mut Loca
             read(src, visit);
             visit(Slot::Def, dest);
         }
+        Inst::TaskSpawn { dest, arg, worker } => {
+            read(arg, visit);
+            read(worker, visit);
+            visit(Slot::Def, dest);
+        }
+        Inst::TaskJoin { dest, handle } => {
+            read(handle, visit);
+            visit(Slot::Def, dest);
+        }
+        Inst::TaskWidth { dest } => {
+            visit(Slot::Def, dest);
+        }
+        Inst::ChanSend { handle, value } => {
+            read(handle, visit);
+            read(value, visit);
+        }
+        Inst::ChanTake { dest, handle } => {
+            read(handle, visit);
+            visit(Slot::Def, dest);
+        }
+        Inst::ChanCtl { dest, handle, op } => {
+            read(handle, visit);
+            read(op, visit);
+            visit(Slot::Def, dest);
+        }
+        Inst::Suspend { dest, args, .. } => {
+            for arg in args {
+                read(arg, visit);
+            }
+            visit(Slot::Def, dest);
+        }
+        Inst::Resume { dest, cont, value } => {
+            read(cont, visit);
+            read(value, visit);
+            visit(Slot::Def, dest);
+        }
+        Inst::Cancel { cont } => {
+            read(cont, visit);
+        }
         Inst::FieldIndex { dest, src, .. } => {
             read(src, visit);
             visit(Slot::Def, dest);

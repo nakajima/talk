@@ -1,0 +1,11 @@
+use task::{ channel, Receiver, Sender }
+
+func drop_receiver(consume receiver: Receiver<String>) -> Int {
+	0
+}
+
+let (sender, receiver) = channel<String>()
+sender.send(value: "queued before the receiver died".to_string())
+print(drop_receiver(receiver: receiver))
+sender.send(value: "sent after the receiver died".to_string())
+print(1)

@@ -211,6 +211,43 @@ pub enum InlineIRInstructionKind {
     ByteToInt { dest: Register, val: Value },
     #[doc = "$dest = itob $val"]
     IntToByte { dest: Register, val: Value },
+    #[doc = "$dest = task_spawn $arg $worker"]
+    TaskSpawn {
+        dest: Register,
+        arg: Value,
+        worker: Value,
+    },
+    #[doc = "$dest = task_join $ty $handle"]
+    TaskJoin {
+        dest: Register,
+        ty: TypeAnnotation,
+        handle: Value,
+    },
+    #[doc = "$dest = task_width"]
+    TaskWidth { dest: Register },
+    #[doc = "chan_send $handle $value"]
+    ChanSend { handle: Value, value: Value },
+    #[doc = "$dest = chan_take $ty $handle"]
+    ChanTake {
+        dest: Register,
+        ty: TypeAnnotation,
+        handle: Value,
+    },
+    #[doc = "$dest = chan_ctl $handle $op"]
+    ChanCtl {
+        dest: Register,
+        handle: Value,
+        op: Value,
+    },
+    #[doc = "$dest = resume $ty $cont $value"]
+    Resume {
+        dest: Register,
+        ty: TypeAnnotation,
+        cont: Value,
+        value: Value,
+    },
+    #[doc = "cancel $cont"]
+    Cancel { cont: Value },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
@@ -533,6 +570,35 @@ impl Display for InlineIRInstruction {
             }
             InlineIRInstructionKind::IntToByte { dest, val } => {
                 write!(f, "{dest} = itob {}", val)
+            }
+            InlineIRInstructionKind::TaskSpawn { dest, arg, worker } => {
+                write!(f, "{dest} = task_spawn {} {}", arg, worker)
+            }
+            InlineIRInstructionKind::TaskJoin { dest, ty, handle } => {
+                write!(f, "{dest} = task_join {} {}", ty.simple_display(), handle)
+            }
+            InlineIRInstructionKind::TaskWidth { dest } => {
+                write!(f, "{dest} = task_width")
+            }
+            InlineIRInstructionKind::ChanSend { handle, value } => {
+                write!(f, "chan_send {} {}", handle, value)
+            }
+            InlineIRInstructionKind::Resume {
+                dest,
+                ty,
+                cont,
+                value,
+            } => {
+                write!(f, "{dest} = resume {} {} {}", ty.simple_display(), cont, value)
+            }
+            InlineIRInstructionKind::Cancel { cont } => {
+                write!(f, "cancel {cont}")
+            }
+            InlineIRInstructionKind::ChanTake { dest, ty, handle } => {
+                write!(f, "{dest} = chan_take {} {}", ty.simple_display(), handle)
+            }
+            InlineIRInstructionKind::ChanCtl { dest, handle, op } => {
+                write!(f, "{dest} = chan_ctl {} {}", handle, op)
             }
         }
     }

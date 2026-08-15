@@ -1,0 +1,37 @@
+// ADR 0064: resumptions escape their clause. `drive` turns an extent
+// into a Step — done or parked-with-resumption — so two extents park
+// simultaneously and finish later, each resumed outside any handler.
+// The recursive answer type is legal: a Resumption stores only its
+// slot, so Step is not layout-recursive.
+effect 'pause() -> Int 'suspending
+
+enum Step {
+	case done(Int)
+	case parked(Resumption<Int, Step>)
+}
+
+func job(tag: Int) -> Int {
+	print(tag)
+	let boost = 'pause()
+	print(tag + boost)
+	tag
+}
+
+func drive(tag: Int) -> Step {
+	#handle 'pause { k in
+		Step.parked(k)
+	}
+	Step.done(job(tag: tag))
+}
+
+func settle(consume step: Step, value: Int) -> Int {
+	match step {
+		.done(result) -> result,
+		.parked(k) -> settle(step: resume(k: k, value: value), value: value)
+	}
+}
+
+let first = drive(tag: 100)
+let second = drive(tag: 200)
+print(settle(step: first, value: 7))
+print(settle(step: second, value: 40))

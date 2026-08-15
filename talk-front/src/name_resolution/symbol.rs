@@ -291,6 +291,9 @@ impl Symbol {
     const WELL_KNOWN_CORE_SHOWABLE_ID: u32 = u32::MAX - 20;
     const WELL_KNOWN_CORE_EQUATABLE_ID: u32 = u32::MAX - 19;
     const WELL_KNOWN_CORE_INTO_ID: u32 = u32::MAX - 18;
+    const WELL_KNOWN_CORE_SEND_ID: u32 = u32::MAX - 17;
+    const WELL_KNOWN_CORE_SYNC_ID: u32 = u32::MAX - 16;
+    const WELL_KNOWN_CORE_RESUMPTION_ID: u32 = u32::MAX - 15;
 
     pub const Int: Symbol = Symbol::Builtin(BuiltinId {
         module_id: ModuleId::Core,
@@ -408,10 +411,29 @@ impl Symbol {
         module_id: ModuleId::Core,
         local_id: Self::WELL_KNOWN_CORE_INTO_ID,
     });
+    /// ADR 0050 checked transfer capability: an owned value may move to
+    /// another worker.
+    pub const Send: Symbol = Symbol::Protocol(ProtocolId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_SEND_ID,
+    });
+    /// ADR 0050 checked share capability: shared references may be used
+    /// by multiple workers. `Sync(T)` iff `Send(&T)`.
+    pub const Sync: Symbol = Symbol::Protocol(ProtocolId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_SYNC_ID,
+    });
+    /// ADR 0064 one-shot resumption handle: the linear core struct a
+    /// suspending handler's final binder carries.
+    pub const Resumption: Symbol = Symbol::Struct(StructId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_RESUMPTION_ID,
+    });
 
     pub fn well_known_core_struct(name: &str) -> Option<Symbol> {
         match name {
             "String" => Some(Symbol::String),
+            "Resumption" => Some(Symbol::Resumption),
             "Array" => Some(Symbol::Array),
             "Storage" => Some(Symbol::Storage),
             "Character" => Some(Symbol::Character),
@@ -433,6 +455,8 @@ impl Symbol {
             "Showable" => Some(Symbol::Showable),
             "Equatable" => Some(Symbol::Equatable),
             "Into" => Some(Symbol::Into),
+            "Send" => Some(Symbol::Send),
+            "Sync" => Some(Symbol::Sync),
             _ => None,
         }
     }

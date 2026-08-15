@@ -1,35 +1,109 @@
 // no-core
-pub enum Poll<T, Y> {
-	case ready(T)
-	case pending(Y)
+use package::Array::{ Array }
+
+// Direct-style concurrency (ADR 0067) over one-shot resumptions
+// (ADR 0064): waiting is a family of suspending effects. The blocking
+// host fallbacks live in core/Host.tlk; a cooperative scheduler
+// (stdlib `coop`) is just a nearer handler for the same effects.
+
+// Typed readiness operation: the performing computation volunteers to
+// yield the worker. The reference host resumes immediately
+// (core/Host.tlk, ADR 0039); a scheduler may intercept it.
+pub effect 'yield_now() -> ()
+
+// Park until the channel behind `handle` has a value or closes
+// (ADR 0067; a resumed receiver re-checks and takes itself).
+pub effect 'park_recv(handle: Int) -> () 'suspending
+
+// Park until the bounded channel behind `handle` has room or its
+// receiver is gone.
+pub effect 'park_send(handle: Int) -> () 'suspending
+
+// Park until the monotonic clock reaches `deadline_ms`.
+pub effect 'park_sleep(deadline_ms: Int) -> () 'suspending
+
+// Park until either channel has a value or closes (two-way select).
+pub effect 'park_recv2(a: Int, b: Int) -> () 'suspending
+
+// === Task runtime (ADR 0058) ==========================================
+//
+// The runtime half of the structured parallel executor: spawn hands a
+// worker closure to the runtime under a fresh executor-internal handle,
+// and join transfers the worker's output back exactly once (joining an
+// invalid or already-joined handle traps). Whether workers run on other
+// OS threads or inline is runtime policy, never semantics. Handles never
+// leave the structured stdlib scope that spawned them.
+
+// The worker takes its state as an argument rather than a capture: the
+// transfer is explicit at the boundary, and the closure itself stays
+// environment-free.
+pub func _task_spawn<A, T>(consume arg: A, consume worker: (consume A) -> T) -> Int {
+	#_ir(arg, worker) { %? = task_spawn $0 $1 }
 }
 
-pub enum FuturePoll<T> {
-	case ready(T)
-	case pending
+pub func _task_join<T>(handle: Int) -> T {
+	#_ir(handle) { %? = task_join T $0 }
 }
 
-pub struct Waker {
-	let task_id: Int
-
-	pub init(task_id: Int) {
-		self.task_id = task_id
-		self
-	}
+// The host's available parallelism (at least 1).
+pub func _task_width() -> Int {
+	#_ir { %? = task_width }
 }
 
-pub struct Context {
-	let waker: Waker
+// === Channel runtime (ADR 0059) =======================================
+//
+// Cross-worker transfer queues behind runtime-minted handles: send
+// enqueues a transferred value and wakes parked receivers, take pops a
+// value the status op has proven present, and the control op carries
+// the scalar lifecycle (create, status, sender/receiver retain and
+// drop, external-wait registration, park). Handles never leave the
+// stdlib channel types that wrap them.
 
-	pub init(waker: Waker) {
-		self.waker = waker
-		self
-	}
+pub func _chan_send<T>(handle: Int, consume value: T) -> Void {
+	#_ir(handle, value) { chan_send $0 $1 }
 }
 
-pub protocol Future {
-	associated Output
-	func poll(cx: Context) -> FuturePoll<Output>
+pub func _chan_take<T>(handle: Int) -> T {
+	#_ir(handle) { %? = chan_take T $0 }
 }
 
-pub effect 'async() -> ()
+// Ops: 0 status (0 value ready, 1 empty and open, 2 closed and
+// drained), 1 retain sender, 2 drop sender, 3 drop receiver,
+// 4 register an external wait, 5 unregister, 6 park, 7 create (the
+// handle operand carries the capacity; 0 = unbounded), 8 count this
+// worker's external waits, 9 whether the receiver is still live,
+// 10 atomically reserve a send slot (1 on success), 11 register a
+// send-wait, 12 unregister one, 13 monotonic now (ms), 14 register a
+// deadline (the handle operand, absolute ms), 15 unregister one.
+pub func _chan_ctl(handle: Int, op: Int) -> Int {
+	#_ir(handle, op) { %? = chan_ctl $0 $1 }
+}
+
+// === One-shot resumptions (ADR 0064) ==================================
+//
+// A suspending effect's perform captures its extent — the installing
+// frame through the perform site — into a stored resumption, and the
+// handler clause binds it as a final `Resumption<R, A>` parameter:
+// `R` is what resuming supplies to the perform site, `A` the handled
+// extent's answer. The struct is linear: a resumption is resumed or
+// cancelled exactly once, statically. The slot names a worker-local
+// segment; the runtime's take of that slot is the dynamic backstop,
+// and linearity (which never derives Send) keeps resumptions on the
+// worker that minted them.
+
+pub struct Resumption<R, A> 'linear {
+	let slot: Int
+}
+
+// Deliver `value` to the suspended perform site and run the extent to
+// its next suspension or completion; the return value is the extent's
+// answer either way.
+pub func resume<R, A>(consume k: Resumption<R, A>, value: R) -> A {
+	#_ir(k, value) { %? = resume A $0 $1 }
+}
+
+// Discard a suspended extent, unwinding every captured frame through
+// its cleanup entries — cancellation cannot leak.
+pub func cancel<R, A>(consume k: Resumption<R, A>) -> () {
+	#_ir(k) { cancel $0 }
+}

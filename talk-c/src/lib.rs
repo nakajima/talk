@@ -67,7 +67,8 @@ use talk_mir::{
     CmpKind, Constant, Function, Inst, MirSymbol, Module as Program, Operand, ScalarOp, Term,
 };
 use talk_native_runtime::emit::{
-    Interners, c_escape, needs_identity, static_strings, symbol_rows, type_table,
+    Interners, c_escape, needs_identity, resumable_functions, static_strings, symbol_rows,
+    type_table,
 };
 
 /// The generated file's runtime half, emitted verbatim ahead of the
@@ -115,9 +116,23 @@ fn translate(program: &Program, library: bool) -> Result<Translation<'_>, Error>
         ..Emitter::default()
     };
     let facts = Facts::new(program);
+    // ADR 0065: the resumable set — every function a suspension's
+    // return-status can propagate through — and whether any
+    // address-taken function is in it (the conservative indirect rule).
+    let resumable = resumable_functions(&program.functions);
+    let closures_suspend = program.functions.iter().any(|function| {
+        function.blocks.iter().any(|block| {
+            block.insts.iter().any(|inst| match inst {
+                Inst::MakeClosure { func, .. } => {
+                    resumable.get(*func).copied().unwrap_or(false)
+                }
+                _ => false,
+            })
+        })
+    });
     let mut bodies = String::new();
     for (id, function) in program.functions.iter().enumerate() {
-        emitter.function(&mut bodies, id, function, &facts)?;
+        emitter.function(&mut bodies, id, function, &facts, &resumable, closures_suspend)?;
     }
     emit_dispatch(&mut bodies, program, &facts);
     // Built after the bodies (they record which layouts went native) but
@@ -491,12 +506,26 @@ impl Emitter {
         id: usize,
         function: &Function,
         facts: &Facts,
+        resumable: &[bool],
+        closures_suspend: bool,
     ) -> Result<(), Error> {
         // Only a frame that names itself can ever be a continuation's
         // target or a handler's installer, so leaf functions stay free of
-        // shadow-stack traffic.
-        let identified = needs_identity(function);
+        // shadow-stack traffic. A resumable function (ADR 0065) always
+        // carries identity: suspensions land by frame id.
+        let is_resumable = resumable.get(id).copied().unwrap_or(false);
+        let identified = needs_identity(function) || is_resumable;
         let sig = &facts.sigs[id];
+        if is_resumable {
+            return self.resumable_function(
+                out,
+                id,
+                function,
+                facts,
+                resumable,
+                closures_suspend,
+            );
+        }
         let _ = writeln!(
             out,
             "\n/* {} */\nstatic {} {}({}) {{",
@@ -625,7 +654,7 @@ impl Emitter {
             let _ = writeln!(out, "b{index}:");
             for (instruction_index, inst) in block.insts.iter().enumerate() {
                 let frame_slot = storage.get(&(index, instruction_index)).copied();
-                self.inst(out, inst, identified, frame_slot, &frame)?;
+                self.inst(out, inst, identified, frame_slot, &frame, &mut SusCtx::inert())?;
             }
             let term = block
                 .term
@@ -637,6 +666,131 @@ impl Emitter {
         Ok(())
     }
 
+    /// ADR 0065: emit one function in resumable form — a wrapper with
+    /// the published signature over a heap-framed impl with re-entry
+    /// dispatch. Locals are forced uniform so the frame's `l[]` is the
+    /// whole state; `TalkValue *l = fr->l;` keeps every instruction
+    /// emission textually identical.
+    fn resumable_function(
+        &mut self,
+        out: &mut String,
+        id: usize,
+        function: &Function,
+        facts: &Facts,
+        resumable: &[bool],
+        closures_suspend: bool,
+    ) -> Result<(), Error> {
+        let sig = &facts.sigs[id];
+        let n_locals = usize::from(function.n_locals()).max(1);
+        let frame = Frame {
+            native: vec![None; function.locals.len().max(n_locals)],
+            buffered: vec![false; function.locals.len().max(n_locals)],
+            ret: None,
+            facts,
+        };
+        let mut sus = SusCtx {
+            active: true,
+            next_rpc: 1,
+            marked: resumable,
+            closures_suspend,
+        };
+        // The body first, into a buffer: the impl's dispatch needs the
+        // final re-entry count.
+        let mut body = String::new();
+        for (index, block) in function.blocks.iter().enumerate() {
+            let _ = writeln!(body, "b{index}:");
+            for inst in &block.insts {
+                self.inst(&mut body, inst, true, None, &frame, &mut sus)?;
+            }
+            let term = block
+                .term
+                .as_ref()
+                .ok_or_else(|| internal("basic block has no terminator"))?;
+            emit_term(&mut body, term, function, true, &frame)?;
+        }
+        let _ = writeln!(
+            out,
+            "
+/* {} (resumable) */
+static TalkValue {}_impl(TalkResumeFrame *fr);",
+            comment(&function.name),
+            symbol(id)
+        );
+        let _ = writeln!(
+            out,
+            "static {} {}({}) {{",
+            return_type(sig.ret),
+            symbol(id),
+            parameter_list(function.arity, sig)
+        );
+        let _ = writeln!(
+            out,
+            "    TalkResumeFrame *fr = talk_resume_frame_new({n_locals}, {}_impl, env);",
+            symbol(id)
+        );
+        for index in 0..function.arity {
+            match sig.param(index) {
+                Some(layout) => {
+                    let _ = writeln!(out, "    fr->l[{index}] = talk_box_l{layout}(p{index});");
+                }
+                None => {
+                    let _ = writeln!(out, "    fr->l[{index}] = p{index};");
+                }
+            }
+        }
+        let _ = writeln!(out, "    TalkValue v = {}_impl(fr);", symbol(id));
+        let _ = writeln!(out, "    if (talk_frame_detached) {{");
+        let _ = writeln!(out, "        talk_frame_detached = 0;");
+        let _ = writeln!(out, "    }} else {{");
+        let _ = writeln!(out, "        free(fr);");
+        let _ = writeln!(out, "    }}");
+        match sig.ret {
+            Some(ret) => {
+                let _ = writeln!(
+                    out,
+                    "    if (talk_unwinding || talk_suspend_pending) {{ return (TalkL{ret}){{0}}; }}"
+                );
+                let _ = writeln!(out, "    return talk_unbox_l{ret}(v);");
+            }
+            None => {
+                let _ = writeln!(out, "    return v;");
+            }
+        }
+        let _ = writeln!(out, "}}");
+        let _ = writeln!(
+            out,
+            "static TalkValue {}_impl(TalkResumeFrame *fr) {{",
+            symbol(id)
+        );
+        let _ = writeln!(out, "    TalkValue *l = fr->l;");
+        let _ = writeln!(out, "    const TalkValue *env = fr->env;");
+        let _ = writeln!(out, "    (void)env;");
+        let _ = writeln!(out, "    (void)l;");
+        let _ = writeln!(out, "    talk_frame_enter();");
+        // Depth is captured before the identity push, so this frame's
+        // shadow slot is frame_depth — the same relationship the plain
+        // identified prologue has.
+        let _ = writeln!(out, "    const size_t frame_depth = talk_depth;");
+        let _ = writeln!(out, "    uint32_t frame_id;");
+        let _ = writeln!(out, "    if (fr->rpc == 0) {{");
+        let _ = writeln!(out, "        frame_id = talk_enter();");
+        let _ = writeln!(out, "        fr->id = frame_id;");
+        let _ = writeln!(out, "    }} else {{");
+        let _ = writeln!(out, "        frame_id = fr->id;");
+        let _ = writeln!(out, "        talk_reenter_identity(frame_id);");
+        let _ = writeln!(out, "    }}");
+        let _ = writeln!(out, "    switch (fr->rpc) {{");
+        let _ = writeln!(out, "    case 0: goto b0;");
+        for k in 1..sus.next_rpc {
+            let _ = writeln!(out, "    case {k}: goto r{k};");
+        }
+        let _ = writeln!(out, "    default: talk_trap(\"resume into an unknown state\");");
+        let _ = writeln!(out, "    }}");
+        out.push_str(&body);
+        let _ = writeln!(out, "}}");
+        Ok(())
+    }
+
     fn inst(
         &mut self,
         out: &mut String,
@@ -644,6 +798,7 @@ impl Emitter {
         identified: bool,
         frame_slot: Option<usize>,
         frame: &Frame,
+        sus: &mut SusCtx,
     ) -> Result<(), Error> {
         match inst {
             Inst::Copy { dest, src } => {
@@ -710,7 +865,21 @@ impl Emitter {
                         let _ = writeln!(out, "    l[{dest}] = {call};");
                     }
                 }
-                emit_unwind_check(out, *unwind, identified, frame);
+                let stub = sus.active && sus.marked.get(*func).copied().unwrap_or(false);
+                if stub {
+                    // A resumable callee's impl computes the uniform
+                    // value directly, so re-entry lands in the same
+                    // representation the normal path boxed into l[].
+                    let k = sus.reserve();
+                    let _ = writeln!(out, "    goto j{k};");
+                    let _ = writeln!(out, "r{k}:");
+                    let _ = writeln!(out, "    l[{dest}] = talk_reenter(fr->child);");
+                    let _ = writeln!(out, "j{k}: ;");
+                    emit_unwind_check(out, *unwind, identified, frame);
+                    emit_suspend_stub(out, k);
+                } else {
+                    emit_unwind_check(out, *unwind, identified, frame);
+                }
             }
             Inst::CallIndirect {
                 dest,
@@ -747,7 +916,18 @@ impl Emitter {
                     "        l[{dest}] = talk_dispatch({callee}.v.agg->meta, {callee}.v.agg->fields, a);"
                 );
                 let _ = writeln!(out, "    }}");
-                emit_unwind_check(out, *unwind, identified, frame);
+                let stub = sus.active && sus.closures_suspend;
+                if stub {
+                    let k = sus.reserve();
+                    let _ = writeln!(out, "    goto j{k};");
+                    let _ = writeln!(out, "r{k}:");
+                    let _ = writeln!(out, "    l[{dest}] = talk_reenter(fr->child);");
+                    let _ = writeln!(out, "j{k}: ;");
+                    emit_unwind_check(out, *unwind, identified, frame);
+                    emit_suspend_stub(out, k);
+                } else {
+                    emit_unwind_check(out, *unwind, identified, frame);
+                }
             }
             Inst::MakeClosure { dest, func, env } => {
                 let _ = writeln!(out, "    {{");
@@ -999,6 +1179,124 @@ impl Emitter {
                     frame.value(*a)?,
                     frame.value(*b)?,
                     frame.value(*c)?
+                );
+            }
+            Inst::TaskSpawn { dest, arg, worker } => {
+                let _ = writeln!(
+                    out,
+                    "    l[{dest}] = talk_int(talk_task_spawn({}, {}));",
+                    frame.value(*arg)?,
+                    frame.value(*worker)?
+                );
+            }
+            Inst::TaskJoin { dest, handle } => {
+                let _ = writeln!(
+                    out,
+                    "    l[{dest}] = talk_task_join({});",
+                    frame.value(*handle)?
+                );
+            }
+            Inst::TaskWidth { dest } => {
+                let _ = writeln!(out, "    l[{dest}] = talk_int(talk_task_width());");
+            }
+            Inst::ChanSend { handle, value } => {
+                let _ = writeln!(
+                    out,
+                    "    talk_chan_send({}, {});",
+                    frame.value(*handle)?,
+                    frame.value(*value)?
+                );
+            }
+            Inst::ChanTake { dest, handle } => {
+                let _ = writeln!(
+                    out,
+                    "    l[{dest}] = talk_chan_take({});",
+                    frame.value(*handle)?
+                );
+            }
+            Inst::Suspend {
+                dest,
+                effect,
+                args,
+                unwind,
+            } => {
+                // ADR 0065: record the in-flight suspension, link this
+                // frame, and either land it (this frame installed the
+                // handler: run the clause and return its result on the
+                // native return path) or propagate the status outward.
+                if !sus.active {
+                    return Err(internal(
+                        "a suspend site outside the resumable set",
+                    ));
+                }
+                let k = sus.reserve();
+                let effect = self.interners.effect(*effect);
+                let _ = writeln!(out, "    {{");
+                let _ = writeln!(out, "        TalkValue sa[{}];", args.len().max(1));
+                if args.is_empty() {
+                    let _ = writeln!(out, "        memset(sa, 0, sizeof sa);");
+                }
+                for (index, arg) in args.iter().enumerate() {
+                    let _ = writeln!(out, "        sa[{index}] = {};", frame.value(*arg)?);
+                }
+                let _ = writeln!(
+                    out,
+                    "        talk_suspend_begin({effect}, sa, {});",
+                    args.len()
+                );
+                let _ = writeln!(out, "    }}");
+                let _ = writeln!(out, "    fr->rpc = {k};");
+                let _ = writeln!(out, "    talk_suspend_link(fr);");
+                let _ = writeln!(out, "    if (talk_suspend_is_mine(frame_id)) {{");
+                let _ = writeln!(out, "        TalkValue sr = talk_suspend_finish(frame_depth);");
+                let _ = writeln!(out, "        talk_leave();");
+                let _ = writeln!(out, "        talk_frame_detached = 1;");
+                let _ = writeln!(out, "        return sr;");
+                let _ = writeln!(out, "    }}");
+                let _ = writeln!(out, "    talk_leave();");
+                let _ = writeln!(out, "    talk_frame_detached = 1;");
+                let _ = writeln!(out, "    return talk_unit();");
+                let _ = writeln!(out, "r{k}:");
+                // Re-entry delivers the resume value — or, under a
+                // cancellation (the unwind status pre-set), routes into
+                // this site's cleanup edge like any aborted call.
+                let _ = writeln!(out, "    if (talk_unwinding) {{");
+                match unwind {
+                    Some(block) => {
+                        let _ = writeln!(out, "        goto b{block};");
+                    }
+                    None => {
+                        let _ = writeln!(out, "        talk_leave();");
+                        let _ = writeln!(out, "        return talk_unit();");
+                    }
+                }
+                let _ = writeln!(out, "    }}");
+                let _ = writeln!(out, "    l[{dest}] = talk_resume_take();");
+            }
+            Inst::Resume { dest, cont, value } => {
+                let call = format!(
+                    "talk_resume_extent({}, {})",
+                    frame.value(*cont)?,
+                    frame.value(*value)?
+                );
+                match frame.class_of(*dest) {
+                    Some(layout) => {
+                        let _ = writeln!(out, "    x{dest} = talk_unbox_l{layout}({call});");
+                    }
+                    None => {
+                        let _ = writeln!(out, "    l[{dest}] = {call};");
+                    }
+                }
+            }
+            Inst::Cancel { cont } => {
+                let _ = writeln!(out, "    talk_cancel_extent({});", frame.value(*cont)?);
+            }
+            Inst::ChanCtl { dest, handle, op } => {
+                let _ = writeln!(
+                    out,
+                    "    l[{dest}] = talk_int(talk_chan_ctl({}, {}));",
+                    frame.value(*handle)?,
+                    frame.value(*op)?
                 );
             }
             Inst::Alloc { dest, bytes } => {
@@ -1784,6 +2082,56 @@ fn untag_kind(kind: SlotKind, value: &str) -> String {
         SlotKind::Ptr => format!("{value}.v.ptr"),
         SlotKind::Value => value.to_string(),
     }
+}
+
+/// Suspension-emission context (ADR 0065): active inside a resumable
+/// function, where it numbers the re-entry points and knows which
+/// callees can carry a suspension out.
+struct SusCtx<'a> {
+    active: bool,
+    next_rpc: u32,
+    marked: &'a [bool],
+    closures_suspend: bool,
+}
+
+impl<'a> SusCtx<'a> {
+    fn inert() -> SusCtx<'static> {
+        SusCtx {
+            active: false,
+            next_rpc: 1,
+            marked: &[],
+            closures_suspend: false,
+        }
+    }
+
+    fn reserve(&mut self) -> u32 {
+        let k = self.next_rpc;
+        self.next_rpc += 1;
+        k
+    }
+}
+
+/// The propagation stub after a possibly-suspending call in a resumable
+/// function: link this frame into the segment and either land the
+/// suspension (this frame installed the target handler) or pass the
+/// status to the caller.
+fn emit_suspend_stub(out: &mut String, k: u32) {
+    let _ = writeln!(out, "    if (talk_suspend_pending) {{");
+    let _ = writeln!(out, "        fr->rpc = {k};");
+    let _ = writeln!(out, "        talk_suspend_link(fr);");
+    // The detach flag is set immediately before each return: the
+    // landing path nests arbitrary execution inside talk_suspend_finish,
+    // and a flag set earlier would be consumed by an inner invoker.
+    let _ = writeln!(out, "        if (talk_suspend_is_mine(frame_id)) {{");
+    let _ = writeln!(out, "            TalkValue sr = talk_suspend_finish(frame_depth);");
+    let _ = writeln!(out, "            talk_leave();");
+    let _ = writeln!(out, "            talk_frame_detached = 1;");
+    let _ = writeln!(out, "            return sr;");
+    let _ = writeln!(out, "        }}");
+    let _ = writeln!(out, "        talk_leave();");
+    let _ = writeln!(out, "        talk_frame_detached = 1;");
+    let _ = writeln!(out, "        return talk_unit();");
+    let _ = writeln!(out, "    }}");
 }
 
 /// After any call, an in-flight unwind either ends at this frame or keeps

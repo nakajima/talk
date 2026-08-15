@@ -77,6 +77,9 @@ pub struct IntoCoercion {
 pub struct EffectContract {
     pub params: Vec<Ty>,
     pub type_generics: Vec<Symbol>,
+    /// ADR 0064: this effect's performs suspend their extent; handler
+    /// clauses bind the stored resumption as a final parameter.
+    pub suspending: bool,
 }
 
 /// A checked inline-IR operation (ADR 0038): canonical operation
@@ -150,6 +153,52 @@ pub enum CheckedIrKind {
         b: IrOperand,
         c: IrOperand,
     },
+    /// ADR 0058 task runtime: start a worker running an `(A) -> T`
+    /// closure over the transferred `arg`, producing an executor-internal
+    /// handle. The argument convention (not capture) keeps the worker
+    /// closure environment-free.
+    TaskSpawn {
+        arg: IrOperand,
+        worker: IrOperand,
+    },
+    /// ADR 0058 task runtime: join a spawned worker and take its
+    /// output, whose checked type is `ty`.
+    TaskJoin {
+        ty: Ty,
+        handle: IrOperand,
+    },
+    /// ADR 0058 task runtime: the host's available parallelism.
+    TaskWidth,
+    /// ADR 0059: enqueue a transferred value on a channel and wake its
+    /// waiter.
+    ChanSend {
+        handle: IrOperand,
+        value: IrOperand,
+    },
+    /// ADR 0059: take a queued value off a channel (trap when none —
+    /// callers gate on `chan_ctl` status first).
+    ChanTake {
+        ty: Ty,
+        handle: IrOperand,
+    },
+    /// ADR 0059: scalar channel/park control. Ops: 0 status, 1 retain
+    /// sender, 2 drop sender, 3 drop receiver, 4 register external wait,
+    /// 5 unregister, 6 park, 7 create (handle ignored).
+    ChanCtl {
+        handle: IrOperand,
+        op: IrOperand,
+    },
+    /// ADR 0064: resume a stored one-shot resumption with a value; the
+    /// checked type is the handled extent's answer, transferred to the
+    /// resumer when the extent finishes.
+    Resume {
+        ty: Ty,
+        cont: IrOperand,
+        value: IrOperand,
+    },
+    /// ADR 0064: cancel a stored resumption, unwinding its captured
+    /// frames through their cleanup entries.
+    Cancel { cont: IrOperand },
 }
 
 /// The scalar operations inline IR may perform, with their operand

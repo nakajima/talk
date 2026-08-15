@@ -1,0 +1,16 @@
+// A displaced 'heap-field value releases its buffer-owning content: the
+// region graph keeps object interiors alive, but a String or Array the
+// old field value owned must free when the assignment displaces it.
+struct Holder 'heap {
+	let items: [Int]
+	let name: String
+}
+func main() -> Int {
+	let h = Holder(items: [], name: "start")
+	h.items = [1, 2, 3]
+	h.items = [4, 5]
+	h.name = h.name + "!"
+	h.name = h.name + "?"
+	h.items.count + h.name.byte_count
+}
+print(main())

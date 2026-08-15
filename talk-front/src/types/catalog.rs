@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::types::ty::{
-    Predicate, ProtocolRef, Scheme, SchemeParam, Ty, match_key_pattern, match_pattern,
+    Perm, Predicate, ProtocolRef, Scheme, SchemeParam, Ty, match_key_pattern, match_pattern,
 };
 use crate::{front::module::ModuleId, name_resolution::symbol::Symbol};
 
@@ -378,6 +378,9 @@ pub struct EffectSig {
     pub predicates: Vec<Predicate>,
     pub params: Vec<Ty>,
     pub ret: Ty,
+    /// ADR 0064: performs suspend their extent into a stored one-shot
+    /// resumption; every handler clause binds it as a final parameter.
+    pub suspending: bool,
 }
 
 /// A transparent type alias. `params` are captured nominal parameters when
@@ -974,6 +977,188 @@ impl TypeCatalog {
             Ty::Eff(_) | Ty::Static(_) => true,
             Ty::Borrow(..) | Ty::Func(..) | Ty::Forall(..) | Ty::Any { .. } | Ty::Proj(..) => false,
         }
+    }
+
+    /// Send/Sync transfer-share capability judgment (ADR 0050). Structural
+    /// by default: an aggregate satisfies a capability when every stored
+    /// component does. Declared conformance rows are consulted first so a
+    /// validated claim (including a conditional row) is authority — that is
+    /// the only route for `linear` declarations, which the automatic
+    /// derivation excludes. Raw pointers, `'heap` references, function
+    /// values, and non-atomic copy-on-write buffers refuse both
+    /// capabilities; borrows follow the reference table (`&T` is Send only
+    /// when `T` is Sync, `&mut T` is Send only when `T` is Send, either
+    /// borrow is Sync only when `T` is Sync).
+    pub fn ty_satisfies_capability(&self, ty: &Ty, capability: Symbol, ambient: &[Predicate]) -> bool {
+        self.ty_satisfies_capability_at(ty, capability, ambient, &mut FxHashSet::default())
+    }
+
+    fn ty_satisfies_capability_at(
+        &self,
+        ty: &Ty,
+        capability: Symbol,
+        ambient: &[Predicate],
+        active: &mut FxHashSet<(Ty, Symbol)>,
+    ) -> bool {
+        if active.len() >= MAX_MARKER_PROOF_DEPTH {
+            return false;
+        }
+
+        let goal = (ty.clone(), capability);
+        if !active.insert(goal.clone()) {
+            return false;
+        }
+
+        let satisfied = self.ty_satisfies_capability_inner(ty, capability, ambient, active);
+        active.remove(&goal);
+        satisfied
+    }
+
+    fn ty_satisfies_capability_inner(
+        &self,
+        ty: &Ty,
+        capability: Symbol,
+        ambient: &[Predicate],
+        active: &mut FxHashSet<(Ty, Symbol)>,
+    ) -> bool {
+        match ty {
+            // Error is poison; a variable here means the type is still
+            // resolving — the use sites re-check once it settles.
+            Ty::Error | Ty::Var(_) => true,
+            Ty::Borrow(perm, inner) => {
+                if capability == Symbol::Sync {
+                    // A reference to a reference shares exactly what the
+                    // referent shares.
+                    return self.ty_satisfies_capability_at(inner, Symbol::Sync, ambient, active);
+                }
+                match perm {
+                    // Sync(T) iff Send(&T): moving a shared borrow to
+                    // another worker publishes shared access to the
+                    // referent.
+                    Perm::Shared => {
+                        self.ty_satisfies_capability_at(inner, Symbol::Sync, ambient, active)
+                    }
+                    // An exclusive borrow transfers sole access, so it
+                    // moves exactly when an owned referent would.
+                    Perm::Exclusive => {
+                        self.ty_satisfies_capability_at(inner, Symbol::Send, ambient, active)
+                    }
+                    // Unresolved permission: require both readings.
+                    Perm::Var(_) | Perm::Param(_) => {
+                        self.ty_satisfies_capability_at(inner, Symbol::Sync, ambient, active)
+                            && self.ty_satisfies_capability_at(
+                                inner,
+                                Symbol::Send,
+                                ambient,
+                                active,
+                            )
+                    }
+                }
+            }
+            // The sole reference: transfers and shares exactly like its
+            // referent.
+            Ty::Unique(inner) => {
+                self.ty_satisfies_capability_at(inner, capability, ambient, active)
+            }
+            Ty::Nominal(symbol, args) => {
+                // A raw pointer's referent has unknown aliasing and an
+                // unknown owner: neither capability, ever, in safe source.
+                if *symbol == Symbol::RawPtr {
+                    return false;
+                }
+                if self.is_scalar(*symbol) || self.intrinsic_copy(*symbol) {
+                    return true;
+                }
+                // Declared rows first: a collect-validated claim is the
+                // authority, including for linear declarations.
+                if self
+                    .matching_conformances(*symbol, args, &ProtocolRef::bare(capability))
+                    .iter()
+                    .any(|found| self.capability_context_satisfied_at(found, ambient, active))
+                {
+                    return true;
+                }
+                // A linear value never derives automatically (exactly-once
+                // ownership proves nothing about its payload's aliases);
+                // a 'heap value is a shared reference into a region whose
+                // external-root counts are not atomic.
+                if self.is_linear_decl(*symbol) || self.is_heap(*symbol) {
+                    return false;
+                }
+                // Structural default: every stored component, under this
+                // application's arguments. Unknown heads stay conservative.
+                let Some((params, leaves)) = self.derivation_leaves(*symbol) else {
+                    return false;
+                };
+                let rebind: FxHashMap<Symbol, Ty> =
+                    params.into_iter().zip(args.iter().cloned()).collect();
+                leaves.iter().all(|leaf| {
+                    let leaf =
+                        leaf.substitute(&rebind, &FxHashMap::default(), &FxHashMap::default());
+                    self.ty_satisfies_capability_at(&leaf, capability, ambient, active)
+                })
+            }
+            Ty::Param(symbol) => {
+                self.param_bounds
+                    .get(symbol)
+                    .is_some_and(|bounds| bounds.contains(&ProtocolRef::bare(capability)))
+                    || ambient.iter().any(|predicate| {
+                        matches!(
+                            predicate,
+                            Predicate::Conforms { ty: Ty::Param(bound), protocol }
+                                if bound == symbol
+                                    && protocol.args.is_empty()
+                                    && protocol.protocol == capability
+                        )
+                    })
+            }
+            Ty::Tuple(items) => items
+                .iter()
+                .all(|item| self.ty_satisfies_capability_at(item, capability, ambient, active)),
+            Ty::Record(row) => {
+                row.tail.is_none()
+                    && row.fields.iter().all(|(_, field)| {
+                        self.ty_satisfies_capability_at(field, capability, ambient, active)
+                    })
+            }
+            // Effect and static arguments are phase-only evidence with no
+            // runtime value to transfer or share.
+            Ty::Eff(_) | Ty::Static(_) => true,
+            // A function value's environment may capture frame-bound
+            // handler capabilities and shared mutable cells; no closure
+            // satisfies either capability until a transferable-environment
+            // proof exists (ADR 0050 handler-boundary rule). Projections
+            // and existentials go through the solver's bounds machinery,
+            // not this walk.
+            Ty::Func(..) | Ty::Forall(..) | Ty::Any { .. } | Ty::Proj(..) => false,
+        }
+    }
+
+    /// A matched capability row holds when every where-clause predicate
+    /// does, under the match's substitution. Only Send/Sync predicates are
+    /// decidable here without the solver; anything else stays conservative.
+    fn capability_context_satisfied_at(
+        &self,
+        found: &ConformanceMatch,
+        ambient: &[Predicate],
+        active: &mut FxHashSet<(Ty, Symbol)>,
+    ) -> bool {
+        found.conformance.context.iter().all(|predicate| {
+            let Predicate::Conforms { ty, protocol } = predicate else {
+                return false;
+            };
+            if !(protocol.protocol == Symbol::Send || protocol.protocol == Symbol::Sync)
+                || !protocol.args.is_empty()
+            {
+                return false;
+            }
+            let bound = ty.substitute(
+                &found.substitution,
+                &FxHashMap::default(),
+                &FxHashMap::default(),
+            );
+            self.ty_satisfies_capability_at(&bound, protocol.protocol, ambient, active)
+        })
     }
 
     /// A matched conformance row holds for marker purposes when every

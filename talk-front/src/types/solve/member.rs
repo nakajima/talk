@@ -1941,7 +1941,7 @@ impl<'s> Solver<'s> {
                     level: self.level,
                     givens,
                     wanteds: local_wanteds,
-                    local_params: vec![],
+                    gadt: GadtLocals::default(),
                     touchable_level: None,
                 },
             )));

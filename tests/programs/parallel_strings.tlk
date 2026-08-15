@@ -1,0 +1,19 @@
+// Trusted core transfer contracts (ADR 0050/0058): String jobs move to
+// workers and String outputs move back — the VM images boxed buffers,
+// native moves over atomic counts.
+use task::{ parallel_run }
+
+func shout(consume word: String) -> String {
+	word + "!"
+}
+
+let jobs: [String] = []
+jobs.push("alpha".to_string())
+jobs.push("bravo".to_string())
+jobs.push("charlie".to_string())
+let outputs = parallel_run(jobs: jobs, worker: shout)
+let i = 0
+loop i < outputs.count {
+	print(outputs.get(i))
+	i = i + 1
+}

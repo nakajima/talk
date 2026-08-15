@@ -11,9 +11,11 @@ impl<'s> Solver<'s> {
             level,
             givens,
             wanteds,
-            local_params,
+            gadt,
             touchable_level,
         } = implication;
+        let local_params = gadt.params;
+        let determined_params = gadt.determined;
 
         if givens.is_empty() && local_params.is_empty() && touchable_level.is_none() {
             return wanteds;
@@ -58,11 +60,13 @@ impl<'s> Solver<'s> {
                 ));
                 continue;
             }
-            // A rigid value/equality obligation wholly inside the arm is a
-            // failed local check, not an escape. Rewrite value adaptations
-            // under the arm givens first: unlike Eq solving, Adapt can remain
-            // parked on a projection before applying those refinements.
-            let local_failure = match &residual {
+            // Adapt can park on an associated projection before applying the
+            // arm refinements, unlike Eq solving. Rewrite it first, then try
+            // to express an arm-local obligation through the outer type that
+            // determines the constructor skolem. `U.Ret == U` under `T == U`
+            // becomes the floatable predicate `T.Ret == T`; a genuinely
+            // hidden skolem has no such substitution and remains local.
+            let local_obligation = match &residual {
                 Constraint::Eq(expected, found, origin) => {
                     Some((expected.clone(), found.clone(), *origin))
                 }
@@ -78,16 +82,27 @@ impl<'s> Solver<'s> {
                 )),
                 _ => None,
             };
-            if let Some((expected, found, origin)) = local_failure
+            if let Some((expected, found, origin)) = local_obligation
                 && expected != found
-                && self.ty_mentions_params(&expected, &local_params).is_some()
-                && self.ty_mentions_params(&found, &local_params).is_some()
             {
-                let expected =
-                    self.diagnostic_ty_for_local_params(&expected, &local_params, &givens);
-                let found = self.diagnostic_ty_for_local_params(&found, &local_params, &givens);
-                self.report_mismatch(&expected, &found, origin);
-                continue;
+                let expected_local = self.ty_mentions_params(&expected, &local_params).is_some();
+                let found_local = self.ty_mentions_params(&found, &local_params).is_some();
+                if expected_local || found_local {
+                    let expected = self.rebase_local_params(&expected, &determined_params);
+                    let found = self.rebase_local_params(&found, &determined_params);
+                    if self.ty_mentions_params(&expected, &local_params).is_none()
+                        && self.ty_mentions_params(&found, &local_params).is_none()
+                    {
+                        if expected != found {
+                            floatable.push(Constraint::Eq(expected, found, origin));
+                        }
+                        continue;
+                    }
+                    if expected_local && found_local {
+                        self.report_mismatch(&expected, &found, origin);
+                        continue;
+                    }
+                }
             }
             if let Some(param) = self.constraint_mentions_params(&residual, &local_params) {
                 self.errors.push((
@@ -118,31 +133,11 @@ impl<'s> Solver<'s> {
     }
 
     /// Replace an arm-local skolem with the outer type that the constructor
-    /// result determines for it. This is diagnostic-only: solving remains
-    /// rigid, while messages use the source-visible outer parameter instead
-    /// of a synthesized `TypeParameter(...)` identifier.
-    fn diagnostic_ty_for_local_params(
-        &mut self,
-        ty: &Ty,
-        local_params: &[Symbol],
-        givens: &[Predicate],
-    ) -> Ty {
-        let mut tys = FxHashMap::default();
-        for given in givens {
-            let Predicate::TypeEq(left, right) = given else {
-                continue;
-            };
-            for (candidate, replacement) in [(left, right), (right, left)] {
-                let Ty::Param(param) = candidate else {
-                    continue;
-                };
-                if local_params.contains(param)
-                    && self.ty_mentions_params(replacement, local_params).is_none()
-                {
-                    tys.entry(*param).or_insert_with(|| replacement.clone());
-                }
-            }
-        }
+    /// result determines for it. Solving remains rigid inside the arm; the
+    /// rebased type can safely leave the implication because it contains only
+    /// parameters from the enclosing declaration.
+    fn rebase_local_params(&self, ty: &Ty, determined_params: &[(Symbol, Ty)]) -> Ty {
+        let tys = determined_params.iter().cloned().collect();
         let effs = FxHashMap::default();
         let rows = FxHashMap::default();
         ty.substitute(&tys, &effs, &rows)

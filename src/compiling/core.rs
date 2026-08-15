@@ -141,6 +141,55 @@ fn compilation_sources() -> Vec<Source> {
         .collect()
 }
 
+/// Best-effort positioned rendering of core's own diagnostics for the
+/// failure panic: the analysis workspace re-checks the same sources and
+/// renders file:line:col diagnostics. It may not reproduce every
+/// core-mode-only error (well-known symbols bind only under the core
+/// module id), so the raw dump stays alongside it. Embedding builds
+/// without the CLI keep the raw dump only.
+#[cfg(not(feature = "cli"))]
+fn rendered_core_diagnostics() -> String {
+    String::new()
+}
+
+#[cfg(feature = "cli")]
+fn rendered_core_diagnostics() -> String {
+    use crate::analysis::{DocumentInput, Workspace};
+    let docs: Vec<DocumentInput> = compilation_sources()
+        .into_iter()
+        .filter_map(|source| {
+            let path = source.path().to_string();
+            let text = source.read().ok()?;
+            Some(DocumentInput {
+                id: path.clone(),
+                path,
+                version: 0,
+                text: text.to_string().into(),
+            })
+        })
+        .collect();
+    let Some(workspace) = Workspace::new(docs) else {
+        return String::new();
+    };
+    let mut doc_ids: Vec<_> = workspace.diagnostics.keys().cloned().collect();
+    doc_ids.sort();
+    let mut rendered = String::new();
+    for doc_id in doc_ids {
+        let text = workspace.text_for(&doc_id).unwrap_or("");
+        if let Some(diagnostics) = workspace.diagnostics.get(&doc_id) {
+            for diagnostic in diagnostics {
+                rendered.push_str(&crate::cli::diagnostics::render_text(
+                    &doc_id,
+                    text,
+                    diagnostic,
+                    crate::cli::diagnostics::ColorMode::Never,
+                ));
+            }
+        }
+    }
+    rendered
+}
+
 #[cfg(not(target_family = "wasm"))]
 fn initialize() -> CoreArtifacts {
     if let Some(cached) = load_cached() {
@@ -183,7 +232,8 @@ fn compile_from_sources() -> CoreArtifacts {
 
     assert!(
         !typed.has_errors(),
-        "Core module compiled with errors: {:#?}",
+        "Core module compiled with errors:\n{}\nraw diagnostics: {:#?}",
+        rendered_core_diagnostics(),
         typed.diagnostics()
     );
 

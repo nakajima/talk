@@ -2116,19 +2116,7 @@ impl<'a> Formatter<'a> {
             );
         }
 
-        let param_docs: Vec<_> = func
-            .params
-            .iter()
-            .map(|p| self.format_parameter(p))
-            .collect();
-
-        result = concat(
-            result,
-            concat(
-                text("("),
-                concat(join(param_docs, concat(text(","), text(" "))), text(")")),
-            ),
-        );
+        result = concat(result, self.format_parameter_list(&func.params));
 
         if let Some(effects) = self.format_effect_set(&func.effects) {
             result = concat_space(result, effects);
@@ -2167,17 +2155,7 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_init(&self, _name: &Name, params: &[Parameter], body: &Block) -> Doc {
-        let mut result = text("init");
-
-        let param_docs: Vec<_> = params.iter().map(|p| self.format_parameter(p)).collect();
-
-        result = concat(
-            result,
-            concat(
-                text("("),
-                concat(join(param_docs, concat(text(","), text(" "))), text(")")),
-            ),
-        );
+        let result = concat(text("init"), self.format_parameter_list(params));
 
         let has_comments = self.has_comments_between(body.span.start, body.span.end);
 
@@ -2214,6 +2192,27 @@ impl<'a> Formatter<'a> {
             } => concat_space(text("mut"), self.format_type_annotation(inner)),
             _ => concat_space(text("consume"), self.format_type_annotation(annotation)),
         }
+    }
+
+    fn format_parameter_list(&self, params: &[Parameter]) -> Doc {
+        if params.is_empty() {
+            return text("()");
+        }
+
+        let param_docs = params
+            .iter()
+            .map(|param| self.format_parameter(param))
+            .collect();
+        group(concat(
+            text("("),
+            concat(
+                nest(
+                    1,
+                    concat(softline(), join(param_docs, concat(text(","), line()))),
+                ),
+                concat(softline(), text(")")),
+            ),
+        ))
     }
 
     fn format_parameter(&self, param: &Parameter) -> Doc {
@@ -2738,19 +2737,7 @@ impl<'a> Formatter<'a> {
             );
         }
 
-        let param_docs: Vec<_> = sig
-            .params
-            .iter()
-            .map(|p| self.format_parameter(p))
-            .collect();
-
-        result = concat(
-            result,
-            concat(
-                text("("),
-                concat(join(param_docs, concat(text(","), text(" "))), text(")")),
-            ),
-        );
+        result = concat(result, self.format_parameter_list(&sig.params));
 
         if let Some(effects) = self.format_effect_set(&sig.effects) {
             result = concat_space(result, effects);
@@ -2776,18 +2763,7 @@ impl<'a> Formatter<'a> {
 
     /// `init(params)`: the implicit `-> Self` return never prints.
     fn format_init_requirement(&self, sig: &FuncSignature) -> Doc {
-        let param_docs: Vec<_> = sig
-            .params
-            .iter()
-            .map(|p| self.format_parameter(p))
-            .collect();
-        concat(
-            text("init"),
-            concat(
-                text("("),
-                concat(join(param_docs, concat(text(","), text(" "))), text(")")),
-            ),
-        )
+        concat(text("init"), self.format_parameter_list(&sig.params))
     }
 
     fn format_where_clause(&self, where_clause: &WhereClause) -> Doc {

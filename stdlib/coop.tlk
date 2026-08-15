@@ -1,0 +1,151 @@
+// The cooperative single-worker scheduler (ADR 0067): a nearer handler
+// for the same park effects core's blocking fallbacks serve. Tasks are
+// closures; `drive` turns one task's extent into a TaskStep — finished,
+// or parked-with-resumption — and `run` owns the queues. All scheduler
+// state flows through answer values (the Step-knot): clauses stay pure,
+// and the runtime's park/wake layer is the blocking fallback when every
+// task waits, which is what lets cooperative tasks and cross-worker
+// channels compose.
+
+// Cooperative yield: reschedule this task behind its peers.
+pub effect 'pause() -> () 'suspending
+
+pub typealias Task = () '[pause, spawn_task, park_recv, park_send, park_sleep, park_recv2, io, alloc, yield_now, panic] -> ()
+
+// Start another cooperative task on this scheduler.
+pub effect 'spawn_task(task: Task) -> () 'suspending
+
+enum TaskStep {
+	case finished
+	case wants_recv(Int, Resumption<(), TaskStep>)
+	case wants_send(Int, Resumption<(), TaskStep>)
+	case wants_either(Int, Int, Resumption<(), TaskStep>)
+	case sleeping(Int, Resumption<(), TaskStep>)
+	case paused(Resumption<(), TaskStep>)
+	case spawned(Task, Resumption<(), TaskStep>)
+}
+
+// One task's extent, stepped: each clause returns the park as a value.
+func drive(consume task: Task) -> TaskStep {
+	#handle 'park_recv { handle, k in
+		TaskStep.wants_recv(handle, k)
+	}
+	#handle 'park_send { handle, k in
+		TaskStep.wants_send(handle, k)
+	}
+	#handle 'park_recv2 { a, b, k in
+		TaskStep.wants_either(a, b, k)
+	}
+	#handle 'park_sleep { deadline_ms, k in
+		TaskStep.sleeping(deadline_ms, k)
+	}
+	#handle 'pause { k in
+		TaskStep.paused(k)
+	}
+	#handle 'spawn_task { task, k in
+		TaskStep.spawned(task, k)
+	}
+	task()
+	TaskStep.finished
+}
+
+// Run `main_task` and everything it spawns to completion, cooperatively
+// on this worker. When every task waits, block through the runtime with
+// each parked interest registered — a cross-worker send, a take making
+// room, or a deadline wakes the scheduler exactly as it would wake a
+// bare blocking call.
+pub func run(consume main_task: Task) -> () {
+	let steps: [TaskStep] = []
+	steps.push(drive(task: main_task))
+	loop {
+		let next: [TaskStep] = []
+		let progressed = false
+		// Interests to register if nothing progresses: kind 0 = recv,
+		// 1 = send, 2 = deadline.
+		let reg_kind: [Int] = []
+		let reg_handle: [Int] = []
+		loop {
+			if let .some(step) = steps.pop() {
+				match step {
+					.finished -> {},
+					.paused(k) -> {
+						progressed = true
+						next.push(resume(k: k, value: ()))
+					},
+					.spawned(task, k) -> {
+						progressed = true
+						next.push(drive(task: task))
+						next.push(resume(k: k, value: ()))
+					},
+					.wants_recv(handle, k) -> {
+						if _chan_ctl(handle: handle, op: 0) != 1 {
+							progressed = true
+							next.push(resume(k: k, value: ()))
+						} else {
+							reg_kind.push(0)
+							reg_handle.push(handle)
+							next.push(TaskStep.wants_recv(handle, k))
+						}
+					},
+					.wants_send(handle, k) -> {
+						if _chan_ctl(handle: handle, op: 17) == 1 {
+							progressed = true
+							next.push(resume(k: k, value: ()))
+						} else {
+							reg_kind.push(1)
+							reg_handle.push(handle)
+							next.push(TaskStep.wants_send(handle, k))
+						}
+					},
+					.wants_either(a, b, k) -> {
+						if _chan_ctl(handle: a, op: 0) != 1 || _chan_ctl(handle: b, op: 0) != 1 {
+							progressed = true
+							next.push(resume(k: k, value: ()))
+						} else {
+							reg_kind.push(0)
+							reg_handle.push(a)
+							reg_kind.push(0)
+							reg_handle.push(b)
+							next.push(TaskStep.wants_either(a, b, k))
+						}
+					},
+					.sleeping(deadline, k) -> {
+						if _chan_ctl(handle: 0, op: 13) >= deadline {
+							progressed = true
+							next.push(resume(k: k, value: ()))
+						} else {
+							reg_kind.push(2)
+							reg_handle.push(deadline)
+							next.push(TaskStep.sleeping(deadline, k))
+						}
+					}
+				}
+			} else {
+				break
+			}
+		}
+		steps = next
+		if steps.count == 0 {
+			break
+		}
+		if !progressed {
+			let i = 0
+			loop i < reg_kind.count {
+				let kind = reg_kind.get(i)
+				let handle = reg_handle.get(i)
+				let op = if kind == 0 { 4 } else if kind == 1 { 11 } else { 14 }
+				let registered = _chan_ctl(handle: handle, op: op)
+				i = i + 1
+			}
+			let parked = _chan_ctl(handle: 0, op: 6)
+			let j = 0
+			loop j < reg_kind.count {
+				let kind = reg_kind.get(j)
+				let handle = reg_handle.get(j)
+				let op = if kind == 0 { 5 } else if kind == 1 { 12 } else { 15 }
+				let released = _chan_ctl(handle: handle, op: op)
+				j = j + 1
+			}
+		}
+	}
+}

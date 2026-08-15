@@ -1,0 +1,49 @@
+// Extracting an owned buffer-carrying payload through nested optionals
+// must release the original: `T??` is not a recursive type, and the
+// containment walk must see through the same-head, different-argument
+// application (the guard once conflated it with genuine recursion and
+// dropped the payload's ownership on the floor).
+func drain_nested() -> Int {
+	let xs: [String?] = []
+	xs.push(Optional.some("x".to_string()))
+	let out: [String] = []
+	let it = xs.into_iter()
+	loop {
+		if let .some(entry) = it.next() {
+			if let .some(value) = entry {
+				out.push(value)
+			}
+		} else {
+			break
+		}
+	}
+	out.count
+}
+
+func nested_pattern() -> Int {
+	let xs: [String?] = []
+	xs.push(Optional.some("y".to_string()))
+	let out: [String] = []
+	let it = xs.into_iter()
+	loop {
+		if let .some(.some(value)) = it.next() {
+			out.push(value)
+		} else {
+			break
+		}
+	}
+	out.count
+}
+
+func straight_line() -> Int {
+	let out: [String] = []
+	let opt: String?? = Optional.some(Optional.some("z".to_string()))
+	if let .some(entry) = opt {
+		if let .some(value) = entry {
+			out.push(value)
+		}
+	}
+	out.count
+}
+
+print(drain_nested() + nested_pattern() + straight_line())

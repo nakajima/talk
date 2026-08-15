@@ -1,0 +1,29 @@
+// A `mut` method on an rvalue receiver evolves the receiver's own
+// temporary: the writeback must land back in that temporary so its
+// drop releases the EVOLVED value — dropping the stale pre-call copy
+// double-owned the popped element and freed it under the caller.
+func take_last() -> String {
+	let xs: [String] = []
+	xs.push("keep".to_string())
+	if let .some(value) = xs.pop() {
+		value
+	} else {
+		"".to_string()
+	}
+}
+
+func pop_from_call<T>(consume xs: [T]) -> T? {
+	xs.pop()
+}
+
+func main() -> Int {
+	let names: [String] = []
+	names.push("abc".to_string())
+	let direct = take_last()
+	if let .some(popped) = pop_from_call(xs: names) {
+		print(direct + popped)
+	}
+	0
+}
+
+print(main())

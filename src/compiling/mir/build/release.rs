@@ -97,7 +97,10 @@ pub(super) fn plan(blocks: &[BlockData], records: &[FlowRecord]) -> Plan {
                 apply(bucket[cursor].1, &mut state);
                 cursor += 1;
             }
-            if matches!(inst, Inst::Call { .. } | Inst::CallIndirect { .. }) {
+            if matches!(
+                inst,
+                Inst::Call { .. } | Inst::CallIndirect { .. } | Inst::Suspend { .. }
+            ) {
                 let owned: Vec<LocalId> = (0..n_locals)
                     .filter(|local| state[*local] == OWNED)
                     .map(|local| local as LocalId)

@@ -314,9 +314,7 @@ extend Static<String> {
 }
 
 extend Static<String>: Into<String> {
-	pub consuming func into() -> String {
-		self.value
-	}
+	pub consuming func into() -> String { self.value }
 }
 
 extend Static<String>: Into<Substring> {

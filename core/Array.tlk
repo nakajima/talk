@@ -326,3 +326,34 @@ extend<T> ArrayMutIterator<T> {
 		_store<T>(ptr: ptr, value: value)
 	}
 }
+
+// Whether this array's buffer has exactly one owner. Implicit sharing
+// duplicates values by retain at value boundaries, so a `Deinit` hook
+// runs once per copy; a hook that must act exactly once per logical
+// value (core containers' teardown, stdlib channel endpoints) gates on
+// the owner count of a carried buffer, and this is that gate.
+pub func _storage_is_unique<T>(xs: [T]) -> Bool {
+	_is_unique(ptr: xs.storage.base)
+}
+
+// The exactly-once gate for `Deinit` hooks (ADR 0060). Implicit sharing
+// duplicates values by retain, and a hook runs once per copy; a hook
+// that must act exactly once per LOGICAL value carries a token and
+// gates on `is_last()` — the copy that sees owner count 1 is the last
+// one standing, wherever it drops. A fresh token is a fresh logical
+// identity: clone-like operations construct a new one, compiler-made
+// copies share it.
+pub struct DropToken {
+	let token: [Int]
+}
+
+extend DropToken {
+	pub func is_last() -> Bool {
+		_storage_is_unique(xs: self.token)
+	}
+}
+
+pub func _drop_token() -> DropToken {
+	let token: [Int] = []
+	DropToken(token: token)
+}

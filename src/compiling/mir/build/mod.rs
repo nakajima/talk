@@ -243,7 +243,7 @@ fn contains_guarded(
     builder: &ProgramBuilder<'_>,
     ty: &Ty,
     walk: &ContainsWalk,
-    visiting: &mut Vec<Symbol>,
+    visiting: &mut Vec<(Symbol, Vec<Ty>)>,
 ) -> bool {
     let mut ty = ty;
     while let Ty::Borrow(_, inner) = ty {
@@ -254,10 +254,22 @@ fn contains_guarded(
             if let Some(decided) = (walk.leaf)(builder, *symbol) {
                 return decided;
             }
-            if visiting.contains(symbol) {
+            // Genuine recursion repeats the same APPLICATION; a same-head,
+            // different-argument application (`Optional<Optional<String>>`)
+            // must descend — guarding by bare symbol hid nested payload
+            // ownership and leaked it. Polymorphic recursion changes its
+            // arguments every level, so a depth cap backstops the walk,
+            // answering conservatively (containment assumed).
+            if visiting
+                .iter()
+                .any(|(seen, seen_args)| seen == symbol && seen_args == args)
+            {
                 return false;
             }
-            visiting.push(*symbol);
+            if visiting.len() >= 32 {
+                return true;
+            }
+            visiting.push((*symbol, args.clone()));
             let result = if let Some(fields) = builder.field_types(*symbol, args) {
                 fields
                     .iter()
@@ -291,6 +303,38 @@ const BUFFER_WALK: ContainsWalk = ContainsWalk {
     // Stored views own their referents (owning stored views —
     // docs/ownership.md, wave E's second half): a borrowed
     // payload counts like any other stored reference.
+    skip_borrowed_payloads: false,
+};
+
+/// Whether a value of this type reaches a user `Deinit` hook when it
+/// drops — the type itself conforms, or a stored field, payload, or
+/// element type does. Head-level rows decide the leaf: a specialized
+/// row over-approximates its family, which is the safe direction (an
+/// extra structural drop of a hook-less application emits nothing).
+fn contains_deinit(builder: &ProgramBuilder<'_>, ty: &Ty) -> bool {
+    if let Some(&known) = builder.contains_deinit_cache.borrow().get(ty) {
+        return known;
+    }
+    let computed = contains_guarded(builder, ty, &DEINIT_WALK, &mut Vec::new());
+    builder
+        .contains_deinit_cache
+        .borrow_mut()
+        .insert(ty.clone(), computed);
+    computed
+}
+
+const DEINIT_WALK: ContainsWalk = ContainsWalk {
+    leaf: |builder, symbol| {
+        builder
+            .catalog
+            .deinit_rows
+            .get(&symbol)
+            .is_some_and(|rows| !rows.is_empty())
+            .then_some(true)
+    },
+    // A bare generic already drops through its witnesses; counting it
+    // here would demote every generic consume to move semantics.
+    param_counts: false,
     skip_borrowed_payloads: false,
 };
 
@@ -339,9 +383,13 @@ fn needs_drop_inner(builder: &ProgramBuilder<'_>, ty: &Ty, borrowed: bool) -> bo
     match ty {
         Ty::Nominal(symbol, _) if *symbol == Symbol::RawPtr => false,
         // A `Deinit` conformance is a destructor hook: the value needs
-        // its drop scheduled even when no field owns a buffer.
+        // its drop scheduled even when no field owns a buffer — and a
+        // stored field's hook runs through the container's structural
+        // glue, so containment schedules the drop too.
         Ty::Nominal(..) if conforms_to(builder, ty, Symbol::Deinit) => true,
-        Ty::Nominal(_, _) => contains_buffer(builder, ty),
+        Ty::Nominal(_, _) => {
+            contains_buffer(builder, ty) || contains_deinit(builder, ty)
+        }
         // Aggregate components own even when borrow-typed (owning
         // stored views); only a top-level borrow is a frame view.
         Ty::Tuple(items) => items
@@ -1216,6 +1264,7 @@ struct ProgramBuilder<'a> {
     /// catalogs.
     needs_drop_cache: std::cell::RefCell<FxHashMap<Ty, bool>>,
     contains_buffer_cache: std::cell::RefCell<FxHashMap<Ty, bool>>,
+    contains_deinit_cache: std::cell::RefCell<FxHashMap<Ty, bool>>,
     contains_object_cache: std::cell::RefCell<FxHashMap<Ty, bool>>,
     /// The layout oracle (ADR 0045): one classification per type,
     /// memoized like the structural caches above.
@@ -1297,6 +1346,7 @@ impl<'a> ProgramBuilder<'a> {
             layouts: std::cell::RefCell::new(layouts),
             needs_drop_cache: std::cell::RefCell::new(FxHashMap::default()),
             contains_buffer_cache: std::cell::RefCell::new(FxHashMap::default()),
+            contains_deinit_cache: std::cell::RefCell::new(FxHashMap::default()),
             contains_object_cache: std::cell::RefCell::new(FxHashMap::default()),
             callables: FxHashMap::default(),
             globals: FxHashMap::default(),
@@ -2740,7 +2790,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             self.in_unwind_cleanup = false;
             self.switch_to(saved);
             let head = next.unwrap_or(self.current);
-            if let Inst::Call { unwind, .. } | Inst::CallIndirect { unwind, .. } =
+            if let Inst::Call { unwind, .. }
+            | Inst::CallIndirect { unwind, .. }
+            | Inst::Suspend { unwind, .. } =
                 &mut self.blocks[*block].insts[*index as usize]
             {
                 *unwind = Some(head);
@@ -4392,8 +4444,29 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
         let leaf = &chain.links[chain.links.len() - 1];
         if leaf.heap {
-            // Region containment replaces the stored claim; the old
-            // field's interior belongs to the region graph.
+            // The displaced value: when it owns buffers and reaches no
+            // objects (a String or Array the slot held), nothing else can
+            // ever release it — drop it now, mirroring the displaced-field
+            // drop on the value path below. An old value that CONTAINS
+            // object handles keeps today's region-containment rule: its
+            // interior belongs to the region graph (its stored root claim
+            // was already spent when it was stored), and re-deriving that
+            // claim here cannot be balanced against the nested drop glue's
+            // own releases.
+            let displaced_ty = strip_borrows(leaf.field_ty.clone());
+            if assign
+                && !contains_object(self.program_builder, &displaced_ty)
+                && needs_drop(self.program_builder, &displaced_ty)
+                && self.displaced_field_is_real(chain)
+            {
+                let old = self.fresh_local();
+                self.push(Inst::ObjectGet {
+                    dest: old,
+                    src: Operand::Local(current),
+                    index: leaf.index,
+                });
+                self.drop_value(Operand::Local(old), &displaced_ty);
+            }
             if assign {
                 // Stored slots own (owning stored views).
                 self.consume_binding(value, &strip_borrows(leaf.field_ty.clone()), span)?;
@@ -7110,6 +7183,22 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     payload_tys.push(payload_ty);
                     operands.push(operand);
                 }
+                if contract.suspending {
+                    // ADR 0064: the perform suspends its extent. The
+                    // checker rejected type generics and `mut` arguments
+                    // on suspending effects, so the operands are exactly
+                    // the payloads, and there are no writebacks. The
+                    // resumed value arrives owned.
+                    let dest = self.fresh_local();
+                    self.push(Inst::Suspend {
+                        dest,
+                        effect: executable(effect),
+                        args: operands,
+                        unwind: None,
+                    });
+                    self.produce_temp(dest, &ty);
+                    return Ok(Operand::Local(dest));
+                }
                 // Writeback targets align against the declared parameters
                 // before the witness blocks are appended.
                 let declared_fn = Ty::Func(
@@ -9249,10 +9338,24 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // so its exclusive-borrow parameter must drive writeback below. Only
         // reserve the separate receiver slot for an actual value-member call.
         let receiver = (mut_receiver && value_receiver_ty.is_some()).then(|| {
-            (
-                receiver_place.clone().map(WritebackTarget::Place),
-                value_receiver_ty.clone().unwrap_or(Ty::Error),
-            )
+            let target = match receiver_place.clone() {
+                Some(chain) => Some(WritebackTarget::Place(chain)),
+                // An rvalue receiver evolves in its own temporary: with no
+                // named place, the writeback lands back in the compiled
+                // receiver temp so its later drop releases the EVOLVED
+                // value. Dropping the stale pre-call copy would double-own
+                // whatever the call moved out (`join_all(...).pop()`
+                // freeing the popped element under the caller).
+                None => match operands.first() {
+                    Some(Operand::Local(base)) => Some(WritebackTarget::Place(PlaceChain {
+                        base: *base,
+                        global_slot: None,
+                        links: Vec::new(),
+                    })),
+                    _ => None,
+                },
+            };
+            (target, value_receiver_ty.clone().unwrap_or(Ty::Error))
         });
         let callee_ty = self.resolved(&callee.ty);
         let args_operand_offset = usize::from(value_receiver_ty.is_some());
@@ -9440,6 +9543,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         body: &Block,
         contract: &crate::types::output::EffectContract,
     ) -> Result<(), BackendError> {
+        // ADR 0064: a suspending clause takes over the installer's stack
+        // position and outward linkage at runtime, so it has no
+        // delimiter — completing IS the abort, by plain return — and its
+        // environment starts at the captures.
+        let suspending = contract.suspending;
         let captured = self.live_captures(body);
         let captured_names: Vec<Option<String>> = captured
             .iter()
@@ -9485,6 +9593,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // arguments.
         let arity = fx.bind_witness_params(&sig_generics, declared_arity);
         fx.frame.resize(usize::from(arity), BuildLocal::default());
+        let k_binder = suspending.then(|| body.args.len().saturating_sub(1));
         for (ix, param) in body.args.iter().enumerate() {
             let local = u16::try_from(ix).unwrap_or_default();
             // Typing published every clause binder's type on its node
@@ -9495,6 +9604,32 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 .as_ref()
                 .expect("typed facts invariant: a clause binder carries its checked type");
             let ty = fx.resolved(ty);
+            if Some(ix) == k_binder {
+                // ADR 0064: the runtime delivers the resumption as its
+                // bare slot; the prologue wraps it in the checked
+                // `Resumption` layout, which only compiled code knows.
+                let wrapped = fx.fresh_local();
+                let head = match &ty {
+                    Ty::Nominal(symbol, _) => Some(*symbol),
+                    _ => None,
+                };
+                let layout = fx.construction_layout(&ty, head);
+                fx.push(Inst::Aggregate {
+                    dest: wrapped,
+                    tag: 0,
+                    layout,
+                    args: vec![Operand::Local(local)],
+                });
+                fx.frame_entry(local).declared =
+                    Some(Ty::Nominal(Symbol::Int, Vec::new()));
+                fx.frame_entry(wrapped).declared = Some(ty.clone());
+                fx.own_local(wrapped, &ty);
+                if let Name::Resolved(symbol, name) = &param.name {
+                    fx.locals.insert(*symbol, wrapped);
+                    fx.name_local(wrapped, name);
+                }
+                continue;
+            }
             // `mut` (exclusive-borrow) effect parameters resume with
             // their evolved values, the same writeback convention as
             // direct calls.
@@ -9517,20 +9652,27 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         } else {
             None
         };
-        let delimiter = fx.fresh_local();
-        fx.generated_origin = GeneratedMir::HandlerDelimiter {
-            local: delimiter,
-            env_index: 0,
-            handler_at,
+        let delimiter = if suspending {
+            fx.clause_delimiter = None;
+            None
+        } else {
+            let delimiter = fx.fresh_local();
+            fx.generated_origin = GeneratedMir::HandlerDelimiter {
+                local: delimiter,
+                env_index: 0,
+                handler_at,
+            };
+            fx.push(Inst::EnvGet {
+                dest: delimiter,
+                index: 0,
+            });
+            fx.clause_delimiter = Some(delimiter);
+            Some(delimiter)
         };
-        fx.push(Inst::EnvGet {
-            dest: delimiter,
-            index: 0,
-        });
-        fx.clause_delimiter = Some(delimiter);
+        let env_base = usize::from(!suspending);
         for (index, symbol) in captured.iter().enumerate() {
             let local = fx.fresh_local();
-            let env_index = u16::try_from(index + 1).unwrap_or_default();
+            let env_index = u16::try_from(index + env_base).unwrap_or_default();
             fx.generated_origin = GeneratedMir::ClosureCapture {
                 local,
                 env_index,
@@ -9548,7 +9690,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // Rebind the inherited witness blocks in the same layout
         // `push_witness_block` appended them (the clause-frame mirror of
         // `bind_env`'s inherited section).
-        let mut env_index = u16::try_from(1 + captured.len()).unwrap_or_default();
+        let mut env_index = u16::try_from(env_base + captured.len()).unwrap_or_default();
         for (param_symbol, _) in &inherited {
             let drop_local = fx.fresh_local();
             fx.generated_origin = GeneratedMir::ClosureWitness {
@@ -9600,11 +9742,18 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
         let value = fx.compile_block(body)?;
         if !fx.terminated() {
-            // A clause that finishes without `continue` discontinues: its
-            // value becomes the delimiter frame's return (CHG-03), after
-            // this clause's own cleanup.
             fx.generated_origin = GeneratedMir::FunctionEpilogue;
-            fx.emit_discontinue(Operand::Local(delimiter), value);
+            match delimiter {
+                // A clause that finishes without `continue` discontinues:
+                // its value becomes the delimiter frame's return
+                // (CHG-03), after this clause's own cleanup.
+                Some(delimiter) => {
+                    fx.emit_discontinue(Operand::Local(delimiter), value)
+                }
+                // A suspending clause holds the installer's outward
+                // linkage: completing IS the abort, by plain return.
+                None => fx.emit_frame_return(value),
+            }
         }
         fx.elaborate_and_verify();
         fx.deferred_error()?;
@@ -9621,7 +9770,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             blocks,
         };
 
-        let mut env = vec![Operand::Local(cont)];
+        let mut env = if suspending {
+            Vec::new()
+        } else {
+            vec![Operand::Local(cont)]
+        };
         env.extend(
             captured
                 .iter()
@@ -10332,6 +10485,69 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     size: layout::element_stride(element),
                 });
                 return Ok(Operand::Local(dest));
+            }
+            K::TaskSpawn { arg, worker } => {
+                let arg = self.ir_value(instruction, arg)?;
+                let worker = self.ir_value(instruction, worker)?;
+                // Argument and closure both move into the task: their
+                // previous owners (the wrapper's consumed parameters)
+                // must not also drop them.
+                self.consume_operand(arg);
+                self.consume_operand(worker);
+                self.push(Inst::TaskSpawn { dest, arg, worker });
+                return Ok(Operand::Local(dest));
+            }
+            K::TaskJoin { ty, handle } => {
+                let handle = self.ir_value(instruction, handle)?;
+                self.push(Inst::TaskJoin { dest, handle });
+                // The join transfers ownership of the worker's output.
+                let owned = self.resolved(ty);
+                self.produce_temp(dest, &owned);
+                return Ok(Operand::Local(dest));
+            }
+            K::TaskWidth => {
+                self.push(Inst::TaskWidth { dest });
+                return Ok(Operand::Local(dest));
+            }
+            K::ChanSend { handle, value } => {
+                let handle = self.ir_value(instruction, handle)?;
+                let value = self.ir_value(instruction, value)?;
+                // The value moves into the channel queue.
+                self.consume_operand(value);
+                self.push(Inst::ChanSend { handle, value });
+                return Ok(Operand::Const(Constant::Unit));
+            }
+            K::ChanTake { ty, handle } => {
+                let handle = self.ir_value(instruction, handle)?;
+                self.push(Inst::ChanTake { dest, handle });
+                let owned = self.resolved(ty);
+                self.produce_temp(dest, &owned);
+                return Ok(Operand::Local(dest));
+            }
+            K::ChanCtl { handle, op } => {
+                let handle = self.ir_value(instruction, handle)?;
+                let op = self.ir_value(instruction, op)?;
+                self.push(Inst::ChanCtl { dest, handle, op });
+                return Ok(Operand::Local(dest));
+            }
+            K::Resume { ty, cont, value } => {
+                let cont = self.ir_value(instruction, cont)?;
+                let value = self.ir_value(instruction, value)?;
+                // Both move: the resumption is spent (one-shot) and the
+                // value transfers to the suspended perform site.
+                self.consume_operand(cont);
+                self.consume_operand(value);
+                self.push(Inst::Resume { dest, cont, value });
+                // The extent's answer transfers to the resumer.
+                let owned = self.resolved(ty);
+                self.produce_temp(dest, &owned);
+                return Ok(Operand::Local(dest));
+            }
+            K::Cancel { cont } => {
+                let cont = self.ir_value(instruction, cont)?;
+                self.consume_operand(cont);
+                self.push(Inst::Cancel { cont });
+                return Ok(Operand::Const(Constant::Unit));
             }
             K::Io { op, a, b, c } => {
                 let a = self.ir_value(instruction, a)?;

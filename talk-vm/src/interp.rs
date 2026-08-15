@@ -5,6 +5,16 @@
 //! plain `match` over the decoded instruction (Ertl & Gregg, JILP 2003).
 
 use crate::CmpOp;
+
+// Worker threads: native `std::thread`, or Web-Worker-backed threads on
+// wasm32 with shared-memory atomics (`wasm_thread` mirrors the std API;
+// each spawn is a Worker over the same module and shared memory).
+// Without atomics wasm has no threads at all — the spawn-site inline
+// paths below are the whole story there.
+#[cfg(not(target_arch = "wasm32"))]
+use std::thread;
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+use wasm_thread as thread;
 use crate::VmStats;
 use crate::io::IO;
 use crate::memory::{Allocations, MemoryError, Pointer};
@@ -170,6 +180,10 @@ impl Default for Budgets {
 
 /// Frame.dest sentinel for finalizer frames: their Ret writes nowhere.
 const FINALIZER_DEST: u16 = u16::MAX;
+/// A frame running a spawned task's closure (ADR 0058, sequential
+/// reference executor): its return value goes to the task slot recorded
+/// on the worker's task-destination stack, not to a caller register.
+const TASK_DEST: u16 = u16::MAX - 1;
 
 pub fn run(module: &Module, io: &mut dyn IO) -> Result<Value, String> {
     Ok(run_machine(module, io)?.0)
@@ -504,10 +518,22 @@ fn run_export_inner<'io, S: StatsSink>(
         allocations: Allocations::default(),
         boxed: vec![Value::Void],
         objects: Objects::default(),
+        tasks: vec![],
+        shared_module: None,
+        external: Vec::new(),
+        deadlines: Vec::new(),
         io,
     };
     stats.begin_run(module)?;
-    let result = run_loop(module, &mut machine, chunk_index, values, &budgets, stats);
+    let result = run_loop(
+        module,
+        &mut machine,
+        chunk_index,
+        values,
+        Rc::new(vec![]),
+        &budgets,
+        stats,
+    );
     stats.finish_run();
     match result {
         Ok(value) => Ok(RunOutcome { value, machine }),
@@ -549,6 +575,10 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
         // zeroed, never-stored cell can't alias a real handle.
         boxed: vec![Value::Void],
         objects: Objects::default(),
+        tasks: vec![],
+        shared_module: None,
+        external: Vec::new(),
+        deadlines: Vec::new(),
         io,
     };
     let mut stats = NoStats;
@@ -557,6 +587,7 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
         &mut machine,
         module.entry,
         vec![],
+        Rc::new(vec![]),
         &Budgets::default(),
         &mut stats,
     ) {
@@ -572,11 +603,179 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
     }
 }
 
+/// An installed deep handler (ADR 0032 dynamic nearest-handler routing).
+/// Entries tie to their installing frame by (depth, frame id) and go
+/// stale with it — no pop-site bookkeeping.
+#[derive(Clone)]
+struct HandlerEntry {
+    effect: u32,
+    clause: Value,
+    cont: Value,
+    depth: usize,
+    frame_id: u64,
+}
+
+/// One frame of a suspended extent (ADR 0064): a `Frame` without the
+/// borrowed code slice, so it can outlive the dispatch that captured it.
+/// Rehydrated against the module's chunk table on resume or cancel.
+struct SuspendedFrame {
+    chunk: u32,
+    pc: usize,
+    regs: Vec<Value>,
+    env: Rc<Vec<Value>>,
+    dest: u16,
+    id: u64,
+}
+
+impl SuspendedFrame {
+    fn capture(frame: Frame<'_>) -> Self {
+        SuspendedFrame {
+            chunk: frame.chunk,
+            pc: frame.pc,
+            regs: frame.regs,
+            env: frame.env,
+            dest: frame.dest,
+            id: frame.id,
+        }
+    }
+}
+
+/// A stored one-shot resumption (ADR 0064): the frames of a suspended
+/// extent from its installing frame through its perform site, the
+/// handler entries those frames had installed (depths relative to the
+/// segment base), and the register in the top frame that receives the
+/// resume value. Named by a worker-local slot; the slot is taken
+/// exactly once — the Talk-level `Resumption` value is linear, and the
+/// take is the dynamic backstop.
+struct Segment {
+    frames: Vec<SuspendedFrame>,
+    handlers: Vec<HandlerEntry>,
+    dest: u16,
+}
+
+/// One worker's interpreter state (ADR 0050): frame stack, handler
+/// stack, handler-search floor, unwind state, frame-id source, and the
+/// register-buffer pool are per-worker. A parallel VM runs one `Worker`
+/// per OS thread over the shared immutable `Module`; a task never
+/// inherits another worker's frame-bound state, so handler delimiters
+/// and continuations cannot cross workers.
+struct Worker<'m> {
+    frames: Vec<Frame<'m>>,
+    /// Finalizer frames currently on the stack: the teardown walk must
+    /// not advance (and above all must not bulk-free) while one is
+    /// running.
+    finalizer_frames: usize,
+    handlers: Vec<HandlerEntry>,
+    /// A clause runs outside its own handler (CHG-01): performs inside
+    /// it search below this floor.
+    handler_floor: usize,
+    /// An effect abort in progress (ADR 0027): the delimiter's frame
+    /// index and the value to deliver once every frame above it has run
+    /// its unwind entry and popped.
+    unwinding: Option<(usize, Value)>,
+    next_frame_id: u64,
+    regs_pool: Vec<Vec<Value>>,
+    empty_env: Rc<Vec<Value>>,
+    /// Task slots awaiting the return of a `TASK_DEST` frame, innermost
+    /// last (task frames return LIFO under the sequential executor).
+    task_dests: Vec<usize>,
+    /// Stored suspended extents (ADR 0064), named by slot. `None` =
+    /// spent: resuming or cancelling takes the slot, and a second take
+    /// is the one-shot trap.
+    suspended: Vec<Option<Segment>>,
+}
+
+impl Worker<'_> {
+    fn new() -> Self {
+        Worker {
+            frames: Vec::new(),
+            finalizer_frames: 0,
+            handlers: Vec::new(),
+            handler_floor: usize::MAX,
+            unwinding: None,
+            next_frame_id: 0,
+            regs_pool: Vec::new(),
+            empty_env: Rc::new(vec![]),
+            task_dests: Vec::new(),
+            suspended: Vec::new(),
+        }
+    }
+
+    fn fresh_frame_id(&mut self) -> u64 {
+        let id = self.next_frame_id;
+        self.next_frame_id += 1;
+        id
+    }
+}
+
+/// One isolated VM worker (ADR 0058): a fresh machine over the shared
+/// module, entered at the transferred closure with the transferred
+/// argument in its first register, under a buffering IO sink the parent
+/// replays at join. The worker's exit balance is enforced like a
+/// program's: everything but the output must be released.
+#[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+fn worker_task_main(
+    module: std::sync::Arc<Module>,
+    worker: Transfer,
+    arg: Transfer,
+    budgets: Budgets,
+) -> Result<(Transfer, Vec<u8>, Vec<u8>), String> {
+    let mut io = crate::io::CaptureIO::default();
+    let result = {
+        let mut machine = Machine {
+            slots: vec![],
+            mem: module.statics.clone(),
+            static_len: module.statics.len() as u32,
+            layouts: module.layouts.clone(),
+            static_strings: FxHashMap::default(),
+            allocations: Allocations::default(),
+            boxed: vec![Value::Void],
+            objects: Objects::default(),
+            tasks: vec![],
+            shared_module: Some(module.clone()),
+            external: Vec::new(),
+            deadlines: Vec::new(),
+            io: &mut io,
+        };
+        let worker_value = machine.deserialize_transfer(&worker)?;
+        let arg_value = machine.deserialize_transfer(&arg)?;
+        let Value::Closure(entry, env) = worker_value else {
+            return Err("vm: task spawn of a non-closure".into());
+        };
+        let mut stats = NoStats;
+        let value = run_loop(
+            &module,
+            &mut machine,
+            entry,
+            vec![arg_value],
+            env,
+            &budgets,
+            &mut stats,
+        )?;
+        let balance = machine.balance(&value);
+        if balance.result_exact
+            && (balance.live_allocations != balance.result_allocations
+                || balance.live_objects != balance.result_objects)
+        {
+            return Err(format!(
+                "vm: worker resource leak: {} live allocations, {} live 'heap objects (task output owns {}, {})",
+                balance.live_allocations,
+                balance.live_objects,
+                balance.result_allocations,
+                balance.result_objects
+            ));
+        }
+        machine.serialize_transfer(&value)?
+    };
+    Ok((result, io.out, io.err))
+}
+
 fn run_loop<S: StatsSink>(
     module: &Module,
     machine: &mut Machine,
     entry_index: u32,
     args: Vec<Value>,
+    entry_env: Rc<Vec<Value>>,
     budgets: &Budgets,
     stats: &mut S,
 ) -> Result<Value, String> {
@@ -584,45 +783,21 @@ fn run_loop<S: StatsSink>(
     profiling::scope!("vm.run_loop");
     let mut fuel = budgets.instructions;
     let entry = chunk(module, entry_index)?;
-    let empty_env: Rc<Vec<Value>> = Rc::new(vec![]);
-    let mut next_frame_id: u64 = 0;
-    let mut regs_pool: Vec<Vec<Value>> = Vec::new();
+    let mut worker = Worker::new();
     let mut regs = vec![Value::Void; entry.n_regs as usize];
     for (index, arg) in args.into_iter().enumerate() {
         regs[index] = arg;
     }
-    let mut frames = vec![Frame {
+    let entry_id = worker.fresh_frame_id();
+    worker.frames.push(Frame {
         chunk: entry_index,
         code: &entry.code,
         pc: 0,
         regs,
-        env: empty_env.clone(),
+        env: entry_env,
         dest: 0,
-        id: next_frame_id,
-    }];
-    next_frame_id += 1;
-
-    // Finalizer frames currently on the stack: the teardown walk must not
-    // advance (and above all must not bulk-free) while one is running.
-    let mut finalizer_frames: usize = 0;
-    // Installed deep handlers (ADR 0032 dynamic nearest-handler routing).
-    // Entries tie to their installing frame by (depth, frame id) and go
-    // stale with it — no pop-site bookkeeping.
-    struct HandlerEntry {
-        effect: u32,
-        clause: Value,
-        cont: Value,
-        depth: usize,
-        frame_id: u64,
-    }
-    let mut handlers: Vec<HandlerEntry> = Vec::new();
-    // A clause runs outside its own handler (CHG-01): performs inside it
-    // search below this floor.
-    let mut handler_floor: usize = usize::MAX;
-    // An effect abort in progress (ADR 0027): the delimiter's frame index
-    // and the value to deliver once every frame above it has run its
-    // unwind entry and popped.
-    let mut unwinding: Option<(usize, Value)> = None;
+        id: entry_id,
+    });
 
     let trace_mem = trace_mem();
     loop {
@@ -632,13 +807,13 @@ fn run_loop<S: StatsSink>(
         fuel -= 1;
         // Region-teardown pump: while a region is finalizing, run its
         // members' finalizer thunks (reverse allocation order) as ordinary
-        // frames before executing anything else; the walk's bulk free
+        // worker.frames before executing anything else; the walk's bulk free
         // happens inside `next_finalizer` when members are exhausted.
-        if finalizer_frames == 0
+        if worker.finalizer_frames == 0
             && machine.objects.finalizing()
             && let Some((thunk, object)) = machine.objects.next_finalizer()
         {
-            if frames.len() >= budgets.frames {
+            if worker.frames.len() >= budgets.frames {
                 return Err("vm: call stack overflow".into());
             }
             let Value::Closure(fin_chunk, env) = thunk else {
@@ -646,29 +821,26 @@ fn run_loop<S: StatsSink>(
             };
             let target = chunk(module, fin_chunk)?;
             check_call_shape(target, 1)?;
-            let mut regs = regs_pool.pop().unwrap_or_default();
+            let mut regs = worker.regs_pool.pop().unwrap_or_default();
             regs.resize(target.n_regs as usize, Value::Void);
             regs[0] = Value::Object(object);
-            frames.push(Frame {
+            let id = worker.fresh_frame_id();
+            worker.frames.push(Frame {
                 chunk: fin_chunk,
                 code: &target.code,
                 pc: 0,
                 regs,
                 env,
                 dest: FINALIZER_DEST,
-                id: {
-                    let id = next_frame_id;
-                    next_frame_id += 1;
-                    id
-                },
+                id,
             });
-            finalizer_frames += 1;
+            worker.finalizer_frames += 1;
             continue;
         }
 
-        let frame_count = frames.len();
+        let frame_count = worker.frames.len();
         let frame_index = frame_count - 1;
-        let frame = &mut frames[frame_index];
+        let frame = &mut worker.frames[frame_index];
         let current_chunk = frame.chunk;
         let pc = frame.pc;
         let Some(&insn) = frame.code.get(pc) else {
@@ -688,7 +860,8 @@ fn run_loop<S: StatsSink>(
                 args_len,
             } => {
                 if frame_count >= budgets.frames {
-                    let mut cycle: Vec<String> = frames
+                    let mut cycle: Vec<String> = worker
+                        .frames
                         .iter()
                         .rev()
                         .take(8)
@@ -705,20 +878,18 @@ fn run_loop<S: StatsSink>(
                     args_start,
                     args_len,
                     target.n_regs,
-                    &mut regs_pool,
+                    &mut worker.regs_pool,
                 )?;
-                frames.push(Frame {
+                let id = worker.fresh_frame_id();
+                let env = worker.empty_env.clone();
+                worker.frames.push(Frame {
                     chunk: callee,
                     code: &target.code,
                     pc: 0,
                     regs,
-                    env: empty_env.clone(),
+                    env,
                     dest,
-                    id: {
-                        let id = next_frame_id;
-                        next_frame_id += 1;
-                        id
-                    },
+                    id,
                 });
             }
             Insn::CallIndirect {
@@ -744,26 +915,30 @@ fn run_loop<S: StatsSink>(
                     args_start,
                     args_len,
                     target_chunk.n_regs,
-                    &mut regs_pool,
+                    &mut worker.regs_pool,
                 )?;
-                frames.push(Frame {
+                let id = worker.fresh_frame_id();
+                worker.frames.push(Frame {
                     chunk: target,
                     code: &target_chunk.code,
                     pc: 0,
                     regs,
                     env,
                     dest,
-                    id: {
-                        let id = next_frame_id;
-                        next_frame_id += 1;
-                        id
-                    },
+                    id,
                 });
             }
             Insn::Ret { src } => {
                 let value = frame.regs[src as usize].clone();
                 if let Some(value) =
-                    deliver_return(&mut frames, &mut finalizer_frames, &mut regs_pool, value)
+                    deliver_return(
+                        &mut worker.frames,
+                        &mut worker.finalizer_frames,
+                        &mut worker.regs_pool,
+                        &mut worker.task_dests,
+                        &mut machine.tasks,
+                        value,
+                    )
                 {
                     return Ok(value);
                 }
@@ -783,15 +958,15 @@ fn run_loop<S: StatsSink>(
                 clause,
                 cont,
             } => {
-                while handlers.last().is_some_and(|entry| {
-                    frames
+                while worker.handlers.last().is_some_and(|entry| {
+                    worker.frames
                         .get(entry.depth)
                         .is_none_or(|frame| frame.id != entry.frame_id)
                 }) {
-                    handlers.pop();
+                    worker.handlers.pop();
                 }
-                let frame = &frames[frame_index];
-                handlers.push(HandlerEntry {
+                let frame = &worker.frames[frame_index];
+                worker.handlers.push(HandlerEntry {
                     effect,
                     clause: frame.regs[clause as usize].clone(),
                     cont: frame.regs[cont as usize].clone(),
@@ -805,14 +980,14 @@ fn run_loop<S: StatsSink>(
                 index,
                 effect,
             } => {
-                let limit = handler_floor.min(handlers.len());
-                let found = handlers[..limit]
+                let limit = worker.handler_floor.min(worker.handlers.len());
+                let found = worker.handlers[..limit]
                     .iter()
                     .enumerate()
                     .rev()
                     .find(|(_, entry)| {
                         entry.effect == effect
-                            && frames
+                            && worker.frames
                                 .get(entry.depth)
                                 .is_some_and(|frame| frame.id == entry.frame_id)
                     });
@@ -820,46 +995,62 @@ fn run_loop<S: StatsSink>(
                     return Err("vm: perform with no installed handler".into());
                 };
                 let (clause_value, cont_value) = (entry.clause.clone(), entry.cont.clone());
-                let regs = &mut frames[frame_index].regs;
+                let regs = &mut worker.frames[frame_index].regs;
                 regs[clause as usize] = clause_value;
                 regs[cont as usize] = cont_value;
                 regs[index as usize] = Value::I64(position as i64);
             }
             Insn::GetFloor { dest } => {
-                let floor = i64::try_from(handler_floor).unwrap_or(i64::MAX);
+                let floor = i64::try_from(worker.handler_floor).unwrap_or(i64::MAX);
                 frame.regs[dest as usize] = Value::I64(floor);
             }
             Insn::SetFloor { src } => {
                 let Value::I64(floor) = frame.regs[src as usize] else {
                     return Err("vm: handler floor must be an Int".into());
                 };
-                handler_floor = usize::try_from(floor).unwrap_or(usize::MAX);
+                worker.handler_floor = usize::try_from(floor).unwrap_or(usize::MAX);
             }
             Insn::CallCont { callee, src } => {
-                if unwinding.is_some() {
-                    return Err("vm: abort during abort unwinding".into());
+                if worker.unwinding.is_some() {
+                    return Err("vm: abort during abort worker.unwinding".into());
                 }
                 let cont = frame.regs[callee as usize].clone();
                 let value = frame.regs[src as usize].clone();
                 let Value::Cont(target, id) = cont else {
                     return Err("vm: continuation call on a non-continuation".into());
                 };
-                let target = target as usize;
-                if frames.get(target).is_none_or(|frame| frame.id != id) {
-                    return Err(
-                        "vm: continuation is no longer live (its scope already exited)".into(),
-                    );
+                let mut target = target as usize;
+                if worker.frames.get(target).is_none_or(|frame| frame.id != id) {
+                    // A frame that traveled inside a suspended extent
+                    // (ADR 0064) resumes at a different depth; identity
+                    // is the frame id, the index is only a hint.
+                    match worker.frames.iter().position(|frame| frame.id == id) {
+                        Some(found) => target = found,
+                        None => {
+                            return Err(
+                                "vm: continuation is no longer live (its scope already exited)"
+                                    .into(),
+                            );
+                        }
+                    }
                 }
                 // The aborted computation's handler-search floor dies with
                 // it.
-                handler_floor = usize::MAX;
-                if target == frames.len() - 1 {
+                worker.handler_floor = usize::MAX;
+                if target == worker.frames.len() - 1 {
                     // The continuation targets the executing frame itself:
                     // the delimiter is the aborting frame, whose drops
                     // already ran on its path here — deliver in place as a
-                    // Ret would. No suspended frames, so no unwind walk.
+                    // Ret would. No suspended worker.frames, so no unwind walk.
                     if let Some(value) =
-                        deliver_return(&mut frames, &mut finalizer_frames, &mut regs_pool, value)
+                        deliver_return(
+                        &mut worker.frames,
+                        &mut worker.finalizer_frames,
+                        &mut worker.regs_pool,
+                        &mut worker.task_dests,
+                        &mut machine.tasks,
+                        value,
+                    )
                     {
                         return Ok(value);
                     }
@@ -871,17 +1062,322 @@ fn run_loop<S: StatsSink>(
                     // unwind entry (one-shot delimited abort — Hieb, Dybvig
                     // & Bruggeman, PLDI 1990's stack slice — consumed
                     // through its cleanup, OCaml's `discontinue`).
-                    pop_frame(&mut frames, &mut finalizer_frames, &mut regs_pool);
-                    unwinding = Some((target, value));
+                    pop_frame(&mut worker.frames, &mut worker.finalizer_frames, &mut worker.regs_pool);
+                    worker.unwinding = Some((target, value));
                     if let Some(value) = advance_unwind(
                         module,
-                        &mut frames,
-                        &mut finalizer_frames,
-                        &mut regs_pool,
-                        &mut unwinding,
+                        &mut worker.frames,
+                        &mut worker.finalizer_frames,
+                        &mut worker.regs_pool,
+                        &mut worker.task_dests,
+                        &mut machine.tasks,
+                        &mut worker.unwinding,
                     )? {
                         return Ok(value);
                     }
+                }
+            }
+            Insn::TaskSpawn {
+                dest,
+                arg,
+                worker: worker_reg,
+            } => {
+                let Some(closure) = frame.regs.get(worker_reg as usize).cloned() else {
+                    return Err("vm: task worker register out of range".into());
+                };
+                let Some(arg_value) = frame.regs.get(arg as usize).cloned() else {
+                    return Err("vm: task argument register out of range".into());
+                };
+                let Value::Closure(target, _) = closure.clone() else {
+                    return Err("vm: task spawn of a non-closure".into());
+                };
+                let target_chunk = chunk(module, target)?;
+                check_call_shape(target_chunk, 1)?;
+                #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+                {
+                    // Isolated worker (ADR 0058): image the Send-checked
+                    // values, release this machine's copies (the worker
+                    // owns them now), and run the closure on a fresh
+                    // machine over the shared module on its own thread.
+                    let worker_transfer = machine.serialize_transfer(&closure)?;
+                    let arg_transfer = machine.serialize_transfer(&arg_value)?;
+                    machine.release_transferred(&closure)?;
+                    machine.release_transferred(&arg_value)?;
+                    let shared = match &machine.shared_module {
+                        Some(shared) => shared.clone(),
+                        None => {
+                            let shared = std::sync::Arc::new(module.clone());
+                            machine.shared_module = Some(shared.clone());
+                            shared
+                        }
+                    };
+                    let worker_budgets = *budgets;
+                    let handle = thread::Builder::new()
+                        .name("talk-task".into())
+                        .spawn(move || {
+                            worker_task_main(shared, worker_transfer, arg_transfer, worker_budgets)
+                        })
+                        .map_err(|error| format!("vm: task spawn failed: {error}"))?;
+                    let slot = machine.tasks.len();
+                    machine.tasks.push(TaskSlot::Running(handle));
+                    frame.regs[dest as usize] = Value::I64(slot as i64);
+                }
+                #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+                {
+                    // Single-threaded host: the task runs to completion at
+                    // the spawn site, as a frame whose return routes to
+                    // its task slot. Physical parallelism is runtime
+                    // policy; a correct program cannot tell.
+                    if frame_count >= budgets.frames {
+                        return Err("vm: call stack overflow".into());
+                    }
+                    let Value::Closure(_, env) = closure else {
+                        return Err("vm: task spawn of a non-closure".into());
+                    };
+                    let slot = machine.tasks.len();
+                    machine.tasks.push(TaskSlot::Pending);
+                    frame.regs[dest as usize] = Value::I64(slot as i64);
+                    let mut regs = worker.regs_pool.pop().unwrap_or_default();
+                    regs.resize(target_chunk.n_regs as usize, Value::Void);
+                    regs[0] = arg_value;
+                    let id = worker.fresh_frame_id();
+                    worker.task_dests.push(slot);
+                    worker.frames.push(Frame {
+                        chunk: target,
+                        code: &target_chunk.code,
+                        pc: 0,
+                        regs,
+                        env,
+                        dest: TASK_DEST,
+                        id,
+                    });
+                }
+            }
+            Insn::Suspend {
+                dest,
+                effect,
+                args_start,
+                args_len,
+            } => {
+                // ADR 0064: capture the extent from the installing frame
+                // through this perform site into a stored resumption and
+                // run the clause in the installer's place, with the
+                // installer's outward linkage — a clause that completes
+                // without resuming simply returns where the installer
+                // would have.
+                if frame_count >= budgets.frames {
+                    return Err("vm: call stack overflow".into());
+                }
+                if worker.unwinding.is_some() {
+                    return Err("vm: suspend during an unwind".into());
+                }
+                // Read the perform's arguments before the frame moves
+                // into the segment.
+                let mut args = Vec::with_capacity(usize::from(args_len));
+                let start = usize::try_from(args_start)
+                    .map_err(|_| "vm: bad argument pool range")?;
+                let end = start
+                    .checked_add(usize::from(args_len))
+                    .ok_or("vm: bad argument pool range")?;
+                let arg_regs = module
+                    .arg_pool
+                    .get(start..end)
+                    .ok_or("vm: bad argument pool range")?;
+                for &src in arg_regs {
+                    args.push(rk_value(module, frame, src)?);
+                }
+                // Trim stale handler entries, then find the innermost
+                // live handler for this effect below the floor.
+                while let Some(entry) = worker.handlers.last() {
+                    let live = worker
+                        .frames
+                        .get(entry.depth)
+                        .is_some_and(|frame| frame.id == entry.frame_id);
+                    if live {
+                        break;
+                    }
+                    worker.handlers.pop();
+                }
+                let limit = worker.handler_floor.min(worker.handlers.len());
+                let Some(position) = worker.handlers[..limit]
+                    .iter()
+                    .rposition(|entry| {
+                        entry.effect == effect
+                            && worker
+                                .frames
+                                .get(entry.depth)
+                                .is_some_and(|frame| frame.id == entry.frame_id)
+                    })
+                else {
+                    return Err("vm: perform with no installed handler".into());
+                };
+                let base = worker.handlers[position].depth;
+                // Every handler installed by a frame of the extent
+                // travels with it (the triggering entry included, so a
+                // resume re-installs it at the new base). Live entries
+                // with depth >= base form a suffix of the stack.
+                let boundary = worker
+                    .handlers
+                    .iter()
+                    .position(|entry| {
+                        entry.depth >= base
+                            && worker
+                                .frames
+                                .get(entry.depth)
+                                .is_some_and(|frame| frame.id == entry.frame_id)
+                    })
+                    .unwrap_or(worker.handlers.len());
+                let mut captured: Vec<HandlerEntry> =
+                    worker.handlers.split_off(boundary);
+                captured.retain(|entry| {
+                    worker
+                        .frames
+                        .get(entry.depth)
+                        .is_some_and(|frame| frame.id == entry.frame_id)
+                });
+                for entry in &mut captured {
+                    entry.depth -= base;
+                }
+                let clause = captured
+                    .iter()
+                    .find(|entry| entry.effect == effect && entry.depth == 0)
+                    .map(|entry| entry.clause.clone())
+                    .ok_or("vm: suspending handler entry lost its clause")?;
+                // Capture the frames: installer through perform site.
+                let split = worker.frames.split_off(base);
+                let installer_dest = split.first().map(|frame| frame.dest).unwrap_or(0);
+                let segment = Segment {
+                    frames: split.into_iter().map(SuspendedFrame::capture).collect(),
+                    handlers: captured,
+                    dest,
+                };
+                let slot = match worker.suspended.iter().position(Option::is_none) {
+                    Some(free) => {
+                        worker.suspended[free] = Some(segment);
+                        free
+                    }
+                    None => {
+                        worker.suspended.push(Some(segment));
+                        worker.suspended.len() - 1
+                    }
+                };
+                // The clause's prologue wraps the raw slot in a
+                // properly-laid-out `Resumption` aggregate — layout ids
+                // are compile-time facts the runtime does not mint.
+                let resumption = Value::I64(slot as i64);
+                // Push the clause where the installer stood, with its
+                // outward linkage. The clause runs under the handlers
+                // that remain — its own entry left with the segment.
+                let Value::Closure(target, env) = clause else {
+                    return Err("vm: suspending handler clause is not a closure".into());
+                };
+                let target_chunk = chunk(module, target)?;
+                check_call_shape(target_chunk, args_len + 1)?;
+                let mut regs = worker.regs_pool.pop().unwrap_or_default();
+                regs.reserve(usize::from(target_chunk.n_regs));
+                regs.extend(args);
+                regs.push(resumption);
+                regs.resize(usize::from(target_chunk.n_regs), Value::Void);
+                let id = worker.fresh_frame_id();
+                worker.frames.push(Frame {
+                    chunk: target,
+                    code: &target_chunk.code,
+                    pc: 0,
+                    regs,
+                    env,
+                    dest: installer_dest,
+                    id,
+                });
+                worker.handler_floor = usize::MAX;
+            }
+            Insn::Resume { dest, cont, value } => {
+                // ADR 0064: splice the suspended extent above this frame,
+                // rewiring its base to this call site — the extent's
+                // completion arrives as this instruction's result, like
+                // any call's. Its handlers re-install at the new base.
+                let cont = frame.regs[cont as usize].clone();
+                let value = frame.regs[value as usize].clone();
+                let slot = resumption_slot(&cont)?;
+                let Some(mut segment) =
+                    worker.suspended.get_mut(slot).and_then(Option::take)
+                else {
+                    return Err("vm: resumption already spent (one-shot)".into());
+                };
+                if frame_count + segment.frames.len() >= budgets.frames {
+                    return Err("vm: call stack overflow".into());
+                }
+                let base = worker.frames.len();
+                if let Some(bottom) = segment.frames.first_mut() {
+                    bottom.dest = dest;
+                }
+                for image in segment.frames {
+                    let target_chunk = chunk(module, image.chunk)?;
+                    worker.frames.push(Frame {
+                        chunk: image.chunk,
+                        code: &target_chunk.code,
+                        pc: image.pc,
+                        regs: image.regs,
+                        env: image.env,
+                        dest: image.dest,
+                        id: image.id,
+                    });
+                }
+                for mut entry in segment.handlers {
+                    entry.depth += base;
+                    worker.handlers.push(entry);
+                }
+                // The resumed extent runs under the handlers live HERE
+                // plus its own (the dynamic-extent rule, ADR 0064).
+                worker.handler_floor = usize::MAX;
+                // Deliver the resume value to the suspended perform.
+                #[allow(clippy::expect_used)]
+                let top = worker
+                    .frames
+                    .last_mut()
+                    .expect("a resumed segment has frames");
+                top.regs[usize::from(segment.dest)] = value;
+            }
+            Insn::Cancel { cont } => {
+                // ADR 0064: discard a suspended extent, unwinding its
+                // frames through their cleanup entries (the ADR 0027
+                // machinery), then return from this frame with unit —
+                // exactly the cancel intrinsic's contract.
+                if worker.unwinding.is_some() {
+                    return Err("vm: cancel during an unwind".into());
+                }
+                let cont = frame.regs[cont as usize].clone();
+                let slot = resumption_slot(&cont)?;
+                let Some(segment) =
+                    worker.suspended.get_mut(slot).and_then(Option::take)
+                else {
+                    return Err("vm: resumption already spent (one-shot)".into());
+                };
+                let target = worker.frames.len() - 1;
+                for image in segment.frames {
+                    let target_chunk = chunk(module, image.chunk)?;
+                    worker.frames.push(Frame {
+                        chunk: image.chunk,
+                        code: &target_chunk.code,
+                        pc: image.pc,
+                        regs: image.regs,
+                        env: image.env,
+                        dest: image.dest,
+                        id: image.id,
+                    });
+                }
+                // The captured handlers die unrestored: cleanup code
+                // performs no effects (CHG-08).
+                worker.unwinding = Some((target, Value::Void));
+                if let Some(value) = advance_unwind(
+                    module,
+                    &mut worker.frames,
+                    &mut worker.finalizer_frames,
+                    &mut worker.regs_pool,
+                    &mut worker.task_dests,
+                    &mut machine.tasks,
+                    &mut worker.unwinding,
+                )? {
+                    return Ok(value);
                 }
             }
             Insn::UnwindRet => {
@@ -889,25 +1385,34 @@ fn run_loop<S: StatsSink>(
                 // frame, deliver the stashed value (the unchanged tail of
                 // the pre-ADR-0027 CallCont); otherwise pop the cleaned
                 // frame and continue the unwind toward the delimiter.
-                let Some((target, _)) = unwinding else {
+                let Some((target, _)) = worker.unwinding else {
                     return Err("vm: unwind_ret outside an abort unwind".into());
                 };
-                if frames.len() - 1 == target {
+                if worker.frames.len() - 1 == target {
                     #[allow(clippy::expect_used)]
-                    let (_, value) = unwinding.take().expect("unwinding checked above");
+                    let (_, value) = worker.unwinding.take().expect("worker.unwinding checked above");
                     if let Some(value) =
-                        deliver_return(&mut frames, &mut finalizer_frames, &mut regs_pool, value)
+                        deliver_return(
+                        &mut worker.frames,
+                        &mut worker.finalizer_frames,
+                        &mut worker.regs_pool,
+                        &mut worker.task_dests,
+                        &mut machine.tasks,
+                        value,
+                    )
                     {
                         return Ok(value);
                     }
                 } else {
-                    pop_frame(&mut frames, &mut finalizer_frames, &mut regs_pool);
+                    pop_frame(&mut worker.frames, &mut worker.finalizer_frames, &mut worker.regs_pool);
                     if let Some(value) = advance_unwind(
                         module,
-                        &mut frames,
-                        &mut finalizer_frames,
-                        &mut regs_pool,
-                        &mut unwinding,
+                        &mut worker.frames,
+                        &mut worker.finalizer_frames,
+                        &mut worker.regs_pool,
+                        &mut worker.task_dests,
+                        &mut machine.tasks,
+                        &mut worker.unwinding,
                     )? {
                         return Ok(value);
                     }
@@ -1004,6 +1509,8 @@ fn deliver_return(
     frames: &mut Vec<Frame<'_>>,
     finalizer_frames: &mut usize,
     pool: &mut Vec<Vec<Value>>,
+    task_dests: &mut Vec<usize>,
+    tasks: &mut Vec<TaskSlot>,
     value: Value,
 ) -> Option<Value> {
     #[allow(clippy::expect_used)]
@@ -1014,6 +1521,14 @@ fn deliver_return(
     match frames.last_mut() {
         Some(_) if dest == FINALIZER_DEST => {
             *finalizer_frames = finalizer_frames.saturating_sub(1);
+            None
+        }
+        Some(_) if dest == TASK_DEST => {
+            if let Some(slot) = task_dests.pop()
+                && let Some(entry) = tasks.get_mut(slot)
+            {
+                *entry = TaskSlot::Done(value);
+            }
             None
         }
         Some(caller) => {
@@ -1037,6 +1552,8 @@ fn advance_unwind(
     frames: &mut Vec<Frame<'_>>,
     finalizer_frames: &mut usize,
     pool: &mut Vec<Vec<Value>>,
+    task_dests: &mut Vec<usize>,
+    tasks: &mut Vec<TaskSlot>,
     unwinding: &mut Option<(usize, Value)>,
 ) -> Result<Option<Value>, String> {
     loop {
@@ -1060,7 +1577,14 @@ fn advance_unwind(
         if frames.len() - 1 == target {
             #[allow(clippy::expect_used)]
             let (_, value) = unwinding.take().expect("unwinding checked above");
-            return Ok(deliver_return(frames, finalizer_frames, pool, value));
+            return Ok(deliver_return(
+                frames,
+                finalizer_frames,
+                pool,
+                task_dests,
+                tasks,
+                value,
+            ));
         }
         pop_frame(frames, finalizer_frames, pool);
     }
@@ -1398,11 +1922,701 @@ struct Machine<'io> {
     boxed: Vec<Value>,
     /// Region-allocated `'heap` objects (see `objects.rs`).
     objects: Objects<Value>,
+    /// Spawned tasks by handle (ADR 0058). On thread-capable hosts a
+    /// slot holds the worker's join handle; on single-threaded hosts
+    /// (wasm32) the task ran at the spawn site and the slot holds its
+    /// output. A join empties the slot exactly once.
+    tasks: Vec<TaskSlot>,
+    /// The module wrapped for sharing with worker threads, created on
+    /// the first spawn (one clone per spawning program; workers then
+    /// share it by reference).
+    shared_module: Option<std::sync::Arc<Module>>,
+    /// Channel handles THIS worker holds a live external-wake
+    /// registration on (pending receives per ADR 0059, pending bounded
+    /// sends per ADR 0062; `true` marks a send-wait): the executor may
+    /// park only while this is nonempty — otherwise a poll round that
+    /// wakes nothing is a real deadlock — and a park sleeps only after
+    /// confirming, under the registry lock, that no registration is
+    /// already satisfiable (no lost wakes). A receive-wait is satisfied
+    /// by a value or a close; a send-wait by room or receiver death.
+    external: Vec<(i64, bool)>,
+    /// Absolute monotonic-ms deadlines THIS worker's sleeping futures
+    /// registered (ADR 0063): each is a reason to park, and the park
+    /// waits only until the earliest of them.
+    deadlines: Vec<i64>,
     io: &'io mut dyn IO,
+}
+
+fn record_id(pointer: Pointer) -> Result<u32, String> {
+    pointer
+        .transfer_id()
+        .ok_or_else(|| "vm: a static pointer has no allocation record".into())
+}
+
+/// One channel's cross-worker state (ADR 0059). The registry is
+/// process-global — channels are the one object that outlives a single
+/// machine, carrying transfer packets between isolated workers. A slot
+/// frees when both sides are gone; handles are runtime-minted and a
+/// stale handle finds an empty slot, never another live channel's
+/// state, within one program run.
+struct VmChannel {
+    /// 0 = unbounded; otherwise queued + reserved never exceeds it.
+    capacity: usize,
+    /// Send slots claimed by an in-flight `SendFuture` poll (ADR 0062).
+    /// Reserve and send happen inside one poll body, so a reservation
+    /// never outlives a poll — but racing reservers must see each
+    /// other's claims, which is what makes the bound hard.
+    reserved: usize,
+    queue: std::collections::VecDeque<Transfer>,
+    senders: u32,
+    receiver_live: bool,
+}
+
+/// Monotonic milliseconds from an arbitrary per-process anchor
+/// (ADR 0063). Wall-clock time is host-effect territory; deadlines only
+/// care about deltas.
+fn now_ms() -> i64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        let start = START.get_or_init(std::time::Instant::now);
+        i64::try_from(start.elapsed().as_millis()).unwrap_or(i64::MAX)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        js_sys::Date::now() as i64
+    }
+}
+
+fn channels() -> &'static (
+    std::sync::Mutex<Vec<Option<VmChannel>>>,
+    std::sync::Condvar,
+) {
+    static CHANNELS: std::sync::OnceLock<(
+        std::sync::Mutex<Vec<Option<VmChannel>>>,
+        std::sync::Condvar,
+    )> = std::sync::OnceLock::new();
+    CHANNELS.get_or_init(|| (std::sync::Mutex::new(Vec::new()), std::sync::Condvar::new()))
+}
+
+fn channels_locked()
+-> std::sync::MutexGuard<'static, Vec<Option<VmChannel>>> {
+    match channels().0.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+/// Scalar channel/park control (ADR 0059). Ops: 0 status (0 value
+/// ready, 1 empty and open, 2 closed and drained), 1 retain sender,
+/// 2 drop sender, 3 drop receiver, 4 register an external wait,
+/// 5 unregister, 6 park, 7 create (the handle operand carries the
+/// capacity; 0 = unbounded), 8 count this worker's external waits,
+/// 9 whether the receiver is still live, 10 atomically reserve a send
+/// slot (1 on success), 11 register a send-wait, 12 unregister one,
+/// 13 monotonic now (ms), 14 register a deadline (the handle operand,
+/// absolute ms), 15 unregister one, 17 non-reserving send-room probe.
+fn chan_ctl(machine: &mut Machine, handle: i64, op: i64) -> Result<i64, String> {
+    let slot_index = usize::try_from(handle).ok();
+    match op {
+        0 => {
+            let mut registry = channels_locked();
+            let slot = slot_index
+                .and_then(|slot| registry.get_mut(slot))
+                .and_then(Option::as_mut)
+                .ok_or("vm: status of an invalid channel handle")?;
+            Ok(if !slot.queue.is_empty() {
+                0
+            } else if slot.senders == 0 {
+                2
+            } else {
+                1
+            })
+        }
+        1 | 2 | 3 => {
+            let mut registry = channels_locked();
+            let index =
+                slot_index.ok_or("vm: side change on an invalid channel handle")?;
+            let slot = registry
+                .get_mut(index)
+                .and_then(Option::as_mut)
+                .ok_or("vm: side change on an invalid channel handle")?;
+            match op {
+                1 => slot.senders += 1,
+                2 => slot.senders = slot.senders.saturating_sub(1),
+                _ => slot.receiver_live = false,
+            }
+            let closed = slot.senders == 0;
+            let dead = closed && !slot.receiver_live;
+            if dead {
+                registry[index] = None;
+            }
+            drop(registry);
+            if closed {
+                // The last sender's departure is a wake: parked
+                // receivers must observe the close.
+                channels().1.notify_all();
+            }
+            Ok(0)
+        }
+        4 | 11 => {
+            machine.external.push((handle, op == 11));
+            Ok(0)
+        }
+        5 | 12 => {
+            let is_send = op == 12;
+            if let Some(found) = machine
+                .external
+                .iter()
+                .position(|&entry| entry == (handle, is_send))
+            {
+                machine.external.swap_remove(found);
+            }
+            Ok(0)
+        }
+        6 => {
+            if machine.external.is_empty() && machine.deadlines.is_empty() {
+                return Ok(0);
+            }
+            #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+            {
+                // Check-then-park under the registry lock: a send or
+                // close that raced the caller's status poll already
+                // made a registered channel ready, so sleeping would
+                // lose that wake. Only a confirmed not-ready state may
+                // wait; spurious wakes are fine — the executor re-polls
+                // and re-parks.
+                let guard = channels_locked();
+                let ready = machine.external.iter().any(|&(entry, is_send)| {
+                    match usize::try_from(entry)
+                        .ok()
+                        .and_then(|slot| guard.get(slot))
+                    {
+                        Some(Some(slot)) if is_send => {
+                            !slot.receiver_live
+                                || slot.queue.len() + slot.reserved
+                                    < slot.capacity
+                        }
+                        Some(Some(slot)) => {
+                            !slot.queue.is_empty() || slot.senders == 0
+                        }
+                        _ => true,
+                    }
+                });
+                if !ready {
+                    // A registered deadline bounds the sleep: the wake
+                    // for a timer IS the timeout elapsing.
+                    match machine.deadlines.iter().min() {
+                        Some(&earliest) => {
+                            let wait = earliest.saturating_sub(now_ms());
+                            if wait > 0 {
+                                let _guard = match channels().1.wait_timeout(
+                                    guard,
+                                    std::time::Duration::from_millis(wait as u64),
+                                ) {
+                                    Ok(woken) => woken.0,
+                                    Err(poisoned) => poisoned.into_inner().0,
+                                };
+                            }
+                        }
+                        None => {
+                            let _guard = match channels().1.wait(guard) {
+                                Ok(guard) => guard,
+                                Err(poisoned) => poisoned.into_inner(),
+                            };
+                        }
+                    }
+                }
+                Ok(0)
+            }
+            #[cfg(all(target_arch = "wasm32", not(target_feature = "atomics")))]
+            {
+                // A single-threaded host sleeping IS a blocked thread:
+                // spin out the earliest deadline. With no deadline
+                // nothing can ever wake this park.
+                match machine.deadlines.iter().min() {
+                    Some(&earliest) => {
+                        while now_ms() < earliest {}
+                        Ok(0)
+                    }
+                    None => Err(
+                        "vm: parked with no thread able to wake this task (deadlock)"
+                            .into(),
+                    ),
+                }
+            }
+        }
+        8 => Ok((machine.external.len() + machine.deadlines.len()) as i64),
+        13 => Ok(now_ms()),
+        14 => {
+            machine.deadlines.push(handle);
+            Ok(0)
+        }
+        15 => {
+            if let Some(found) =
+                machine.deadlines.iter().position(|&entry| entry == handle)
+            {
+                machine.deadlines.swap_remove(found);
+            }
+            Ok(0)
+        }
+        9 => {
+            let mut registry = channels_locked();
+            let slot = slot_index
+                .and_then(|slot| registry.get_mut(slot))
+                .and_then(Option::as_mut)
+                .ok_or("vm: liveness of an invalid channel handle")?;
+            Ok(i64::from(slot.receiver_live))
+        }
+        10 => {
+            let mut registry = channels_locked();
+            let slot = slot_index
+                .and_then(|slot| registry.get_mut(slot))
+                .and_then(Option::as_mut)
+                .ok_or("vm: reserve on an invalid channel handle")?;
+            if slot.capacity == 0 {
+                return Ok(1);
+            }
+            if slot.queue.len() + slot.reserved < slot.capacity {
+                slot.reserved += 1;
+                Ok(1)
+            } else {
+                Ok(0)
+            }
+        }
+        17 => {
+            // Non-reserving room probe (ADR 0067): would a parked
+            // sender wake? The resumed send claims its own reservation.
+            let mut registry = channels_locked();
+            let slot = slot_index
+                .and_then(|slot| registry.get_mut(slot))
+                .and_then(Option::as_mut)
+                .ok_or("vm: probe on an invalid channel handle")?;
+            let ready = !slot.receiver_live
+                || slot.capacity == 0
+                || slot.queue.len() + slot.reserved < slot.capacity;
+            Ok(i64::from(ready))
+        }
+        7 => {
+            let mut registry = channels_locked();
+            let fresh = VmChannel {
+                capacity: usize::try_from(handle).unwrap_or(0),
+                reserved: 0,
+                queue: std::collections::VecDeque::new(),
+                senders: 1,
+                receiver_live: true,
+            };
+            if let Some(free) = registry.iter().position(Option::is_none) {
+                registry[free] = Some(fresh);
+                Ok(free as i64)
+            } else {
+                registry.push(Some(fresh));
+                Ok((registry.len() - 1) as i64)
+            }
+        }
+        _ => Err("vm: unknown channel control operation".into()),
+    }
+}
+
+/// One spawned task's state in `Machine::tasks`.
+enum TaskSlot {
+    /// A worker thread is (or may still be) running the task.
+    #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+    Running(thread::JoinHandle<Result<(Transfer, Vec<u8>, Vec<u8>), String>>),
+    /// Awaiting the spawn-site task frame's return (single-threaded
+    /// reference executor; never constructed on thread-capable hosts).
+    #[cfg_attr(any(not(target_arch = "wasm32"), target_feature = "atomics"), allow(dead_code))]
+    Pending,
+    /// The output, ready for its join.
+    Done(Value),
+    /// Already joined.
+    Joined,
+}
+
+/// A machine-independent image of a `Send`-checked value crossing a
+/// worker boundary (ADR 0058): plain owned data — `Send` even though VM
+/// values are not — with buffers deduplicated through a table so storage
+/// shared WITHIN the transferred value stays shared (and balanced) on
+/// the other side.
+#[derive(Debug)]
+struct Transfer {
+    root: Packet,
+    buffers: Vec<BufferImage>,
+}
+
+#[derive(Debug)]
+enum Packet {
+    I64(i64),
+    F64(f64),
+    Bool(bool),
+    Byte(u8),
+    Void,
+    Agg(u32, Vec<Packet>),
+    Existential(Box<Packet>, Vec<Packet>),
+    Closure(u32, Vec<Packet>),
+    /// A pointer into static memory: identical in every machine sharing
+    /// the module.
+    StaticPtr(u32),
+    /// A pointer into buffer `table`, `offset` bytes past its base.
+    Buffer { table: usize, offset: u32 },
+}
+
+/// One buffer's contents, interpreted through the element kind its
+/// typed stores recorded (a `Storage<Element>` buffer is uniform).
+#[derive(Debug)]
+enum BufferImage {
+    /// Scalar elements (or a never-stored buffer): verbatim bytes.
+    Bytes(Vec<u8>),
+    /// `MemKind::Ptr` elements: nonzero words, sparse by word index.
+    Ptrs { len: usize, words: Vec<(usize, Packet)> },
+    /// `MemKind::Boxed` elements: the referenced boxed values, sparse
+    /// by word index.
+    Boxed { len: usize, words: Vec<(usize, Packet)> },
+}
+
+/// Serialization state: buffers already imaged (by allocation id) and
+/// the in-flight set that turns a cyclic buffer graph into a clean
+/// error (Send-checked values are acyclic; bytecode is not trusted).
+#[derive(Default)]
+struct TransferOut {
+    buffers: Vec<BufferImage>,
+    by_id: rustc_hash::FxHashMap<u32, usize>,
+    in_flight: rustc_hash::FxHashSet<u32>,
 }
 
 impl Machine<'_> {
     /// The exit balance for a finished run's result value.
+    /// Image a `Send`-checked value for a worker boundary (ADR 0058).
+    /// Buffer interiors are interpreted through the element kind their
+    /// typed stores recorded; a buffer with conflicting stores, or a
+    /// value kind that cannot leave its machine (cells, `'heap` objects,
+    /// continuations), refuses cleanly — the type system prevents these,
+    /// and untrusted bytecode gets an error, never a wrong transfer.
+    fn serialize_transfer(&self, value: &Value) -> Result<Transfer, String> {
+        let mut out = TransferOut::default();
+        let root = self.serialize_value(value, &mut out)?;
+        Ok(Transfer {
+            root,
+            buffers: out.buffers,
+        })
+    }
+
+    fn serialize_value(&self, value: &Value, out: &mut TransferOut) -> Result<Packet, String> {
+        Ok(match value {
+            Value::I64(v) => Packet::I64(*v),
+            Value::F64(v) => Packet::F64(*v),
+            Value::Bool(v) => Packet::Bool(*v),
+            Value::Byte(v) => Packet::Byte(*v),
+            Value::Void => Packet::Void,
+            Value::Agg(layout, items) => {
+                let mut packed = Vec::with_capacity(items.len());
+                for item in items.iter() {
+                    packed.push(self.serialize_value(item, out)?);
+                }
+                Packet::Agg(*layout, packed)
+            }
+            Value::Existential(payload, witnesses) => {
+                let payload = self.serialize_value(payload, out)?;
+                let mut packed = Vec::with_capacity(witnesses.len());
+                for witness in witnesses.iter() {
+                    packed.push(self.serialize_value(witness, out)?);
+                }
+                Packet::Existential(Box::new(payload), packed)
+            }
+            Value::Closure(chunk, env) => {
+                let mut packed = Vec::with_capacity(env.len());
+                for captured in env.iter() {
+                    packed.push(self.serialize_value(captured, out)?);
+                }
+                Packet::Closure(*chunk, packed)
+            }
+            Value::Ptr(pointer) => {
+                if pointer.is_static() {
+                    return Ok(Packet::StaticPtr(pointer.address()));
+                }
+                let record = self
+                    .allocations
+                    .live_record(*pointer)
+                    .ok_or("vm: a dangling buffer reached a task boundary")?;
+                let id = record_id(*pointer)?;
+                let offset = pointer.address() - record.start;
+                if let Some(&table) = out.by_id.get(&id) {
+                    return Ok(Packet::Buffer {
+                        table,
+                        offset,
+                    });
+                }
+                if !out.in_flight.insert(id) {
+                    return Err("vm: a cyclic buffer graph cannot cross a task boundary".into());
+                }
+                let record = record.clone();
+                let image = self.serialize_buffer(&record, out)?;
+                out.in_flight.remove(&id);
+                let table = out.buffers.len();
+                out.buffers.push(image);
+                out.by_id.insert(id, table);
+                Packet::Buffer { table, offset }
+            }
+            Value::Cell(_) | Value::Object(_) | Value::Cont(..) => {
+                return Err(
+                    "vm: a value of this kind cannot cross a task boundary".into(),
+                );
+            }
+        })
+    }
+
+    fn serialize_buffer(
+        &self,
+        record: &crate::memory::AllocationRecord,
+        out: &mut TransferOut,
+    ) -> Result<BufferImage, String> {
+        if record.mixed {
+            return Err(
+                "vm: a buffer with mixed element kinds cannot cross a task boundary".into(),
+            );
+        }
+        let start = record.start as usize;
+        let bytes = self
+            .mem
+            .get(start..start + record.len)
+            .ok_or("vm: buffer out of bounds at a task boundary")?;
+        match record.stored {
+            None
+            | Some(MemKind::Byte)
+            | Some(MemKind::I64)
+            | Some(MemKind::F64)
+            | Some(MemKind::Bool) => Ok(BufferImage::Bytes(bytes.to_vec())),
+            Some(MemKind::Ptr) => {
+                let mut words = Vec::new();
+                for (index, chunk) in bytes.chunks_exact(8).enumerate() {
+                    let word = u64::from_le_bytes(chunk.try_into().expect("8-byte chunk"));
+                    if word == 0 {
+                        continue;
+                    }
+                    let value = Value::Ptr(Pointer::decode(word));
+                    words.push((index, self.serialize_value(&value, out)?));
+                }
+                Ok(BufferImage::Ptrs {
+                    len: record.len,
+                    words,
+                })
+            }
+            Some(MemKind::Boxed) => {
+                let mut words = Vec::new();
+                for (index, chunk) in bytes.chunks_exact(8).enumerate() {
+                    let word = u64::from_le_bytes(chunk.try_into().expect("8-byte chunk")) as usize;
+                    if word == 0 {
+                        continue;
+                    }
+                    let boxed = self
+                        .boxed
+                        .get(word)
+                        .ok_or("vm: a buffer references a missing boxed value")?;
+                    words.push((index, self.serialize_value(boxed, out)?));
+                }
+                Ok(BufferImage::Boxed {
+                    len: record.len,
+                    words,
+                })
+            }
+        }
+    }
+
+    /// Release the parent's copy of a transferred value: the worker owns
+    /// the image now, so every buffer reference the value tree held is
+    /// freed here — the walk mirrors the serializer, and when a buffer's
+    /// last owner goes, its interior references release too (the same
+    /// element-wise release the program's drop glue would have done).
+    fn release_transferred(&mut self, value: &Value) -> Result<(), String> {
+        match value {
+            Value::I64(_) | Value::F64(_) | Value::Bool(_) | Value::Byte(_) | Value::Void => Ok(()),
+            Value::Agg(_, items) => {
+                for item in items.iter() {
+                    self.release_transferred(item)?;
+                }
+                Ok(())
+            }
+            Value::Existential(payload, witnesses) => {
+                self.release_transferred(payload)?;
+                for witness in witnesses.iter() {
+                    self.release_transferred(witness)?;
+                }
+                Ok(())
+            }
+            Value::Closure(_, env) => {
+                for captured in env.iter() {
+                    self.release_transferred(captured)?;
+                }
+                Ok(())
+            }
+            Value::Ptr(pointer) => {
+                if pointer.is_static() {
+                    return Ok(());
+                }
+                let Some(record) = self.allocations.live_record(*pointer) else {
+                    return Err("vm: a dangling buffer reached a task boundary".into());
+                };
+                // Collect the interior references BEFORE the free: the
+                // span may be recycled the moment the record dies.
+                let mut interior: Vec<Value> = Vec::new();
+                if record.rc == 1 && !record.mixed {
+                    let start = record.start as usize;
+                    let len = record.len;
+                    match record.stored {
+                        Some(MemKind::Ptr) => {
+                            for chunk in self.mem[start..start + len].chunks_exact(8) {
+                                let word =
+                                    u64::from_le_bytes(chunk.try_into().expect("8-byte chunk"));
+                                if word != 0 {
+                                    interior.push(Value::Ptr(Pointer::decode(word)));
+                                }
+                            }
+                        }
+                        Some(MemKind::Boxed) => {
+                            for chunk in self.mem[start..start + len].chunks_exact(8) {
+                                let word = u64::from_le_bytes(
+                                    chunk.try_into().expect("8-byte chunk"),
+                                ) as usize;
+                                if word != 0
+                                    && let Some(boxed) = self.boxed.get(word)
+                                {
+                                    interior.push(boxed.clone());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                self.allocations
+                    .free(self.static_len, *pointer)
+                    .map_err(|error| format!("vm: releasing a transferred buffer: {error:?}"))?;
+                for value in interior {
+                    self.release_transferred(&value)?;
+                }
+                Ok(())
+            }
+            Value::Cell(_) | Value::Object(_) | Value::Cont(..) => {
+                Err("vm: a value of this kind cannot cross a task boundary".into())
+            }
+        }
+    }
+
+    /// Rebuild a transferred value in THIS machine: buffers materialize
+    /// once and later references retain, so sharing and balance inside
+    /// the transferred tree survive the crossing.
+    fn deserialize_transfer(&mut self, transfer: &Transfer) -> Result<Value, String> {
+        let mut bases: Vec<Option<Pointer>> = vec![None; transfer.buffers.len()];
+        self.deserialize_packet(&transfer.root, &transfer.buffers, &mut bases)
+    }
+
+    fn deserialize_packet(
+        &mut self,
+        packet: &Packet,
+        buffers: &[BufferImage],
+        bases: &mut Vec<Option<Pointer>>,
+    ) -> Result<Value, String> {
+        Ok(match packet {
+            Packet::I64(v) => Value::I64(*v),
+            Packet::F64(v) => Value::F64(*v),
+            Packet::Bool(v) => Value::Bool(*v),
+            Packet::Byte(v) => Value::Byte(*v),
+            Packet::Void => Value::Void,
+            Packet::Agg(layout, items) => {
+                let mut values = Vec::with_capacity(items.len());
+                for item in items {
+                    values.push(self.deserialize_packet(item, buffers, bases)?);
+                }
+                Value::Agg(*layout, Rc::new(values))
+            }
+            Packet::Existential(payload, witnesses) => {
+                let payload = self.deserialize_packet(payload, buffers, bases)?;
+                let mut values = Vec::with_capacity(witnesses.len());
+                for witness in witnesses {
+                    values.push(self.deserialize_packet(witness, buffers, bases)?);
+                }
+                Value::Existential(Rc::new(payload), Rc::new(values))
+            }
+            Packet::Closure(chunk, env) => {
+                let mut values = Vec::with_capacity(env.len());
+                for captured in env {
+                    values.push(self.deserialize_packet(captured, buffers, bases)?);
+                }
+                Value::Closure(*chunk, Rc::new(values))
+            }
+            Packet::StaticPtr(address) => Value::Ptr(Pointer::static_at(*address)),
+            Packet::Buffer { table, offset } => {
+                let base = match bases.get(*table).copied().flatten() {
+                    Some(base) => {
+                        // Every reference past the first is another owner.
+                        self.allocations
+                            .retain(self.static_len, base)
+                            .map_err(|error| format!("vm: retaining a transferred buffer: {error:?}"))?;
+                        base
+                    }
+                    None => self.materialize_buffer(*table, buffers, bases)?,
+                };
+                let pointer = base
+                    .checked_add(*offset as usize)
+                    .ok_or("vm: transferred pointer offset overflow")?;
+                Value::Ptr(pointer)
+            }
+        })
+    }
+
+    fn materialize_buffer(
+        &mut self,
+        table: usize,
+        buffers: &[BufferImage],
+        bases: &mut Vec<Option<Pointer>>,
+    ) -> Result<Pointer, String> {
+        let image = buffers
+            .get(table)
+            .ok_or("vm: transferred buffer index out of range")?;
+        let len = match image {
+            BufferImage::Bytes(bytes) => bytes.len(),
+            BufferImage::Ptrs { len, .. } | BufferImage::Boxed { len, .. } => *len,
+        };
+        let base = self
+            .allocations
+            .allocate(&mut self.mem, len)
+            .map_err(|error| format!("vm: allocating a transferred buffer: {error:?}"))?;
+        bases[table] = Some(base);
+        let start = base.address() as usize;
+        // A recycled span carries stale bytes; the image is authoritative.
+        self.mem[start..start + len].fill(0);
+        match image {
+            BufferImage::Bytes(bytes) => {
+                self.mem[start..start + len].copy_from_slice(bytes);
+            }
+            BufferImage::Ptrs { words, .. } => {
+                for (index, packet) in words {
+                    let value = self.deserialize_packet(packet, buffers, bases)?;
+                    let Value::Ptr(pointer) = value else {
+                        return Err("vm: a pointer buffer image holds a non-pointer".into());
+                    };
+                    let slot = start + index * 8;
+                    self.mem[slot..slot + 8].copy_from_slice(&pointer.encode().to_le_bytes());
+                }
+                if let Some(record) = self.allocations.transfer_record_mut(base) {
+                    record.stored = Some(MemKind::Ptr);
+                }
+            }
+            BufferImage::Boxed { words, .. } => {
+                for (index, packet) in words {
+                    let value = self.deserialize_packet(packet, buffers, bases)?;
+                    self.boxed.push(value);
+                    let handle = (self.boxed.len() - 1) as u64;
+                    let slot = start + index * 8;
+                    self.mem[slot..slot + 8].copy_from_slice(&handle.to_le_bytes());
+                }
+                if let Some(record) = self.allocations.transfer_record_mut(base) {
+                    record.stored = Some(MemKind::Boxed);
+                }
+            }
+        }
+        Ok(base)
+    }
+
     fn balance(&self, value: &Value) -> RunBalance {
         let (result_allocations, result_objects, result_exact) = self.result_footprint(value);
         RunBalance {
@@ -1417,11 +2631,11 @@ impl Machine<'_> {
     /// (allocation records, `'heap` objects, exactness) the program's
     /// result value legitimately holds at exit: interior pointers resolve
     /// to their owning records; a held object handle keeps its whole
-    /// region live. Raw buffer CONTENTS are opaque to this walk — the
-    /// bytes carry no type information, so the walk can't follow whatever
-    /// pointers or handles the elements hold. Reaching a buffer big
-    /// enough to hold a word therefore flips exactness off: the counts
-    /// become a lower bound (see [`RunBalance::result_exact`]).
+    /// region live. Buffer interiors are read through the element kind
+    /// their typed stores recorded (ADR 0058): scalar bytes own nothing,
+    /// pointer words and boxed handles recurse. Only a buffer whose
+    /// stores conflicted stays opaque and flips exactness off (see
+    /// [`RunBalance::result_exact`]).
     fn result_footprint(&self, value: &Value) -> (usize, usize, bool) {
         use std::collections::BTreeSet;
         let mut bases: BTreeSet<u32> = BTreeSet::new();
@@ -1432,11 +2646,52 @@ impl Machine<'_> {
         while let Some(value) = stack.pop() {
             match value {
                 Value::Ptr(pointer) => {
-                    if let Some(record) = self.allocations.live_record(pointer) {
-                        bases.insert(record.start);
-                        // Pointers and boxed handles are 8-byte words: a
-                        // shorter buffer's contents can't own anything.
-                        exact &= record.len < 8;
+                    if let Some(record) = self.allocations.live_record(pointer)
+                        && bases.insert(record.start)
+                    {
+                        // The element kind its typed stores recorded (ADR
+                        // 0058) makes the interior walkable: scalar bytes
+                        // own nothing further, pointer words and boxed
+                        // handles recurse. Only a buffer with conflicting
+                        // stores stays opaque.
+                        if record.mixed {
+                            exact = false;
+                            continue;
+                        }
+                        let start = record.start as usize;
+                        let Some(bytes) = self.mem.get(start..start + record.len) else {
+                            exact = false;
+                            continue;
+                        };
+                        match record.stored {
+                            None
+                            | Some(MemKind::Byte)
+                            | Some(MemKind::I64)
+                            | Some(MemKind::F64)
+                            | Some(MemKind::Bool) => {}
+                            Some(MemKind::Ptr) => {
+                                for chunk in bytes.chunks_exact(8) {
+                                    let word = u64::from_le_bytes(
+                                        chunk.try_into().expect("8-byte chunk"),
+                                    );
+                                    if word != 0 {
+                                        stack.push(Value::Ptr(Pointer::decode(word)));
+                                    }
+                                }
+                            }
+                            Some(MemKind::Boxed) => {
+                                for chunk in bytes.chunks_exact(8) {
+                                    let word = u64::from_le_bytes(
+                                        chunk.try_into().expect("8-byte chunk"),
+                                    ) as usize;
+                                    if word != 0
+                                        && let Some(boxed) = self.boxed.get(word)
+                                    {
+                                        stack.push(boxed.clone());
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 Value::Agg(_, items) => {
@@ -2403,6 +3658,9 @@ fn exec_local(
                     return Err(format!("vm: store kind {kind:?} got {value:?}"));
                 }
             }
+            // The transfer copier interprets buffers through the element
+            // kind their typed stores wrote (ADR 0058).
+            machine.allocations.note_store(pointer, kind);
         }
         Insn::Copy { from, to, len } => {
             let (Value::Ptr(from), Value::Ptr(to), Value::I64(len)) = (
@@ -2417,6 +3675,10 @@ fn exec_local(
             }
             machine.check_access(*from, *len as usize, "copy")?;
             machine.check_access(*to, *len as usize, "copy")?;
+            // A raw byte copy moves typed content without a typed store:
+            // carry the source's observed element kind to the target so
+            // the transfer copier keeps seeing through it (ADR 0058).
+            machine.allocations.propagate_kind(*from, *to);
             let (from, to, len) = (
                 from.address() as usize,
                 to.address() as usize,
@@ -2434,6 +3696,98 @@ fn exec_local(
                 MemKind::I64 | MemKind::F64 | MemKind::Bool | MemKind::Ptr | MemKind::Boxed => 8,
             };
             machine.swap_memory(*a, *b, len)?;
+        }
+        Insn::TaskJoin { dest, handle } => {
+            let Some(Value::I64(handle)) = frame.regs.get(handle as usize).cloned() else {
+                return Err("vm: task join handle must be an Int".into());
+            };
+            let slot = usize::try_from(handle)
+                .ok()
+                .filter(|slot| *slot < machine.tasks.len())
+                .ok_or("vm: task join on an invalid or already-joined handle")?;
+            let taken = std::mem::replace(&mut machine.tasks[slot], TaskSlot::Joined);
+            let value = match taken {
+                #[cfg(any(not(target_arch = "wasm32"), target_feature = "atomics"))]
+                TaskSlot::Running(worker) => {
+                    // The join is the synchronization edge; the worker's
+                    // buffered output replays into this machine's sink in
+                    // join order.
+                    let (transfer, out, err) = worker
+                        .join()
+                        .map_err(|_| "vm: a task worker panicked")??;
+                    if !out.is_empty() {
+                        machine.io.write(1, &out);
+                    }
+                    if !err.is_empty() {
+                        machine.io.write(2, &err);
+                    }
+                    machine.deserialize_transfer(&transfer)?
+                }
+                TaskSlot::Done(value) => value,
+                TaskSlot::Pending | TaskSlot::Joined => {
+                    return Err("vm: task join on an invalid or already-joined handle".into());
+                }
+            };
+            frame.regs[dest as usize] = value;
+        }
+        Insn::TaskWidth { dest } => {
+            let width = std::thread::available_parallelism()
+                .map(|n| n.get() as i64)
+                .unwrap_or(1);
+            frame.regs[dest as usize] = Value::I64(width);
+        }
+        Insn::ChanSend { handle, value } => {
+            let Some(Value::I64(handle)) = frame.regs.get(handle as usize).cloned() else {
+                return Err("vm: channel handle must be an Int".into());
+            };
+            let Some(value) = frame.regs.get(value as usize).cloned() else {
+                return Err("vm: channel value register out of range".into());
+            };
+            // The value crosses workers as a transfer packet; this
+            // machine's copy releases, exactly as at a spawn boundary.
+            let packet = machine.serialize_transfer(&value)?;
+            machine.release_transferred(&value)?;
+            let mut registry = channels_locked();
+            let slot = usize::try_from(handle)
+                .ok()
+                .and_then(|slot| registry.get_mut(slot))
+                .and_then(Option::as_mut)
+                .ok_or("vm: send on an invalid channel handle")?;
+            slot.queue.push_back(packet);
+            // A bounded send consumes the reservation its poll claimed.
+            slot.reserved = slot.reserved.saturating_sub(1);
+            drop(registry);
+            channels().1.notify_all();
+        }
+        Insn::ChanTake { dest, handle } => {
+            let Some(Value::I64(handle)) = frame.regs.get(handle as usize).cloned() else {
+                return Err("vm: channel handle must be an Int".into());
+            };
+            let packet = {
+                let mut registry = channels_locked();
+                let slot = usize::try_from(handle)
+                    .ok()
+                    .and_then(|slot| registry.get_mut(slot))
+                    .and_then(Option::as_mut)
+                    .ok_or("vm: take on an invalid channel handle")?;
+                slot.queue
+                    .pop_front()
+                    .ok_or("vm: take on an empty channel")?
+            };
+            // Room opened: parked bounded senders must observe it.
+            channels().1.notify_all();
+            let value = machine.deserialize_transfer(&packet)?;
+            frame.regs[dest as usize] = value;
+        }
+        Insn::ChanCtl { dest, handle, op } => {
+            let Some(Value::I64(handle)) = frame.regs.get(handle as usize).cloned() else {
+                return Err("vm: channel handle must be an Int".into());
+            };
+            let Some(Value::I64(op)) = frame.regs.get(op as usize).cloned() else {
+                return Err("vm: channel op must be an Int".into());
+            };
+            let result = chan_ctl(machine, handle, op)?;
+            frame.regs[dest as usize] = Value::I64(result);
         }
         Insn::Io { dest, op, a, b, c } => {
             let result = run_io(machine, frame, op, a, b, c)?;
@@ -2475,6 +3829,7 @@ fn exec_local(
         }
         Insn::Call { .. }
         | Insn::CallIndirect { .. }
+        | Insn::TaskSpawn { .. }
         | Insn::Ret { .. }
         | Insn::Trap { .. }
         | Insn::MakeCont { .. }
@@ -2483,7 +3838,10 @@ fn exec_local(
         | Insn::PushHandler { .. }
         | Insn::FindHandler { .. }
         | Insn::GetFloor { .. }
-        | Insn::SetFloor { .. } => {
+        | Insn::SetFloor { .. }
+        | Insn::Suspend { .. }
+        | Insn::Resume { .. }
+        | Insn::Cancel { .. } => {
             return Err("vm: non-local instruction in exec_local".into());
         }
     }
@@ -2552,6 +3910,20 @@ fn vm_object_error(error: ObjectError) -> String {
 /// two-step version (collect the arguments, allocate a zeroed frame,
 /// move them in) was two allocations and a drop on every call — the
 /// interpreter's hottest edge.
+/// Unwrap the Talk-level `Resumption` value (a linear one-field core
+/// struct) to its worker-local slot (ADR 0064).
+fn resumption_slot(value: &Value) -> Result<usize, String> {
+    let slot = match value {
+        Value::Agg(_, fields) => match fields.first() {
+            Some(Value::I64(slot)) => *slot,
+            _ => return Err("vm: malformed resumption value".into()),
+        },
+        Value::I64(slot) => *slot,
+        _ => return Err("vm: malformed resumption value".into()),
+    };
+    usize::try_from(slot).map_err(|_| "vm: malformed resumption value".into())
+}
+
 fn call_regs(
     module: &Module,
     frame: &Frame<'_>,

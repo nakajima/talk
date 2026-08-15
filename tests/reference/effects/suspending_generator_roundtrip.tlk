@@ -1,0 +1,24 @@
+// ADR 0064: a suspending perform captures its extent; the clause binds
+// the resumption, and resuming delivers a value to the perform site and
+// runs the extent to its next suspension or completion — the extent's
+// answer arrives as `resume`'s return, through every generation.
+effect 'emit(value: Int) -> Int 'suspending
+
+func count_up(limit: Int) -> Int {
+	let i = 1
+	loop i <= limit {
+		let ack = 'emit(value: i)
+		i = i + ack
+	}
+	limit * 100
+}
+
+func collect() -> Int {
+	#handle 'emit { value, k in
+		print(value)
+		resume(k: k, value: 1)
+	}
+	count_up(limit: 3)
+}
+
+print(collect())

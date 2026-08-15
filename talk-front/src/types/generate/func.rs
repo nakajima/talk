@@ -295,7 +295,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     level: self.level,
                     givens,
                     wanteds,
-                    local_params: vec![],
+                    gadt: GadtLocals::default(),
                     touchable_level: None,
                 })));
             }
@@ -337,7 +337,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         let eff = EffectRow::open(self.store.fresh_eff(self.level, node));
 
         // A nested function cannot resume an enclosing handler.
-        let inner = ctx.enter_function(ret.clone(), eff.clone());
+        let borrow_params = params.iter().any(|param| matches!(param, Ty::Borrow(..)));
+        let inner = ctx.enter_function(ret.clone(), eff.clone(), borrow_params);
         let body_ty = if ret_annotation.is_some() {
             self.check_block_value(body, &ret, &inner);
             ret.clone()
@@ -433,7 +434,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
         // widening must not make closure creation require those effects;
         // the expected row is only an upper bound supplied to callers.
         let inferred_eff = EffectRow::open(self.store.fresh_eff(self.level, func.id));
-        let inner = ctx.enter_function(ret.clone(), inferred_eff.clone());
+        let borrow_params = params.iter().any(|param| matches!(param, Ty::Borrow(..)));
+        let inner = ctx.enter_function(ret.clone(), inferred_eff.clone(), borrow_params);
         self.check_block_value_with_reason(&func.body, &ret, result_reason, &inner);
         self.wanteds.push(Constraint::EffectSubset {
             inferred: inferred_eff,

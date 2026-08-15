@@ -15,6 +15,16 @@ impl Pointer {
         }
     }
 
+    /// Whether this pointer targets static memory (provenance zero).
+    pub const fn is_static(self) -> bool {
+        self.provenance == 0
+    }
+
+    /// The allocation id for transfer bookkeeping (ADR 0058).
+    pub(crate) const fn transfer_id(self) -> Option<u32> {
+        self.allocation_id()
+    }
+
     pub const fn address(self) -> u32 {
         self.address
     }
@@ -69,6 +79,14 @@ pub struct AllocationRecord {
     /// Reference count: shared buffers (copy-on-write clones) retain; every
     /// free releases; the record dies at zero.
     pub rc: u32,
+    /// The element kind typed stores have written (ADR 0058): a
+    /// `Storage<Element>` buffer is uniform, so one observation tells the
+    /// worker-transfer copier how to interpret the interior — raw bytes,
+    /// pointer words, or boxed-arena handles. `None` until the first
+    /// store; `mixed` when conflicting kinds were seen (such a buffer
+    /// cannot cross workers).
+    pub stored: Option<crate::MemKind>,
+    pub mixed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -194,6 +212,8 @@ impl Allocations {
                 start: address,
                 len: count,
                 rc: 1,
+                stored: None,
+                mixed: false,
             },
         );
         Ok(Pointer::allocated(address, id))
@@ -226,6 +246,50 @@ impl Allocations {
     }
 
     /// Add one reference (a copy-on-write clone). Static data is unmanaged.
+    /// Record the element kind a typed store wrote (ADR 0058): the
+    /// transfer copier reads it to interpret buffer interiors. Static
+    /// memory and dead records are ignored; a conflicting kind marks the
+    /// buffer mixed, which refuses worker transfer.
+    pub fn note_store(&mut self, pointer: Pointer, kind: crate::MemKind) {
+        let Some(id) = pointer.allocation_id() else {
+            return;
+        };
+        if let Some(record) = self.records.get_mut(&id) {
+            match record.stored {
+                None => record.stored = Some(kind),
+                Some(existing) if existing == kind => {}
+                Some(_) => record.mixed = true,
+            }
+        }
+    }
+
+    /// Propagate one buffer's observed element kind onto another (a raw
+    /// byte copy moves content without a typed store).
+    pub fn propagate_kind(&mut self, from: Pointer, to: Pointer) {
+        let (Some(from_id), Some(to_id)) = (from.allocation_id(), to.allocation_id()) else {
+            return;
+        };
+        let observed = self
+            .records
+            .get(&from_id)
+            .map(|record| (record.stored, record.mixed));
+        if let Some((stored, mixed)) = observed
+            && let Some(record) = self.records.get_mut(&to_id)
+        {
+            match (record.stored, stored) {
+                (None, Some(kind)) => record.stored = Some(kind),
+                (Some(existing), Some(kind)) if existing != kind => record.mixed = true,
+                _ => {}
+            }
+            record.mixed |= mixed;
+        }
+    }
+
+    /// The live record behind a pointer, mutably (transfer bookkeeping).
+    pub(crate) fn transfer_record_mut(&mut self, pointer: Pointer) -> Option<&mut AllocationRecord> {
+        self.records.get_mut(&pointer.allocation_id()?)
+    }
+
     pub fn retain(&mut self, static_len: u32, pointer: Pointer) -> Result<(), MemoryError> {
         let Some(id) = pointer.allocation_id() else {
             return if pointer.address < static_len {

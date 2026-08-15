@@ -29,6 +29,10 @@ impl Reachability {
                     | Inst::CallIndirect {
                         unwind: Some(target),
                         ..
+                    }
+                    | Inst::Suspend {
+                        unwind: Some(target),
+                        ..
                     } if !reachable[*target] => pending.push(*target),
                     _ => {}
                 }
@@ -96,6 +100,10 @@ impl Reachability {
                         ..
                     }
                     | Inst::CallIndirect {
+                        unwind: Some(target),
+                        ..
+                    }
+                    | Inst::Suspend {
                         unwind: Some(target),
                         ..
                     } => *target = remap[*target],

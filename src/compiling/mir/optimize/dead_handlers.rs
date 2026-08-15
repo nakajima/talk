@@ -21,6 +21,9 @@ pub(super) fn run(program: &mut Program) -> PassResult {
         .flat_map(|block| &block.insts)
         .filter_map(|inst| match inst {
             Inst::FindHandler { effect, .. } => Some(*effect),
+            // A suspending perform (ADR 0064) routes to its handler
+            // inside the VM, without a FindHandler — it is a use.
+            Inst::Suspend { effect, .. } => Some(*effect),
             _ => None,
         })
         .collect();
@@ -67,8 +70,15 @@ pub(super) fn run(program: &mut Program) -> PassResult {
                         !requested.contains(effect)
                             && *clause == *pushed_clause
                             && *cont == *pushed_cont
-                            && env.as_slice() == [Operand::Local(*cont)]
-                            && uses.get(cont) == Some(&2)
+                            // A plain clause's env is exactly the
+                            // delimiter; a suspending clause (ADR 0064)
+                            // has no delimiter slot, so a capture-free
+                            // one has an empty env. Either shape owns
+                            // nothing, so the triple erases cleanly.
+                            && (env.as_slice() == [Operand::Local(*cont)]
+                                || env.is_empty())
+                            && (uses.get(cont) == Some(&2)
+                                || (env.is_empty() && uses.get(cont) == Some(&1)))
                             && uses.get(clause) == Some(&1)
                     }
                     _ => false,

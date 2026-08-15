@@ -2,7 +2,7 @@
 //! optimization, register allocation, and frame shaping — everything up
 //! to the public finalized module (ADR 0047). Target adapters live in
 //! their own crates: `talk-bytecode` lowers the module to VM bytecode,
-//! and the `talk-c` and `talk-llvm` emitters consume it directly.
+//! and the `talk-c` emitter consumes it directly.
 
 mod optimize;
 

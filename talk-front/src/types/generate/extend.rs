@@ -206,7 +206,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         level: self.level,
                         givens,
                         wanteds: vec![wanted],
-                        local_params: vec![],
+                        gadt: GadtLocals::default(),
                         touchable_level: None,
                     })));
                 }
@@ -227,7 +227,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     level: self.level,
                     givens: work.context.clone(),
                     wanteds,
-                    local_params: vec![],
+                    gadt: GadtLocals::default(),
                     touchable_level: None,
                 })));
             }
@@ -371,7 +371,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                     level: self.level,
                     givens,
                     wanteds,
-                    local_params: vec![],
+                    gadt: GadtLocals::default(),
                     touchable_level: None,
                 })));
             }

@@ -138,6 +138,8 @@ The arm result equality is part of `arm_wanteds`, so it is checked under the sam
 
 This behavior applies to every pattern site, not just `match`, because TalkTalk desugars `if let` and `let ... else` through the same pattern machinery.
 
+A case-local parameter determined by the constructor result can also carry a residual associated-type equality out of the arm. If matching establishes `T == U`, an arm obligation `U.Ret == U` rebases to `T.Ret == T` and may qualify the enclosing function's scheme. The solver must perform this rebasing before existential-escape checking; parameters absent from the constructor result remain hidden and cannot be floated this way.
+
 ### Or-patterns
 
 V1 rejects or-pattern alternatives with different canonical GADT refinements:

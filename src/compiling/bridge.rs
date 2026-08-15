@@ -1648,6 +1648,42 @@ impl ResultAdapter<'_, '_> {
                 a: next("a")?,
                 b: next("b")?,
             },
+            "task_spawn" => InlineIRInstructionKind::TaskSpawn {
+                dest: require_dest?,
+                arg: next("arg")?,
+                worker: next("worker")?,
+            },
+            "task_join" => InlineIRInstructionKind::TaskJoin {
+                dest: require_dest?,
+                ty: require_ty?,
+                handle: next("handle")?,
+            },
+            "task_width" => InlineIRInstructionKind::TaskWidth {
+                dest: require_dest?,
+            },
+            "chan_send" => InlineIRInstructionKind::ChanSend {
+                handle: next("handle")?,
+                value: next("value")?,
+            },
+            "chan_take" => InlineIRInstructionKind::ChanTake {
+                dest: require_dest?,
+                ty: require_ty?,
+                handle: next("handle")?,
+            },
+            "chan_ctl" => InlineIRInstructionKind::ChanCtl {
+                dest: require_dest?,
+                handle: next("handle")?,
+                op: next("op")?,
+            },
+            "resume" => InlineIRInstructionKind::Resume {
+                dest: require_dest?,
+                ty: require_ty?,
+                cont: next("cont")?,
+                value: next("value")?,
+            },
+            "cancel" => InlineIRInstructionKind::Cancel {
+                cont: next("cont")?,
+            },
             other => return Err(format!("unknown #_ir instruction `{other}`")),
         };
         Ok(InlineIRInstruction {
@@ -2465,6 +2501,9 @@ impl ResultAdapter<'_, '_> {
                     params
                 },
                 ret: self.type_annotation(&p[6])?,
+                // The pre-ADR-0064 frontend artifact emits 7 payloads;
+                // tolerate it during the bootstrap transition.
+                suspending: if p.len() > 7 { boolean(&p[7])? } else { false },
             },
             "associated_decl" => DeclKind::Associated {
                 generic: self.generic_decl(&p[0])?,

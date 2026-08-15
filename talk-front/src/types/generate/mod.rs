@@ -70,7 +70,7 @@ use crate::types::catalog::{
     Conformance, ConformanceId, Enum, MemberOwner, ProtocolApplication, ProtocolInfo, Requirement,
     StructInfo, TypeAliasInfo, TypeCatalog, Variant,
 };
-use crate::types::constraint::{Constraint, CtOrigin, CtReason, Implication};
+use crate::types::constraint::{Constraint, CtOrigin, CtReason, GadtLocals, Implication};
 use crate::types::error::TypeError;
 use crate::types::output::{
     CheckedIntegerLiteral, ExistentialPack, ForPlan, MemberResolution, PropagationPlan, TypeOutput,
@@ -203,9 +203,13 @@ fn finish_scheme(
     catalog: &mut TypeCatalog,
     diagnostics: &mut DiagnosticSink,
 ) {
-    let mut predicates = declared.predicates.clone();
-    predicates.extend(std::mem::take(&mut scheme.predicates));
-    scheme.predicates = predicates;
+    let inferred = std::mem::take(&mut scheme.predicates);
+    scheme.predicates = declared.predicates.clone();
+    for predicate in inferred {
+        if !scheme.predicates.contains(&predicate) {
+            scheme.predicates.push(predicate);
+        }
+    }
     for predicate in &scheme.predicates {
         if let Predicate::Conforms {
             ty: Ty::Param(param),
@@ -408,7 +412,7 @@ impl StmtValue {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct PatternRefinement {
     givens: Vec<Predicate>,
-    local_params: Vec<Symbol>,
+    gadt: GadtLocals,
 }
 
 /// The bidirectional checking context Γ (Dunfield & Krishnaswami, *Bidirectional
@@ -420,6 +424,14 @@ struct Ctx {
     ret: Ty,
     eff: EffectRow,
     handler_ret: Option<Ty>,
+    /// Inside a suspending handler clause (ADR 0064): `'continue` is
+    /// replaced by the bound resumption, and gets a dedicated error.
+    suspending_clause: bool,
+    /// The enclosing function takes borrowed parameters — references
+    /// that would dangle if one of its extents were suspended and
+    /// resumed after the lender unwound. A suspending `#handle` is
+    /// rejected here (ADR 0064 phase 1's conservative rule).
+    borrow_params: bool,
     binder: Option<Symbol>,
     has_return_boundary: bool,
     in_loop: bool,
@@ -431,6 +443,8 @@ impl Ctx {
             ret: Ty::Error,
             eff: EffectRow::pure(),
             handler_ret: None,
+            suspending_clause: false,
+            borrow_params: false,
             binder: None,
             has_return_boundary: false,
             in_loop: false,
@@ -445,11 +459,13 @@ impl Ctx {
         }
     }
 
-    fn enter_function(&self, ret: Ty, eff: EffectRow) -> Self {
+    fn enter_function(&self, ret: Ty, eff: EffectRow, borrow_params: bool) -> Self {
         Ctx {
             ret,
             eff,
             handler_ret: None,
+            suspending_clause: false,
+            borrow_params,
             binder: self.binder,
             has_return_boundary: true,
             in_loop: false,
@@ -473,6 +489,14 @@ impl Ctx {
     fn with_handler_ret(&self, handler_ret: Ty) -> Self {
         Ctx {
             handler_ret: Some(handler_ret),
+            ..self.clone()
+        }
+    }
+
+    fn enter_suspending_clause(&self) -> Self {
+        Ctx {
+            handler_ret: None,
+            suspending_clause: true,
             ..self.clone()
         }
     }

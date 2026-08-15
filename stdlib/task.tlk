@@ -1,0 +1,291 @@
+// Direct-style concurrency (ADR 0067): waiting is a suspending effect,
+// not a poll protocol. Every operation here is straight-line code that
+// checks its source, acts when ready, and performs a park effect when
+// not — under core's blocking fallbacks (Host.tlk) a park blocks this
+// worker; under a cooperative scheduler (stdlib `coop`) it suspends the
+// task. The channel endpoint types keep their ADR 0060 lifecycle
+// guards; the runtime layers (queues, reservation, registration,
+// park/wake, deadlines — ADRs 0059/0062/0063) are unchanged.
+
+// Install the full set of root fallbacks — the same rows core's
+// `_with_host` gives the program entry — and run `body` under them
+// with `arg` passed through. The worker convention twice over: a
+// spawned worker's closure must carry a pure row to cross the
+// boundary, and a closure cannot capture owned values, so state
+// arrives as an argument.
+pub func run_blocking<A, T>(consume arg: A, consume body: (consume A) '[io, alloc, yield_now, panic, park_recv, park_send, park_sleep, park_recv2] -> T) -> T {
+	#handle 'io { request in
+		'continue _io_host(request: request)
+	}
+	#handle 'alloc { allocation in
+		'continue
+	}
+	#handle 'yield_now {
+		'continue
+	}
+	#handle 'panic { message in
+		write_string(fd: STDERR_FD, s: message)
+		write_string(fd: STDERR_FD, s: "\n")
+		_io_host(request: .exit(1))
+		loop {}
+	}
+	// TRAMPOLINED like core's _with_host: the extent's parks arrive as
+	// values, and this flat loop blocks the worker then resumes —
+	// constant stack no matter how many times the body parks.
+	let step = _block_extent(arg: arg, body: body)
+	loop {
+		match step {
+			.finished(value) -> {
+				return value
+			},
+			.recv(handle, k) -> {
+				let registered = _chan_ctl(handle: handle, op: 4)
+				let parked = _chan_ctl(handle: 0, op: 6)
+				let released = _chan_ctl(handle: handle, op: 5)
+				step = resume(k: k, value: ())
+			},
+			.send(handle, k) -> {
+				let registered = _chan_ctl(handle: handle, op: 11)
+				let parked = _chan_ctl(handle: 0, op: 6)
+				let released = _chan_ctl(handle: handle, op: 12)
+				step = resume(k: k, value: ())
+			},
+			.slept(deadline_ms, k) -> {
+				let registered = _chan_ctl(handle: deadline_ms, op: 14)
+				let parked = _chan_ctl(handle: 0, op: 6)
+				let released = _chan_ctl(handle: deadline_ms, op: 15)
+				step = resume(k: k, value: ())
+			},
+			.either(a, b, k) -> {
+				let first = _chan_ctl(handle: a, op: 4)
+				let second = _chan_ctl(handle: b, op: 4)
+				let parked = _chan_ctl(handle: 0, op: 6)
+				let drop_second = _chan_ctl(handle: b, op: 5)
+				let drop_first = _chan_ctl(handle: a, op: 5)
+				step = resume(k: k, value: ())
+			}
+		}
+	}
+}
+
+enum BlockStep<T> {
+	case finished(T)
+	case recv(Int, Resumption<(), BlockStep<T>>)
+	case send(Int, Resumption<(), BlockStep<T>>)
+	case slept(Int, Resumption<(), BlockStep<T>>)
+	case either(Int, Int, Resumption<(), BlockStep<T>>)
+}
+
+func _block_extent<A, T>(consume arg: A, consume body: (consume A) '[io, alloc, yield_now, panic, park_recv, park_send, park_sleep, park_recv2] -> T) -> BlockStep<T> {
+	#handle 'park_recv { handle, k in
+		BlockStep.recv(handle, k)
+	}
+	#handle 'park_send { handle, k in
+		BlockStep.send(handle, k)
+	}
+	#handle 'park_sleep { deadline_ms, k in
+		BlockStep.slept(deadline_ms, k)
+	}
+	#handle 'park_recv2 { a, b, k in
+		BlockStep.either(a, b, k)
+	}
+	BlockStep.finished(body(arg))
+}
+
+// Run every job on its own parallel worker and return the outputs in
+// argument order (ADR 0058). Structured: every worker completes before
+// this returns, and no handle escapes. Transfer capabilities gate the
+// boundary: jobs move to workers, outputs move back, and the worker
+// closure must carry a pure row (install fallbacks inside via
+// `run_blocking` when the body needs effects).
+pub func parallel_run<A, T>(consume jobs: [A], worker: (consume A) -> T) -> [T] where A: Send && T: Send {
+	let handles: [Int] = []
+	let feed = jobs.into_iter()
+	loop {
+		if let .some(job) = feed.next() {
+			handles.push(_task_spawn(arg: job, worker: worker))
+		} else {
+			break
+		}
+	}
+	let outputs: [T] = []
+	let joined = handles.into_iter()
+	loop {
+		if let .some(handle) = joined.next() {
+			outputs.push(_task_join<T>(handle: handle))
+		} else {
+			break
+		}
+	}
+	outputs
+}
+
+// === Channels (ADR 0059/0067) =========================================
+//
+// A multi-producer, single-consumer transfer channel. `recv` blocks in
+// the direct style: value, or `none` once every sender is gone.
+// Implicit sharing may duplicate endpoint values by retain, and a
+// `Deinit` hook runs once per copy (ADR 0060); each endpoint carries a
+// `DropToken` and gates its lifecycle op on `is_last()`.
+
+pub struct Sender<T> {
+	let handle: Int
+	let guard: DropToken
+
+	pub func send(consume value: T) -> Void {
+		// The runtime queue is untyped, so only Talk code can release a
+		// value nobody will ever take: a send to a dead receiver drops
+		// the value here instead of enqueueing it.
+		if _chan_ctl(handle: self.handle, op: 9) == 1 {
+			_chan_send(handle: self.handle, value: value)
+		}
+	}
+}
+
+// A separate extension: the constructor call needs Sender's generic
+// init generalized, which it is not inside the struct's own binding
+// group.
+extend<T> Sender<T> {
+	// A fresh logical sender: its own token, its own runtime count.
+	pub func clone() -> Sender<T> {
+		let ignored = _chan_ctl(handle: self.handle, op: 1)
+		Sender(handle: self.handle, guard: _drop_token())
+	}
+}
+
+extend<T> Sender<T>: Deinit {
+	consuming func deinit() -> Void {
+		if self.guard.is_last() {
+			let ignored = _chan_ctl(handle: self.handle, op: 2)
+		}
+	}
+}
+
+pub struct Receiver<T> {
+	let handle: Int
+	let guard: DropToken
+
+	// Receive directly: the queued value, or `none` once every sender
+	// is gone and the queue is drained. Parks between checks; a
+	// spurious wake just re-checks.
+	pub func recv() -> T? {
+		loop {
+			let status = _chan_ctl(handle: self.handle, op: 0)
+			if status == 0 {
+				return Optional.some(_chan_take<T>(handle: self.handle))
+			}
+			if status == 2 {
+				return Optional.none
+			}
+			'park_recv(handle: self.handle)
+		}
+	}
+}
+
+extend<T> Receiver<T>: Deinit {
+	consuming func deinit() -> Void {
+		if self.guard.is_last() {
+			// Drain before release: queued values free through their
+			// own typed drop glue, which the untyped runtime queue
+			// cannot run. A send racing this drain can still strand a
+			// value until the channel record itself dies.
+			loop {
+				if _chan_ctl(handle: self.handle, op: 0) == 0 {
+					let dropped: T = _chan_take<T>(handle: self.handle)
+				} else {
+					break
+				}
+			}
+			let ignored = _chan_ctl(handle: self.handle, op: 3)
+		}
+	}
+}
+
+pub func channel<T>() -> (Sender<T>, Receiver<T>) where T: Send {
+	let handle = _chan_ctl(handle: 0, op: 7)
+	(
+		Sender(handle: handle, guard: _drop_token()),
+		Receiver(handle: handle, guard: _drop_token())
+	)
+}
+
+// === Bounded channels (ADR 0062/0067) =================================
+//
+// Backpressure in the direct style: `send` claims a slot by ATOMIC
+// RESERVATION and delivers, parking while the queue is full. It
+// returns `true` on delivery and `false` when the receiver is gone —
+// the undelivered value frees here, through its own typed drop glue.
+
+pub struct BoundedSender<T> {
+	let handle: Int
+	let guard: DropToken
+
+	pub func send(consume value: T) -> Bool {
+		loop {
+			if _chan_ctl(handle: self.handle, op: 9) == 0 {
+				return false
+			}
+			if _chan_ctl(handle: self.handle, op: 10) == 1 {
+				_chan_send(handle: self.handle, value: value)
+				return true
+			}
+			'park_send(handle: self.handle)
+		}
+	}
+}
+
+extend<T> BoundedSender<T> {
+	pub func clone() -> BoundedSender<T> {
+		let ignored = _chan_ctl(handle: self.handle, op: 1)
+		BoundedSender(handle: self.handle, guard: _drop_token())
+	}
+}
+
+extend<T> BoundedSender<T>: Deinit {
+	consuming func deinit() -> Void {
+		if self.guard.is_last() {
+			let ignored = _chan_ctl(handle: self.handle, op: 2)
+		}
+	}
+}
+
+pub func channel_bounded<T>(capacity: Int) -> (BoundedSender<T>, Receiver<T>) where T: Send {
+	let bound = if capacity < 1 { 1 } else { capacity }
+	let handle = _chan_ctl(handle: bound, op: 7)
+	(
+		BoundedSender(handle: handle, guard: _drop_token()),
+		Receiver(handle: handle, guard: _drop_token())
+	)
+}
+
+// === Timers (ADR 0063/0067) ===========================================
+
+// Sleep at least `ms` of monotonic time, parking until the deadline.
+pub func sleep(ms: Int) -> () {
+	let deadline = _chan_ctl(handle: 0, op: 13) + ms
+	loop _chan_ctl(handle: 0, op: 13) < deadline {
+		'park_sleep(deadline_ms: deadline)
+	}
+}
+
+// === select (ADR 0061/0067) ===========================================
+
+pub enum Either<L, R> {
+	case left(L)
+	case right(R)
+}
+
+// Race two receivers: the first ready side wins, ties go left, and a
+// closed channel counts as ready (its receive is `none`). The losing
+// side's value stays queued for a later receive.
+pub func select_recv<T, U>(a: &Receiver<T>, b: &Receiver<U>) -> Either<T?, U?> {
+	loop {
+		if _chan_ctl(handle: a.handle, op: 0) != 1 {
+			return Either.left(a.recv())
+		}
+		if _chan_ctl(handle: b.handle, op: 0) != 1 {
+			return Either.right(b.recv())
+		}
+		'park_recv2(a: a.handle, b: b.handle)
+	}
+}

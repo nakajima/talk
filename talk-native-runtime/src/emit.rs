@@ -223,6 +223,60 @@ pub fn type_table(out: &mut String, interners: &Interners, display: &DisplayName
 /// Whether the function reifies its own frame. Continuations only ever
 /// name the frame that created them, so a function with no `MakeCont` and
 /// no `PushHandler` can neither be an unwind target nor own a handler.
+/// The functions a native backend must compile in resumable form
+/// (ADR 0065): a suspension's return-status propagates through every
+/// activation between the perform and its installer, so every function
+/// that can dynamically sit on such a path needs a heap frame and
+/// re-entry dispatch. Seeds are the `Suspend` sites; propagation is a
+/// call-graph fixpoint over direct calls, with the conservative
+/// indirect rule: once any address-taken function is marked, every
+/// function containing an indirect call is too. Propagation runs all
+/// the way up — a position-aware cutoff at installers is a later
+/// precision win, not a correctness need. Sound by construction: an
+/// unmarked function contains no suspend and calls only unmarked code,
+/// so no suspension can ever arise inside it.
+pub fn resumable_functions(functions: &[Function]) -> Vec<bool> {
+    let mut marked = vec![false; functions.len()];
+    let mut address_taken: Vec<usize> = Vec::new();
+    let mut has_indirect = vec![false; functions.len()];
+    let mut direct: Vec<Vec<usize>> = vec![Vec::new(); functions.len()];
+    for (id, function) in functions.iter().enumerate() {
+        for block in &function.blocks {
+            for inst in &block.insts {
+                match inst {
+                    Inst::Suspend { .. } => marked[id] = true,
+                    Inst::Call { func, .. } => direct[id].push(*func),
+                    Inst::MakeClosure { func, .. } => address_taken.push(*func),
+                    Inst::CallIndirect { .. } => has_indirect[id] = true,
+                    _ => {}
+                }
+            }
+        }
+    }
+    loop {
+        let mut changed = false;
+        let closure_suspends = address_taken
+            .iter()
+            .any(|&func| marked.get(func).copied().unwrap_or(false));
+        for id in 0..functions.len() {
+            if marked[id] {
+                continue;
+            }
+            let calls_marked = direct[id]
+                .iter()
+                .any(|&callee| marked.get(callee).copied().unwrap_or(false));
+            if calls_marked || (closure_suspends && has_indirect[id]) {
+                marked[id] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    marked
+}
+
 pub fn needs_identity(function: &Function) -> bool {
     function.blocks.iter().any(|block| {
         block.insts.iter().any(|inst| {

@@ -1,5 +1,63 @@
 use super::*;
 
+#[derive(Default)]
+struct DeclaredPredicateRetention {
+    owner_by_param: FxHashMap<Symbol, Symbol>,
+    predicates_by_binder: FxHashMap<Symbol, Vec<Predicate>>,
+}
+
+impl DeclaredPredicateRetention {
+    fn register_binder(
+        &mut self,
+        binder: Symbol,
+        declared: &DeclaredSchemeContext,
+        closed_contract: bool,
+    ) {
+        if closed_contract {
+            return;
+        }
+        for param in &declared.params {
+            self.owner_by_param.insert(param.symbol, binder);
+        }
+    }
+
+    fn retain_associated_equality(&mut self, left: Ty, right: Ty) -> bool {
+        // Written signatures remain exact for ordinary and static type
+        // equalities. Only an associated projection can add an inferred
+        // qualified predicate to declared generic parameters.
+        if (!matches!(left, Ty::Proj(..)) && !matches!(right, Ty::Proj(..)))
+            || left.has_unification_vars()
+            || right.has_unification_vars()
+        {
+            return false;
+        }
+        let mut params = FxHashSet::default();
+        collect_ty_params(&left, None, &mut params);
+        collect_ty_params(&right, None, &mut params);
+        let mut owners = params
+            .iter()
+            .map(|param| self.owner_by_param.get(param).copied());
+        let Some(Some(owner)) = owners.next() else {
+            return false;
+        };
+        if !owners.all(|candidate| candidate == Some(owner)) {
+            return false;
+        }
+        let predicate = Predicate::TypeEq(left, right);
+        let predicates = self.predicates_by_binder.entry(owner).or_default();
+        if !predicates.contains(&predicate) {
+            predicates.push(predicate);
+        }
+        true
+    }
+
+    fn take(&mut self, binder: Symbol) -> Vec<Predicate> {
+        self.predicates_by_binder
+            .remove(&binder)
+            .unwrap_or_default()
+    }
+}
+
 impl<'s, 'a> BindingGroupChecker<'s, 'a> {
     pub(super) fn check(&mut self, collected: Collected<'a>) {
         let Collected {
@@ -626,7 +684,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         level: self.level,
                         givens: nominal_givens,
                         wanteds,
-                        local_params: vec![],
+                        gadt: GadtLocals::default(),
                         touchable_level: None,
                     })));
                 }
@@ -646,6 +704,13 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         // retained predicates, generalized from class predicates to Talk's
         // unified predicate language.
         let mut var_predicates: FxHashMap<u32, Vec<Predicate>> = FxHashMap::default();
+        let mut declared_predicates = DeclaredPredicateRetention::default();
+        for (binder, _, _, annotated, declared) in &outputs {
+            // An explicit value annotation is a closed contract. Function
+            // declarations carry their generic skeleton separately and may
+            // acquire associated equalities inferred from the body.
+            declared_predicates.register_binder(*binder, declared, *annotated);
+        }
         let mut held_members: Vec<(Ty, crate::label::Label, Ty, CtOrigin)> = vec![];
         // Held equations keep their origins on the side: a scheme predicate
         // carries none, but one whose root never quantifies is reported
@@ -745,7 +810,22 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                         if !predicates.contains(&predicate) {
                             predicates.push(predicate);
                         }
+                    } else if generalizable {
+                        let a = self.store.zonk_ty(a);
+                        let b = self.store.zonk_ty(b);
+                        if !declared_predicates.retain_associated_equality(a, b) {
+                            self.deferred.push(residual)
+                        }
                     } else {
+                        self.deferred.push(residual)
+                    }
+                }
+                Constraint::Adapt {
+                    expected, found, ..
+                } if generalizable => {
+                    let expected = self.store.zonk_ty(expected);
+                    let found = self.store.zonk_ty(found);
+                    if !declared_predicates.retain_associated_equality(expected, found) {
                         self.deferred.push(residual)
                     }
                 }
@@ -777,6 +857,7 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                 } else {
                     generalizer.generalize(ty, &declared.params)
                 };
+                scheme.predicates.extend(declared_predicates.take(*symbol));
                 finish_scheme(&mut scheme, declared, self.catalog, self.diagnostics);
                 self.schemes.insert(*symbol, scheme);
             }

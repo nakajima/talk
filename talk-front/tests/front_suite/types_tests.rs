@@ -5336,7 +5336,7 @@ pub mod tests {
     }
 
     #[test]
-    fn gadt_arm_reports_unproven_associated_result_as_mismatch() {
+    fn gadt_arm_floats_associated_result_equality_into_function_scheme() {
         let typed = check(
             "// no-core
             protocol Add<RHS> {
@@ -5357,18 +5357,115 @@ pub mod tests {
             }
             ",
         );
+        assert_clean(&typed);
+        assert!(ty_of(&typed, "eval").contains("where T == T.Ret"));
+    }
+
+    #[test]
+    fn generic_body_retains_associated_result_equality_on_declared_parameter() {
+        let typed = check(
+            "// no-core
+            protocol Add<RHS> {
+                associated Ret
+                func add(rhs: RHS) -> Ret
+            }
+            extend Int: Add<Int> {
+                func add(rhs: Int) -> Int { rhs }
+            }
+            func combine<T: Add<T>>(lhs: T, rhs: T) -> T {
+                lhs + rhs
+            }
+            func identity<U>(value: U) -> U { value }
+            let result: Int = combine(lhs: 20, rhs: 22)
+            ",
+        );
+        assert_clean(&typed);
+        assert!(ty_of(&typed, "combine").contains("where T == T.Ret"));
+        assert!(!ty_of(&typed, "identity").contains("where"));
+    }
+
+    #[test]
+    fn inferred_associated_result_equality_crosses_module_boundary() {
+        use talk_front::front::module::{ModuleEnvironment, ModuleId};
+
+        let module = compile_library(
+            "AssocApi",
+            ModuleId::External(0),
+            "pub func combine<T: Add<T>>(lhs: T, rhs: T) -> T { lhs + rhs }",
+            ModuleEnvironment::default(),
+        );
+        let combine = module
+            .symbol_names
+            .iter()
+            .find_map(|(symbol, name)| (name == "combine").then_some(*symbol))
+            .expect("exported combine symbol");
+        assert!(
+            module.types.schemes[&combine]
+                .predicates
+                .iter()
+                .any(|predicate| matches!(
+                    predicate,
+                    talk_front::types::ty::Predicate::TypeEq(
+                        _,
+                        talk_front::types::ty::Ty::Proj(..)
+                    ) | talk_front::types::ty::Predicate::TypeEq(
+                        talk_front::types::ty::Ty::Proj(..),
+                        _
+                    )
+                ))
+        );
+    }
+
+    #[test]
+    fn explicit_value_annotation_does_not_infer_associated_equality() {
+        let typed = check(
+            "// no-core
+            protocol Add<RHS> {
+                associated Ret
+                func add(rhs: RHS) -> Ret
+            }
+            let combine: <T: Add<T>>(T, T) -> T = func(lhs, rhs) {
+                lhs + rhs
+            }
+            ",
+        );
+        let errors = type_errors(&typed);
+        assert!(
+            errors.iter().any(|error| error.contains("T.Ret")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn inferred_associated_result_equality_rejects_heterogeneous_call() {
+        let typed = check(
+            "// no-core
+            protocol Add<RHS> {
+                associated Ret
+                func add(rhs: RHS) -> Ret
+            }
+            struct A {}
+            struct B {}
+            extend A: Add<A> {
+                func add(rhs: A) -> B { B() }
+            }
+            func combine<T: Add<T>>(lhs: T, rhs: T) -> T {
+                lhs + rhs
+            }
+            let bad: A = combine(lhs: A(), rhs: A())
+            ",
+        );
         let errors = type_errors(&typed);
         assert!(
             errors
                 .iter()
-                .any(|error| error.contains("requires T") && error.contains("T.Ret")),
+                .any(|error| error.contains("A") && error.contains("B")),
             "{errors:?}"
         );
         assert!(
             !errors
                 .iter()
-                .any(|error| error.contains("escapes this pattern arm")
-                    || error.contains("TypeParameter(")),
+                .any(|error| error.contains("escapes this pattern arm")),
             "{errors:?}"
         );
     }
@@ -5426,6 +5523,33 @@ pub mod tests {
         );
         assert!(
             !errors
+                .iter()
+                .any(|error| error.contains("escapes this pattern arm")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn hidden_gadt_associated_projection_cannot_be_rebased() {
+        let typed = check(
+            "// no-core
+            protocol Project {
+                associated Ret
+                func project() -> Ret
+            }
+            enum Hidden {
+                case value<U: Project>(U) -> Hidden
+            }
+            func leak(value: Hidden) -> Int {
+                match value {
+                    .value(item) -> item.project()
+                }
+            }
+            ",
+        );
+        let errors = type_errors(&typed);
+        assert!(
+            errors
                 .iter()
                 .any(|error| error.contains("escapes this pattern arm")),
             "{errors:?}"
@@ -5817,11 +5941,11 @@ mod with_core {
     fn host_effects_admit_handlers() {
         // Every host-list effect routes through the ordinary handler
         // stack (ADR 0039): user handlers may intercept 'io, 'alloc, and
-        // 'async alike; unhandled performs reach the host fallback.
+        // 'yield_now alike; unhandled performs reach the host fallback.
         for source in [
             "#handle 'io { request in\n\t'continue 0\n}\n1",
             "#handle 'alloc { allocation in\n\t'continue\n}\n1",
-            "#handle 'async {\n\t'continue\n}\n'async()\n1",
+            "#handle 'yield_now {\n\t'continue\n}\n'yield_now()\n1",
         ] {
             let t = check_with_core(Source::from(source));
             let errors = type_errors(&t);
@@ -6637,6 +6761,244 @@ mod with_core {
             errors.iter().any(|e| e.contains("linear")),
             "expected a linear/Copy conflict error, got {errors:?}"
         );
+    }
+
+    // === Send / Sync checked transfer/share capabilities (ADR 0050) ===
+    // Structural by default: an aggregate is Send/Sync when every stored
+    // component is. Raw pointers, `'heap` references, closures, and
+    // non-atomic copy-on-write buffers (String, Array) are neither; a
+    // `linear` declaration is excluded from the automatic derivation but
+    // may claim explicitly, and every safe-source claim is validated
+    // field-by-field so it cannot lie.
+
+    #[test]
+    fn send_bound_accepts_scalar_aggregates() {
+        let t = check_with_core(Source::from(
+            "struct Point {\n\tlet x: Int\n\tlet y: Int\n}\nfunc needs_send<T: Send>(consume value: T) {}\nneeds_send(value: Point(x: 1, y: 2))",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn send_bound_accepts_nested_aggregates_of_send_components() {
+        let t = check_with_core(Source::from(
+            "struct Point {\n\tlet x: Int\n\tlet y: Int\n}\nstruct Pair<T> {\n\tlet a: T\n\tlet b: T\n}\nfunc needs_send<T: Send>(consume value: T) {}\nneeds_send(value: Pair(a: Point(x: 1, y: 2), b: Point(x: 3, y: 4)))",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn send_bound_rejects_non_send_generic_arguments() {
+        // Function values are never Send (their environments may hold
+        // frame-bound capabilities), so a generic aggregate over them
+        // fails the structural derivation.
+        let t = check_with_core(Source::from(
+            "struct Pair<T> {\n\tlet a: T\n\tlet b: T\n}\nfunc needs_send<T: Send>(consume value: T) {}\nneeds_send(value: Pair(a: func() -> Int {\n\t1\n}, b: func() -> Int {\n\t2\n}))",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("Send")),
+            "expected a Send rejection for a pair of closures, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn send_bound_rejects_raw_pointer_fields() {
+        let t = check_with_core(Source::from(
+            "struct Handle {\n\tlet ptr: RawPtr\n}\nfunc needs_send<T: Send>(consume value: T) {}\nfunc caller(consume h: Handle) {\n\tneeds_send(value: h)\n}",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("Send")),
+            "expected a Send rejection for a raw-pointer field, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn send_bound_rejects_heap_references() {
+        // A 'heap value is a shared mutable reference into a region whose
+        // external-root counts are not atomic: neither Send nor Sync.
+        let t = check_with_core(Source::from(
+            "struct Node 'heap {\n\tlet value: Int\n}\nfunc needs_send<T: Send>(consume value: T) {}\nneeds_send(value: Node(value: 1))",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("Send")),
+            "expected a Send rejection for a 'heap reference, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn send_bound_rejects_closures() {
+        // Function values capture effect capabilities whose handler
+        // clauses contain frame-bound delimiters (ADR 0050 handler
+        // boundary rule): no closure is Send until a transferable
+        // environment proof exists.
+        let t = check_with_core(Source::from(
+            "func needs_send<T: Send>(consume value: T) {}\nneeds_send(value: func() -> Int { 1 })",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("Send")),
+            "expected a Send rejection for a function value, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn linear_types_are_not_automatically_send() {
+        let t = check_with_core(Source::from(
+            "struct Token 'linear {\n\tlet id: Int\n}\nfunc needs_send<T: Send>(consume value: T) {}\nfunc caller(consume t: Token) {\n\tneeds_send(value: t)\n}",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("Send")),
+            "expected linear Token to be excluded from automatic Send, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn linear_send_claim_is_validated_structurally_and_accepted() {
+        // Strict linearity is orthogonal to transfer safety (ADR 0050):
+        // exactly-once ownership of scalar payloads may claim Send, and
+        // the claim is checked field-by-field like every marker.
+        let t = check_with_core(Source::from(
+            "struct Token 'linear {\n\tlet id: Int\n}\nextend Token: Send {}\nfunc needs_send<T: Send>(consume value: T) {}\nfunc caller(consume t: Token) {\n\tneeds_send(value: t)\n}",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn send_claim_validates_scalar_fields() {
+        let t = check_with_core(Source::from(
+            "struct Point {\n\tlet x: Int\n\tlet y: Int\n}\nextend Point: Send {}\nextend Point: Sync {}",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn send_claim_rejects_raw_pointer_fields() {
+        let t = check_with_core(Source::from(
+            "struct Handle {\n\tlet ptr: RawPtr\n}\nextend Handle: Send {}",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("Send")),
+            "safe source must not claim Send over a raw pointer, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn send_claim_on_heap_declaration_is_rejected() {
+        let t = check_with_core(Source::from(
+            "struct Node 'heap {\n\tlet value: Int\n}\nextend Node: Send {}",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("heap") || e.contains("Send")),
+            "expected a 'heap/Send conflict error, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn conditional_send_claim_validates_against_its_context() {
+        // A conditional capability row is authority for exactly the
+        // applications whose context holds, mirroring conditional Copy.
+        let t = check_with_core(Source::from(
+            "struct Wrap<T> 'linear {\n\tlet inner: T\n}\nextend<T> Wrap<T>: Send where T: Send {}\nfunc needs_send<T: Send>(consume value: T) {}\nfunc ok(consume w: Wrap<Int>) {\n\tneeds_send(value: w)\n}",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn conditional_send_claim_rejects_unsatisfied_context() {
+        let t = check_with_core(Source::from(
+            "struct Opaque {\n\tlet ptr: RawPtr\n}\nstruct Wrap<T> 'linear {\n\tlet inner: T\n}\nextend<T> Wrap<T>: Send where T: Send {}\nfunc needs_send<T: Send>(consume value: T) {}\nfunc bad(consume w: Wrap<Opaque>) {\n\tneeds_send(value: w)\n}",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("Send")),
+            "Wrap<Opaque> must not satisfy the conditional Send row, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn sync_bound_accepts_scalars_and_rejects_heap_references() {
+        let clean = check_with_core(Source::from(
+            "func needs_sync<T: Sync>(consume value: T) {}\nneeds_sync(value: 1)",
+        ));
+        assert_no_errors(&clean);
+
+        let rejected = check_with_core(Source::from(
+            "struct Node 'heap {\n\tlet value: Int\n}\nfunc needs_sync<T: Sync>(consume value: T) {}\nneeds_sync(value: Node(value: 1))",
+        ));
+        let errors = type_errors(&rejected);
+        assert!(
+            errors.iter().any(|e| e.contains("Sync")),
+            "expected a Sync rejection for a 'heap reference, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn core_value_types_are_send_for_worker_transfer() {
+        // Core's trusted conformances (ADR 0050 host-contract rule):
+        // Storage<Element>: Send where Element: Send, and ByteStorage:
+        // Send — the native runtime's atomic owner transitions and the
+        // VM's transfer copier are the proof. String and Array derive
+        // structurally from there.
+        let t = check_with_core(Source::from(
+            "func needs_send<T: Send>(consume value: T) {}\nneeds_send(value: \"fizz\")\nlet xs: [Int] = []\nxs.push(1)\nneeds_send(value: xs)\nlet names: [String] = []\nnames.push(\"buzz\")\nneeds_send(value: names)",
+        ));
+        assert_no_errors(&t);
+    }
+
+    #[test]
+    fn arrays_of_non_send_elements_are_not_send() {
+        // The element condition is structural: moving an array still
+        // requires Send(Element), and function values are never Send.
+        let t = check_with_core(Source::from(
+            "func needs_send<T: Send>(consume value: T) {}\nlet callbacks: [() -> Int] = []\ncallbacks.push(func() -> Int {\n\t1\n})\nneeds_send(value: callbacks)",
+        ));
+        let errors = type_errors(&t);
+        assert!(
+            errors.iter().any(|e| e.contains("Send")),
+            "an array of closures must not be Send, got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn capability_borrow_and_unique_rules() {
+        // &T is Send only when T is Sync; &mut T is Send only when T is
+        // Send; a unique pointer follows its referent (ADR 0050 table).
+        use talk_front::name_resolution::symbol::Symbol;
+        use talk_front::types::ty::{Perm, Ty};
+        let t = check_with_core(Source::from("struct Plain {\n\tlet x: Int\n}"));
+        assert_no_errors(&t);
+        let catalog = &t.phase.program.types().catalog;
+        let int = Ty::Nominal(Symbol::Int, vec![]);
+        let string = Ty::Nominal(Symbol::String, vec![]);
+
+        let shared = |inner: &Ty| Ty::Borrow(Perm::Shared, Box::new(inner.clone()));
+        let exclusive = |inner: &Ty| Ty::Borrow(Perm::Exclusive, Box::new(inner.clone()));
+        let unique = |inner: &Ty| Ty::Unique(Box::new(inner.clone()));
+        let func = Ty::Func(
+            vec![],
+            Box::new(int.clone()),
+            talk_front::types::ty::EffectRow::new(vec![], None),
+        );
+
+        assert!(catalog.ty_satisfies_capability(&shared(&int), Symbol::Send, &[]));
+        assert!(catalog.ty_satisfies_capability(&exclusive(&int), Symbol::Send, &[]));
+        assert!(catalog.ty_satisfies_capability(&unique(&int), Symbol::Send, &[]));
+        assert!(catalog.ty_satisfies_capability(&shared(&int), Symbol::Sync, &[]));
+        // String is Send (trusted core transfer contract) but not Sync:
+        // an owned move is sound, publishing shared access is undecided.
+        assert!(catalog.ty_satisfies_capability(&exclusive(&string), Symbol::Send, &[]));
+        assert!(catalog.ty_satisfies_capability(&unique(&string), Symbol::Send, &[]));
+        assert!(!catalog.ty_satisfies_capability(&shared(&string), Symbol::Send, &[]));
+        assert!(!catalog.ty_satisfies_capability(&shared(&string), Symbol::Sync, &[]));
+        // Function values are neither, in any position.
+        assert!(!catalog.ty_satisfies_capability(&func, Symbol::Send, &[]));
+        assert!(!catalog.ty_satisfies_capability(&unique(&func), Symbol::Send, &[]));
     }
 
     #[test]

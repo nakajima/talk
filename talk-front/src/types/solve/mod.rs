@@ -48,7 +48,7 @@ use crate::types::adapt::{Adapted, Donation, Site, adapt};
 use crate::types::catalog::{
     DictionaryEntry, MemberOwner, ProtocolApplication, Requirement, TypeCatalog,
 };
-use crate::types::constraint::{Constraint, CtOrigin, CtReason, Implication};
+use crate::types::constraint::{Constraint, CtOrigin, CtReason, GadtLocals, Implication};
 use crate::types::error::TypeError;
 use crate::types::output::{IntoCoercion, MemberResolution};
 use crate::types::ty::{

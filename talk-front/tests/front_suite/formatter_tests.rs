@@ -306,6 +306,16 @@ let value = Foo()";
     }
 
     #[test]
+    fn wraps_long_function_parameter_lists() {
+        let source = "pub func passthrough(input: MacroInput?, consume target: Syntax<Decl>, declaration: DeclContext, use_site: SyntaxContext, context: QuoteContext) -> DeclWrapperResult { .replace(target) }";
+        let expected = "pub func passthrough(\n\tinput: MacroInput?,\n\tconsume target: Syntax<Decl>,\n\tdeclaration: DeclContext,\n\tuse_site: SyntaxContext,\n\tcontext: QuoteContext\n) -> DeclWrapperResult {\n\t.replace(target)\n}";
+
+        let formatted = format_code(source, 80);
+        assert_eq!(formatted, expected);
+        assert_eq!(format_code(&formatted, 80), formatted);
+    }
+
+    #[test]
     fn test_capture_spec_formatting() {
         assert_eq!(
             format_code(

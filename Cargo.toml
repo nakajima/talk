@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "talk-front", "wasm", "www", "talk-vm", "talk-static", "talk-ffi", "talk-llvm", "talk-mir", "talk-native-runtime", "talk-bytecode", "talk-c"]
+members = [".", "talk-front", "wasm", "www", "talk-vm", "talk-static", "talk-ffi", "talk-mir", "talk-native-runtime", "talk-bytecode", "talk-c"]
 default-members = ["."]
 resolver = "2"
 
@@ -21,6 +21,7 @@ sha2 = "0.10.9"
 [dev-dependencies]
 ctor = "0.4.2"
 prettydiff = "0.8.0"
+talk-native-runtime = { path = "talk-native-runtime" }
 color-eyre = "0.6"
 # The test harness initializes tracing without the cli feature.
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }

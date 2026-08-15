@@ -195,7 +195,7 @@ fn implication_floats_untouchable_equalities_without_givens() {
             Ty::Nominal(Symbol::Int, vec![]),
             origin(),
         )],
-        local_params: vec![],
+        gadt: GadtLocals::default(),
         touchable_level: Some(Level(2)),
     }))]);
 
@@ -224,7 +224,7 @@ fn implication_with_givens_floats_safe_untouchable_outer_variable() {
             Ty::Nominal(Symbol::Int, vec![]),
             origin(),
         )],
-        local_params: vec![],
+        gadt: GadtLocals::default(),
         touchable_level: Some(Level(2)),
     }))]);
 
@@ -249,7 +249,7 @@ fn implication_can_bind_touchable_local_variable() {
             Ty::Nominal(Symbol::Int, vec![]),
             origin(),
         )],
-        local_params: vec![],
+        gadt: GadtLocals::default(),
         touchable_level: Some(Level(2)),
     }))]);
 
@@ -275,7 +275,7 @@ fn implication_floats_untouchable_effect_equalities() {
         level: Level(2),
         givens: vec![],
         wanteds: vec![Constraint::EffEq(expected.clone(), found, origin())],
-        local_params: vec![],
+        gadt: GadtLocals::default(),
         touchable_level: Some(Level(2)),
     }))]);
 
@@ -303,7 +303,10 @@ fn implication_rejects_escape_hidden_by_local_given_rewrite() {
             Ty::Param(existential),
             origin(),
         )],
-        local_params: vec![existential],
+        gadt: GadtLocals {
+            params: vec![existential],
+            determined: vec![],
+        },
         touchable_level: Some(Level(2)),
     }))]);
 
@@ -337,7 +340,10 @@ fn implication_rejects_escape_laundered_through_given_chain() {
             Predicate::TypeEq(Ty::Param(existential), Ty::Nominal(Symbol::Int, vec![])),
         ],
         wanteds: vec![Constraint::Eq(Ty::Var(outer), Ty::Param(bridge), origin())],
-        local_params: vec![existential],
+        gadt: GadtLocals {
+            params: vec![existential],
+            determined: vec![],
+        },
         touchable_level: Some(Level(2)),
     }))]);
 
@@ -364,7 +370,10 @@ fn implication_rejects_escaping_existential() {
             Ty::Param(existential),
             origin(),
         )],
-        local_params: vec![existential],
+        gadt: GadtLocals {
+            params: vec![existential],
+            determined: vec![],
+        },
         touchable_level: Some(Level(2)),
     }))]);
 
@@ -386,7 +395,7 @@ fn an_implications_origin_is_the_construct_that_introduced_it() {
         level: Level(2),
         givens: vec![],
         wanteds: vec![],
-        local_params: vec![],
+        gadt: GadtLocals::default(),
         touchable_level: None,
     }));
     let origin = implic.origin();
@@ -415,7 +424,10 @@ fn escaping_existential_from_outer_binding_carries_a_real_node() {
             Ty::Nominal(holder, vec![Ty::Param(existential)]),
             CtOrigin::new(NodeID(crate::node_id::FileID(0), 9), CtReason::Pattern),
         )],
-        local_params: vec![existential],
+        gadt: GadtLocals {
+            params: vec![existential],
+            determined: vec![],
+        },
         touchable_level: None,
     }))]);
 

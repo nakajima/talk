@@ -1,0 +1,73 @@
+// One-shot resumptions (ADR 0064) and the channel/clock runtime surface
+// (ADR 0067), tested at the core level.
+
+effect 'step(value: Int) -> Int 'suspending
+
+enum Held {
+	case parked(Resumption<Int, Held>)
+	case done(Int)
+}
+
+func emit_upto(limit: Int) -> Int {
+	let i = 1
+	let acc = 0
+	loop i <= limit {
+		acc = acc + 'step(value: i)
+		i = i + 1
+	}
+	acc
+}
+
+func drive_resuming() -> Int {
+	#handle 'step { value, k in resume(k: k, value: value * 10) }
+	emit_upto(limit: 3)
+}
+
+func drive_cancelling() -> Int {
+	#handle 'step { value, k in
+		let done = cancel(k: k)
+		value + 500
+	}
+	emit_upto(limit: 3)
+}
+
+func drive_holding() -> Held {
+	#handle 'step { value, k in Held.parked(k) }
+	Held.done(emit_upto(limit: 1))
+}
+
+func settle(consume held: Held) -> Int {
+	match held {
+		.parked(k) -> settle(held: resume(k: k, value: 41)),
+		.done(value) -> value
+	}
+}
+
+test "resuming delivers values and the extent's answer returns" {
+	assert(drive_resuming() == 60)
+}
+
+test "a clause that cancels aborts with its own value" {
+	assert(drive_cancelling() == 501)
+}
+
+test "resumptions escape their clause and finish later" {
+	assert(settle(held: drive_holding()) == 41)
+}
+
+test "channel ops enqueue, take, and observe closes" {
+	let handle = _chan_ctl(handle: 0, op: 7)
+	assert(_chan_ctl(handle: handle, op: 0) == 1)
+	_chan_send(handle: handle, value: 9)
+	assert(_chan_ctl(handle: handle, op: 0) == 0)
+	assert(_chan_take<Int>(handle: handle) == 9)
+	let sender_gone = _chan_ctl(handle: handle, op: 2)
+	assert(_chan_ctl(handle: handle, op: 0) == 2)
+	let receiver_gone = _chan_ctl(handle: handle, op: 3)
+}
+
+test "the monotonic clock advances" {
+	let before = _chan_ctl(handle: 0, op: 13)
+	let after = _chan_ctl(handle: 0, op: 13)
+	assert(after >= before)
+}

@@ -107,6 +107,39 @@ fn verify_function(module: &Module, id: usize, function: &Function, findings: &m
                     dests.push(*dest);
                     layouts.push(*layout);
                 }
+                Inst::TaskSpawn { dest, arg, worker } => {
+                    dests.push(*dest);
+                    operands.push(*arg);
+                    operands.push(*worker);
+                }
+                Inst::TaskJoin { dest, handle } | Inst::ChanTake { dest, handle } => {
+                    dests.push(*dest);
+                    operands.push(*handle);
+                }
+                Inst::TaskWidth { dest } => {
+                    dests.push(*dest);
+                }
+                Inst::ChanSend { handle, value } => {
+                    operands.push(*handle);
+                    operands.push(*value);
+                }
+                Inst::ChanCtl { dest, handle, op } => {
+                    dests.push(*dest);
+                    operands.push(*handle);
+                    operands.push(*op);
+                }
+                Inst::Suspend { dest, args, .. } => {
+                    dests.push(*dest);
+                    operands.extend(args.iter().copied());
+                }
+                Inst::Resume { dest, cont, value } => {
+                    dests.push(*dest);
+                    operands.push(*cont);
+                    operands.push(*value);
+                }
+                Inst::Cancel { cont } => {
+                    operands.push(*cont);
+                }
                 Inst::Field {
                     dest,
                     src,

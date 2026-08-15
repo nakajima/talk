@@ -7,9 +7,11 @@ const MAGIC: &[u8; 7] = b"TALKBC\0";
 /// in artifact manifests (ADR 0043): a loader refuses any other version.
 // Version 8 adds `StringLit`: complete immutable literal descriptors are
 // cached by the machine instead of being rebuilt from two `AggNew`
-// instructions at every evaluation. Version 7 remains readable because
-// the module sections are unchanged and its opcode set is a strict subset.
-pub const FORMAT_VERSION: u32 = 8;
+// instructions at every evaluation. Version 9 adds the task, channel,
+// and suspension opcodes (ADRs 0058/0059/0064). Versions 7 and 8 remain
+// readable because the module sections are unchanged and each version's
+// opcode set is a strict subset of the next.
+pub const FORMAT_VERSION: u32 = 9;
 const MIN_SUPPORTED_FORMAT_VERSION: u32 = 7;
 
 pub fn supports_format(version: u32) -> bool {
@@ -438,6 +440,59 @@ impl Encoder {
                 self.u16(a);
                 self.u16(b);
                 self.mem_kind(kind);
+            }
+            Insn::TaskSpawn { dest, arg, worker } => {
+                self.u8(65);
+                self.u16(dest);
+                self.u16(arg);
+                self.u16(worker);
+            }
+            Insn::TaskJoin { dest, handle } => {
+                self.u8(66);
+                self.u16(dest);
+                self.u16(handle);
+            }
+            Insn::TaskWidth { dest } => {
+                self.u8(67);
+                self.u16(dest);
+            }
+            Insn::ChanSend { handle, value } => {
+                self.u8(68);
+                self.u16(handle);
+                self.u16(value);
+            }
+            Insn::ChanTake { dest, handle } => {
+                self.u8(69);
+                self.u16(dest);
+                self.u16(handle);
+            }
+            Insn::ChanCtl { dest, handle, op } => {
+                self.u8(70);
+                self.u16(dest);
+                self.u16(handle);
+                self.u16(op);
+            }
+            Insn::Suspend {
+                dest,
+                effect,
+                args_start,
+                args_len,
+            } => {
+                self.u8(71);
+                self.u16(dest);
+                self.u32(effect);
+                self.u32(args_start);
+                self.u16(args_len);
+            }
+            Insn::Resume { dest, cont, value } => {
+                self.u8(72);
+                self.u16(dest);
+                self.u16(cont);
+                self.u16(value);
+            }
+            Insn::Cancel { cont } => {
+                self.u8(73);
+                self.u16(cont);
             }
             Insn::Io { dest, op, a, b, c } => {
                 self.u8(28);
@@ -1029,6 +1084,41 @@ impl<'a> Decoder<'a> {
                 index: self.u16()?,
                 element: self.u32()?,
             }),
+            65 => Ok(Insn::TaskSpawn {
+                dest: self.u16()?,
+                arg: self.u16()?,
+                worker: self.u16()?,
+            }),
+            66 => Ok(Insn::TaskJoin {
+                dest: self.u16()?,
+                handle: self.u16()?,
+            }),
+            67 => Ok(Insn::TaskWidth { dest: self.u16()? }),
+            68 => Ok(Insn::ChanSend {
+                handle: self.u16()?,
+                value: self.u16()?,
+            }),
+            69 => Ok(Insn::ChanTake {
+                dest: self.u16()?,
+                handle: self.u16()?,
+            }),
+            70 => Ok(Insn::ChanCtl {
+                dest: self.u16()?,
+                handle: self.u16()?,
+                op: self.u16()?,
+            }),
+            71 => Ok(Insn::Suspend {
+                dest: self.u16()?,
+                effect: self.u32()?,
+                args_start: self.u32()?,
+                args_len: self.u16()?,
+            }),
+            72 => Ok(Insn::Resume {
+                dest: self.u16()?,
+                cont: self.u16()?,
+                value: self.u16()?,
+            }),
+            73 => Ok(Insn::Cancel { cont: self.u16()? }),
             62 => Ok(Insn::IToB {
                 dest: self.u16()?,
                 src: self.u16()?,
@@ -1352,10 +1442,13 @@ impl Insn {
             | Insn::IsUnique { dest, ptr: src }
             | Insn::RegionAcquire { dest, src }
             | Insn::RegionRelease { dest, src }
-            | Insn::CallCont { callee: dest, src }
-            | Insn::EnvGet { dest, index: src } => {
+            | Insn::CallCont { callee: dest, src } => {
                 Register::new(n_regs).check_many(&[dest, src])?
             }
+            // `index` addresses the closure ENVIRONMENT, not the register
+            // file; its bound (the env length) is a per-value runtime
+            // fact, checked at execution.
+            Insn::EnvGet { dest, .. } => Register::new(n_regs).check(dest)?,
             Insn::MakeCont { dest } => Register::new(n_regs).check(dest)?,
             // UnwindRet touches no registers; its legality is dynamic
             // (only during an abort unwind).
@@ -1515,6 +1608,35 @@ impl Insn {
             Insn::Copy { from, to, len } => Register::new(n_regs).check_many(&[from, to, len])?,
             Insn::Swap { a, b, .. } => Register::new(n_regs).check_many(&[a, b])?,
             Insn::Io { dest, a, b, c, .. } => Register::new(n_regs).check_many(&[dest, a, b, c])?,
+            Insn::TaskSpawn { dest, arg, worker } => {
+                Register::new(n_regs).check_many(&[dest, arg, worker])?
+            }
+            Insn::TaskJoin { dest, handle } => {
+                Register::new(n_regs).check_many(&[dest, handle])?
+            }
+            Insn::TaskWidth { dest } => Register::new(n_regs).check(dest)?,
+            Insn::ChanSend { handle, value } => {
+                Register::new(n_regs).check_many(&[handle, value])?
+            }
+            Insn::ChanTake { dest, handle } => {
+                Register::new(n_regs).check_many(&[dest, handle])?
+            }
+            Insn::ChanCtl { dest, handle, op } => {
+                Register::new(n_regs).check_many(&[dest, handle, op])?
+            }
+            Insn::Suspend {
+                dest,
+                args_start,
+                args_len,
+                ..
+            } => {
+                Register::new(n_regs).check(dest)?;
+                module.check_arg_registers(args_start, args_len, n_regs)?;
+            }
+            Insn::Resume { dest, cont, value } => {
+                Register::new(n_regs).check_many(&[dest, cont, value])?
+            }
+            Insn::Cancel { cont } => Register::new(n_regs).check(cont)?,
             Insn::Call {
                 dest,
                 chunk,

@@ -1,0 +1,51 @@
+// ADR 0059/0067: an MPSC channel moves values from producer workers to
+// a consuming worker, direct style — `recv` parks under the blocking
+// host fallback and resolves `none` once every sender is dropped. One
+// producer proves in-order delivery; a second phase fans in from two
+// producers, where only the sum and count are deterministic.
+use task::{ channel, run_blocking, Sender }
+
+func produce(consume sender: Sender<Int>, base: Int, count: Int) -> Int {
+	let sent = 0
+	loop sent < count {
+		sender.send(value: base * (sent + 1))
+		sent = sent + 1
+	}
+	count
+}
+
+// One producer: delivery order matches send order.
+let (ordered_sender, ordered_receiver) = channel<Int>()
+let ordered_handle = _task_spawn(arg: ordered_sender, worker: func(consume sender: Sender<Int>) -> Int {
+			produce(sender: sender, base: 7, count: 3)
+		})
+loop {
+	if let .some(value) = ordered_receiver.recv() {
+		print(value)
+	} else {
+		break
+	}
+}
+print(_task_join<Int>(handle: ordered_handle))
+
+// Two producers: the interleaving is scheduling, the fan-in total is not.
+let (merged_sender, merged_receiver) = channel<Int>()
+let left = _task_spawn(arg: merged_sender.clone(), worker: func(consume sender: Sender<Int>) -> Int {
+			produce(sender: sender, base: 100, count: 3)
+		})
+let right = _task_spawn(arg: merged_sender, worker: func(consume sender: Sender<Int>) -> Int {
+			produce(sender: sender, base: 1000, count: 3)
+		})
+let total = 0
+let received = 0
+loop {
+	if let .some(value) = merged_receiver.recv() {
+		total = total + value
+		received = received + 1
+	} else {
+		break
+	}
+}
+print(received)
+print(total)
+print(_task_join<Int>(handle: left) + _task_join<Int>(handle: right))

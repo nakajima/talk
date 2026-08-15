@@ -55,8 +55,8 @@ fn2 shared_retain (arity 1, locals 2, params [L0] -> uniform)
     -> Return(Const(Unit))
 fn3 print (arity 1, locals 7, params [&L1] -> L3)
   b0:
-    Call { dest: 1, func: 14, args: [Local(0)], unwind: None }
-    Call { dest: 2, func: 15, args: [Local(1)], unwind: Some(1) }
+    Call { dest: 1, func: 21, args: [Local(0)], unwind: None }
+    Call { dest: 2, func: 22, args: [Local(1)], unwind: Some(1) }
     Field { dest: 5, src: Local(1), container: 1, offset: 0, member: Some(0) }
     Field { dest: 6, src: Local(1), container: 1, offset: 0, member: None }
     Free { src: Local(6) }
@@ -66,22 +66,135 @@ fn3 print (arity 1, locals 7, params [&L1] -> L3)
     Field { dest: 4, src: Local(1), container: 1, offset: 0, member: None }
     Free { src: Local(4) }
     -> UnwindRet
-fn4 _with_host (arity 1, locals 10, params [L3] -> L3)
+fn4 _with_host (arity 1, locals 69, params [L3] -> L3)
   b0:
     MakeCont { dest: 1 }
     MakeClosure { dest: 2, func: 7, env: [Local(1)] }
-    PushHandler { effect: @Effect(1:30), clause: Local(2), cont: Local(1) }
+    PushHandler { effect: @Effect(1:32), clause: Local(2), cont: Local(1) }
     MakeCont { dest: 3 }
     MakeClosure { dest: 4, func: 10, env: [Local(3)] }
-    PushHandler { effect: @Effect(1:28), clause: Local(4), cont: Local(3) }
+    PushHandler { effect: @Effect(1:26), clause: Local(4), cont: Local(3) }
     MakeCont { dest: 5 }
     MakeClosure { dest: 6, func: 11, env: [Local(5)] }
-    PushHandler { effect: @Effect(1:29), clause: Local(6), cont: Local(5) }
+    PushHandler { effect: @Effect(1:27), clause: Local(6), cont: Local(5) }
     MakeCont { dest: 7 }
     MakeClosure { dest: 8, func: 12, env: [Local(7)] }
-    PushHandler { effect: @Effect(1:31), clause: Local(8), cont: Local(7) }
-    CallIndirect { dest: 9, callee: Local(0), args: [], unwind: None }
-    -> Return(Local(9))
+    PushHandler { effect: @Effect(1:33), clause: Local(8), cont: Local(7) }
+    Call { dest: 9, func: 14, args: [Local(0)], unwind: None }
+    Copy { dest: 10, src: Local(9) }
+    -> Goto(1, [])
+  b1:
+    -> Goto(2, [])
+  b2:
+    GetTag { dest: 12, src: Local(10) }
+    Scalar { dest: 13, op: IntCmp(Eq), a: Local(12), b: Some(Const(Int(0))) }
+    -> Branch { cond: Local(13), then_block: 8, else_block: 7 }
+  b3:
+    -> Trap("unreachable loop exit")
+  b4:
+    -> Return(Const(Unit))
+  b5:
+    -> Goto(1, [])
+  b6:
+    -> Goto(9, [])
+  b7:
+    Scalar { dest: 14, op: IntCmp(Eq), a: Local(12), b: Some(Const(Int(1))) }
+    -> Branch { cond: Local(14), then_block: 12, else_block: 11 }
+  b8:
+    -> Goto(6, [])
+  b9:
+    -> Goto(4, [Const(Unit)])
+  b10:
+    Call { dest: 19, func: 15, args: [Local(17), Const(Int(4))], unwind: None }
+    Copy { dest: 20, src: Local(19) }
+    Call { dest: 21, func: 15, args: [Const(Int(0)), Const(Int(6))], unwind: None }
+    Copy { dest: 22, src: Local(21) }
+    Call { dest: 23, func: 15, args: [Local(17), Const(Int(5))], unwind: None }
+    Copy { dest: 24, src: Local(23) }
+    Call { dest: 25, func: 16, args: [Local(18), Const(Unit)], unwind: None }
+    Copy { dest: 10, src: Local(25) }
+    -> Goto(5, [Const(Unit)])
+  b11:
+    Scalar { dest: 26, op: IntCmp(Eq), a: Local(12), b: Some(Const(Int(2))) }
+    -> Branch { cond: Local(26), then_block: 16, else_block: 15 }
+  b12:
+    Field { dest: 15, src: Local(10), container: 6, offset: 1, member: None }
+    Field { dest: 16, src: Local(10), container: 6, offset: 2, member: Some(5) }
+    Copy { dest: 17, src: Local(15) }
+    -> Goto(13, [])
+  b13:
+    Copy { dest: 18, src: Local(16) }
+    -> Goto(10, [])
+  b14:
+    Call { dest: 31, func: 15, args: [Local(29), Const(Int(11))], unwind: None }
+    Copy { dest: 32, src: Local(31) }
+    Call { dest: 33, func: 15, args: [Const(Int(0)), Const(Int(6))], unwind: None }
+    Copy { dest: 34, src: Local(33) }
+    Call { dest: 35, func: 15, args: [Local(29), Const(Int(12))], unwind: None }
+    Copy { dest: 36, src: Local(35) }
+    Call { dest: 37, func: 16, args: [Local(30), Const(Unit)], unwind: None }
+    Copy { dest: 10, src: Local(37) }
+    -> Goto(5, [Const(Unit)])
+  b15:
+    Scalar { dest: 38, op: IntCmp(Eq), a: Local(12), b: Some(Const(Int(3))) }
+    -> Branch { cond: Local(38), then_block: 20, else_block: 19 }
+  b16:
+    Field { dest: 27, src: Local(10), container: 6, offset: 1, member: None }
+    Field { dest: 28, src: Local(10), container: 6, offset: 2, member: Some(5) }
+    Copy { dest: 29, src: Local(27) }
+    -> Goto(17, [])
+  b17:
+    Copy { dest: 30, src: Local(28) }
+    -> Goto(14, [])
+  b18:
+    Call { dest: 43, func: 15, args: [Local(41), Const(Int(14))], unwind: None }
+    Copy { dest: 44, src: Local(43) }
+    Call { dest: 45, func: 15, args: [Const(Int(0)), Const(Int(6))], unwind: None }
+    Copy { dest: 46, src: Local(45) }
+    Call { dest: 47, func: 15, args: [Local(41), Const(Int(15))], unwind: None }
+    Copy { dest: 48, src: Local(47) }
+    Call { dest: 49, func: 16, args: [Local(42), Const(Unit)], unwind: None }
+    Copy { dest: 10, src: Local(49) }
+    -> Goto(5, [Const(Unit)])
+  b19:
+    Scalar { dest: 50, op: IntCmp(Eq), a: Local(12), b: Some(Const(Int(4))) }
+    -> Branch { cond: Local(50), then_block: 24, else_block: 23 }
+  b20:
+    Field { dest: 39, src: Local(10), container: 6, offset: 1, member: None }
+    Field { dest: 40, src: Local(10), container: 6, offset: 2, member: Some(5) }
+    Copy { dest: 41, src: Local(39) }
+    -> Goto(21, [])
+  b21:
+    Copy { dest: 42, src: Local(40) }
+    -> Goto(18, [])
+  b22:
+    Call { dest: 57, func: 15, args: [Local(54), Const(Int(4))], unwind: None }
+    Copy { dest: 58, src: Local(57) }
+    Call { dest: 59, func: 15, args: [Local(55), Const(Int(4))], unwind: None }
+    Copy { dest: 60, src: Local(59) }
+    Call { dest: 61, func: 15, args: [Const(Int(0)), Const(Int(6))], unwind: None }
+    Copy { dest: 62, src: Local(61) }
+    Call { dest: 63, func: 15, args: [Local(55), Const(Int(5))], unwind: None }
+    Copy { dest: 64, src: Local(63) }
+    Call { dest: 65, func: 15, args: [Local(54), Const(Int(5))], unwind: None }
+    Copy { dest: 66, src: Local(65) }
+    Call { dest: 67, func: 16, args: [Local(56), Const(Unit)], unwind: None }
+    Copy { dest: 10, src: Local(67) }
+    -> Goto(5, [Const(Unit)])
+  b23:
+    -> Trap("unmatched value")
+  b24:
+    Field { dest: 51, src: Local(10), container: 6, offset: 1, member: None }
+    Field { dest: 52, src: Local(10), container: 6, offset: 2, member: None }
+    Field { dest: 53, src: Local(10), container: 6, offset: 3, member: Some(5) }
+    Copy { dest: 54, src: Local(51) }
+    -> Goto(25, [])
+  b25:
+    Copy { dest: 55, src: Local(52) }
+    -> Goto(26, [])
+  b26:
+    Copy { dest: 56, src: Local(53) }
+    -> Goto(22, [])
 fn5 entry_body (arity 0, locals 1)
   b0:
     Call { dest: 0, func: 0, args: [], unwind: None }
@@ -550,11 +663,56 @@ fn13 write_string (arity 2, locals 6, params [L3, &L1] -> L3)
     Field { dest: 5, src: Local(1), container: 1, offset: 1, member: None }
     Io { dest: 2, op: 1, a: Local(0), b: Local(4), c: Local(5) }
     -> Return(Local(2))
-fn14 show (arity 1, locals 2, params [&L1] -> L1)
+fn14 _host_extent (arity 1, locals 11, params [L3] -> L6)
   b0:
-    Call { dest: 1, func: 16, args: [Local(0)], unwind: None }
+    MakeCont { dest: 1 }
+    MakeClosure { dest: 2, func: 17, env: [] }
+    PushHandler { effect: @Effect(1:28), clause: Local(2), cont: Local(1) }
+    MakeCont { dest: 3 }
+    MakeClosure { dest: 4, func: 18, env: [] }
+    PushHandler { effect: @Effect(1:29), clause: Local(4), cont: Local(3) }
+    MakeCont { dest: 5 }
+    MakeClosure { dest: 6, func: 19, env: [] }
+    PushHandler { effect: @Effect(1:30), clause: Local(6), cont: Local(5) }
+    MakeCont { dest: 7 }
+    MakeClosure { dest: 8, func: 20, env: [] }
+    PushHandler { effect: @Effect(1:31), clause: Local(8), cont: Local(7) }
+    CallIndirect { dest: 9, callee: Local(0), args: [], unwind: None }
+    Aggregate { dest: 10, tag: 0, layout: L6, args: [] }
+    -> Return(Local(10))
+fn15 _chan_ctl (arity 2, locals 3, params [L3, L3] -> L3)
+  b0:
+    ChanCtl { dest: 2, handle: Local(0), op: Local(1) }
+    -> Return(Local(2))
+fn16 resume (arity 2, locals 3, params [L5, &L3] -> L6)
+  b0:
+    Resume { dest: 2, cont: Local(0), value: Local(1) }
+    -> Return(Local(2))
+fn17 handler_clause (arity 2, locals 4)
+  b0:
+    Aggregate { dest: 2, tag: 0, layout: L5, args: [Local(1)] }
+    Aggregate { dest: 3, tag: 1, layout: L6, args: [Local(0), Local(2)] }
+    -> Return(Local(3))
+fn18 handler_clause (arity 2, locals 4)
+  b0:
+    Aggregate { dest: 2, tag: 0, layout: L5, args: [Local(1)] }
+    Aggregate { dest: 3, tag: 2, layout: L6, args: [Local(0), Local(2)] }
+    -> Return(Local(3))
+fn19 handler_clause (arity 2, locals 4)
+  b0:
+    Aggregate { dest: 2, tag: 0, layout: L5, args: [Local(1)] }
+    Aggregate { dest: 3, tag: 3, layout: L6, args: [Local(0), Local(2)] }
+    -> Return(Local(3))
+fn20 handler_clause (arity 3, locals 5)
+  b0:
+    Aggregate { dest: 3, tag: 0, layout: L5, args: [Local(2)] }
+    Aggregate { dest: 4, tag: 4, layout: L6, args: [Local(0), Local(1), Local(3)] }
+    -> Return(Local(4))
+fn21 show (arity 1, locals 2, params [&L1] -> L1)
+  b0:
+    Call { dest: 1, func: 23, args: [Local(0)], unwind: None }
     -> Return(Local(1))
-fn15 _print_line (arity 1, locals 14, params [&L1] -> L3)
+fn22 _print_line (arity 1, locals 14, params [&L1] -> L3)
   b0:
     Field { dest: 2, src: Local(0), container: 1, offset: 0, member: Some(0) }
     Field { dest: 3, src: Local(0), container: 1, offset: 0, member: None }
@@ -571,30 +729,30 @@ fn15 _print_line (arity 1, locals 14, params [&L1] -> L3)
     Field { dest: 13, src: Local(6), container: 1, offset: 0, member: None }
     Free { src: Local(13) }
     -> Return(Const(Unit))
-fn16 to_string (arity 1, locals 13, params [&L1] -> L1)
+fn23 to_string (arity 1, locals 13, params [&L1] -> L1)
   b0:
     Field { dest: 1, src: Local(0), container: 1, offset: 1, member: None }
-    Call { dest: 2, func: 17, args: [Local(1)], unwind: None }
+    Call { dest: 2, func: 24, args: [Local(1)], unwind: None }
     Copy { dest: 3, src: Local(2) }
     Field { dest: 4, src: Local(0), container: 1, offset: 0, member: Some(0) }
     Field { dest: 5, src: Local(0), container: 1, offset: 0, member: None }
     Field { dest: 6, src: Local(0), container: 1, offset: 1, member: None }
-    Call { dest: 7, func: 18, args: [Local(5), Local(3), Local(6)], unwind: None }
+    Call { dest: 7, func: 25, args: [Local(5), Local(3), Local(6)], unwind: None }
     Aggregate { dest: 8, tag: 0, layout: L0, args: [Local(3)] }
     Field { dest: 9, src: Local(0), container: 1, offset: 1, member: None }
     Field { dest: 10, src: Local(0), container: 1, offset: 1, member: None }
     Blank { dest: 11, layout: L1 }
-    Call { dest: 12, func: 19, args: [Local(11), Local(8), Local(9), Local(10)], unwind: None }
+    Call { dest: 12, func: 26, args: [Local(11), Local(8), Local(9), Local(10)], unwind: None }
     -> Return(Local(12))
-fn17 _alloc (arity 1, locals 2, params [L3] -> L3)
+fn24 _alloc (arity 1, locals 2, params [L3] -> L3)
   b0:
     Alloc { dest: 1, bytes: Local(0) }
     -> Return(Local(1))
-fn18 _copy (arity 3, locals 4, params [L3, L3, L3] -> L3)
+fn25 _copy (arity 3, locals 4, params [L3, L3, L3] -> L3)
   b0:
     MemCopy { from: Local(0), to: Local(1), len: Local(2) }
     -> Return(Const(Unit))
-fn19 init (arity 4, locals 5, params [uniform, L0, L3, L3] -> L1)
+fn26 init (arity 4, locals 5, params [uniform, L0, L3, L3] -> L1)
   b0:
     SetField { rec: 0, src: Local(1), container: 1, offset: 0, member: Some(0) }
     Field { dest: 4, src: Local(0), container: 1, offset: 0, member: Some(0) }
@@ -606,4 +764,6 @@ layout table:
   L1: inline @Struct(1:4294967263) width 3, fields [0:L0, 1:int, 2:int], kinds [ptr, int, int]
   L2: inline @Struct(1:4294967265) width 1, fields [0:ptr], kinds [ptr]
   L3: slot
-  L4: inline @Enum(1:19) width 4, payloads [[1:int, 2:ptr, 3:int], [1:int, 2:ptr, 3:int], [1:ptr, 2:int, 3:int], [1:int], [1:int], [1:ptr, 2:int, 3:int], [1:int, 2:int, 3:int], [1:int, 2:int, 3:int], [1:int, 2:int, 3:int], [1:int, 2:int], [1:int, 2:int, 3:int], [1:int], [], [1:ptr], [1:ptr, 2:int], [1:ptr, 2:int, 3:ptr], [], [1:int], [1:int, 2:ptr], [1:ptr], [1:ptr, 2:int], [1:ptr, 2:int], [1:ptr, 2:int, 3:ptr], [1:int], [1:ptr], [1:ptr, 2:ptr], [1:int, 2:int, 3:int], [1:int]], kinds [int, value, value, value]
+  L4: inline @Enum(1:16) width 4, payloads [[1:int, 2:ptr, 3:int], [1:int, 2:ptr, 3:int], [1:ptr, 2:int, 3:int], [1:int], [1:int], [1:ptr, 2:int, 3:int], [1:int, 2:int, 3:int], [1:int, 2:int, 3:int], [1:int, 2:int, 3:int], [1:int, 2:int], [1:int, 2:int, 3:int], [1:int], [], [1:ptr], [1:ptr, 2:int], [1:ptr, 2:int, 3:ptr], [], [1:int], [1:int, 2:ptr], [1:ptr], [1:ptr, 2:int], [1:ptr, 2:int], [1:ptr, 2:int, 3:ptr], [1:int], [1:ptr], [1:ptr, 2:ptr], [1:int, 2:int, 3:int], [1:int]], kinds [int, value, value, value]
+  L5: inline @Struct(1:4294967280) width 1, fields [0:int], kinds [int]
+  L6: inline @Enum(1:20) width 4, payloads [[], [1:int, 2:L5], [1:int, 2:L5], [1:int, 2:L5], [1:int, 2:int, 3:L5]], kinds [int, int, int, int]

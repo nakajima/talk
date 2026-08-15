@@ -147,6 +147,10 @@ pub enum DeclKind {
         where_clause: Option<WhereClause>,
         params: Vec<Parameter>,
         ret: TypeAnnotation,
+        /// ADR 0064: performs of this effect suspend their extent into
+        /// a stored one-shot resumption bound by every handler clause.
+        #[drive(skip)]
+        suspending: bool,
     },
     Struct {
         #[drive(skip)]

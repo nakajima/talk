@@ -28,6 +28,39 @@ impl<'s> Solver<'s> {
         if self.given_conformance_satisfies(&normalized, &protocol) {
             return None;
         }
+        // ADR 0050 checked capabilities discharge structurally, and BEFORE
+        // the generic borrow delegation below: `&T: Send` demands `T: Sync`,
+        // not `T: Send`. Params, projections, and existentials fall through
+        // to the ordinary bounds machinery.
+        if protocol.args.is_empty()
+            && (protocol.protocol == Symbol::Send || protocol.protocol == Symbol::Sync)
+            && matches!(
+                normalized,
+                Ty::Borrow(..)
+                    | Ty::Unique(..)
+                    | Ty::Nominal(..)
+                    | Ty::Tuple(..)
+                    | Ty::Record(..)
+                    | Ty::Func(..)
+                    | Ty::Forall(..)
+            )
+        {
+            if normalized.has_unification_vars() {
+                return Some(Constraint::Conforms {
+                    ty,
+                    protocol,
+                    origin,
+                });
+            }
+            return if self
+                .catalog
+                .ty_satisfies_capability(&normalized, protocol.protocol, &[])
+            {
+                None
+            } else {
+                self.not_conforming(&ty, protocol, origin)
+            };
+        }
         match normalized.clone() {
             Ty::Var(_) => Some(Constraint::Conforms {
                 ty,

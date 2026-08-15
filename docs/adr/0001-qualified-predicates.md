@@ -47,6 +47,8 @@ Evidence is static and erased for now. The lowerer continues to rely on monomorp
 
 Source-level declaration `where` clauses lower into this predicate language. Inline generic bounds remain syntactic sugar and lower into the same context. Protocol composition uses `&`; separate where predicates use `&&`. The implemented v1 covers functions, methods, protocol requirements, structs, enums, extends, effects, associated types, and protocols.
 
+A function body may infer an associated-type equality over its declared generic parameters. The equality is retained in the published scheme, so callers must prove it from the selected conformance just as if it had been written in a `where` clause. For example, a body that returns `lhs + rhs` as `T` under `T: Add<T>` infers `T.Ret == T`. This strengthening is limited to associated projections; ordinary and static equalities in a written signature remain exact and must be declared explicitly.
+
 Original v1 associated-type protocol applications were semantic sugar for conformance plus equality predicates. For example, `T: Iterator<Element>` meant `T: Iterator` and `T.Element == Element` after the projection had a known protocol owner. ADR 0016 supersedes that surface for protocols with input arguments: positional angle arguments are protocol arguments, while associated-type equalities are named bindings or ordinary same-type predicates.
 
 ## Nominal well-formedness

@@ -1233,7 +1233,7 @@ pub mod tests {
     }
 
     fn service_executable(source: &str, exports: &[&str]) -> Result<Executable, String> {
-        service_with_effects(source, exports, &["io", "alloc", "async", "panic"])
+        service_with_effects(source, exports, &["io", "alloc", "yield_now", "panic"])
     }
 
     #[test]

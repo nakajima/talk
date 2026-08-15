@@ -1178,6 +1178,77 @@ impl Lowering<'_> {
                 let dest = self.fresh_reg();
                 self.code.push(Insn::RegionRelease { dest, src });
             }
+            Inst::TaskSpawn { dest, arg, worker } => {
+                let arg = self.reg(*arg);
+                let worker = self.reg(*worker);
+                self.code.push(Insn::TaskSpawn {
+                    dest: *dest,
+                    arg,
+                    worker,
+                });
+            }
+            Inst::TaskJoin { dest, handle } => {
+                let handle = self.reg(*handle);
+                self.code.push(Insn::TaskJoin {
+                    dest: *dest,
+                    handle,
+                });
+            }
+            Inst::TaskWidth { dest } => {
+                self.code.push(Insn::TaskWidth { dest: *dest });
+            }
+            Inst::ChanSend { handle, value } => {
+                let handle = self.reg(*handle);
+                let value = self.reg(*value);
+                self.code.push(Insn::ChanSend { handle, value });
+            }
+            Inst::ChanTake { dest, handle } => {
+                let handle = self.reg(*handle);
+                self.code.push(Insn::ChanTake {
+                    dest: *dest,
+                    handle,
+                });
+            }
+            Inst::Suspend {
+                dest,
+                effect,
+                args,
+                unwind,
+            } => {
+                let effect = self.effects.intern(*effect);
+                let (args_start, args_len) = self.arg_range(args);
+                self.code.push(Insn::Suspend {
+                    dest: *dest,
+                    effect,
+                    args_start,
+                    args_len,
+                });
+                if let Some(block) = unwind {
+                    self.unwind_sites.push((self.pc(), *block));
+                }
+            }
+            Inst::Resume { dest, cont, value } => {
+                let cont = self.reg(*cont);
+                let value = self.reg(*value);
+                self.code.push(Insn::Resume {
+                    dest: *dest,
+                    cont,
+                    value,
+                });
+            }
+            Inst::Cancel { cont } => {
+                let cont = self.reg(*cont);
+                self.code.push(Insn::Cancel { cont });
+            }
+            Inst::ChanCtl { dest, handle, op } => {
+                let handle = self.reg(*handle);
+                let op = self.reg(*op);
+                self.code.push(Insn::ChanCtl {
+                    dest: *dest,
+                    handle,
+                    op,
+                });
+            }
             Inst::Io { dest, op, a, b, c } => {
                 // Core `IORequest` variant order maps one-to-one onto the
                 // runtime operation table (`IoOp::ALL`).

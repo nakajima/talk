@@ -29,7 +29,7 @@ pub enum CmpOp {
 
 /// What one memory access moves: a byte, a little-endian scalar word, or
 /// an 8-byte handle into the boxed arena.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MemKind {
     Byte,
     I64,
@@ -345,6 +345,54 @@ pub enum Insn {
         b: u16,
         c: u16,
     },
+    /// ADR 0058 task runtime: start a worker running the `() -> T`
+    /// closure in `worker`; `dest` receives the executor-internal handle.
+    TaskSpawn {
+        dest: u16,
+        arg: u16,
+        worker: u16,
+    },
+    /// ADR 0058 task runtime: join the worker behind `handle` and
+    /// transfer its output to `dest`.
+    TaskJoin {
+        dest: u16,
+        handle: u16,
+    },
+    /// ADR 0058 task runtime: the host's available parallelism.
+    TaskWidth {
+        dest: u16,
+    },
+    /// ADR 0059: enqueue a transferred value on a channel.
+    ChanSend {
+        handle: u16,
+        value: u16,
+    },
+    /// ADR 0059: take a queued value off a channel.
+    ChanTake {
+        dest: u16,
+        handle: u16,
+    },
+    /// ADR 0064: perform a suspending effect — capture the extent from
+    /// the installing frame through this site into a stored one-shot
+    /// resumption and run the handler clause in the installer's place.
+    Suspend {
+        dest: u16,
+        effect: u32,
+        args_start: u32,
+        args_len: u16,
+    },
+    /// ADR 0064: resume a stored resumption with a value; `dest`
+    /// receives the extent's answer when it finishes or aborts.
+    Resume { dest: u16, cont: u16, value: u16 },
+    /// ADR 0064: cancel a stored resumption, unwinding its captured
+    /// frames through their cleanup entries.
+    Cancel { cont: u16 },
+    /// ADR 0059: scalar channel/park control.
+    ChanCtl {
+        dest: u16,
+        handle: u16,
+        op: u16,
+    },
     Call {
         dest: u16,
         chunk: u32,
@@ -538,7 +586,7 @@ impl IoOp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Chunk {
     pub name: String,
     pub code: Vec<Insn>,
@@ -568,7 +616,7 @@ pub enum Constant {
     Ptr(u32),
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Module {
     pub chunks: Vec<Chunk>,
     pub consts: Vec<Constant>,
@@ -751,6 +799,35 @@ impl Module {
             Insn::Swap { a, b, kind } => {
                 format!("swap_{} [r{a}], [r{b}]", format!("{kind:?}").to_lowercase())
             }
+            Insn::TaskSpawn { dest, arg, worker } => {
+                format!("r{dest} = task_spawn r{arg} r{worker}")
+            }
+            Insn::TaskJoin { dest, handle } => {
+                format!("r{dest} = task_join r{handle}")
+            }
+            Insn::TaskWidth { dest } => format!("r{dest} = task_width"),
+            Insn::ChanSend { handle, value } => {
+                format!("chan_send r{handle} r{value}")
+            }
+            Insn::ChanTake { dest, handle } => {
+                format!("r{dest} = chan_take r{handle}")
+            }
+            Insn::ChanCtl { dest, handle, op } => {
+                format!("r{dest} = chan_ctl r{handle} r{op}")
+            }
+            Insn::Suspend {
+                dest,
+                effect,
+                args_start,
+                args_len,
+            } => format!(
+                "r{dest} = suspend @{effect}({})",
+                self.render_args(*args_start, *args_len)
+            ),
+            Insn::Resume { dest, cont, value } => {
+                format!("r{dest} = resume r{cont} r{value}")
+            }
+            Insn::Cancel { cont } => format!("cancel r{cont}"),
             Insn::Io { dest, op, a, b, c } => format!(
                 "io_{} r{dest} <- r{a}, r{b}, r{c}",
                 format!("{op:?}").to_lowercase()

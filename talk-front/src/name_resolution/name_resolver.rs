@@ -2387,8 +2387,16 @@ impl NameResolver {
                 | InlineIRInstructionKind::Swap { ty, .. }
                 | InlineIRInstructionKind::Retain { ty, .. }
                 | InlineIRInstructionKind::Gep { ty, .. }
-                | InlineIRInstructionKind::InlineGet { ty, .. } => self.enter_type_annotation(ty),
+                | InlineIRInstructionKind::InlineGet { ty, .. }
+                | InlineIRInstructionKind::TaskJoin { ty, .. }
+                | InlineIRInstructionKind::ChanTake { ty, .. }
+                | InlineIRInstructionKind::Resume { ty, .. } => self.enter_type_annotation(ty),
                 InlineIRInstructionKind::Io { .. }
+                | InlineIRInstructionKind::TaskSpawn { .. }
+                | InlineIRInstructionKind::TaskWidth { .. }
+                | InlineIRInstructionKind::ChanSend { .. }
+                | InlineIRInstructionKind::ChanCtl { .. }
+                | InlineIRInstructionKind::Cancel { .. }
                 | InlineIRInstructionKind::Trunc { .. }
                 | InlineIRInstructionKind::IsUnique { .. }
                 | InlineIRInstructionKind::IntToFloat { .. }

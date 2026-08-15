@@ -1,0 +1,58 @@
+// ADR 0062/0067: bounded sends park directly while the queue is full.
+// A capacity-1 sender parks until the cross-worker consumer makes
+// room; a same-worker fill-then-drain alternation stays in bounds; a
+// send to a dead receiver resolves `false` and frees its value (the C
+// backend's exit-time leak accounting enforces that). The consumer
+// worker opens with `run_blocking`: recv parks, so its row needs the
+// root fallbacks installed inside the boundary.
+use task::{ channel_bounded, run_blocking, BoundedSender, Receiver }
+
+func consume_three(consume receiver: Receiver<Int>) -> Int {
+	run_blocking(arg: receiver, body: func(consume receiver: Receiver<Int>) -> Int {
+		let total = 0
+		loop {
+			if let .some(value) = receiver.recv() {
+				total = total + value
+			} else {
+				break
+			}
+		}
+		total
+	})
+}
+
+func drop_sender(consume sender: BoundedSender<Int>) -> Int {
+	0
+}
+
+func drop_receiver(consume receiver: Receiver<String>) -> Int {
+	0
+}
+
+func mark(delivered: Bool) -> Int {
+	if delivered { 1 } else { 0 }
+}
+
+// Cross-worker: the second and third sends park until the consumer
+// takes; every value arrives, closed drain reports the sum.
+let (sender, receiver) = channel_bounded<Int>(capacity: 1)
+let worker = _task_spawn(arg: receiver, worker: func(consume receiver: Receiver<Int>) -> Int {
+			consume_three(receiver: receiver)
+		})
+print(mark(delivered: sender.send(value: 1)))
+print(mark(delivered: sender.send(value: 2)))
+print(mark(delivered: sender.send(value: 3)))
+print(drop_sender(sender: sender))
+print(_task_join<Int>(handle: worker))
+
+// Same worker: fill to the bound, then drain, twice over.
+let (local_sender, local_receiver) = channel_bounded<Int>(capacity: 2)
+print(mark(delivered: local_sender.send(value: 5)))
+print(mark(delivered: local_sender.send(value: 7)))
+if let .some(first) = local_receiver.recv() { print(first) } else { print(0 - 1) }
+if let .some(second) = local_receiver.recv() { print(second) } else { print(0 - 2) }
+
+// Dead receiver: the send resolves false and the value frees here.
+let (dead_sender, dead_receiver) = channel_bounded<String>(capacity: 1)
+print(drop_receiver(receiver: dead_receiver))
+print(mark(delivered: dead_sender.send(value: "undeliverable".to_string())))

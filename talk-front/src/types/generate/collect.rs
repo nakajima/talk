@@ -122,10 +122,18 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     where_clause,
                     params,
                     ret,
+                    suspending,
                     ..
                 } => {
                     if let Ok(symbol) = name.symbol() {
-                        self.register_effect(symbol, generics, where_clause.as_ref(), params, ret);
+                        self.register_effect(
+                            symbol,
+                            generics,
+                            where_clause.as_ref(),
+                            params,
+                            ret,
+                            *suspending,
+                        );
                         self.register_callable_contract(
                             symbol,
                             &name.name_str(),
@@ -427,7 +435,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         row: crate::types::catalog::ConformanceId,
         node: NodeID,
     ) {
-        if matches!(protocol, Symbol::Copy | Symbol::CheapClone | Symbol::Deinit) {
+        if matches!(protocol, Symbol::Copy | Symbol::CheapClone | Symbol::Deinit)
+            || protocol == Symbol::Send
+            || protocol == Symbol::Sync
+        {
             self.marker_claims.push((head, protocol, row, node));
         }
     }
@@ -436,9 +447,25 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
     /// collected: a `linear` declaration may not claim any of them (Copy
     /// duplicates the value, CheapClone shares it, Deinit silently discards
     /// it), and `Copy`/`CheapClone` require every field to satisfy the
-    /// marker.
+    /// marker. The ADR 0050 capabilities validate on the same pass: every
+    /// stored component of a `Send`/`Sync` claim must satisfy the claimed
+    /// capability, so safe source cannot lie about thread transfer or
+    /// sharing. Linearity does not conflict with them — exactly-once
+    /// ownership is orthogonal to worker transfer — but `'heap` reference
+    /// semantics do.
     fn validate_marker_conformances(&mut self) {
         for (head, protocol, row_id, node) in std::mem::take(&mut self.marker_claims) {
+            let capability = protocol == Symbol::Send || protocol == Symbol::Sync;
+            // Core's capability claims are trusted runtime contracts (ADR
+            // 0050 host-contract rule): the runtime supplies the proof —
+            // atomic owner transitions on native, the transfer copier on
+            // the VM — precisely where the structural walk cannot see it
+            // (Storage's raw pointer). The same trust already exempts
+            // core from the 'unsafe gate; user modules stay fully
+            // checked, so safe source cannot lie.
+            if capability && self.module_id == crate::front::module::ModuleId::Core {
+                continue;
+            }
             let declared_linear = self
                 .catalog
                 .structs
@@ -446,7 +473,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 .map(|info| info.linear)
                 .or_else(|| self.catalog.enums.get(&head).map(|info| info.linear))
                 .unwrap_or(false);
-            if declared_linear {
+            if declared_linear && !capability {
                 self.diagnostics.errors.push((
                     TypeError::LinearConformance {
                         ty: head.to_string(),
@@ -501,7 +528,12 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 .collect();
             for (field, ty) in self.marker_checked_fields(head) {
                 let ty = ty.substitute(&rebind, &FxHashMap::default(), &FxHashMap::default());
-                if !self.catalog.ty_satisfies_marker(&ty, protocol, &context) {
+                let satisfied = if capability {
+                    self.catalog.ty_satisfies_capability(&ty, protocol, &context)
+                } else {
+                    self.catalog.ty_satisfies_marker(&ty, protocol, &context)
+                };
+                if !satisfied {
                     self.diagnostics.errors.push((
                         TypeError::NonConformingField {
                             protocol: protocol.to_string(),
@@ -1715,6 +1747,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         where_clause: Option<&WhereClause>,
         params: &[Parameter],
         ret: &TypeAnnotation,
+        suspending: bool,
     ) {
         let sig = self.in_declaration_context(None, generics, where_clause, |this, context| {
             let params = params
@@ -1735,8 +1768,15 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 predicates: context.predicates.clone(),
                 params,
                 ret,
+                suspending,
             }
         });
+        if suspending && !sig.generics.is_empty() {
+            self.unsupported(
+                params.first().map_or(ret.id, |param| param.id),
+                "type generics on a suspending effect",
+            );
+        }
         self.catalog.effects.insert(symbol, sig);
     }
 

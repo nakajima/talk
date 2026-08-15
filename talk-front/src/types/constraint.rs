@@ -271,12 +271,21 @@ impl Predicate {
     }
 }
 
+/// The GADT-local scope carried by an implication. `params` are rigid skolems
+/// introduced by the pattern. `determined` records the subset recoverable from
+/// the constructor result, paired with their enclosing types, so only those
+/// skolems can be rebased into predicates that leave the implication.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GadtLocals {
+    pub params: Vec<crate::name_resolution::symbol::Symbol>,
+    pub determined: Vec<(crate::name_resolution::symbol::Symbol, Ty)>,
+}
+
 /// OutsideIn(X) implication constraints (Vytiniotis, Peyton Jones,
 /// Schrijvers, Sulzmann, JFP 2011): wanteds solved under local givens. When
 /// `touchable_level` is set, variables from outside that level are
-/// untouchable inside. `local_params` are rigid skolems introduced by GADT
-/// patterns; Peyton Jones, Vytiniotis, Weirich, and Washburn (ICFP 2006)
-/// describe such constructor-local variables as existential and non-escaping.
+/// untouchable inside. GADT locals are rigid and non-escaping per Peyton
+/// Jones, Vytiniotis, Weirich, and Washburn (ICFP 2006).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Implication {
     /// The construct that introduced this implication (the match arm,
@@ -288,6 +297,6 @@ pub struct Implication {
     pub level: Level,
     pub givens: Vec<Predicate>,
     pub wanteds: Vec<Constraint>,
-    pub local_params: Vec<crate::name_resolution::symbol::Symbol>,
+    pub gadt: GadtLocals,
     pub touchable_level: Option<Level>,
 }

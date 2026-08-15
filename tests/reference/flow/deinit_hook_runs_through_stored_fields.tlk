@@ -1,0 +1,44 @@
+// A `Deinit` hook must run when its value tears down INSIDE something
+// else: a struct field, an enum payload, an array element. The drop
+// scheduler once gated containers on buffer containment alone, so a
+// hook-carrying scalar struct stored in any aggregate was dropped
+// without its hook (a leaked destructor, invisible until the hook had
+// observable effects — ADR 0059's channel endpoints).
+struct Loud {
+	let id: Int
+}
+
+extend Loud: Deinit {
+	consuming func deinit() -> Void {
+		print(self.id)
+	}
+}
+
+struct Plain {
+	let inner: Loud
+}
+
+enum Slot {
+	case filled(Loud)
+	case empty
+}
+
+func scoped_struct() -> Int {
+	let holder = Plain(inner: Loud(id: 9))
+	0
+}
+
+func scoped_enum() -> Int {
+	let slot = Slot.filled(Loud(id: 8))
+	0
+}
+
+func scoped_array() -> Int {
+	let kept: [Plain] = []
+	kept.push(Plain(inner: Loud(id: 7)))
+	kept.count
+}
+
+print(scoped_struct())
+print(scoped_enum())
+print(scoped_array())

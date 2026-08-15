@@ -1247,7 +1247,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 level: self.level,
                 givens: givens.to_vec(),
                 wanteds,
-                local_params: vec![],
+                gadt: GadtLocals::default(),
                 touchable_level: None,
             })));
     }

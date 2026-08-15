@@ -1,0 +1,39 @@
+// ADR 0058: nested structured scopes. Every outer worker runs an inner
+// parallel scope and joins it; the pooled runtime must HELP (run queued
+// jobs on the joining worker) rather than sleep, or width outer jobs
+// would starve the queue their inner jobs wait in.
+use task::{ parallel_run }
+
+func leaf(consume n: Int) -> Int {
+	n * n
+}
+
+func branch(consume base: Int) -> Int {
+	let leaves: [Int] = []
+	let i = 1
+	loop i <= 4 {
+		leaves.push(base + i)
+		i = i + 1
+	}
+	let inner = parallel_run(jobs: leaves, worker: leaf)
+	let total = 0
+	let j = 0
+	loop j < inner.count {
+		total = total + inner.get(j)
+		j = j + 1
+	}
+	total
+}
+
+let bases: [Int] = []
+let b = 0
+loop b < 12 {
+	bases.push(b * 10)
+	b = b + 1
+}
+let outputs = parallel_run(jobs: bases, worker: branch)
+let k = 0
+loop k < outputs.count {
+	print(outputs.get(k))
+	k = k + 1
+}

@@ -1,6 +1,6 @@
 //! Interface tests for the public MIR publication point (ADR 0047): a
 //! source fixture compiled through `compile_mir` must publish every fact
-//! the bytecode, C, and LLVM adapters read, under the invariants the
+//! the bytecode and C adapters read, under the invariants the
 //! adapters rely on.
 
 use talk::compiling::driver::{Driver, DriverConfig, MirEntry, Source};

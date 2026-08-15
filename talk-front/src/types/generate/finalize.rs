@@ -646,14 +646,22 @@ impl<'a> TypecheckSession<'a> {
                 | C::Swap { ty, .. }
                 | C::Take { ty, .. }
                 | C::Gep { elem: ty, .. }
-                | C::InlineGet { element: ty, .. } => {
+                | C::InlineGet { element: ty, .. }
+                | C::TaskJoin { ty, .. }
+                | C::ChanTake { ty, .. }
+                | C::Resume { ty, .. } => {
                     *ty = final_ty(&mut self.store, &self.catalog, ty)
                 }
                 C::Scalar { .. }
                 | C::Free { .. }
                 | C::IsUnique { .. }
                 | C::MemCopy { .. }
-                | C::Io { .. } => {}
+                | C::Io { .. }
+                | C::TaskSpawn { .. }
+                | C::TaskWidth
+                | C::ChanSend { .. }
+                | C::ChanCtl { .. }
+                | C::Cancel { .. } => {}
             }
         }
 

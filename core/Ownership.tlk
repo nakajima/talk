@@ -21,3 +21,17 @@ pub protocol CheapClone {
 pub protocol Deinit {
 	consuming func deinit() -> Void
 }
+
+// Checked transfer capability (ADR 0050): an owned Send value may safely
+// move to another worker. Conformance is structural by default — an
+// aggregate is Send when every stored component is — and a safe-source
+// claim is validated field-by-field, so it cannot lie. Raw pointers,
+// 'heap references, closures, and non-atomic copy-on-write buffers are
+// not Send; a linear declaration may claim explicitly but never derives
+// automatically.
+pub protocol Send {}
+
+// Checked share capability (ADR 0050): shared references to a Sync value
+// may safely be used by multiple workers. Sync(T) iff Send(&T). Same
+// structural derivation and claim validation as Send.
+pub protocol Sync {}

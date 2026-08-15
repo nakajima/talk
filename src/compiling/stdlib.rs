@@ -22,6 +22,8 @@ pub const STDLIB_SOURCE_NAMES: &[&str] = &[
     "net.tlk",
     "os.tlk",
     "http.tlk",
+    "task.tlk",
+    "coop.tlk",
 ];
 
 const STDLIB_MODULES: &[(&str, &str, &str)] = &[
@@ -51,6 +53,8 @@ const STDLIB_MODULES: &[(&str, &str, &str)] = &[
     ("net", "net.tlk", include_str!("../../stdlib/net.tlk")),
     ("os", "os.tlk", include_str!("../../stdlib/os.tlk")),
     ("http", "http.tlk", include_str!("../../stdlib/http.tlk")),
+    ("task", "task.tlk", include_str!("../../stdlib/task.tlk")),
+    ("coop", "coop.tlk", include_str!("../../stdlib/coop.tlk")),
 ];
 
 const STDLIB_FILES: &[(&str, &str)] = &[
@@ -87,6 +91,8 @@ const STDLIB_FILES: &[(&str, &str)] = &[
     ("net.tlk", include_str!("../../stdlib/net.tlk")),
     ("os.tlk", include_str!("../../stdlib/os.tlk")),
     ("http.tlk", include_str!("../../stdlib/http.tlk")),
+    ("task.tlk", include_str!("../../stdlib/task.tlk")),
+    ("coop.tlk", include_str!("../../stdlib/coop.tlk")),
 ];
 
 static STDLIB: OnceLock<Vec<OnceLock<CompiledStdlib>>> = OnceLock::new();
@@ -643,6 +649,24 @@ mod tests {
         };
         assert_eq!(dependencies_of("testing"), vec!["ansi"]);
         assert_eq!(dependencies_of("http"), vec!["net"]);
+    }
+
+    #[test]
+    fn every_module_root_is_a_bundled_file() {
+        // A module registered in STDLIB_MODULES but absent from
+        // STDLIB_FILES compiles as an EMPTY module in bundled mode
+        // (no path override — the wasm build), so imports resolve the
+        // module and then find no symbols.
+        for (name, root_source, _) in STDLIB_MODULES {
+            assert!(
+                STDLIB_FILES.iter().any(|(path, _)| path == root_source),
+                "stdlib module {name}: root source {root_source} missing from STDLIB_FILES"
+            );
+            assert!(
+                STDLIB_SOURCE_NAMES.contains(root_source),
+                "stdlib module {name}: root source {root_source} missing from STDLIB_SOURCE_NAMES"
+            );
+        }
     }
 
     #[test]

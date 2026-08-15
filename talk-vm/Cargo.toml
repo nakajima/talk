@@ -14,5 +14,15 @@ profile-tracy = ["dep:tracy-client", "profiling/profile-with-tracy"]
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Web-Worker-backed std::thread mirror for threaded wasm (ADR 0058/0059
+# browser validation). Only compiled when the wasm build enables the
+# atomics target feature; plain wasm32 builds stay dependency-free.
+[target.'cfg(all(target_arch = "wasm32", target_feature = "atomics"))'.dependencies]
+wasm_thread = "0.3"
+
+# The wasm clock (ADR 0063): Date.now through the JS host.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+
 [lints.clippy]
 approx_constant = "allow"
