@@ -1299,6 +1299,9 @@ impl TypedTreeBuilder<'_> {
             decl::DeclKind::MacroCall { .. } => {
                 unreachable!("macro invocations are expanded before typed-program build")
             }
+            decl::DeclKind::Wrapper { .. } => {
+                unreachable!("wrapper macros are expanded before typed-program build")
+            }
             decl::DeclKind::Import(import) => typed_ast::DeclKind::Import(import.clone()),
             decl::DeclKind::Effect {
                 name,

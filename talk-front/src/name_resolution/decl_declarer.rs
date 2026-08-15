@@ -1048,6 +1048,7 @@ impl<'a> DeclDeclarer<'a> {
             DeclKind::Import(_)
             | DeclKind::Macro { .. }
             | DeclKind::MacroCall { .. }
+            | DeclKind::Wrapper { .. }
             | DeclKind::Extend { .. }
             | DeclKind::Let { .. } => None,
         }

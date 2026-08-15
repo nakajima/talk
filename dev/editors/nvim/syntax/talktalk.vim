@@ -40,6 +40,9 @@ syntax match talktalkAttribute "@[A-Za-z0-9_][A-Za-z0-9_]*"
 syntax match talktalkBoundVar "\$[A-Za-z0-9_][A-Za-z0-9_]*"
 syntax match talktalkIRRegister "%[0-9?][0-9?]*"
 syntax match talktalkQuotedIdentifier '#"[^"\\]\+"'
+" A #[name] declaration wrapper marker (ADR 0026); the bracketed name
+" highlights like the @attribute sigil form.
+syntax match talktalkWrapperMarker "#\[[A-Za-z0-9_]\+\ze[(\]]"
 
 syntax match talktalkEscape "\\\(n\|t\|r\|\"\|\\\|u{[0-9A-Fa-f]\{1,6}}\)" contained
 syntax match talktalkCharEscape "\\\(n\|t\|r\|\"\|'\|\\\|u{[0-9A-Fa-f]\{1,6}}\)" contained
@@ -68,6 +71,7 @@ highlight default link talktalkOperator Operator
 highlight default link talktalkEscape SpecialChar
 highlight default link talktalkCharEscape SpecialChar
 highlight default link talktalkQuotedIdentifier Identifier
+highlight default link talktalkWrapperMarker PreProc
 highlight default link talktalkCharacter Character
 highlight default link talktalkString String
 highlight default link talktalkComment Comment

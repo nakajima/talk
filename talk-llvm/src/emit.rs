@@ -15,7 +15,9 @@ use talk_mir::{
     CmpKind, Constant, DisplayNames, FieldRepr, Function, Inst, Layout, LayoutId, MirSymbol,
     Module, Operand, ScalarOp, Shape, SlotKind, Term,
 };
-use talk_native_runtime::emit::{Interners, needs_identity, symbol_rows, type_table};
+use talk_native_runtime::emit::{
+    Interners, needs_identity, static_strings, symbol_rows, type_table,
+};
 
 use crate::{Artifact, Error, LibraryArtifact};
 
@@ -32,11 +34,7 @@ pub(crate) fn emit(program: &Module) -> Result<Artifact, Error> {
         ));
     }
 
-    let mut emitter = Emitter::new(
-        program.string_symbol,
-        program.storage_symbol,
-        program.layout_table.clone(),
-    );
+    let mut emitter = Emitter::new(program.string_symbol, program.layout_table.clone());
     let mut bodies = String::new();
     for (id, function) in program.functions.iter().enumerate() {
         emitter.function(&mut bodies, id, function)?;
@@ -78,11 +76,7 @@ pub(crate) fn emit_library(program: &Module, prefix: &str) -> Result<LibraryArti
         ));
     }
 
-    let mut emitter = Emitter::new(
-        program.string_symbol,
-        program.storage_symbol,
-        program.layout_table.clone(),
-    );
+    let mut emitter = Emitter::new(program.string_symbol, program.layout_table.clone());
     let mut bodies = String::new();
     for (id, function) in program.functions.iter().enumerate() {
         emitter.function(&mut bodies, id, function)?;
@@ -137,7 +131,7 @@ declare void @talk_llvm_field_index(ptr, ptr, i32)
 declare i64 @talk_llvm_agg_tag(ptr)
 declare void @talk_llvm_set_field(ptr, ptr, i32, i32, i32)
 declare void @talk_llvm_set_field_index(ptr, ptr, i32)
-declare void @talk_llvm_string(ptr, i32, i32, i32, i32, i32, i32)
+declare void @talk_llvm_static_string(ptr, i32)
 declare void @talk_llvm_bytes(ptr, i32)
 declare void @talk_llvm_closure(ptr, i32, i32)
 declare i32 @talk_llvm_closure_function(ptr)
@@ -176,12 +170,11 @@ struct Emitter {
     call_width: usize,
     operand_width: usize,
     string_symbol: MirSymbol,
-    storage_symbol: MirSymbol,
     layouts: Vec<Layout>,
 }
 
 impl Emitter {
-    fn new(string_symbol: MirSymbol, storage_symbol: MirSymbol, layouts: Vec<Layout>) -> Self {
+    fn new(string_symbol: MirSymbol, layouts: Vec<Layout>) -> Self {
         let mut emitter = Self {
             interners: Interners::default(),
             next_value: 0,
@@ -189,7 +182,6 @@ impl Emitter {
             call_width: 1,
             operand_width: 1,
             string_symbol,
-            storage_symbol,
             layouts,
         };
         let symbols: Vec<_> = emitter
@@ -524,15 +516,14 @@ impl Emitter {
                 dest,
                 bytes,
                 layout,
-                storage_layout,
+                storage_layout: _,
             } => {
-                let offset = self.interners.intern_static(bytes);
-                let string = self.interners.display_id(self.string_symbol);
-                let storage = self.interners.display_id(self.storage_symbol);
+                let literal =
+                    self.interners
+                        .intern_static_string(bytes, *layout, self.string_symbol);
                 let _ = writeln!(
                     out,
-                    "  call void @talk_llvm_string(ptr %l{dest}, i32 {offset}, i32 {}, i32 {layout}, i32 {storage_layout}, i32 {string}, i32 {storage})",
-                    bytes.len()
+                    "  call void @talk_llvm_static_string(ptr %l{dest}, i32 {literal})"
                 );
             }
             Inst::BytesLit { dest, bytes } => {
@@ -1298,6 +1289,7 @@ impl Emitter {
         out.push_str(talk_native_runtime::source());
         out.push('\n');
         emit_statics(&mut out, &self.interners.statics);
+        static_strings(&mut out, &self.interners);
         emit_layout_table(&mut out, self);
         type_table(&mut out, &self.interners, names);
         let _ = writeln!(
@@ -1354,6 +1346,7 @@ impl Emitter {
         out.push_str(talk_native_runtime::source());
         out.push('\n');
         emit_statics(&mut out, &self.interners.statics);
+        static_strings(&mut out, &self.interners);
         emit_layout_table(&mut out, self);
         type_table(&mut out, &self.interners, &program.display);
         symbol_rows(&mut out, &self.interners);

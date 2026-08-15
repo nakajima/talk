@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk Playground - Notebook</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css" rel="stylesheet">
+    <link href="/playground-options.css" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a><a href="/playground" aria-current="page">Playground</a><a href="/qa">Q/A</a><a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="playground-page notebook-page playground-scope">
+      <div class="playground-masthead">
+        <div>
+          <span class="playground-eyebrow">Option 02 / Notebook</span>
+          <h1>Learn in small steps.</h1>
+        </div>
+        <span class="runtime-status">runtime loading</span>
+      </div>
+      <div class="notebook-intro">Each cell is independent: edit it, run it, inspect the value, then continue down the page.</div>
+      <div class="console-presets notebook-catalog" aria-label="Load a program into the first cell" data-example-catalog data-initial-example="gadt-evaluator"></div>
+
+      <section class="notebook-cell playground-runner runnable">
+        <div class="notebook-cell-meta"><span class="cell-index">Cell 01</span><strong>Typed interpreter</strong><button class="text-action" data-example="gadt-evaluator">Load example</button></div>
+        <div class="notebook-cell-body">
+          <div class="code-block"><pre class="code-highlight" aria-hidden="true"></pre><div class="code-diagnostics" aria-hidden="true"></div><textarea class="code-editable" rows="18" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off" wrap="off"></textarea></div>
+          <div class="actions"><span class="action-control" data-tooltip="WASM bundle initializing" aria-label="WASM bundle initializing" tabindex="0"><button type="button" class="run" disabled>Run</button></span><span class="action-control" data-tooltip="WASM bundle initializing" aria-label="WASM bundle initializing" tabindex="0"><button type="button" class="lower" disabled>Lower</button></span><span class="action-control" data-tooltip="WASM bundle initializing" aria-label="WASM bundle initializing" tabindex="0"><button type="button" class="format" disabled>Format</button></span></div>
+          <div class="result"></div><div class="output-empty"></div>
+        </div>
+      </section>
+
+      <section class="notebook-cell playground-runner runnable">
+        <div class="notebook-cell-meta"><span class="cell-index">Cell 02</span><strong>Nested handlers</strong><button class="text-action" data-example="nested-handlers">Load example</button></div>
+        <div class="notebook-cell-body">
+          <div class="code-block"><pre class="code-highlight" aria-hidden="true"></pre><div class="code-diagnostics" aria-hidden="true"></div><textarea class="code-editable" rows="16" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off" wrap="off"></textarea></div>
+          <div class="actions"><span class="action-control" data-tooltip="WASM bundle initializing" aria-label="WASM bundle initializing" tabindex="0"><button type="button" class="run" disabled>Run</button></span><span class="action-control" data-tooltip="WASM bundle initializing" aria-label="WASM bundle initializing" tabindex="0"><button type="button" class="lower" disabled>Lower</button></span><span class="action-control" data-tooltip="WASM bundle initializing" aria-label="WASM bundle initializing" tabindex="0"><button type="button" class="format" disabled>Format</button></span></div>
+          <div class="result"></div><div class="output-empty"></div>
+        </div>
+      </section>
+
+      <section class="notebook-cell playground-runner runnable">
+        <div class="notebook-cell-meta"><span class="cell-index">Cell 03</span><strong>Cyclic graph</strong><button class="text-action" data-example="cyclic-graph">Load example</button></div>
+        <div class="notebook-cell-body">
+          <div class="code-block"><pre class="code-highlight" aria-hidden="true"></pre><div class="code-diagnostics" aria-hidden="true"></div><textarea class="code-editable" rows="22" spellcheck="false" autocapitalize="off" autocorrect="off" autocomplete="off" wrap="off"></textarea></div>
+          <div class="actions"><span class="action-control" data-tooltip="WASM bundle initializing" aria-label="WASM bundle initializing" tabindex="0"><button type="button" class="run" disabled>Run</button></span><span class="action-control" data-tooltip="WASM bundle initializing" aria-label="WASM bundle initializing" tabindex="0"><button type="button" class="lower" disabled>Lower</button></span><span class="action-control" data-tooltip="WASM bundle initializing" aria-label="WASM bundle initializing" tabindex="0"><button type="button" class="format" disabled>Format</button></span></div>
+          <div class="result"></div><div class="output-empty"></div>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/page.js"></script><script type="module" src="/playground-options.js"></script>
+  </body>
+</html>

@@ -11,6 +11,7 @@ use crate::memory::{Allocations, MemoryError, Pointer};
 use crate::objects::{ObjectError, Objects};
 use crate::symbol::Symbol;
 use crate::{Chunk, Constant, FieldShape, Insn, LayoutBody, LayoutDesc, MemKind, Module};
+use rustc_hash::FxHashMap;
 use std::rc::Rc;
 
 /// Whether `TALK_TRACE_MEM` is set, read once: the check guards the
@@ -499,6 +500,7 @@ fn run_export_inner<'io, S: StatsSink>(
         static_len: mem.len() as u32,
         mem,
         layouts: module.layouts.clone(),
+        static_strings: FxHashMap::default(),
         allocations: Allocations::default(),
         boxed: vec![Value::Void],
         objects: Objects::default(),
@@ -541,6 +543,7 @@ fn run_machine<'io>(module: &Module, io: &'io mut dyn IO) -> Result<(Value, Mach
         mem: module.statics.clone(),
         static_len: module.statics.len() as u32,
         layouts: module.layouts.clone(),
+        static_strings: FxHashMap::default(),
         allocations: Allocations::default(),
         // Slot 0 is a reserved placeholder (like arg_pool's) so that a
         // zeroed, never-stored cell can't alias a real handle.
@@ -1384,6 +1387,10 @@ struct Machine<'io> {
     /// rendering can read flat aggregates after the run (the module
     /// reference itself does not outlive `run_loop`).
     layouts: Vec<LayoutDesc>,
+    /// Complete immutable String values, interned on first execution.
+    /// Their slot vectors are shared by every evaluation of an equal
+    /// `(offset, length, layout)` literal.
+    static_strings: FxHashMap<(u32, u32, u32), Value>,
     allocations: Allocations,
     /// Aggregates stored in raw memory live here; the memory cell holds an
     /// 8-byte index into this arena (Leroy, POPL 1992's mixed
@@ -2047,6 +2054,29 @@ fn exec_local(
         } => {
             let args = arg_values(module, frame, args_start, args_len)?;
             frame.regs[dest as usize] = build_agg(&module.layouts, layout, tag, args)?;
+        }
+        Insn::StringLit {
+            dest,
+            offset,
+            len,
+            layout,
+        } => {
+            let value = machine
+                .static_strings
+                .entry((offset, len, layout))
+                .or_insert_with(|| {
+                    let len = i64::from(len);
+                    Value::Agg(
+                        layout,
+                        Rc::new(vec![
+                            Value::Ptr(Pointer::static_at(offset)),
+                            Value::I64(len),
+                            Value::I64(len),
+                        ]),
+                    )
+                })
+                .clone();
+            frame.regs[dest as usize] = value;
         }
         Insn::Field {
             dest,

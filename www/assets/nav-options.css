@@ -1,0 +1,476 @@
+/* Five global-navigation prototypes for index-2.html through index-6.html. */
+
+.global-nav {
+  box-sizing: border-box;
+  font-family: "Bitstream Vera Sans Mono", monospace;
+}
+
+.global-nav a {
+  box-sizing: border-box;
+  text-decoration: none;
+}
+
+.global-nav-brand {
+  color: #fff;
+  font-weight: 700;
+}
+
+.global-nav-context {
+  color: var(--ink-dim);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.global-nav-links {
+  display: flex;
+}
+
+.global-nav-links a {
+  color: var(--ink-dim);
+  font-size: 0.82rem;
+}
+
+.global-nav-links a:hover,
+.global-nav-links a:focus-visible {
+  color: #fff;
+}
+
+/* Option 1: conventional sticky header */
+
+.nav-option-2 .global-nav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: stretch;
+  min-height: 3.25rem;
+  padding: 0 max(1rem, calc((100vw - 61rem) / 2));
+  background: rgba(6, 7, 7, 0.96);
+  border-bottom: 1px solid var(--color-tin-3);
+  backdrop-filter: blur(12px);
+}
+
+.nav-option-2 .global-nav-brand,
+.nav-option-2 .global-nav-context,
+.nav-option-2 .global-nav-links a {
+  display: flex;
+  align-items: center;
+}
+
+.nav-option-2 .global-nav-brand::before {
+  color: var(--accent);
+  content: "> ";
+  white-space: pre;
+}
+
+.nav-option-2 .global-nav-context {
+  justify-content: center;
+  padding: 0 1.5rem;
+}
+
+.nav-option-2 .global-nav-links {
+  justify-content: flex-end;
+}
+
+.nav-option-2 .global-nav-links a {
+  padding: 0 0.75rem;
+  border-bottom: 2px solid transparent;
+}
+
+.nav-option-2 .global-nav-links a:hover,
+.nav-option-2 .global-nav-links a:focus-visible {
+  background: var(--color-tin-1);
+  border-bottom-color: var(--accent);
+}
+
+.nav-option-2 .global-nav-links a[aria-current="page"] {
+  color: #fff;
+  border-bottom-color: var(--accent);
+}
+
+.nav-option-2 main h2 {
+  top: 3.25rem;
+}
+
+/* Option 2: quiet documentation rail */
+
+@media (min-width: 1180px) {
+  .nav-option-3 .global-nav {
+    position: fixed;
+    top: 1.5rem;
+    bottom: 1.5rem;
+    left: 1.5rem;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    width: 10.5rem;
+    padding: 1.1rem 0 0 1rem;
+    background: rgba(6, 7, 7, 0.94);
+    border-left: 2px solid var(--accent);
+    border-right: 1px solid var(--color-tin-1);
+  }
+
+  .nav-option-3 .global-nav-brand {
+    margin-bottom: 0.4rem;
+    font-size: 1rem;
+  }
+
+  .nav-option-3 .global-nav-context {
+    margin-bottom: 3rem;
+  }
+
+  .nav-option-3 .global-nav-links {
+    flex-direction: column;
+    gap: 0;
+  }
+
+  .nav-option-3 .global-nav-links a {
+    position: relative;
+    padding: 0.7rem 0.6rem 0.7rem 1.9rem;
+    border-top: 1px solid var(--color-tin-1);
+  }
+
+  .nav-option-3 .global-nav-links a:last-child {
+    border-bottom: 1px solid var(--color-tin-1);
+  }
+
+  .nav-option-3 .global-nav-links a::before {
+    position: absolute;
+    left: 0;
+    color: var(--color-tin-3);
+    content: "0" counter(nav-item);
+    counter-increment: nav-item;
+    font-size: 0.65rem;
+  }
+
+  .nav-option-3 .global-nav-links {
+    counter-reset: nav-item;
+  }
+
+  .nav-option-3 .global-nav-links a:hover,
+  .nav-option-3 .global-nav-links a:focus-visible,
+  .nav-option-3 .global-nav-links a[aria-current="page"] {
+    color: var(--accent);
+  }
+}
+
+@media (max-width: 1179px) {
+  .nav-option-3 .global-nav {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem clamp(1rem, 4vw, 2.5rem);
+    background: var(--color-tin-1);
+    border-left: 4px solid var(--accent);
+  }
+
+  .nav-option-3 .global-nav-context {
+    display: none;
+  }
+
+  .nav-option-3 .global-nav-links {
+    margin-left: auto;
+    gap: 1rem;
+  }
+
+  .nav-option-3 .global-nav-links a[aria-current="page"] {
+    color: var(--accent);
+  }
+}
+
+/* Option 3: bold editorial masthead */
+
+.nav-option-4 .global-nav {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) 2fr;
+  grid-template-areas:
+    "brand context"
+    "brand links";
+  min-height: 9rem;
+  padding: 1.5rem max(1rem, calc((100vw - 61rem) / 2));
+  color: #030404;
+  background: var(--accent);
+}
+
+.nav-option-4 .global-nav-brand {
+  grid-area: brand;
+  align-self: center;
+  color: #030404;
+  font-size: clamp(2rem, 5vw, 4.5rem);
+  letter-spacing: -0.09em;
+  line-height: 0.9;
+}
+
+.nav-option-4 .global-nav-brand::after {
+  content: ".";
+}
+
+.nav-option-4 .global-nav-context {
+  grid-area: context;
+  justify-self: end;
+  color: rgba(0, 0, 0, 0.65);
+}
+
+.nav-option-4 .global-nav-links {
+  grid-area: links;
+  align-self: end;
+  justify-content: flex-end;
+  border-top: 1px solid rgba(0, 0, 0, 0.35);
+}
+
+.nav-option-4 .global-nav-links a {
+  padding: 0.8rem 1rem 0;
+  color: rgba(0, 0, 0, 0.7);
+  font-weight: 700;
+}
+
+.nav-option-4 .global-nav-links a:last-child {
+  padding-right: 0;
+}
+
+.nav-option-4 .global-nav-links a:hover,
+.nav-option-4 .global-nav-links a:focus-visible,
+.nav-option-4 .global-nav-links a[aria-current="page"] {
+  color: #000;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.35em;
+}
+
+/* Option 4: two-level project/file navigation */
+
+.nav-option-5 .global-nav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-rows: 2rem 2.8rem;
+  grid-template-areas:
+    "brand context"
+    "links links";
+  padding: 0 max(1rem, calc((100vw - 61rem) / 2));
+  background: #0a0b0c;
+  border-bottom: 1px solid var(--color-tin-3);
+}
+
+.nav-option-5 .global-nav-brand {
+  grid-area: brand;
+  align-self: center;
+  font-size: 0.75rem;
+}
+
+.nav-option-5 .global-nav-brand::before {
+  color: var(--ink-dim);
+  content: "workspace / ";
+  font-weight: 400;
+}
+
+.nav-option-5 .global-nav-context {
+  grid-area: context;
+  align-self: center;
+}
+
+.nav-option-5 .global-nav-links {
+  grid-area: links;
+  align-items: stretch;
+  border-top: 1px solid var(--color-tin-1);
+}
+
+.nav-option-5 .global-nav-links a {
+  display: flex;
+  align-items: center;
+  min-width: 9rem;
+  padding: 0 1rem;
+  border-right: 1px solid var(--color-tin-1);
+}
+
+.nav-option-5 .global-nav-links a::before {
+  width: 0.65rem;
+  height: 0.65rem;
+  margin-right: 0.65rem;
+  background: var(--color-tin-3);
+  content: "";
+}
+
+.nav-option-5 .global-nav-links a:nth-child(2)::before { background: var(--accent); }
+.nav-option-5 .global-nav-links a:nth-child(3)::before { background: oklch(95% 0.217 48.1); }
+.nav-option-5 .global-nav-links a:nth-child(4)::before { background: oklch(77% 0.156 12.4); }
+
+.nav-option-5 .global-nav-links a:hover,
+.nav-option-5 .global-nav-links a:focus-visible {
+  background: var(--color-tin-1);
+}
+
+.nav-option-5 .global-nav-links a[aria-current="page"] {
+  color: #fff;
+  background: var(--color-tin-1);
+  box-shadow: inset 0 -2px var(--accent);
+}
+
+.nav-option-5 main h2 {
+  top: 4.8rem;
+}
+
+/* Option 5: fixed bottom command bar */
+
+.nav-option-6 {
+  padding-bottom: 3.5rem;
+}
+
+.nav-option-6 .global-nav {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 100;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  min-height: 3.5rem;
+  padding: 0 max(1rem, calc((100vw - 61rem) / 2));
+  background: rgba(6, 7, 7, 0.96);
+  border-top: 2px solid var(--accent);
+  box-shadow: 0 -1rem 3rem rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(12px);
+}
+
+.nav-option-6 .global-nav-brand,
+.nav-option-6 .global-nav-context,
+.nav-option-6 .global-nav-links a {
+  display: flex;
+  align-items: center;
+}
+
+.nav-option-6 .global-nav-brand::before {
+  margin-right: 0.5rem;
+  color: var(--accent);
+  content: "[tt]";
+}
+
+.nav-option-6 .global-nav-context {
+  justify-content: center;
+  padding: 0 1rem;
+}
+
+.nav-option-6 .global-nav-links {
+  justify-content: flex-end;
+}
+
+.nav-option-6 .global-nav-links a {
+  padding: 0 0.75rem;
+}
+
+.nav-option-6 .global-nav-links a::before {
+  color: var(--color-tin-3);
+  content: "/";
+  margin-right: 0.65rem;
+}
+
+.nav-option-6 .global-nav-links a[aria-current="page"] {
+  color: #fff;
+}
+
+@media (max-width: 700px) {
+  body .global-nav .global-nav-links {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0;
+  }
+
+  body .global-nav .global-nav-links a {
+    justify-content: center;
+    min-width: 0;
+    padding-inline: 0.2rem;
+    font-size: 0.62rem;
+    white-space: nowrap;
+  }
+
+  .nav-option-2 .global-nav {
+    grid-template-columns: auto 1fr;
+    padding: 0 1rem;
+  }
+
+  .nav-option-2 .global-nav-context,
+  .nav-option-5 .global-nav-context {
+    display: none;
+  }
+
+  .nav-option-3 .global-nav {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .nav-option-3 .global-nav-links {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .nav-option-4 .global-nav {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "context"
+      "brand"
+      "links";
+    gap: 1.2rem;
+    padding: 1.25rem 1rem;
+  }
+
+  .nav-option-4 .global-nav-context {
+    justify-self: start;
+  }
+
+  .nav-option-4 .global-nav-links a {
+    padding-top: 0.8rem;
+  }
+
+  .nav-option-5 .global-nav {
+    grid-template-columns: 1fr;
+    grid-template-rows: 2rem 2.8rem;
+    grid-template-areas:
+      "brand"
+      "links";
+    padding: 0;
+  }
+
+  .nav-option-5 .global-nav-brand {
+    padding-left: 1rem;
+  }
+
+  .nav-option-5 .global-nav-links {
+    overflow-x: auto;
+  }
+
+  .nav-option-5 .global-nav-links a::before {
+    display: none;
+  }
+
+  .nav-option-6 {
+    padding-bottom: 3.25rem;
+  }
+
+  .nav-option-6 .global-nav {
+    display: block;
+    min-height: 3.25rem;
+    padding: 0;
+  }
+
+  .nav-option-6 .global-nav-brand,
+  .nav-option-6 .global-nav-context {
+    display: none;
+  }
+
+  .nav-option-6 .global-nav-links {
+    width: 100%;
+  }
+
+  .nav-option-6 .global-nav-links a {
+    min-height: 3.25rem;
+    border-left: 1px solid var(--color-tin-1);
+  }
+
+  .nav-option-6 .global-nav-links a::before {
+    display: none;
+  }
+}

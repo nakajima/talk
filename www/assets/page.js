@@ -201,7 +201,7 @@ function createHoverTooltips() {
   const showHover = async (editor, highlightEl, tokenEl) => {
     if (!tokenEl.isConnected) return;
 
-    const { source, currentSource } = getAccumulatedSource(editor);
+    const { source, currentSource } = getHoverSource(editor);
     const tokenText = tokenEl.textContent || "";
     const charOffset =
       charOffsetForToken(highlightEl, tokenEl) +
@@ -239,13 +239,14 @@ function createHoverTooltips() {
   };
 
   const tokenFromPoint = (editor, highlightEl, x, y) => {
+    const editable = editor.matches(".code-editable");
     const previousPointerEvents = editor.style.pointerEvents;
-    editor.style.pointerEvents = "none";
+    if (editable) editor.style.pointerEvents = "none";
     const elementsFromPoint = document.elementsFromPoint
       ? document.elementsFromPoint(x, y)
       : null;
     const topElement = document.elementFromPoint(x, y);
-    editor.style.pointerEvents = previousPointerEvents;
+    if (editable) editor.style.pointerEvents = previousPointerEvents;
 
     if (Array.isArray(elementsFromPoint)) {
       for (const element of elementsFromPoint) {
@@ -287,9 +288,9 @@ function createHoverTooltips() {
       return;
     }
 
-    const highlightEl = editor
-      .closest(".runnable")
-      ?.querySelector(".code-highlight");
+    const highlightEl = editor.matches(".code-highlight")
+      ? editor
+      : editor.closest(".runnable")?.querySelector(".code-highlight");
     if (!highlightEl) {
       hide();
       return;
@@ -324,7 +325,9 @@ function createHoverTooltips() {
     (event) => {
       const editor =
         event.target instanceof Element
-          ? event.target.closest(".code-editable")
+          ? event.target.closest(
+              ".code-editable, .no-run .code-highlight",
+            )
           : null;
       if (!editor) {
         hide();
@@ -536,9 +539,17 @@ function accumulateGroup(container) {
   return container?.dataset.accumulateGroup ?? "";
 }
 
-function getAccumulatedSource(editor) {
-  const currentContainer = editor.closest(".runnable");
-  const currentSource = editor.value || "";
+function sourceForContainer(container) {
+  const editor = container?.querySelector(".code-editable");
+  return (
+    editor?.value ??
+    container?.dataset.source ??
+    container?.querySelector(".code-highlight")?.textContent ??
+    ""
+  );
+}
+
+function getAccumulatedSourceForContainer(currentContainer, currentSource) {
   const priorSources = [];
 
   if (currentContainer?.dataset.accumulates === "true") {
@@ -552,9 +563,7 @@ function getAccumulatedSource(editor) {
         candidate.dataset.accumulates === "true" &&
         accumulateGroup(candidate) === group
       ) {
-        const candidateEditor = candidate.querySelector(".code-editable");
-        const candidateSource =
-          candidateEditor?.value ?? candidate.dataset.source ?? "";
+        const candidateSource = sourceForContainer(candidate);
         if (candidateSource.trim().length > 0) {
           priorSources.push(candidateSource);
         }
@@ -570,6 +579,22 @@ function getAccumulatedSource(editor) {
     currentSource,
     lineOffset: prefix ? prefix.split("\n").length + 1 : 0,
   };
+}
+
+function getAccumulatedSource(editor) {
+  const currentContainer = editor.closest(".runnable");
+  return getAccumulatedSourceForContainer(
+    currentContainer,
+    editor.value || "",
+  );
+}
+
+function getHoverSource(editor) {
+  const currentContainer = editor.closest(".runnable, .no-run");
+  const currentSource = editor.matches(".code-editable")
+    ? editor.value || ""
+    : sourceForContainer(currentContainer);
+  return getAccumulatedSourceForContainer(currentContainer, currentSource);
 }
 
 function diagnosticsForCurrentExample(checkResult, lineOffset, currentSource) {

@@ -15,6 +15,10 @@ pub enum MacroError {
         name: String,
         span: crate::parsing::span::Span,
     },
+    UndefinedWrapper {
+        name: String,
+        span: crate::parsing::span::Span,
+    },
     AmbiguousProceduralMacro {
         name: String,
         packages: Vec<String>,
@@ -53,6 +57,7 @@ impl MacroError {
         match self {
             Self::DuplicateMacroRule { .. } => "macro.duplicate-rule",
             Self::UndefinedMacro { .. } => "macro.undefined",
+            Self::UndefinedWrapper { .. } => "macro.undefined-wrapper",
             Self::AmbiguousProceduralMacro { .. } => "macro.ambiguous-procedural",
             Self::MacroArityMismatch { .. } => "macro.arity-mismatch",
             Self::InvalidMacroTemplate { .. } => "macro.invalid-template",
@@ -70,6 +75,9 @@ impl std::fmt::Display for MacroError {
                 write!(f, "Duplicate macro rule `@{name}` with {arity} argument(s)")
             }
             Self::UndefinedMacro { name, .. } => write!(f, "Undefined macro `@{name}`"),
+            Self::UndefinedWrapper { name, .. } => {
+                write!(f, "Undefined declaration wrapper `#[{name}]`")
+            }
             Self::AmbiguousProceduralMacro { name, packages, .. } => write!(
                 f,
                 "Macro `@{name}` is ambiguous between {}",
@@ -113,7 +121,9 @@ impl std::error::Error for MacroError {}
 
 use derive_visitor::{Drive, DriveMut, VisitorMut};
 
-use crate::front::macro_host::{MacroBindings, MacroHost, MacroResolution, ProceduralMacro};
+use crate::front::macro_host::{
+    MacroBindings, MacroHost, MacroResolution, ProceduralMacro, WrapperContext, WrapperResolution,
+};
 use crate::{
     ast::{AST, Parsed},
     diagnostic::{AnyDiagnostic, Diagnostic, Severity},
@@ -391,10 +401,11 @@ pub fn expand_macros_with_sources(
             host,
             generated_sources: HashMap::new(),
             emitted_metadata: Vec::new(),
+            nominal_contexts: Vec::new(),
         };
         loop {
             expander.changed = false;
-            expander.expand_decl_items(&mut ast.roots);
+            expander.expand_decl_items(&mut ast.roots, WrapperContext::TopLevel);
             for root in &mut ast.roots {
                 root.drive_mut(&mut expander);
             }
@@ -415,6 +426,7 @@ pub fn expand_macros_with_sources(
     Expr(enter),
     Block(enter),
     Body(enter),
+    Decl(enter, exit),
     Pattern(enter),
     TypeAnnotation(enter)
 )]
@@ -431,6 +443,29 @@ struct MacroExpander<'a> {
     host: &'a dyn MacroHost,
     generated_sources: HashMap<NodeID, String>,
     emitted_metadata: Vec<crate::hygiene::MaterializedIdentifier>,
+    // The nominal bodies the visitor is currently inside, so `enter_body`
+    // knows which declaration context a wrapper target occupies.
+    nominal_contexts: Vec<WrapperContext>,
+}
+
+/// What applying one wrapper did to the declaration it was rooted at.
+enum WrapperApplied {
+    /// The declaration was rewritten in place; it stays in its container.
+    Replaced,
+    /// The declaration must be removed: the wrapper returned `Remove`, or
+    /// the chain stopped on an error already reported.
+    Remove,
+}
+
+/// The member context a nominal body assigns to its declarations.
+fn nominal_context(kind: &DeclKind) -> Option<WrapperContext> {
+    match kind {
+        DeclKind::Struct { .. } => Some(WrapperContext::StructBody),
+        DeclKind::Enum { .. } => Some(WrapperContext::EnumBody),
+        DeclKind::Protocol { .. } => Some(WrapperContext::ProtocolBody),
+        DeclKind::Extend { .. } => Some(WrapperContext::ExtendBody),
+        _ => None,
+    }
 }
 
 impl MacroExpander<'_> {
@@ -693,6 +728,273 @@ impl MacroExpander<'_> {
         self.changed = true;
     }
 
+    /// Apply the innermost wrapper of the chain rooted at `decl` (ADR 0026):
+    /// the marker closest to the declaration runs first, and `Remove` or a
+    /// failure stops the chain. One call performs one application; a chain's
+    /// remaining markers and any markers quoted into the replacement expand
+    /// through the ordinary fixpoint loop.
+    fn apply_wrapper(&mut self, decl: &mut Decl, context: WrapperContext) -> WrapperApplied {
+        let id = decl.id;
+        let span = decl.span;
+        let DeclKind::Wrapper {
+            name,
+            name_span,
+            input_span,
+            input_tokens,
+            target_tokens,
+            target,
+        } = &mut decl.kind
+        else {
+            unreachable!("apply_wrapper requires a wrapper declaration");
+        };
+
+        if matches!(target.kind, DeclKind::Wrapper { .. }) {
+            let applied = self.apply_wrapper(target, context);
+            if let WrapperApplied::Replaced = applied {
+                // The captured tokens still spell the inner marker; the
+                // replacement's canonical text is recorded under the new
+                // target id and is re-scanned instead.
+                target_tokens.clear();
+            }
+            return applied;
+        }
+
+        let name = name.clone();
+        let name_span = *name_span;
+        let input_span = *input_span;
+        let input_tokens = input_tokens.clone();
+        let target_tokens = target_tokens.clone();
+        let target_id = target.id;
+
+        if self.expansions >= MAX_EXPANSIONS_PER_FILE {
+            self.error(id, MacroError::MacroExpansionLimit { name, span });
+            return WrapperApplied::Remove;
+        }
+
+        let binding = match self.procedural.resolve_wrapper(&name) {
+            WrapperResolution::Found(binding) => binding,
+            WrapperResolution::Ambiguous(packages) => {
+                self.error(
+                    id,
+                    MacroError::AmbiguousProceduralMacro {
+                        name,
+                        packages,
+                        span: name_span,
+                    },
+                );
+                return WrapperApplied::Remove;
+            }
+            WrapperResolution::Missing => {
+                self.error(
+                    id,
+                    MacroError::UndefinedWrapper {
+                        name,
+                        span: name_span,
+                    },
+                );
+                return WrapperApplied::Remove;
+            }
+        };
+
+        let args_source = self
+            .generated_sources
+            .get(&id)
+            .cloned()
+            .or_else(|| self.source.map(str::to_string));
+        let Some(args_source) = args_source else {
+            self.error(
+                id,
+                MacroError::InvalidProceduralExpansion {
+                    name,
+                    reason: "invocation source is unavailable".into(),
+                    span,
+                },
+            );
+            return WrapperApplied::Remove;
+        };
+        let (target_source, target_tokens) = if target_tokens.is_empty() {
+            match self.generated_sources.get(&target_id).cloned() {
+                Some(generated) => (generated, Vec::new()),
+                None => {
+                    self.error(
+                        id,
+                        MacroError::InvalidProceduralExpansion {
+                            name,
+                            reason: "wrapper target tokens are unavailable".into(),
+                            span,
+                        },
+                    );
+                    return WrapperApplied::Remove;
+                }
+            }
+        } else {
+            (args_source.clone(), target_tokens)
+        };
+
+        let namespace = (u64::from(self.file_id.0) << 32) | u64::from(id.1);
+        let ordinal = self.expansions as u64 + 1;
+        let expansion = match binding.expand_wrapper(
+            self.file_id,
+            &args_source,
+            input_span.start,
+            input_span.end,
+            &input_tokens,
+            &target_source,
+            &target_tokens,
+            context,
+            namespace,
+            ordinal,
+        ) {
+            Ok(expansion) => expansion,
+            Err(message) => {
+                self.error(
+                    id,
+                    MacroError::ProceduralMacroFailure {
+                        name,
+                        code: "macro.execution".into(),
+                        message,
+                        span,
+                    },
+                );
+                return WrapperApplied::Remove;
+            }
+        };
+        if let Some(failure) = expansion.failure {
+            self.error(
+                id,
+                MacroError::ProceduralMacroFailure {
+                    name,
+                    code: failure.code,
+                    message: failure.message,
+                    span,
+                },
+            );
+            return WrapperApplied::Remove;
+        }
+        if expansion.removed {
+            self.expansions += 1;
+            self.changed = true;
+            return WrapperApplied::Remove;
+        }
+        let Some(mut parsed) = expansion.parse else {
+            self.error(
+                id,
+                MacroError::InvalidProceduralExpansion {
+                    name,
+                    reason: "successful result contains no parsed declaration".into(),
+                    span,
+                },
+            );
+            return WrapperApplied::Remove;
+        };
+        let parse_failure = parsed
+            .failure
+            .take()
+            .or_else(|| parsed.diags.drain(..).next());
+        if let Some(failure) = parse_failure {
+            self.error(
+                id,
+                MacroError::ProceduralMacroFailure {
+                    name,
+                    code: failure.code,
+                    message: failure.message,
+                    span,
+                },
+            );
+            return WrapperApplied::Remove;
+        }
+        expansion.metadata.apply(&mut parsed.roots);
+        self.emitted_metadata.extend(expansion.metadata.identifiers);
+        if parsed.roots.len() != 1 {
+            self.error(
+                id,
+                MacroError::InvalidProceduralExpansion {
+                    name,
+                    reason: format!("expected one declaration, got {} roots", parsed.roots.len()),
+                    span,
+                },
+            );
+            return WrapperApplied::Remove;
+        }
+        let Node::Decl(mut replacement) = parsed.roots.remove(0) else {
+            self.error(
+                id,
+                MacroError::InvalidProceduralExpansion {
+                    name,
+                    reason: "result root is not a declaration".into(),
+                    span,
+                },
+            );
+            return WrapperApplied::Remove;
+        };
+        // Imports and macro definitions establish the macro namespace itself
+        // and are collected before expansion, so a replacement cannot
+        // introduce them (ADR 0026).
+        if matches!(
+            replacement.kind,
+            DeclKind::Macro { .. } | DeclKind::Import(_)
+        ) {
+            self.error(
+                id,
+                MacroError::InvalidProceduralExpansion {
+                    name,
+                    reason: "wrappers cannot produce imports or macro definitions".into(),
+                    span,
+                },
+            );
+            return WrapperApplied::Remove;
+        }
+        replacement.drive_mut(&mut NodeIdRemapper {
+            file_id: self.file_id,
+            node_ids: &mut self.node_ids,
+        });
+        replacement.drive_mut(&mut CallSiteSpanRewriter { span });
+        let mut nested = vec![replacement.id];
+        {
+            let mut collect = derive_visitor::visitor_enter_fn(|candidate: &Expr| {
+                if matches!(candidate.kind, ExprKind::MacroCall { .. }) {
+                    nested.push(candidate.id);
+                }
+            });
+            replacement.drive(&mut collect);
+        }
+        {
+            let mut collect = derive_visitor::visitor_enter_fn(|candidate: &Pattern| {
+                if matches!(candidate.kind, PatternKind::MacroCall { .. }) {
+                    nested.push(candidate.id);
+                }
+            });
+            replacement.drive(&mut collect);
+        }
+        {
+            let mut collect = derive_visitor::visitor_enter_fn(|candidate: &TypeAnnotation| {
+                if matches!(candidate.kind, TypeAnnotationKind::MacroCall { .. }) {
+                    nested.push(candidate.id);
+                }
+            });
+            replacement.drive(&mut collect);
+        }
+        {
+            let mut collect = derive_visitor::visitor_enter_fn(|candidate: &Decl| {
+                if matches!(
+                    candidate.kind,
+                    DeclKind::MacroCall { .. } | DeclKind::Wrapper { .. }
+                ) {
+                    nested.push(candidate.id);
+                }
+            });
+            replacement.drive(&mut collect);
+        }
+        for nested_id in nested {
+            self.generated_sources
+                .insert(nested_id, expansion.source.clone());
+        }
+        *decl = replacement;
+        self.expansions += 1;
+        self.changed = true;
+        WrapperApplied::Replaced
+    }
+
     fn enter_expr(&mut self, expr: &mut Expr) {
         let ExprKind::MacroCall {
             name,
@@ -792,9 +1094,20 @@ impl MacroExpander<'_> {
     /// macros expand in order. Invocations of expression-producing macros
     /// (the compiler-provided `@assert`, procedural macros) expand to an
     /// expression statement.
-    fn expand_decl_items(&mut self, items: &mut Vec<Node>) {
+    fn expand_decl_items(&mut self, items: &mut Vec<Node>, context: WrapperContext) {
         let mut index = 0;
         while index < items.len() {
+            if let Node::Decl(decl) = &mut items[index]
+                && matches!(decl.kind, DeclKind::Wrapper { .. })
+            {
+                match self.apply_wrapper(decl, context) {
+                    WrapperApplied::Replaced => index += 1,
+                    WrapperApplied::Remove => {
+                        items.remove(index);
+                    }
+                }
+                continue;
+            }
             let (id, span, name, name_span, input_span, input_tokens, args) = match &items[index] {
                 Node::Decl(Decl {
                     id,
@@ -898,12 +1211,38 @@ impl MacroExpander<'_> {
     }
 
     fn enter_block(&mut self, block: &mut Block) {
-        self.expand_decl_items(&mut block.body);
+        self.expand_decl_items(&mut block.body, WrapperContext::Block);
+    }
+
+    fn enter_decl(&mut self, decl: &mut Decl) {
+        if let Some(context) = nominal_context(&decl.kind) {
+            self.nominal_contexts.push(context);
+        }
+    }
+
+    fn exit_decl(&mut self, decl: &mut Decl) {
+        if nominal_context(&decl.kind).is_some() {
+            self.nominal_contexts.pop();
+        }
     }
 
     fn enter_body(&mut self, body: &mut crate::node_kinds::body::Body) {
+        let member_context = self
+            .nominal_contexts
+            .last()
+            .copied()
+            .unwrap_or(WrapperContext::StructBody);
         let mut index = 0;
         while index < body.decls.len() {
+            if matches!(body.decls[index].kind, DeclKind::Wrapper { .. }) {
+                match self.apply_wrapper(&mut body.decls[index], member_context) {
+                    WrapperApplied::Replaced => index += 1,
+                    WrapperApplied::Remove => {
+                        body.decls.remove(index);
+                    }
+                }
+                continue;
+            }
             let (id, span, name, name_span, input_span, input_tokens) =
                 match &body.decls[index].kind {
                     DeclKind::MacroCall {

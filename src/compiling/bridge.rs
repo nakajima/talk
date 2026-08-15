@@ -318,7 +318,7 @@ use crate::node_kinds::decl::{
     Decl, DeclKind, Import, ImportPath, ImportedSymbol, ImportedSymbols, MacroParameter,
     ReceiverMode, Visibility,
 };
-use crate::node_kinds::expr::{Expr, ExprKind, MacroToken};
+use crate::node_kinds::expr::{Expr, ExprKind, MacroToken, QuoteCategory};
 use crate::node_kinds::func::{CaptureMode, CaptureSpec, EffectSet, Func, FuncOrigin};
 use crate::node_kinds::func_signature::FuncSignature;
 use crate::node_kinds::generic_arg::{GenericArg, StaticExpr, StaticExprKind, StaticOpKind};
@@ -345,7 +345,7 @@ use crate::token_kind::TokenKind;
 
 // The bridged result types are frontend data (ADR 0057 slice 3b); the
 // bridge constructs them and re-exports the historical paths.
-pub use crate::front::macro_host::{BridgedExprMacro, BridgedFail, BridgedParse};
+pub use crate::front::macro_host::{BridgedDeclWrapper, BridgedExprMacro, BridgedFail, BridgedParse};
 
 /// Decode a `lex_tokens` result: the token stream (comments included
 /// as LineComment tokens) and whether the scan completed. A trailing
@@ -470,6 +470,60 @@ pub fn adapt_expr_macro(
         source,
         parse,
         metadata,
+        failure,
+    })
+}
+
+/// Decode one declaration-wrapper result (ADR 0026). Shaped like
+/// `adapt_expr_macro` with the additional intentional-removal flag.
+pub fn adapt_decl_wrapper(
+    run: FrontendRun,
+    schema: &AbiSchema,
+    materialized_file: FileID,
+) -> Result<BridgedDeclWrapper, String> {
+    let mut adapter = ResultAdapter {
+        v: ResultValidator::new(run, schema)?,
+        boxed: AbiTy::Named("boxed".into()),
+        ids: IDGenerator::default(),
+        meta: NodeMetaStorage::default(),
+        metas: Vec::new(),
+        meta_cursor: 0,
+        file_id: materialized_file,
+    };
+    let mut output = adapter.record(&run.root(), "DeclWrapperOutput")?;
+    let source = adapter.string(&take(&mut output, "source")?)?;
+    let outcome = adapter.opt(&take(&mut output, "outcome")?)?;
+    let metadata_value = take(&mut output, "metadata")?;
+    let removed = boolean(&take(&mut output, "removed")?)?;
+    let code = adapter
+        .opt(&take(&mut output, "failure_code")?)?
+        .map(|value| adapter.string(&value))
+        .transpose()?;
+    let message = adapter
+        .opt(&take(&mut output, "failure_message")?)?
+        .map(|value| adapter.string(&value))
+        .transpose()?;
+    let failure_start = int(&take(&mut output, "failure_start")?)?;
+    let failure_end = int(&take(&mut output, "failure_end")?)?;
+    let failure = match (code, message) {
+        (Some(code), Some(message)) => Some(BridgedFail {
+            code,
+            message,
+            span: Some(adapter.span(failure_start, failure_end)?),
+            expected: None,
+        }),
+        (None, None) => None,
+        _ => return Err("macro failure code and message must both be present or absent".into()),
+    };
+    let metadata = adapter.syntax_metadata(&metadata_value)?;
+    let parse = outcome
+        .map(|value| adapter.parse_outcome(&value))
+        .transpose()?;
+    Ok(BridgedDeclWrapper {
+        source,
+        parse,
+        metadata,
+        removed,
         failure,
     })
 }
@@ -1181,6 +1235,14 @@ impl ResultAdapter<'_, '_> {
                     .iter()
                     .map(|value| self.string(value))
                     .collect::<Result<_, _>>()?,
+                // The pre-wrapper bootstrap frontend emits no category field;
+                // treat its quotes as expression quotations so the artifact
+                // can regenerate itself.
+                category: match p.get(3) {
+                    None => QuoteCategory::Expr,
+                    Some(value) if int(value)? == 1 => QuoteCategory::Decl,
+                    Some(_) => QuoteCategory::Expr,
+                },
             },
             other => return Err(format!("unknown ExprKind variant `{other}`")),
         };
@@ -2434,6 +2496,26 @@ impl ResultAdapter<'_, '_> {
                 input_tokens: self.macro_tokens(&p[5])?,
                 args: self.exprs(&p[6])?,
             },
+            "wrapper_decl" => {
+                let mut targets = Vec::new();
+                for target in self.array(&p[7])? {
+                    targets.push(self.decl(&target)?);
+                }
+                if targets.len() != 1 {
+                    return Err(format!(
+                        "expected exactly one wrapper target, got {}",
+                        targets.len()
+                    ));
+                }
+                DeclKind::Wrapper {
+                    name: self.string(&p[0])?,
+                    name_span: self.span(int(&p[1])?, int(&p[2])?)?,
+                    input_span: self.span(int(&p[3])?, int(&p[4])?)?,
+                    input_tokens: self.macro_tokens(&p[5])?,
+                    target_tokens: self.macro_tokens(&p[6])?,
+                    target: Box::new(targets.remove(0)),
+                }
+            }
             other => return Err(format!("unknown DeclKind variant `{other}`")),
         };
         Ok(Decl {

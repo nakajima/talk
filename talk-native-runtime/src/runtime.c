@@ -327,6 +327,45 @@ static inline TalkValue talk_agg(uint32_t layout, uint32_t symbol, uint32_t meta
     return value;
 }
 
+/* A tagged aggregate with process lifetime, for static values crossing
+ * runtimes whose uniform representation is TALK_AGG. */
+static inline TalkValue talk_static_agg(uint32_t layout, uint32_t symbol, uint32_t meta, uint32_t len) {
+    TalkAgg *agg = (TalkAgg *)malloc(sizeof(TalkAgg) + (size_t)len * sizeof(TalkValue));
+    if (agg == NULL) {
+        talk_trap("out of memory");
+    }
+    agg->layout = layout;
+    agg->symbol = symbol;
+    agg->meta = meta;
+    agg->len = len;
+    TalkValue value;
+    value.tag = TALK_AGG;
+    value.v.agg = agg;
+    return value;
+}
+
+/* A native String-shaped aggregate with process lifetime. Static-value
+ * caches build each descriptor once; unlike arena boxes these survive
+ * library-call cleanup and are never part of dynamic allocation balance. */
+static inline TalkValue talk_static_string_value(uint32_t layout, uint32_t display,
+                                                 unsigned char *base, int64_t len) {
+    TalkNative *native = (TalkNative *)malloc(sizeof(TalkNative) + 24u);
+    if (native == NULL) {
+        talk_trap("out of memory");
+    }
+    native->layout = layout;
+    native->display = display;
+    unsigned char *payload = (unsigned char *)(native + 1);
+    memset(payload, 0, 24u);
+    memcpy(payload, &base, sizeof base);
+    memcpy(payload + 8u, &len, sizeof len);
+    memcpy(payload + 16u, &len, sizeof len);
+    TalkValue value;
+    value.tag = TALK_NATIVE;
+    value.v.native = native;
+    return value;
+}
+
 /* An aggregate in caller-provided storage: the frame's, for a
  * construction the escape analysis proved cannot outlive it. One slot per
  * site, reused on each execution, so a loop allocates nothing. */

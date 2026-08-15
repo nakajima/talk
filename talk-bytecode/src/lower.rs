@@ -916,37 +916,16 @@ impl Lowering<'_> {
                 dest,
                 bytes,
                 layout,
-                storage_layout,
+                storage_layout: _,
             } => {
-                // Literal text is immortal static data; the value is the
-                // core String struct over it: String { storage:
-                // Storage { base }, byte_count, capacity } (layout owned
-                // by core/String.tlk; parity tests pin the shape).
                 let offset = self.statics.intern(self.module, bytes);
-                let base = self.fresh_reg();
-                let k = self.consts.intern_ptr(offset);
-                self.code.push(Insn::Const { dest: base, k });
-                let storage = self.fresh_reg();
-                let storage_layout = self.require_shaped(*storage_layout)?;
-                let (args_start, args_len) = self.reg_range(&[base]);
-                self.code.push(Insn::AggNew {
-                    dest: storage,
-                    layout: storage_layout,
-                    tag: 0,
-                    args_start,
-                    args_len,
-                });
-                let len = self.reg(Operand::Const(Constant::Int(
-                    i64::try_from(bytes.len()).unwrap_or_default(),
-                )));
+                let len = u32::try_from(bytes.len()).unwrap_or_default();
                 let layout = self.require_shaped(*layout)?;
-                let (args_start, args_len) = self.reg_range(&[storage, len, len]);
-                self.code.push(Insn::AggNew {
+                self.code.push(Insn::StringLit {
                     dest: *dest,
+                    offset,
+                    len,
                     layout,
-                    tag: 0,
-                    args_start,
-                    args_len,
                 });
             }
             Inst::BytesLit { dest, bytes } => {

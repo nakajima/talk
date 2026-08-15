@@ -302,6 +302,7 @@ fn opcode_name(insn: &Insn) -> &'static str {
         Insn::CellGet { .. } => "CellGet",
         Insn::CellSet { .. } => "CellSet",
         Insn::AggNew { .. } => "AggNew",
+        Insn::StringLit { .. } => "StringLit",
         Insn::Field { .. } => "Field",
         Insn::FieldIndex { .. } => "FieldIndex",
         Insn::GetElement { .. } => "GetElement",

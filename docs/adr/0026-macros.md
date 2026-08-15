@@ -374,11 +374,46 @@ associated-type bindings from protocol equalities such as
 `Iterator.Element == Iterable.Element`, preserving those bindings in exported
 conformance rows so generic stdlib helpers specialize correctly downstream.
 
-Declaration wrapper macros, list-producing attached generation roles,
-repetition, persistent expansion caching, and the complete source/expanded
-analysis map remain follow-ups. A wrapper is specifically the zero-or-one
-transform described above; implementing one does not implicitly add peer or
-member generation.
+Declaration wrapper macros are now implemented. `#[name]` and
+`#[name(tokens)]` markers parse before a declaration in file, block, and
+nominal-body positions; the marker and its target parse as one declaration,
+and adjacent markers nest with the innermost closest to the target. A
+wrapper is a procedural macro whose declared return type is
+`DeclWrapperResult`; that return type is the export's role tag, recorded in
+a separate role map in the versioned macro artifact, so one visible spelling
+may name both an expression macro and a wrapper without ambiguity. The
+wrapper function receives the argument token tree (`MacroInput?`, absent
+for the bare form), the target as use-site `Syntax<Decl>` with the applied
+marker removed, the declaration context (`DeclContext`), and the ordinary
+hygiene and quotation contexts. Target capture and replacement validation
+parse in the declaration's actual context — a `func` member is a method, a
+`case` needs an enum body — via context-threaded declaration parsing, and a
+`quote decl { ... }` quotation form (with `$name` splicing and
+`expr_decl_fragment`/`type_decl_fragment` embedding) builds replacements.
+`Remove` and `Failure` stop a marker chain; chained applications hand the
+previous replacement's rendered canonical text to the next wrapper.
+Expansion applies one wrapper per fixpoint round under the existing
+per-file work budget, with fresh node identities and call-site span blame.
+
+The declaration lens API is implemented as views and rebuilders in the
+syntax library. `view_decl` locates a target's structure by parsing its own
+canonical tokens through the real grammar in the declaration context the
+target occupies, and exposes its grammatical shape (`DeclShape`), declared
+name, and body block (as expression syntax with token provenance and
+hygiene contexts intact, so it splices into quotations). Rebuilders
+re-splice the original provenance-carrying tokens around replaced child
+syntax: `view_with_body` swaps the body block, `view_with_name` introduces
+a fresh hygienic binder (definition site plus expansion scope, invisible to
+callers), and `view_with_name_token` splices a caller-provided identifier
+token as the binder — the intentional exposure path; a raw string is still
+never enough for call-site capture. Rebuilt declarations remain ordinary
+`Syntax<Decl>` values, category-checked at the wrapper service boundary in
+the target's actual context.
+
+List-producing attached generation roles, repetition, persistent expansion
+caching, and the complete source/expanded analysis map remain follow-ups. A
+wrapper is specifically the zero-or-one transform described above;
+implementing one does not implicitly add peer or member generation.
 
 ## Consequences
 

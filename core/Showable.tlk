@@ -1,5 +1,5 @@
 // no-core
-use package::String::{ String }
+use package::String::{ Static, String }
 use package::StringBuilder::{ StringBuilder }
 use package::Operators::{ Add, Subtract, Multiply, Divide, Comparable, Equatable, Negatable }
 
@@ -125,6 +125,12 @@ extend Void: Showable {
 }
 
 extend String: Showable {
+	pub func show() -> String {
+		self.to_string()
+	}
+}
+
+extend Static<String>: Showable {
 	pub func show() -> String {
 		self.to_string()
 	}

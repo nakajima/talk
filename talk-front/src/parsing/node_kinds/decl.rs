@@ -274,6 +274,29 @@ pub enum DeclKind {
     },
 
     TypeAlias(#[drive(skip)] Name, #[drive(skip)] Span, TypeAnnotation),
+
+    /// A `#[name]` / `#[name(tokens)]` declaration wrapper marker attached to
+    /// the following declaration (ADR 0026). Adjacent markers nest, innermost
+    /// closest to the declaration; expansion applies the innermost wrapper
+    /// first and replaces the whole node before name resolution.
+    Wrapper {
+        #[drive(skip)]
+        name: String,
+        #[drive(skip)]
+        name_span: Span,
+        /// The argument extent: the balanced parenthesized input, or an empty
+        /// range after the name for the bare `#[name]` form.
+        #[drive(skip)]
+        input_span: Span,
+        /// Canonical argument tokens, including the outer parentheses; empty
+        /// for the bare form.
+        #[drive(skip)]
+        input_tokens: Vec<MacroToken>,
+        /// The target's canonical tokens, marker excluded.
+        #[drive(skip)]
+        target_tokens: Vec<MacroToken>,
+        target: Box<Decl>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

@@ -29,13 +29,39 @@ self.addEventListener("message", (event) => {
     self.postMessage({
       type: "result",
       id,
-      error: {
-        message: error instanceof Error ? error.message : String(error),
-        stack: error instanceof Error ? error.stack : undefined,
-      },
+      error: describeError(error),
     });
   }
 });
+
+function describeError(error) {
+  if (error instanceof Error) {
+    return { message: error.message, stack: error.stack };
+  }
+  if (typeof error === "string") {
+    return { message: error };
+  }
+  if (error && typeof error === "object") {
+    const messages = [];
+    if (typeof error.message === "string" && error.message.trim()) {
+      messages.push(error.message.trim());
+    }
+    if (Array.isArray(error.diagnostics)) {
+      for (const diagnostic of error.diagnostics) {
+        if (typeof diagnostic?.message !== "string") continue;
+        const message = diagnostic.message.trim();
+        if (message && !messages.includes(message)) messages.push(message);
+      }
+    }
+    if (messages.length) return { message: messages.join("\n") };
+
+    try {
+      const serialized = JSON.stringify(error);
+      if (serialized && serialized !== "{}") return { message: serialized };
+    } catch {}
+  }
+  return { message: "Unknown WASM error" };
+}
 
 function perform(operation, payload) {
   switch (operation) {

@@ -5,12 +5,11 @@ use crate::{Chunk, Constant, FieldShape, Insn, IoOp, LayoutBody, LayoutDesc, Mem
 const MAGIC: &[u8; 7] = b"TALKBC\0";
 /// The wire-format version, embedded in every image header and recorded
 /// in artifact manifests (ADR 0043): a loader refuses any other version.
-// Version 6 is the flat-aggregate format (ADR 0045): the module ships
-// its layout table, one `AggNew` opcode builds every aggregate under a
-// published layout, and field access is offset-addressed. The floor
-// matches: earlier versions carried the symbol-headed representation
-// this runtime no longer has, so they fail at the gate.
-pub const FORMAT_VERSION: u32 = 7;
+// Version 8 adds `StringLit`: complete immutable literal descriptors are
+// cached by the machine instead of being rebuilt from two `AggNew`
+// instructions at every evaluation. Version 7 remains readable because
+// the module sections are unchanged and its opcode set is a strict subset.
+pub const FORMAT_VERSION: u32 = 8;
 const MIN_SUPPORTED_FORMAT_VERSION: u32 = 7;
 
 pub fn supports_format(version: u32) -> bool {
@@ -257,6 +256,18 @@ impl Encoder {
                 self.u16(tag);
                 self.u32(args_start);
                 self.u16(args_len);
+            }
+            Insn::StringLit {
+                dest,
+                offset,
+                len,
+                layout,
+            } => {
+                self.u8(64);
+                self.u16(dest);
+                self.u32(offset);
+                self.u32(len);
+                self.u32(layout);
             }
             Insn::Field {
                 dest,
@@ -821,6 +832,12 @@ impl<'a> Decoder<'a> {
                 tag: self.u16()?,
                 args_start: self.u32()?,
                 args_len: self.u16()?,
+            }),
+            64 => Ok(Insn::StringLit {
+                dest: self.u16()?,
+                offset: self.u32()?,
+                len: self.u32()?,
+                layout: self.u32()?,
             }),
             13 => Ok(Insn::Field {
                 dest: self.u16()?,
@@ -1399,6 +1416,26 @@ impl Insn {
                     return Err(DecodeError::InvalidIndex("construction arity"));
                 }
             }
+            Insn::StringLit {
+                dest,
+                offset,
+                len,
+                layout,
+            } => {
+                Register::new(n_regs).check(dest)?;
+                let desc = module.shaped_layout(layout)?;
+                if desc.width != 3 {
+                    return Err(DecodeError::InvalidIndex("string literal layout"));
+                }
+                let end = offset
+                    .checked_add(len)
+                    .ok_or(DecodeError::IntegerOverflow)?;
+                if usize::try_from(end).map_err(|_| DecodeError::IntegerOverflow)?
+                    > module.statics.len()
+                {
+                    return Err(DecodeError::InvalidIndex("string literal bytes"));
+                }
+            }
             Insn::ExistentialPack {
                 dest,
                 args_start,
@@ -1653,6 +1690,40 @@ mod tests {
             assert_eq!(IoOp::from_index(op.index()), Some(*op));
         }
         assert_eq!(IoOp::from_index(IoOp::ALL.len() as u8), None);
+    }
+
+    #[test]
+    fn round_trips_static_string_literal() {
+        let module = Module {
+            chunks: vec![Chunk {
+                name: "main".into(),
+                code: vec![
+                    Insn::StringLit {
+                        dest: 0,
+                        offset: 0,
+                        len: 5,
+                        layout: 0,
+                    },
+                    Insn::Ret { src: 0 },
+                ],
+                arity: 0,
+                n_regs: 1,
+                unwind: vec![],
+            }],
+            statics: b"hello".to_vec(),
+            layouts: vec![LayoutDesc {
+                symbol: None,
+                width: 3,
+                body: LayoutBody::Product(vec![
+                    (0, FieldShape::Slot),
+                    (1, FieldShape::Slot),
+                    (2, FieldShape::Slot),
+                ]),
+            }],
+            ..Module::default()
+        };
+        let decoded = Module::decode_bytecode(&module.encode_bytecode().unwrap()).unwrap();
+        assert_eq!(decoded.chunks[0].code, module.chunks[0].code);
     }
 
     #[test]

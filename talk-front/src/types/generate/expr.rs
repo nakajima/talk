@@ -335,6 +335,17 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 let ty = self.infer_expr(expr, ctx);
                 self.check_inferred_against_expected(expr.id, expected, ty, reason);
             }
+            ExprKind::LiteralString(_)
+                if matches!(
+                    self.store.shallow(expected),
+                    Ty::Nominal(symbol, args)
+                        if symbol == Symbol::Static
+                            && matches!(args.as_slice(), [Ty::Nominal(inner, args)]
+                                if *inner == Symbol::String && args.is_empty())
+                ) =>
+            {
+                self.artifacts.node_types.insert(expr.id, expected.clone());
+            }
             ExprKind::Block(block) => {
                 self.check_block_value(block, expected, ctx);
                 self.artifacts.node_types.insert(expr.id, expected.clone());

@@ -6578,11 +6578,18 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             ExprKind::Proj(base, _, field) => {
                 let base_ty = self.resolved(&base.ty);
-                let mut head = &base_ty;
-                while let Ty::Borrow(_, inner) = head {
-                    head = inner;
+                let mut access_ty = base_ty.clone();
+                while let Ty::Borrow(_, inner) = access_ty {
+                    access_ty = *inner;
                 }
-                let Ty::Nominal(struct_symbol, _) = head else {
+                if let Ty::Nominal(symbol, args) = &access_ty
+                    && *symbol == Symbol::Static
+                    && self.program_builder.field_index(*symbol, *field).is_none()
+                    && let [inner @ Ty::Nominal(..)] = args.as_slice()
+                {
+                    access_ty = inner.clone();
+                }
+                let Ty::Nominal(struct_symbol, _) = &access_ty else {
                     return Err(BackendError::unsupported(
                         "field reads on this type are not supported yet".into(),
                         expr.span,
@@ -6611,7 +6618,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 if heap {
                     self.push(Inst::ObjectGet { dest, src, index });
                 } else {
-                    let layout = self.container_layout(&base_ty);
+                    let layout = self.container_layout(&access_ty);
                     self.push_field(dest, src, layout, index, None);
                 }
                 // Field reads carry their owner's provenance so views
@@ -8350,6 +8357,21 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         while let Ty::Borrow(_, inner) = head_ty {
             head_ty = *inner;
         }
+        let scrutinee = if matches!(
+            &head_ty,
+            Ty::Nominal(symbol, args)
+                if *symbol == Symbol::Static
+                    && matches!(args.as_slice(), [Ty::Nominal(inner, args)]
+                        if *inner == Symbol::String && args.is_empty())
+        ) {
+            let container = self.container_layout(&head_ty);
+            let value = self.fresh_local();
+            self.push_field(value, scrutinee, container, 0, None);
+            head_ty = Ty::Nominal(Symbol::String, Vec::new());
+            Operand::Local(value)
+        } else {
+            scrutinee
+        };
         let Ty::Nominal(head, _) = &head_ty else {
             return Err(BackendError::unsupported(
                 "string patterns on this scrutinee are not supported yet".into(),

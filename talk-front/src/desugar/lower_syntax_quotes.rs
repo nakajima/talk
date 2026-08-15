@@ -8,7 +8,7 @@ use crate::{
     node_id::{FileID, NodeID},
     node_kinds::{
         call_arg::{ArgMode, CallArg, CallArgOrigin},
-        expr::{Expr, ExprKind, MacroToken},
+        expr::{Expr, ExprKind, MacroToken, QuoteCategory},
     },
     span::Span,
 };
@@ -113,6 +113,7 @@ impl LowerSyntaxQuotes {
             source,
             tokens,
             splices,
+            category,
         } = expr.kind.clone()
         else {
             return;
@@ -135,7 +136,11 @@ impl LowerSyntaxQuotes {
             self.argument("splices", splice_array, None, span),
             self.argument("context", context, None, span),
         ];
-        let lowered = self.call("quote_expr_encoded", args, span);
+        let entry = match category {
+            QuoteCategory::Expr => "quote_expr_encoded",
+            QuoteCategory::Decl => "quote_decl_encoded",
+        };
+        let lowered = self.call(entry, args, span);
         expr.kind = lowered.kind;
     }
 }

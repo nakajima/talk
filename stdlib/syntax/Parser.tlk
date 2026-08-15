@@ -1201,6 +1201,7 @@ struct Parser {
 		if k == .int_number || k == .float_number || k == .string_literal || k == .character_literal { return self.literal() }
 		if k == .keyword_true || k == .keyword_false { return self.literal() }
 		if k == .identifier && self.lexeme(token: self.current()) == "quote" && self.next_kind() == .left_brace { return self.syntax_quote() }
+		if k == .identifier && self.lexeme(token: self.current()) == "quote" && self.next_kind() == .identifier && self.lexeme(token: self.token_at(index: self.pos + 1)) == "decl" && self.token_at(index: self.pos + 2).kind == .left_brace { return self.syntax_quote() }
 		if k == .identifier { return self.variable(can_assign: can_assign) }
 		if k == .minus || k == .bang || k == .tilde { return self.unary() }
 		if k == .dot { return self.member_prefix(can_assign: can_assign) }
@@ -1308,6 +1309,74 @@ struct Parser {
 		Decl(kind: .macro_call_decl(name, name_tok.lexeme.lower, name_tok.lexeme.upper, input_start, input_end, canonical, args), is_public: false, start: name_tok.span.lower, end: self.span_end())
 	}
 
+	// A `#[name]` / `#[name(tokens)]` declaration wrapper marker (ADR 0026).
+	// The marker and its target parse as one declaration; adjacent markers
+	// nest through the recursive `decl` call, so the marker closest to the
+	// declaration ends up innermost.
+	mut func wrapper_decl_parse(context: BlockContext, is_static: Bool) -> Item {
+		let start_tok = self.current()
+		self.advance()
+		self.consume(kind: .left_bracket)
+		if self.is_failed() { return .decl_item(dummy_decl()) }
+		let name_tok = self.current()
+		if name_tok.kind != .identifier {
+			self.fail(code: "parser.unexpected-token", message: "Unexpected token: expected a wrapper macro name, got " + describe_kind(kind: name_tok.kind))
+			return .decl_item(dummy_decl())
+		}
+		self.advance()
+		let name = self.lexeme(token: name_tok)
+		let input_start = name_tok.lexeme.upper
+		let input_end = name_tok.lexeme.upper
+		let canonical: [MacroToken] = []
+		if self.peek_is(kind: .left_paren) {
+			let (args_start, args_end, args_canonical, _) = self.macro_input_capture()
+			if self.is_failed() { return .decl_item(dummy_decl()) }
+			input_start = args_start
+			input_end = args_end
+			canonical = args_canonical
+		}
+		self.consume(kind: .right_bracket)
+		if self.is_failed() { return .decl_item(dummy_decl()) }
+		self.skip_semicolons_and_newlines()
+		let target_start_pos = self.pos
+		let item = self.decl(context: context, is_static: is_static)
+		if self.is_failed() { return item }
+		match item {
+			.decl_item(target) -> {
+				// Imports and macro definitions establish the macro namespace
+				// wrapper resolution itself depends on, so they are excluded
+				// as targets (ADR 0026).
+				match target.kind {
+					.import_decl(_) -> {
+						self.fail(code: "parser.wrapper-target", message: "A #[...] wrapper cannot be applied to an import")
+						return .decl_item(dummy_decl())
+					},
+					.macro_decl(_, _, _, _, _, _, _) -> {
+						self.fail(code: "parser.wrapper-target", message: "A #[...] wrapper cannot be applied to a macro definition")
+						return .decl_item(dummy_decl())
+					},
+					_ -> {}
+				}
+				let target_tokens: [MacroToken] = []
+				let index = target_start_pos
+				loop index < self.pos {
+					target_tokens.push(macro_token(token: self.token_at(index: index)))
+					index = index + 1
+				}
+				return .decl_item(Decl(
+					kind: .wrapper_decl(name, name_tok.lexeme.lower, name_tok.lexeme.upper, input_start, input_end, canonical, target_tokens, [target]),
+					is_public: false,
+					start: start_tok.span.lower,
+					end: self.span_end()
+				))
+			},
+			_ -> {
+				self.fail(code: "parser.wrapper-target", message: "A #[...] wrapper must be followed by a declaration")
+				return .decl_item(dummy_decl())
+			}
+		}
+	}
+
 	// An @macro invocation in pattern position.
 	mut func macro_call_pattern() -> Pattern {
 		let name_tok = self.current()
@@ -1357,6 +1426,11 @@ struct Parser {
 	mut func syntax_quote() -> Expr {
 		let start = self.current()
 		self.advance()
+		let category = 0
+		if self.current().kind == .identifier && self.lexeme(token: self.current()) == "decl" {
+			self.advance()
+			category = 1
+		}
 		let open = self.current()
 		self.consume(kind: .left_brace)
 		if self.is_failed() { return dummy_expr() }
@@ -1412,7 +1486,7 @@ struct Parser {
 			}
 		}
 		canonical.push(macro_token(token: close))
-		Expr(kind: .syntax_quote(self.source.clone(), canonical, splices), start: start.span.lower, end: self.span_end())
+		Expr(kind: .syntax_quote(self.source.clone(), canonical, splices, category), start: start.span.lower, end: self.span_end())
 	}
 
 	// `'effect(args)`: an effect call. The node's span includes the sigil;
@@ -4167,6 +4241,9 @@ struct Parser {
 		if self.current().kind == .attribute {
 			return .decl_item(self.macro_call_decl())
 		}
+		if self.current().kind == .hash && self.next_kind() == .left_bracket {
+			return self.wrapper_decl_parse(context: .plain, is_static: false)
+		}
 		if is_decl_keyword(kind: self.current().kind) {
 			return self.decl(context: .plain, is_static: false)
 		}
@@ -4182,6 +4259,9 @@ struct Parser {
 		let k = cur.kind
 		if k == .attribute {
 			return .decl_item(self.macro_call_decl())
+		}
+		if k == .hash && self.next_kind() == .left_bracket {
+			return self.wrapper_decl_parse(context: context, is_static: is_static)
 		}
 		if k == .keyword_pub {
 			return self.pub_decl(context: context, is_static: is_static)
@@ -4302,6 +4382,7 @@ struct Parser {
 			.extend_decl(_, _, _, _, _) -> self.reject_pub(what: "an extension"),
 			.enum_variant(_, _, _, _, _, _, _) -> self.reject_pub(what: "an enum case"),
 			.macro_decl(_, _, _, _, _, _, _) -> self.fail(code: "parser.macro-export-unsupported", message: "Macros cannot be exported; remove `pub`"),
+			.wrapper_decl(_, _, _, _, _, _, _, _) -> self.fail(code: "parser.visibility-before-wrapper", message: "Write the wrapper marker first: `#[name] pub ...`"),
 			.associated_decl(_, _) -> self.reject_pub(what: "a protocol requirement"),
 			.method_requirement(_, _) -> self.reject_pub(what: "a protocol requirement"),
 			.init_requirement(_) -> self.reject_pub(what: "a protocol requirement"),
@@ -4470,6 +4551,24 @@ struct Parser {
 	mut func parse_decl_root() -> Void {
 		self.skip_semicolons_and_newlines()
 		let root = self.next_root()
+		if self.is_failed() { return () }
+		match root {
+			.decl_item(decl) -> self.items.push(.decl_item(decl)),
+			_ -> {
+				self.fail(code: "parser.expected-declaration", message: "Expected a declaration")
+				return ()
+			}
+		}
+		self.require_end_of_input()
+	}
+
+	// The declaration category parsed in an explicit body context, so a
+	// wrapper macro's target and replacement mean the same thing they meant
+	// where the marker appeared (ADR 0026): a `func` in a nominal body is a
+	// method, an `init` is admitted only where the grammar admits it.
+	mut func parse_decl_root_in(context: BlockContext) -> Void {
+		self.skip_semicolons_and_newlines()
+		let root = self.decl(context: context, is_static: false)
 		if self.is_failed() { return () }
 		match root {
 			.decl_item(decl) -> self.items.push(.decl_item(decl)),
@@ -4656,6 +4755,24 @@ pub func parse_type_tokens(source: String, input: TokenRange) -> ParseOutcome {
 pub func parse_decl_tokens(source: String, input: TokenRange) -> ParseOutcome {
 	let parser = token_parser(source: source, input: input)
 	parser.parse_decl_root()
+	parser.finish(comments: [])
+}
+
+// Declaration-context tags shared with the wrapper macro ABI: 0 and 1 are
+// the file and block contexts (both parse with the plain grammar), then
+// struct, enum, protocol, and extension bodies.
+func block_context_from_tag(tag: Int) -> BlockContext {
+	if tag == 2 { return .struct_body }
+	if tag == 3 { return .enum_body }
+	if tag == 4 { return .protocol_body }
+	if tag == 5 { return .extend_body }
+	.plain
+}
+
+// The declaration category in an explicit context (ADR 0026 wrapper macros).
+pub func parse_decl_tokens_in(source: String, input: TokenRange, context_tag: Int) -> ParseOutcome {
+	let parser = token_parser(source: source, input: input)
+	parser.parse_decl_root_in(context: block_context_from_tag(tag: context_tag))
 	parser.finish(comments: [])
 }
 
@@ -5000,6 +5117,11 @@ func meta_decl(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: 
 		.macro_call_decl(_, _, _, _, _, _, args) -> {
 			for e in args {
 				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: e)
+			}
+		},
+		.wrapper_decl(_, _, _, _, _, _, _, targets) -> {
+			for target in targets {
+				meta_decl(ctx: ctx, metas: metas, claimed: claimed, live: live, decl: target)
 			}
 		}
 	}

@@ -338,9 +338,12 @@ mod tests {
     fn checked_in_artifact_matches_compiled_core() {
         let bytes = artifact_bytes().expect("serialize core artifact");
         let manifest = artifact_manifest(&bytes).expect("render core manifest");
-        assert_eq!(
-            bytes,
-            std::fs::read(ARTIFACT_PATH).expect("read checked-in core artifact")
+        let checked_in_bytes = std::fs::read(ARTIFACT_PATH).expect("read checked-in core artifact");
+        assert!(
+            bytes == checked_in_bytes,
+            "{ARTIFACT_PATH} is stale (generated digest: {}, checked-in digest: {}); regenerate with `cargo run -- core-artifact`",
+            crate::compiling::manifest::artifact_digest(&bytes),
+            crate::compiling::manifest::artifact_digest(&checked_in_bytes),
         );
         assert_eq!(
             manifest,

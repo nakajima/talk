@@ -67,14 +67,25 @@ pub trait MacroHost {
     fn bindings_for<'host>(&'host self, ast: &AST<Parsed>) -> Box<dyn MacroBindings + 'host>;
 }
 
-/// One file's procedural-macro table.
+/// One file's procedural-macro table. Expression macros and declaration
+/// wrappers are separate roles (ADR 0026): one visible spelling may name
+/// both without either invocation form becoming ambiguous.
 pub trait MacroBindings {
     fn resolve(&self, name: &str) -> MacroResolution<'_>;
+    fn resolve_wrapper(&self, name: &str) -> WrapperResolution<'_>;
 }
 
 /// How a procedural-macro name resolved.
 pub enum MacroResolution<'bindings> {
     Found(&'bindings dyn ProceduralMacro),
+    /// The name is exported by more than one package.
+    Ambiguous(Vec<String>),
+    Missing,
+}
+
+/// How a declaration-wrapper name resolved.
+pub enum WrapperResolution<'bindings> {
+    Found(&'bindings dyn DeclWrapperMacro),
     /// The name is exported by more than one package.
     Ambiguous(Vec<String>),
     Missing,
@@ -95,6 +106,63 @@ pub trait ProceduralMacro {
     ) -> Result<BridgedExprMacro, String>;
 }
 
+/// The declaration context a wrapper's target appeared in (ADR 0026).
+/// Tags match `decl_context_from_tag` in `stdlib/syntax/Syntax.tlk` and
+/// `parse_decl_tokens_in` in `stdlib/syntax/Parser.tlk`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WrapperContext {
+    TopLevel,
+    Block,
+    StructBody,
+    EnumBody,
+    ProtocolBody,
+    ExtendBody,
+}
+
+impl WrapperContext {
+    pub fn tag(self) -> u32 {
+        match self {
+            WrapperContext::TopLevel => 0,
+            WrapperContext::Block => 1,
+            WrapperContext::StructBody => 2,
+            WrapperContext::EnumBody => 3,
+            WrapperContext::ProtocolBody => 4,
+            WrapperContext::ExtendBody => 5,
+        }
+    }
+}
+
+/// A decoded declaration-wrapper expansion: the replacement source and
+/// parse (absent for `Remove` and failures), the hygiene metadata to
+/// apply, the intentional-removal flag, and any structured failure.
+pub struct BridgedDeclWrapper {
+    pub source: String,
+    pub parse: Option<BridgedParse>,
+    pub metadata: SyntaxMetadata,
+    pub removed: bool,
+    pub failure: Option<BridgedFail>,
+}
+
+/// One resolved declaration wrapper, ready to execute. An empty
+/// `target_tokens` slice means the target is a chained replacement whose
+/// canonical text is `target_source`; the service re-derives its tokens.
+pub trait DeclWrapperMacro {
+    #[allow(clippy::too_many_arguments)]
+    fn expand_wrapper(
+        &self,
+        source_id: FileID,
+        args_source: &str,
+        input_start: u32,
+        input_end: u32,
+        input_tokens: &[MacroToken],
+        target_source: &str,
+        target_tokens: &[MacroToken],
+        context: WrapperContext,
+        expansion_namespace: u64,
+        expansion_ordinal: u64,
+    ) -> Result<BridgedDeclWrapper, String>;
+}
+
 /// The macro-free table: every lookup misses. The host for compiles
 /// with no procedural-macro environment.
 pub struct NoProceduralMacros;
@@ -102,5 +170,9 @@ pub struct NoProceduralMacros;
 impl MacroBindings for NoProceduralMacros {
     fn resolve(&self, _name: &str) -> MacroResolution<'_> {
         MacroResolution::Missing
+    }
+
+    fn resolve_wrapper(&self, _name: &str) -> WrapperResolution<'_> {
+        WrapperResolution::Missing
     }
 }

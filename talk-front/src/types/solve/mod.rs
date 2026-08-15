@@ -196,10 +196,14 @@ impl<'s> Solver<'s> {
                         if a == b {
                             continue;
                         }
-                        if stuck_projection(self.store, &a)
-                            || stuck_projection(self.store, &b)
-                            || !self.unify(&a, &b, origin, &mut queue)
-                        {
+                        if stuck_projection(self.store, &a) || stuck_projection(self.store, &b) {
+                            // Keep the equality that actually failed. A guard records that a
+                            // local given participated in rewriting, but replacing a stuck
+                            // projection equality with that guard loses the real obligation
+                            // (for example `U.Ret == U`) and later misdiagnoses it as an
+                            // existential escape.
+                            stuck.push(Constraint::Eq(a, b, origin));
+                        } else if !self.unify(&a, &b, origin, &mut queue) {
                             stuck.push(guarded.unwrap_or(Constraint::Eq(a, b, origin)));
                         }
                     }

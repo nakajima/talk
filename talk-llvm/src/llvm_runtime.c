@@ -227,18 +227,8 @@ void talk_llvm_set_field_index(TalkValue *record, const TalkValue *value,
     talk_llvm_replace_slots(record, value, site->offset, site->child);
 }
 
-void talk_llvm_string(TalkValue *out, uint32_t offset, uint32_t len,
-                      uint32_t string_layout, uint32_t storage_layout,
-                      uint32_t string_symbol, uint32_t storage_symbol) {
-    TalkValue storage;
-    talk_llvm_agg(&storage, storage_layout, storage_symbol, 0);
-    TalkValue pointer = talk_pointer(talk_statics + offset);
-    talk_llvm_agg_arg(&storage, storage_layout, 0, 0, &pointer);
-    talk_llvm_agg(out, string_layout, string_symbol, 0);
-    TalkValue length = talk_int((int64_t)len);
-    talk_llvm_agg_arg(out, string_layout, 0, 0, &storage);
-    talk_llvm_agg_arg(out, string_layout, 0, 1, &length);
-    talk_llvm_agg_arg(out, string_layout, 0, 2, &length);
+void talk_llvm_static_string(TalkValue *out, uint32_t literal) {
+    *out = talk_static_string_tagged(literal);
 }
 void talk_llvm_bytes(TalkValue *out, uint32_t offset) {
     *out = talk_pointer(talk_statics + offset);

@@ -275,6 +275,7 @@ impl SymbolKind {
 
 #[allow(non_upper_case_globals)]
 impl Symbol {
+    const WELL_KNOWN_CORE_STATIC_ID: u32 = u32::MAX - 33;
     const WELL_KNOWN_CORE_STRING_ID: u32 = u32::MAX - 32;
     const WELL_KNOWN_CORE_ARRAY_ID: u32 = u32::MAX - 31;
     const WELL_KNOWN_CORE_STORAGE_ID: u32 = u32::MAX - 30;
@@ -367,6 +368,10 @@ impl Symbol {
         module_id: ModuleId::Core,
         local_id: Self::WELL_KNOWN_CORE_INLINE_ARRAY_ID,
     });
+    pub const Static: Symbol = Symbol::Struct(StructId {
+        module_id: ModuleId::Core,
+        local_id: Self::WELL_KNOWN_CORE_STATIC_ID,
+    });
     pub const Borrowed: Symbol = Symbol::Protocol(ProtocolId {
         module_id: ModuleId::Core,
         local_id: Self::WELL_KNOWN_CORE_BORROWED_ID,
@@ -412,6 +417,7 @@ impl Symbol {
             "Character" => Some(Symbol::Character),
             "Substring" => Some(Symbol::Substring),
             "InlineArray" => Some(Symbol::InlineArray),
+            "Static" => Some(Symbol::Static),
             _ => None,
         }
     }
@@ -931,6 +937,7 @@ mod tests {
             Symbol::Storage,
             Symbol::Character,
             Symbol::Substring,
+            Symbol::Static,
         ] {
             let bytes = symbol.as_bytes();
             let recovered = Symbol::from_bytes(&bytes);

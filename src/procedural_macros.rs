@@ -27,12 +27,20 @@ fn load_artifact(artifact: &ProceduralMacroArtifact) -> Result<ProceduralMacroSe
     {
         let module = talk_vm::Module::decode_bytecode(&artifact.image)
             .map_err(|error| format!("invalid procedural macro artifact: {error:?}"))?;
+        let wrapper_schema = if artifact.wrapper_schema.is_empty() {
+            None
+        } else {
+            Some(crate::compiling::abi::parse_schema(
+                &artifact.wrapper_schema,
+            )?)
+        };
         Ok(ProceduralMacroService {
             executable: talk_bytecode::Executable::from_vm_module(
                 module,
                 crate::compiling::mir::string_shape(),
             ),
             schema: crate::compiling::abi::parse_schema(&artifact.schema)?,
+            wrapper_schema,
             artifact: artifact.clone(),
         })
     }
@@ -44,6 +52,9 @@ fn load_artifact(artifact: &ProceduralMacroArtifact) -> Result<ProceduralMacroSe
 pub struct ProceduralMacroService {
     executable: talk_bytecode::Executable,
     schema: AbiSchema,
+    /// The `DeclWrapperOutput` schema; present only when the service
+    /// exports declaration wrappers.
+    wrapper_schema: Option<AbiSchema>,
     artifact: ProceduralMacroArtifact,
 }
 
@@ -157,11 +168,12 @@ impl ProceduralMacroService {
                     && let DeclKind::Func(function) = &decl.kind
                 {
                     let name = function.name.name_str();
-                    if !seen.insert(name.clone()) {
+                    let role = macro_role(function);
+                    if !seen.insert((name.clone(), role)) {
                         return Err(format!("duplicate procedural macro `@{name}`"));
                     }
-                    names.push(name.clone());
-                    unit_names.push(name);
+                    names.push((name.clone(), role));
+                    unit_names.push((name, role));
                 }
             }
             if forbidden.inline_ir || forbidden.unsafe_block {
@@ -194,16 +206,27 @@ impl ProceduralMacroService {
             .collect::<Vec<_>>();
 
         let mut wrappers = BTreeMap::new();
-        for (index, name) in names.iter().enumerate() {
-            wrappers.insert(name.clone(), format!("__talk_expand_{index}"));
+        let mut decl_wrappers = BTreeMap::new();
+        for (index, (name, role)) in names.iter().enumerate() {
+            match role {
+                MacroRole::Expression => {
+                    wrappers.insert(name.clone(), format!("__talk_expand_{index}"));
+                }
+                MacroRole::DeclWrapper => {
+                    decl_wrappers.insert(name.clone(), format!("__talk_wrap_{index}"));
+                }
+            }
         }
         for (index, (text, mut unit_names)) in macro_sources.into_iter().enumerate() {
             unit_names.sort();
             let mut unit = String::from(
                 "use package::Lexer::{ capture_macro_input }\n\
-                 use package::Syntax::{ ExprMacroOutput, empty_syntax_context, lexical_scope, \
-                 module_scope, syntax_context_with_scope, expansion_scope, quote_context, \
-                 expr_macro_failure, materialize_expr_macro_result, splice, quote_expr_encoded }\n\n",
+                 use package::Syntax::{ ExprMacroOutput, DeclWrapperOutput, empty_syntax_context, \
+                 lexical_scope, module_scope, syntax_context_with_scope, expansion_scope, \
+                 quote_context, expr_macro_failure, materialize_expr_macro_result, splice, \
+                 quote_expr_encoded, quote_decl_encoded, decl_wrapper_failure, \
+                 materialize_decl_wrapper_result, capture_wrapper_target, decl_context_from_tag, \
+                 no_macro_input, some_macro_input }\n\n",
             );
             unit.push_str(&format!(
                 "let __talk_macro_definition_source_id = {}\n\n",
@@ -211,37 +234,85 @@ impl ProceduralMacroService {
             ));
             unit.push_str(&text);
             unit.push_str("\n\n");
-            for name in unit_names {
-                let wrapper = &wrappers[&name];
-                unit.push_str(&format!(
-                    "pub func {wrapper}(source_id: Int, source: String, input_start: Int, input_end: Int, token_data: String, definition_module_id: Int, expansion_namespace: Int, expansion_ordinal: Int) -> ExprMacroOutput {{\n\
-                     \t#handle 'panic {{ message in\n\
-                     \t\texpr_macro_failure(code: \"macro.panic\", message: message, span: input_start..<input_end)\n\
-                     \t}}\n\
-                     \tlet captured = capture_macro_input(source_id: source_id, source: source, encoded: token_data)\n\
-                     \tif let .some(input) = captured {{\n\
-                     \t\tlet use_site = empty_syntax_context()\n\
-                     \t\tlet definition_site = empty_syntax_context()\n\
-                     \t\tif definition_module_id < 0 {{\n\
-                     \t\t\tdefinition_site = syntax_context_with_scope(\n\
-                     \t\t\t\tcontext: definition_site,\n\
-                     \t\t\t\tscope: lexical_scope(file_id: source_id, node_id: 0)\n\
-                     \t\t\t)\n\
-                     \t\t}} else {{\n\
-                     \t\t\tdefinition_site = syntax_context_with_scope(\n\
-                     \t\t\t\tcontext: definition_site,\n\
-                     \t\t\t\tscope: module_scope(module_id: definition_module_id)\n\
-                     \t\t\t)\n\
-                     \t\t}}\n\
-                     \t\tlet context = quote_context(\n\
-                     \t\t\tdefinition_site: definition_site,\n\
-                     \t\t\texpansion_scope: expansion_scope(namespace: expansion_namespace, ordinal: expansion_ordinal)\n\
-                     \t\t)\n\
-                     \t\treturn materialize_expr_macro_result(result: {name}(input: input, use_site: use_site, context: context))\n\
-                     \t}}\n\
-                     \texpr_macro_failure(code: \"macro.invalid-input\", message: \"Macro invocation is not one balanced token tree\", span: input_start..<input_end)\n\
-                     }}\n\n"
-                ));
+            for (name, role) in unit_names {
+                match role {
+                    MacroRole::Expression => {
+                        let wrapper = &wrappers[&name];
+                        unit.push_str(&format!(
+                            "pub func {wrapper}(source_id: Int, source: String, input_start: Int, input_end: Int, token_data: String, definition_module_id: Int, expansion_namespace: Int, expansion_ordinal: Int) -> ExprMacroOutput {{\n\
+                             \t#handle 'panic {{ message in\n\
+                             \t\texpr_macro_failure(code: \"macro.panic\", message: message, span: input_start..<input_end)\n\
+                             \t}}\n\
+                             \tlet captured = capture_macro_input(source_id: source_id, source: source, encoded: token_data)\n\
+                             \tif let .some(input) = captured {{\n\
+                             \t\tlet use_site = empty_syntax_context()\n\
+                             \t\tlet definition_site = empty_syntax_context()\n\
+                             \t\tif definition_module_id < 0 {{\n\
+                             \t\t\tdefinition_site = syntax_context_with_scope(\n\
+                             \t\t\t\tcontext: definition_site,\n\
+                             \t\t\t\tscope: lexical_scope(file_id: source_id, node_id: 0)\n\
+                             \t\t\t)\n\
+                             \t\t}} else {{\n\
+                             \t\t\tdefinition_site = syntax_context_with_scope(\n\
+                             \t\t\t\tcontext: definition_site,\n\
+                             \t\t\t\tscope: module_scope(module_id: definition_module_id)\n\
+                             \t\t\t)\n\
+                             \t\t}}\n\
+                             \t\tlet context = quote_context(\n\
+                             \t\t\tdefinition_site: definition_site,\n\
+                             \t\t\texpansion_scope: expansion_scope(namespace: expansion_namespace, ordinal: expansion_ordinal)\n\
+                             \t\t)\n\
+                             \t\treturn materialize_expr_macro_result(result: {name}(input: input, use_site: use_site, context: context))\n\
+                             \t}}\n\
+                             \texpr_macro_failure(code: \"macro.invalid-input\", message: \"Macro invocation is not one balanced token tree\", span: input_start..<input_end)\n\
+                             }}\n\n"
+                        ));
+                    }
+                    MacroRole::DeclWrapper => {
+                        let wrapper = &decl_wrappers[&name];
+                        unit.push_str(&format!(
+                            "pub func {wrapper}(source_id: Int, args_source: String, input_start: Int, input_end: Int, args_token_data: String, target_source: String, target_token_data: String, context_tag: Int, definition_module_id: Int, expansion_namespace: Int, expansion_ordinal: Int) -> DeclWrapperOutput {{\n\
+                             \t#handle 'panic {{ message in\n\
+                             \t\tdecl_wrapper_failure(code: \"macro.panic\", message: message, span: input_start..<input_end)\n\
+                             \t}}\n\
+                             \tlet args = no_macro_input()\n\
+                             \tif args_token_data.utf8().count() > 0 {{\n\
+                             \t\tlet captured_args = capture_macro_input(source_id: source_id, source: args_source, encoded: args_token_data)\n\
+                             \t\tif let .some(input) = captured_args {{\n\
+                             \t\t\targs = some_macro_input(input: input)\n\
+                             \t\t}} else {{\n\
+                             \t\t\treturn decl_wrapper_failure(code: \"macro.invalid-input\", message: \"Wrapper arguments are not one balanced token tree\", span: input_start..<input_end)\n\
+                             \t\t}}\n\
+                             \t}}\n\
+                             \tlet use_site = empty_syntax_context()\n\
+                             \tlet definition_site = empty_syntax_context()\n\
+                             \tif definition_module_id < 0 {{\n\
+                             \t\tdefinition_site = syntax_context_with_scope(\n\
+                             \t\t\tcontext: definition_site,\n\
+                             \t\t\tscope: lexical_scope(file_id: source_id, node_id: 0)\n\
+                             \t\t)\n\
+                             \t}} else {{\n\
+                             \t\tdefinition_site = syntax_context_with_scope(\n\
+                             \t\t\tcontext: definition_site,\n\
+                             \t\t\tscope: module_scope(module_id: definition_module_id)\n\
+                             \t\t)\n\
+                             \t}}\n\
+                             \tlet context = quote_context(\n\
+                             \t\tdefinition_site: definition_site,\n\
+                             \t\texpansion_scope: expansion_scope(namespace: expansion_namespace, ordinal: expansion_ordinal)\n\
+                             \t)\n\
+                             \tlet captured_target = capture_wrapper_target(source_id: source_id, source: target_source, encoded: target_token_data, context_tag: context_tag, context: use_site)\n\
+                             \tif let .some(failure) = captured_target.failure {{\n\
+                             \t\treturn decl_wrapper_failure(code: failure.code, message: failure.message, span: failure.span)\n\
+                             \t}}\n\
+                             \tif let .some(target) = captured_target.value {{\n\
+                             \t\treturn materialize_decl_wrapper_result(result: {name}(input: args, target: target, declaration: decl_context_from_tag(tag: context_tag), use_site: use_site, context: context), context_tag: context_tag)\n\
+                             \t}}\n\
+                             \tdecl_wrapper_failure(code: \"macro.invalid-input\", message: \"Wrapper target is not one declaration\", span: input_start..<input_end)\n\
+                             }}\n\n"
+                        ));
+                    }
+                }
             }
             sources.push(Source::in_memory(
                 format!("MacroUnit{index}.tlk").into(),
@@ -276,9 +347,22 @@ impl ProceduralMacroService {
         }
         let schema_text = crate::compiling::abi::describe(&typed.phase.program, "ExprMacroOutput")?;
         let schema = crate::compiling::abi::parse_schema(&schema_text)?;
+        let wrapper_schema_text = if decl_wrappers.is_empty() {
+            String::new()
+        } else {
+            crate::compiling::abi::describe(&typed.phase.program, "DeclWrapperOutput")?
+        };
+        let wrapper_schema = if wrapper_schema_text.is_empty() {
+            None
+        } else {
+            Some(crate::compiling::abi::parse_schema(&wrapper_schema_text)?)
+        };
         let exports = names
             .iter()
-            .map(|name| wrappers[name].clone())
+            .map(|(name, role)| match role {
+                MacroRole::Expression => wrappers[name].clone(),
+                MacroRole::DeclWrapper => decl_wrappers[name].clone(),
+            })
             .collect::<Vec<_>>();
         let executable = typed.compile_service(&exports, &["alloc".into(), "diagnostic".into()])?;
         let image = executable
@@ -287,10 +371,13 @@ impl ProceduralMacroService {
         Ok(Self {
             executable,
             schema,
+            wrapper_schema,
             artifact: ProceduralMacroArtifact {
                 image,
                 schema: schema_text,
                 wrappers,
+                decl_wrappers,
+                wrapper_schema: wrapper_schema_text,
             },
         })
     }
@@ -301,6 +388,15 @@ impl ProceduralMacroService {
 
     pub fn contains(&self, name: &str) -> bool {
         self.artifact.wrappers.contains_key(name)
+            || self.artifact.decl_wrappers.contains_key(name)
+    }
+
+    fn is_expression_macro(&self, name: &str) -> bool {
+        self.artifact.wrappers.contains_key(name)
+    }
+
+    fn is_decl_wrapper(&self, name: &str) -> bool {
+        self.artifact.decl_wrappers.contains_key(name)
     }
 
     pub fn exported_names(&self) -> impl Iterator<Item = &str> {
@@ -361,6 +457,100 @@ impl ProceduralMacroService {
             source_id,
         )
     }
+
+    /// Run a declaration wrapper (ADR 0026). `target_tokens` empty means the
+    /// target is a chained replacement whose canonical text is
+    /// `target_source`; the service re-scans it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn expand_wrapper(
+        &self,
+        name: &str,
+        source_id: FileID,
+        args_source: &str,
+        input_start: u32,
+        input_end: u32,
+        input_tokens: &[crate::node_kinds::expr::MacroToken],
+        target_source: &str,
+        target_tokens: &[crate::node_kinds::expr::MacroToken],
+        context: crate::front::macro_host::WrapperContext,
+        definition_module: Option<ModuleId>,
+        expansion_namespace: u64,
+        expansion_ordinal: u64,
+    ) -> Result<crate::front::macro_host::BridgedDeclWrapper, String> {
+        let wrapper = self
+            .artifact
+            .decl_wrappers
+            .get(name)
+            .ok_or_else(|| format!("undefined declaration wrapper `#[{name}]`"))?;
+        let schema = self
+            .wrapper_schema
+            .as_ref()
+            .ok_or_else(|| "macro service carries no declaration-wrapper schema".to_string())?;
+        let integer = |value: u64, what: &str| {
+            i64::try_from(value).map_err(|_| format!("{what} exceeds Talk's Int range"))
+        };
+        let args_data = if input_tokens.is_empty() {
+            String::new()
+        } else {
+            crate::node_kinds::expr::MacroToken::encode_all(input_tokens)
+        };
+        let args = [
+            talk_vm::interp::HostValue::Int(i64::from(source_id.0)),
+            talk_vm::interp::HostValue::String(args_source.as_bytes().to_vec()),
+            talk_vm::interp::HostValue::Int(i64::from(input_start)),
+            talk_vm::interp::HostValue::Int(i64::from(input_end)),
+            talk_vm::interp::HostValue::String(args_data.into_bytes()),
+            talk_vm::interp::HostValue::String(target_source.as_bytes().to_vec()),
+            talk_vm::interp::HostValue::String(
+                crate::node_kinds::expr::MacroToken::encode_all(target_tokens).into_bytes(),
+            ),
+            talk_vm::interp::HostValue::Int(i64::from(context.tag())),
+            talk_vm::interp::HostValue::Int(
+                definition_module.map_or(-1, |module| i64::from(module.0)),
+            ),
+            talk_vm::interp::HostValue::Int(integer(
+                expansion_namespace,
+                "macro expansion namespace",
+            )?),
+            talk_vm::interp::HostValue::Int(integer(expansion_ordinal, "macro expansion ordinal")?),
+        ];
+        let mut io = talk_vm::io::CaptureIO::default();
+        let run = self.executable.run_export(
+            wrapper,
+            &args,
+            talk_vm::interp::Budgets {
+                instructions: MAX_MACRO_INSTRUCTIONS,
+                frames: MAX_MACRO_FRAMES,
+                memory_bytes: MAX_MACRO_MEMORY,
+            },
+            &mut io,
+        )?;
+        crate::compiling::bridge::adapt_decl_wrapper(
+            crate::compiling::bridge::FrontendRun::Vm(&run),
+            schema,
+            source_id,
+        )
+    }
+}
+
+/// The role a public macro-unit function plays, decided by its declared
+/// return type: `DeclWrapperResult` marks a declaration wrapper, anything
+/// else is an expression macro.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum MacroRole {
+    Expression,
+    DeclWrapper,
+}
+
+fn macro_role(function: &crate::node_kinds::func::Func) -> MacroRole {
+    if let Some(ret) = &function.ret
+        && let crate::node_kinds::type_annotation::TypeAnnotationKind::Nominal { name, .. } =
+            &ret.kind
+        && name.name_str() == "DeclWrapperResult"
+    {
+        return MacroRole::DeclWrapper;
+    }
+    MacroRole::Expression
 }
 
 #[derive(Debug)]
@@ -485,6 +675,7 @@ pub(crate) struct ProceduralMacroBinding {
 #[derive(Debug, Default)]
 pub(crate) struct ProceduralMacroBindings {
     by_name: HashMap<String, Vec<ProceduralMacroBinding>>,
+    wrappers_by_name: HashMap<String, Vec<ProceduralMacroBinding>>,
 }
 
 pub(crate) enum ProceduralMacroResolution<'a> {
@@ -493,32 +684,58 @@ pub(crate) enum ProceduralMacroResolution<'a> {
     Ambiguous(Vec<String>),
 }
 
+fn insert_binding(
+    map: &mut HashMap<String, Vec<ProceduralMacroBinding>>,
+    visible_name: &str,
+    binding: ProceduralMacroBinding,
+) {
+    let set = map.entry(visible_name.to_string()).or_default();
+    if set.iter().any(|existing| {
+        existing.definition_module == binding.definition_module
+            && existing.exported_name == binding.exported_name
+    }) {
+        return;
+    }
+    set.push(binding);
+}
+
+fn resolve_in<'a>(
+    map: &'a HashMap<String, Vec<ProceduralMacroBinding>>,
+    name: &str,
+) -> ProceduralMacroResolution<'a> {
+    let Some(bindings) = map.get(name) else {
+        return ProceduralMacroResolution::Missing;
+    };
+    if let [binding] = bindings.as_slice() {
+        return ProceduralMacroResolution::Found(binding);
+    }
+    let mut origins = bindings
+        .iter()
+        .map(|binding| binding.origin.clone())
+        .collect::<Vec<_>>();
+    origins.sort();
+    origins.dedup();
+    ProceduralMacroResolution::Ambiguous(origins)
+}
+
 impl ProceduralMacroBindings {
+    /// One visible spelling may carry both roles (ADR 0026); the binding
+    /// lands in each table its exported name actually implements.
     fn insert(&mut self, visible_name: &str, binding: ProceduralMacroBinding) {
-        let set = self.by_name.entry(visible_name.to_string()).or_default();
-        if set.iter().any(|existing| {
-            existing.definition_module == binding.definition_module
-                && existing.exported_name == binding.exported_name
-        }) {
-            return;
+        if binding.service.is_expression_macro(&binding.exported_name) {
+            insert_binding(&mut self.by_name, visible_name, binding.clone());
         }
-        set.push(binding);
+        if binding.service.is_decl_wrapper(&binding.exported_name) {
+            insert_binding(&mut self.wrappers_by_name, visible_name, binding);
+        }
     }
 
     pub(crate) fn resolve(&self, name: &str) -> ProceduralMacroResolution<'_> {
-        let Some(bindings) = self.by_name.get(name) else {
-            return ProceduralMacroResolution::Missing;
-        };
-        if let [binding] = bindings.as_slice() {
-            return ProceduralMacroResolution::Found(binding);
-        }
-        let mut origins = bindings
-            .iter()
-            .map(|binding| binding.origin.clone())
-            .collect::<Vec<_>>();
-        origins.sort();
-        origins.dedup();
-        ProceduralMacroResolution::Ambiguous(origins)
+        resolve_in(&self.by_name, name)
+    }
+
+    pub(crate) fn resolve_wrapper(&self, name: &str) -> ProceduralMacroResolution<'_> {
+        resolve_in(&self.wrappers_by_name, name)
     }
 }
 
@@ -571,7 +788,8 @@ mod tests {
 // and the compiled procedural-macro services.
 
 use crate::front::macro_host::{
-    BridgedExprMacro, BridgedParse, MacroBindings, MacroHost, MacroResolution, ProceduralMacro,
+    BridgedDeclWrapper, BridgedExprMacro, BridgedParse, DeclWrapperMacro, MacroBindings, MacroHost,
+    MacroResolution, ProceduralMacro, WrapperContext, WrapperResolution,
 };
 
 impl ProceduralMacro for ProceduralMacroBinding {
@@ -599,12 +817,51 @@ impl ProceduralMacro for ProceduralMacroBinding {
     }
 }
 
+impl DeclWrapperMacro for ProceduralMacroBinding {
+    fn expand_wrapper(
+        &self,
+        source_id: crate::node_id::FileID,
+        args_source: &str,
+        input_start: u32,
+        input_end: u32,
+        input_tokens: &[crate::node_kinds::expr::MacroToken],
+        target_source: &str,
+        target_tokens: &[crate::node_kinds::expr::MacroToken],
+        context: WrapperContext,
+        expansion_namespace: u64,
+        expansion_ordinal: u64,
+    ) -> Result<BridgedDeclWrapper, String> {
+        self.service.expand_wrapper(
+            &self.exported_name,
+            source_id,
+            args_source,
+            input_start,
+            input_end,
+            input_tokens,
+            target_source,
+            target_tokens,
+            context,
+            self.definition_module,
+            expansion_namespace,
+            expansion_ordinal,
+        )
+    }
+}
+
 impl MacroBindings for ProceduralMacroBindings {
     fn resolve(&self, name: &str) -> MacroResolution<'_> {
         match ProceduralMacroBindings::resolve(self, name) {
             ProceduralMacroResolution::Found(binding) => MacroResolution::Found(binding),
             ProceduralMacroResolution::Ambiguous(origins) => MacroResolution::Ambiguous(origins),
             ProceduralMacroResolution::Missing => MacroResolution::Missing,
+        }
+    }
+
+    fn resolve_wrapper(&self, name: &str) -> WrapperResolution<'_> {
+        match ProceduralMacroBindings::resolve_wrapper(self, name) {
+            ProceduralMacroResolution::Found(binding) => WrapperResolution::Found(binding),
+            ProceduralMacroResolution::Ambiguous(origins) => WrapperResolution::Ambiguous(origins),
+            ProceduralMacroResolution::Missing => WrapperResolution::Missing,
         }
     }
 }

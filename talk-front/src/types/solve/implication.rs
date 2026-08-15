@@ -23,7 +23,7 @@ impl<'s> Solver<'s> {
         let original_level = self.level;
         let original_touchable_level = self.touchable_level;
         let original_local_param_len = self.local_params.len();
-        self.givens.extend(givens);
+        self.givens.extend(givens.iter().cloned());
         self.local_params.extend(local_params.iter().copied());
         self.level = level;
         self.touchable_level = touchable_level;
@@ -58,6 +58,37 @@ impl<'s> Solver<'s> {
                 ));
                 continue;
             }
+            // A rigid value/equality obligation wholly inside the arm is a
+            // failed local check, not an escape. Rewrite value adaptations
+            // under the arm givens first: unlike Eq solving, Adapt can remain
+            // parked on a projection before applying those refinements.
+            let local_failure = match &residual {
+                Constraint::Eq(expected, found, origin) => {
+                    Some((expected.clone(), found.clone(), *origin))
+                }
+                Constraint::Adapt {
+                    expected,
+                    found,
+                    origin,
+                    ..
+                } => Some((
+                    self.rewrite_ty_with_local_givens(expected.clone(), &givens),
+                    self.rewrite_ty_with_local_givens(found.clone(), &givens),
+                    *origin,
+                )),
+                _ => None,
+            };
+            if let Some((expected, found, origin)) = local_failure
+                && expected != found
+                && self.ty_mentions_params(&expected, &local_params).is_some()
+                && self.ty_mentions_params(&found, &local_params).is_some()
+            {
+                let expected =
+                    self.diagnostic_ty_for_local_params(&expected, &local_params, &givens);
+                let found = self.diagnostic_ty_for_local_params(&found, &local_params, &givens);
+                self.report_mismatch(&expected, &found, origin);
+                continue;
+            }
             if let Some(param) = self.constraint_mentions_params(&residual, &local_params) {
                 self.errors.push((
                     TypeError::EscapingExistential {
@@ -76,6 +107,45 @@ impl<'s> Solver<'s> {
             floatable.push(residual);
         }
         floatable
+    }
+
+    fn rewrite_ty_with_local_givens(&mut self, ty: Ty, givens: &[Predicate]) -> Ty {
+        let original_given_len = self.givens.len();
+        self.givens.extend(givens.iter().cloned());
+        let rewritten = self.rewrite_ty_from_givens(ty);
+        self.givens.truncate(original_given_len);
+        rewritten
+    }
+
+    /// Replace an arm-local skolem with the outer type that the constructor
+    /// result determines for it. This is diagnostic-only: solving remains
+    /// rigid, while messages use the source-visible outer parameter instead
+    /// of a synthesized `TypeParameter(...)` identifier.
+    fn diagnostic_ty_for_local_params(
+        &mut self,
+        ty: &Ty,
+        local_params: &[Symbol],
+        givens: &[Predicate],
+    ) -> Ty {
+        let mut tys = FxHashMap::default();
+        for given in givens {
+            let Predicate::TypeEq(left, right) = given else {
+                continue;
+            };
+            for (candidate, replacement) in [(left, right), (right, left)] {
+                let Ty::Param(param) = candidate else {
+                    continue;
+                };
+                if local_params.contains(param)
+                    && self.ty_mentions_params(replacement, local_params).is_none()
+                {
+                    tys.entry(*param).or_insert_with(|| replacement.clone());
+                }
+            }
+        }
+        let effs = FxHashMap::default();
+        let rows = FxHashMap::default();
+        ty.substitute(&tys, &effs, &rows)
     }
 
     pub(super) fn escaping_outer_binding(

@@ -28,6 +28,21 @@
     }
 
     #[test]
+    fn wrapper_markers_are_stable() {
+        let stable = "#[outer]\n#[logged(level: \"debug\")]\npub func loud() -> Int { 1 }";
+        assert_eq!(format_code(stable, 80), stable);
+        assert_eq!(
+            format_code(
+                "#[logged(level: \"debug\")]  pub func loud() -> Int { 1 }",
+                80
+            ),
+            "#[logged(level: \"debug\")]\npub func loud() -> Int { 1 }"
+        );
+        let member = "struct Holder {\n\t#[memo]\n\tfunc cached() -> Int { 2 }\n}";
+        assert_eq!(format_code(member, 80), member);
+    }
+
+    #[test]
     fn protocol_extension_heads_with_binders_and_arguments_are_stable() {
         let stable = "extend<T> Into<[T]> {\n\tconsuming func first_converted() -> T? { .none }\n}";
         assert_eq!(format_code(stable, 80), stable);

@@ -737,6 +737,25 @@ impl<'a> Formatter<'a> {
                     ),
                 }
             }
+            DeclKind::Wrapper {
+                name,
+                input_span,
+                input_tokens,
+                target,
+                ..
+            } => {
+                let marker = if input_tokens.is_empty() {
+                    text(format!("#[{name}]"))
+                } else if let Some(source) = self.source
+                    && let Some(input) =
+                        source.get(input_span.start as usize..input_span.end as usize)
+                {
+                    text(format!("#[{name}{input}]"))
+                } else {
+                    text(format!("#[{name}(...)]"))
+                };
+                marker + hardline() + self.format_decl(target)
+            }
             DeclKind::Macro {
                 name,
                 params,

@@ -1,0 +1,9 @@
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/"{LANGUAGE_CURRENT}>Language</a>
+        <a href="/playground"{PLAYGROUND_CURRENT}>Playground</a>
+        <a href="/qa"{QA_CURRENT}>Q/A</a>
+        <a href="/philosophy"{PHILOSOPHY_CURRENT}>Philosophy</a>
+      </div>
+    </nav>

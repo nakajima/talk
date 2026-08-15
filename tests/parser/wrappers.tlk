@@ -1,0 +1,10 @@
+#[trace]
+func traced() -> Int { 1 }
+
+#[logged(level: "debug")]
+pub func loud() -> Int { 2 }
+
+struct Holder {
+	#[memo]
+	func cached() -> Int { 3 }
+}

@@ -66,7 +66,9 @@ use talk_mir::layout::{FieldRepr, Layout, LayoutId, Shape, SlotKind};
 use talk_mir::{
     CmpKind, Constant, Function, Inst, MirSymbol, Module as Program, Operand, ScalarOp, Term,
 };
-use talk_native_runtime::emit::{Interners, c_escape, needs_identity, symbol_rows, type_table};
+use talk_native_runtime::emit::{
+    Interners, c_escape, needs_identity, static_strings, symbol_rows, type_table,
+};
 
 /// The generated file's runtime half, emitted verbatim ahead of the
 /// translated functions. Owned by `talk-native-runtime` and shared with
@@ -158,6 +160,7 @@ fn translate(program: &Program, library: bool) -> Result<Translation<'_>, Error>
     out.push_str(PRELUDE);
     out.push('\n');
     emit_statics(&mut out, &emitter.interners.statics);
+    static_strings(&mut out, &emitter.interners);
     type_table(&mut out, &emitter.interners, display);
     if library {
         symbol_rows(&mut out, &emitter.interners);
@@ -819,52 +822,19 @@ impl Emitter {
                 let _ = writeln!(out, "    talk_abort_to({cont}, {value});");
                 emit_return(out, &frame.unwind_value(), identified);
             }
-            // A literal is static bytes behind the core `String` shape:
-            // `String { Storage { base }, byte_count, capacity }` (layout
-            // owned by core/String.tlk, as `lower` builds it too).
+            // Literal values are cached immutable aggregates over the
+            // module's static bytes. Loading one is a pointer copy even
+            // when the site executes repeatedly in a loop.
             Inst::StringLit {
                 dest,
                 bytes,
                 layout,
-                storage_layout,
+                storage_layout: _,
             } => {
-                let offset = self.interners.intern_static(bytes);
-                if frame.facts.boxes_native(*layout) && frame.facts.boxes_native(*storage_layout) {
-                    // The native String struct over static bytes: one
-                    // box, no per-field tagging.
-                    let _ = writeln!(out, "    {{");
-                    let _ = writeln!(out, "        TalkL{layout} tmp;");
-                    let _ = writeln!(out, "        tmp.m0 = talk_statics + {offset};");
-                    let _ = writeln!(out, "        tmp.m1 = {};", bytes.len());
-                    let _ = writeln!(out, "        tmp.m2 = {};", bytes.len());
-                    let _ = writeln!(out, "        l[{dest}] = talk_box_l{layout}(tmp);");
-                    let _ = writeln!(out, "    }}");
-                } else {
-                    // The tagged fallback carries String's display
-                    // identity so it renders as quoted text.
-                    let string_symbol = self.interners.display_id(MirSymbol::STRING);
-                    let _ = writeln!(out, "    {{");
-                    let _ = writeln!(
-                        out,
-                        "        TalkValue built = talk_agg({layout}u, {string_symbol}, 0, 3);"
-                    );
-                    let _ = writeln!(
-                        out,
-                        "        built.v.agg->fields[0] = talk_pointer(talk_statics + {offset});"
-                    );
-                    let _ = writeln!(
-                        out,
-                        "        built.v.agg->fields[1] = talk_int({});",
-                        bytes.len()
-                    );
-                    let _ = writeln!(
-                        out,
-                        "        built.v.agg->fields[2] = talk_int({});",
-                        bytes.len()
-                    );
-                    let _ = writeln!(out, "        l[{dest}] = built;");
-                    let _ = writeln!(out, "    }}");
-                }
+                let literal =
+                    self.interners
+                        .intern_static_string(bytes, *layout, MirSymbol::STRING);
+                let _ = writeln!(out, "    l[{dest}] = talk_static_string({literal});");
             }
             Inst::BytesLit { dest, bytes } => {
                 let offset = self.interners.intern_static(bytes);

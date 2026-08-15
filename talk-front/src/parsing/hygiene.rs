@@ -207,6 +207,7 @@ impl SyntaxAnnotator<'_> {
             DeclKind::Import(_)
             | DeclKind::Macro { .. }
             | DeclKind::MacroCall { .. }
+            | DeclKind::Wrapper { .. }
             | DeclKind::Let { .. }
             | DeclKind::Init { .. }
             | DeclKind::Method { .. }

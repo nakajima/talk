@@ -45,6 +45,25 @@ impl MacroToken {
     }
 }
 
+/// The grammar category a `quote` block captures (ADR 0026).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Drive,
+    DriveMut,
+    serde::Serialize,
+    serde::Deserialize,
+)]
+pub enum QuoteCategory {
+    #[default]
+    Expr,
+    Decl,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
 pub enum ExprKind {
     // These first expressions only exist to assist with LSP operations
@@ -69,7 +88,9 @@ pub enum ExprKind {
         args: Vec<Expr>,
     },
 
-    /// Opaque expression syntax quotation used while compiling macro units.
+    /// Opaque syntax quotation used while compiling macro units:
+    /// `quote { ... }` quotes an expression, `quote decl { ... }` a
+    /// declaration.
     SyntaxQuote {
         #[drive(skip)]
         source: String,
@@ -77,6 +98,7 @@ pub enum ExprKind {
         tokens: Vec<MacroToken>,
         #[drive(skip)]
         splices: Vec<String>,
+        category: QuoteCategory,
     },
 
     CallEffect {

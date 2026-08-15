@@ -1279,11 +1279,12 @@ func decode_hex_word(view: UTF8View, start: Int) -> Int? {
 	.some(value)
 }
 
-// Decode the parser-recorded canonical token records supplied by the macro
-// service ABI. This does not inspect token spelling or run the lexer again.
-pub func capture_macro_input(source_id: Int, source: String, encoded: String) -> MacroInput? {
+// Decode canonical token records without imposing tree structure: the
+// wrapper macro ABI hands over a declaration's token run, which is not a
+// single delimited group. Empty input decodes to an empty token list.
+pub func decode_token_records(encoded: String) -> [Token]? {
 	let view = encoded.utf8()
-	if view.count() == 0 || (view.count() / 40) * 40 != view.count() { return .none }
+	if (view.count() / 40) * 40 != view.count() { return .none }
 	let tokens: [Token] = []
 	let index = 0
 	loop index < view.count() {
@@ -1303,6 +1304,15 @@ pub func capture_macro_input(source_id: Int, source: String, encoded: String) ->
 		tokens.push(Token(kind: kind, span: span_start..<span_end, lexeme: lexeme_start..<lexeme_end))
 		index = index + 40
 	}
+	.some(tokens)
+}
+
+// Decode the parser-recorded canonical token records supplied by the macro
+// service ABI. This does not inspect token spelling or run the lexer again.
+pub func capture_macro_input(source_id: Int, source: String, encoded: String) -> MacroInput? {
+	if encoded.utf8().count() == 0 { return .none }
+	let tokens: [Token]
+	if let .some(decoded) = decode_token_records(encoded: encoded) { tokens = decoded } else { return .none }
 	let captured = capture_token_trees(tokens: tokens)
 	if captured.trees.count != 1 { return .none }
 	for tree in captured.trees {

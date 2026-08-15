@@ -214,6 +214,16 @@ pub enum Insn {
         args_start: u32,
         args_len: u16,
     },
+    /// Load an immutable String-shaped aggregate over module static bytes.
+    /// The machine interns the complete value by `(offset, len, layout)`,
+    /// so executing a literal site is an `Rc` clone rather than aggregate
+    /// construction.
+    StringLit {
+        dest: u16,
+        offset: u32,
+        len: u32,
+        layout: u32,
+    },
     /// Offset-addressed field read on a flat aggregate (ADR 0045): the
     /// lowering resolved the logical index against the container's
     /// published layout. `layout` is [`NO_LAYOUT`] for a one-slot field,
@@ -656,6 +666,12 @@ impl Module {
                 "agg_new r{dest} <- L{layout}#{tag}({})",
                 self.render_args(*args_start, *args_len)
             ),
+            Insn::StringLit {
+                dest,
+                offset,
+                len,
+                layout,
+            } => format!("string_lit r{dest} <- L{layout}@{offset}+{len}"),
             Insn::Field {
                 dest,
                 src,

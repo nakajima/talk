@@ -252,6 +252,12 @@ impl<'a> Higlighter<'a> {
                 DeclKind::MacroCall { name_span, .. } => {
                     result.push(self.make_span(Kind::MACRO, *name_span));
                 }
+                DeclKind::Wrapper {
+                    name_span, target, ..
+                } => {
+                    result.push(self.make_span(Kind::MACRO, *name_span));
+                    result.extend(self.tokens_from_expr(&**target, ast));
+                }
                 DeclKind::Macro {
                     name_span, params, ..
                 } => {

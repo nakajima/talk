@@ -82,6 +82,7 @@ enum DeclKind @ enum:65535.45
 	associated_decl(GenericDecl, WhereClause?)
 	macro_decl(String, Int, Int, [MacroParam], Int, Int, [MacroToken])
 	macro_call_decl(String, Int, Int, Int, Int, [MacroToken], [Expr])
+	wrapper_decl(String, Int, Int, Int, Int, [MacroToken], [MacroToken], [Decl])
 
 struct EffectSet @ struct:65535.4
 	names: [String]
@@ -124,7 +125,7 @@ enum ExprKind @ enum:65535.30
 	record_literal([RecordField], [Expr])
 	inline_ir([Expr], IRInstruction)
 	macro_call(String, Int, Int, Int, Int, [MacroToken], [Expr])
-	syntax_quote(String, [MacroToken], [String])
+	syntax_quote(String, [MacroToken], [String], Int)
 
 struct Fail @ struct:65535.69
 	code: String

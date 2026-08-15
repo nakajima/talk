@@ -287,6 +287,7 @@ pub fn describe(program: &TypedProgram, root: &str) -> Result<String, String> {
     names.insert(Symbol::Void, "Void".into());
     names.insert(Symbol::RawPtr, "RawPtr".into());
     names.insert(Symbol::String, "String".into());
+    names.insert(Symbol::Static, "Static".into());
     names.insert(Symbol::Array, "Array".into());
 
     let root_symbol = catalog
@@ -349,9 +350,7 @@ pub fn describe(program: &TypedProgram, root: &str) -> Result<String, String> {
             // types sit in the catalog too, but they cross the ABI as
             // leaf names (`String`), not as schema entries.
             if (catalog.structs.contains_key(&reference) || catalog.enums.contains_key(&reference))
-                && program
-                    .symbol_names()
-                    .contains_key(&reference)
+                && program.symbol_names().contains_key(&reference)
                 && !visited.contains(&reference)
             {
                 visited.push(reference);

@@ -9,6 +9,38 @@ while fixing several type-checker and lexer correctness bugs.
 
 ### Added
 
+- **Source-visible static values.** `Static<T>` represents immutable program-lifetime storage. String literals can inhabit `Static<String>` in an explicit static context while continuing to default to `String`; static strings convert to `String` and `Substring` without copying their bytes. All backends now cache complete literal descriptors instead of rebuilding String aggregates at each evaluation.
+- **Declaration wrapper macros (ADR 0026).** `#[name]` and `#[name(args)]`
+  markers attach a bounded transform to the following declaration in file,
+  block, and nominal-body positions. A wrapper is a procedural macro whose
+  return type is `DeclWrapperResult`: it receives its argument tokens, the
+  target as use-site `Syntax<Decl>` (marker removed), the declaration
+  context, and the ordinary hygiene contexts, and returns
+  `replace(Syntax<Decl>)`, `remove`, or `failure(SyntaxFailure)`. Adjacent
+  markers nest and apply innermost-first; `remove` and failures stop the
+  chain, and a removed binder never enters the program. Replacements are
+  validated in the declaration's actual context, so wrapped members stay
+  methods and wrapped `case` declarations stay enum variants. The new
+  `quote decl { ... }` quotation builds replacement declarations with
+  `$name` splicing. Imports and macro definitions establish the macro
+  namespace expansion itself depends on, so they are rejected both as
+  wrapper targets and as replacements. Wrapper exports carry a distinct
+  role in the macro artifact, so an expression macro and a wrapper may
+  share a spelling; the formatter, highlighter, and parser dumps understand
+  the marker syntax.
+
+- **Declaration lens views and rebuilders (ADR 0026).** Wrapper macros can
+  inspect and structurally alter their target instead of only splicing it
+  wholesale. `view_decl(target:declaration:)` parses the target's canonical
+  tokens in its actual declaration context and exposes `view_shape`,
+  `view_name`, and `view_body` (the body block as splice-ready expression
+  syntax with provenance and hygiene intact). `view_with_body` rebuilds the
+  declaration around a new body, `view_with_name` renames it to a fresh
+  hygienic binder invisible to callers, and `view_with_name_token` splices
+  a caller-provided identifier token as the binder for intentional
+  exposure. Untouched tokens keep their source identity, and every rebuilt
+  declaration is still category-checked at the wrapper service boundary.
+
 - **Positional inferred parameters.** A bare inferred parameter such as `func f(x)` is called positionally as `f(1)`. Writing the colon opts into a same-name label: `func f(x:)` and `func f(x: Int)` are called as `f(x: 1)`. Typed positional parameters continue to use `_ x: Int`.
 - **Effect-tracked `unreachable` and postfix force unwrap.** The `unreachable` expression performs Core's public abortive `'panic(message: String) -> Never` effect. Functions infer `'panic`, user handlers may intercept it, and Core's outer host fallback reports unhandled panics and terminates the process. On the same two-variant enums supported by postfix `?`, `value!` extracts the first variant's payload shape and evaluates `unreachable` for the second variant instead of returning it.
 - **Lexical unsafe boundaries.** Raw-pointer expressions and `#_ir` now carry

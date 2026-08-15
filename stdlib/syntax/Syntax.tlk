@@ -8,13 +8,14 @@
 
 use package::Lexer::{
 	Token, TokenKind, TokenRange, TokenTree, MacroInput, group_contents,
-	capture_macro_input
+	capture_macro_input, decode_token_records, scan
 }
 use package::Parser::{
 	Fail, ParseOutcome,
-	parse_expr_tokens, parse_pattern_tokens, parse_type_tokens, parse_decl_tokens
+	parse_expr_tokens, parse_pattern_tokens, parse_type_tokens, parse_decl_tokens,
+	parse_decl_tokens_in
 }
-use package::Ast::{ Expr, Pattern, TypeAnnotation, Decl }
+use package::Ast::{ Expr, Pattern, TypeAnnotation, Decl, DeclKind, Item }
 
 pub enum SyntaxOrigin {
 	case use_site
@@ -288,12 +289,17 @@ struct MaterializedTokens {
 	let source: String
 	let input: TokenRange
 	let identifiers: [MaterializedIdentifier]
+	// Provenance-preserving copies of each rendered token, parallel to
+	// `input.tokens`; collected only for declaration lens views.
+	let atoms: [SyntaxToken]
 }
 
 struct SyntaxBuilder {
 	let source: StringBuilder
 	let tokens: [Token]
 	let identifiers: [MaterializedIdentifier]
+	let collect_atoms: Bool
+	let atoms: [SyntaxToken]
 }
 
 func source_slice(view: UTF8View, range: Range<Int>) -> String {
@@ -348,11 +354,38 @@ func grouped_splice(category: SyntaxCategory) -> Bool {
 	}
 }
 
+func copy_syntax_token(token: &SyntaxToken) -> SyntaxToken {
+	SyntaxToken(
+		kind: token.kind,
+		leading: token.leading.clone(),
+		spelling: token.spelling.clone(),
+		lexeme_start: token.lexeme_start,
+		lexeme_end: token.lexeme_end,
+		source_id: token.source_id,
+		source_span: token.source_span.lower..<token.source_span.upper,
+		context: copy_syntax_context(context: token.context),
+		origin: token.origin
+	)
+}
+
 func append_delimiter(mut builder: SyntaxBuilder, kind: TokenKind, spelling: String) -> Void {
 	let start = builder.source.utf8_count()
 	builder.source.append(string: spelling)
 	let end = builder.source.utf8_count()
 	builder.tokens.push(Token(kind: kind, span: start..<end, lexeme: start..<end))
+	if builder.collect_atoms {
+		builder.atoms.push(SyntaxToken(
+			kind: kind,
+			leading: "",
+			spelling: spelling.clone(),
+			lexeme_start: 0,
+			lexeme_end: spelling.utf8().count(),
+			source_id: 0 - 1,
+			source_span: 0..<0,
+			context: empty_syntax_context(),
+			origin: .definition_site
+		))
+	}
 }
 
 func append_raw(mut builder: SyntaxBuilder, raw: &RawSyntax, group_splices: Bool) -> Void {
@@ -365,6 +398,9 @@ func append_raw(mut builder: SyntaxBuilder, raw: &RawSyntax, group_splices: Bool
 				let end = builder.source.utf8_count()
 				let lexeme = (start + token.lexeme_start)..<(start + token.lexeme_end)
 				builder.tokens.push(Token(kind: token.kind, span: start..<end, lexeme: lexeme))
+				if builder.collect_atoms {
+					builder.atoms.push(copy_syntax_token(token: token))
+				}
 				if identifier_token(kind: token.kind) {
 					builder.identifiers.push(MaterializedIdentifier(
 						text: token_lexeme(token: token),
@@ -393,11 +429,15 @@ func append_raw(mut builder: SyntaxBuilder, raw: &RawSyntax, group_splices: Bool
 }
 
 func materialize(raw: &RawSyntax, group_splices: Bool) -> MaterializedTokens {
-	let builder = SyntaxBuilder(source: StringBuilder(), tokens: [], identifiers: [])
+	materialize_collect(raw: raw, group_splices: group_splices, collect_atoms: false)
+}
+
+func materialize_collect(raw: &RawSyntax, group_splices: Bool, collect_atoms: Bool) -> MaterializedTokens {
+	let builder = SyntaxBuilder(source: StringBuilder(), tokens: [], identifiers: [], collect_atoms: collect_atoms, atoms: [])
 	append_raw(builder: builder, raw: raw, group_splices: group_splices)
 	let end = builder.source.utf8_count()
 	let source = builder.source.finish()
-	MaterializedTokens(source: source, input: TokenRange(tokens: builder.tokens, span: 0..<end), identifiers: builder.identifiers)
+	MaterializedTokens(source: source, input: TokenRange(tokens: builder.tokens, span: 0..<end), identifiers: builder.identifiers, atoms: builder.atoms)
 }
 
 func syntax_failure(failure: Fail, fallback: Range<Int>) -> SyntaxFailure {
@@ -575,6 +615,26 @@ pub func type_expr_fragment(consume syntax: Syntax<TypeAnnotation>) -> Syntax<Ex
 	raw_expr_fragment(raw: consume syntax.raw)
 }
 
+func raw_decl_fragment(consume raw: RawSyntax) -> Syntax<Decl> {
+	Syntax<Decl>(raw: RawSyntax(
+		category: .decl,
+		pieces: raw.pieces,
+		trailing: raw.trailing,
+		group_when_spliced: raw.group_when_spliced
+	))
+}
+
+// These fragments are valid only inside a declaration quotation at the
+// corresponding grammar position; the completed quotation is still parsed
+// as one declaration before it can escape the wrapper service boundary.
+pub func expr_decl_fragment(consume syntax: Syntax<Expr>) -> Syntax<Decl> {
+	raw_decl_fragment(raw: consume syntax.raw)
+}
+
+pub func type_decl_fragment(consume syntax: Syntax<TypeAnnotation>) -> Syntax<Decl> {
+	raw_decl_fragment(raw: consume syntax.raw)
+}
+
 func generated_syntax_token(kind: TokenKind, spelling: String, leading: String, source_id: Int, source_span: Range<Int>, context: &QuoteContext) -> SyntaxToken {
 	SyntaxToken(
 		kind: kind,
@@ -703,6 +763,161 @@ pub func capture_decl(source_id: Int, source: String, input: TokenRange, context
 	SyntaxResult<Decl>(value: .some(Syntax<Decl>(raw: raw)), failure: .none)
 }
 
+// MARK: Declaration wrapper macros (ADR 0026)
+
+// Optional constructors for the generated wrapper ABI entry points, which
+// deliberately avoid naming `MacroInput` so their generated text can never
+// collide with a macro unit's own imports.
+pub func no_macro_input() -> MacroInput? {
+	.none
+}
+
+pub func some_macro_input(consume input: MacroInput) -> MacroInput? {
+	.some(consume input)
+}
+
+// The declaration context a wrapper's target appeared in. Tags match
+// `parse_decl_tokens_in`: file, block, then the nominal bodies.
+pub enum DeclContext {
+	case top_level
+	case block
+	case struct_body
+	case enum_body
+	case protocol_body
+	case extend_body
+}
+
+pub func decl_context_from_tag(tag: Int) -> DeclContext {
+	if tag == 1 { return .block }
+	if tag == 2 { return .struct_body }
+	if tag == 3 { return .enum_body }
+	if tag == 4 { return .protocol_body }
+	if tag == 5 { return .extend_body }
+	.top_level
+}
+
+// A wrapper macro's single explicit result: replace the target with one
+// declaration, intentionally emit no declaration, or report a diagnostic.
+pub enum DeclWrapperResult {
+	case replace(Syntax<Decl>)
+	case remove
+	case failure(SyntaxFailure)
+}
+
+// The service boundary for declaration wrapper macros. A replacement
+// carries the already-parsed canonical outcome, exactly like
+// `ExprMacroOutput`; `removed` reports the intentional no-declaration
+// result distinctly from failure.
+pub struct DeclWrapperOutput {
+	pub let source: String
+	pub let outcome: ParseOutcome?
+	pub let metadata: SyntaxMetadataOutput
+	pub let removed: Bool
+	pub let failure_code: String?
+	pub let failure_message: String?
+	pub let failure_start: Int
+	pub let failure_end: Int
+}
+
+pub func decl_wrapper_failure(code: String, message: String, span: Range<Int>) -> DeclWrapperOutput {
+	DeclWrapperOutput(
+		source: "",
+		outcome: .none,
+		metadata: SyntaxMetadataOutput(identifiers: []),
+		removed: false,
+		failure_code: .some(code),
+		failure_message: .some(message),
+		failure_start: span.lower,
+		failure_end: span.upper
+	)
+}
+
+// The declaration category parsed in the target's declaration context, so a
+// captured or replaced member means what it meant where the marker appeared.
+pub func capture_decl_in(source_id: Int, source: String, input: TokenRange, context_tag: Int, context: &SyntaxContext) -> SyntaxResult<Decl> {
+	let outcome = parse_decl_tokens_in(source: source, input: input, context_tag: context_tag)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: input.span) {
+		return SyntaxResult<Decl>(value: .none, failure: .some(failure))
+	}
+	let raw = raw_from_range(source_id: source_id, source: source, input: input, category: .decl, context: context, origin: .use_site)
+	SyntaxResult<Decl>(value: .some(Syntax<Decl>(raw: raw)), failure: .none)
+}
+
+// Capture a wrapper's target declaration. The first application in a chain
+// supplies the parser-recorded canonical tokens; a chained application
+// supplies the previous replacement's rendered source instead, which scans
+// deterministically because it was materialized from canonical tokens.
+pub func capture_wrapper_target(source_id: Int, source: String, encoded: String, context_tag: Int, context: &SyntaxContext) -> SyntaxResult<Decl> {
+	if encoded.utf8().count() > 0 {
+		if let .some(tokens) = decode_token_records(encoded: encoded) {
+			if tokens.count == 0 {
+				return SyntaxResult<Decl>(value: .none, failure: .some(SyntaxFailure(code: "macro.invalid-input", message: "Wrapper target token records are empty", span: 0..<0)))
+			}
+			let span = tokens[0].span.lower..<tokens[tokens.count - 1].span.upper
+			return capture_decl_in(source_id: source_id, source: source, input: TokenRange(tokens: tokens, span: span), context_tag: context_tag, context: context)
+		}
+		return SyntaxResult<Decl>(value: .none, failure: .some(SyntaxFailure(code: "macro.invalid-input", message: "Wrapper target token records are invalid", span: 0..<0)))
+	}
+	let result = scan(source: source)
+	if let .some(message) = result.error {
+		return SyntaxResult<Decl>(value: .none, failure: .some(SyntaxFailure(code: "macro.invalid-input", message: message, span: 0..<0)))
+	}
+	let extent = source.utf8().count()
+	capture_decl_in(source_id: source_id, source: source, input: TokenRange(tokens: result.tokens, span: 0..<extent), context_tag: context_tag, context: context)
+}
+
+// The declaration category parse at the wrapper service boundary, in the
+// declaration context the replacement will occupy.
+pub func materialize_decl_syntax_in(syntax: &Syntax<Decl>, context_tag: Int) -> MaterializedResult<Decl> {
+	let materialized = materialize(raw: syntax.raw, group_splices: true)
+	let outcome = parse_decl_tokens_in(source: materialized.source, input: materialized.input, context_tag: context_tag)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: materialized.input.span) {
+		return MaterializedResult<Decl>(value: .none, failure: .some(failure))
+	}
+	MaterializedResult<Decl>(
+		value: .some(MaterializedSyntax<Decl>(source: materialized.source, input: materialized.input, outcome: outcome, identifiers: materialized.identifiers)),
+		failure: .none
+	)
+}
+
+// Turn the wrapper author's result into the flattened service output
+// consumed by the Rust expansion driver.
+pub func materialize_decl_wrapper_result(consume result: DeclWrapperResult, context_tag: Int) -> DeclWrapperOutput {
+	match result {
+		.remove -> DeclWrapperOutput(
+			source: "",
+			outcome: .none,
+			metadata: SyntaxMetadataOutput(identifiers: []),
+			removed: true,
+			failure_code: .none,
+			failure_message: .none,
+			failure_start: 0,
+			failure_end: 0
+		),
+		.failure(failure) -> decl_wrapper_failure(code: failure.code, message: failure.message, span: failure.span),
+		.replace(syntax) -> {
+			let materialized = materialize_decl_syntax_in(syntax: syntax, context_tag: context_tag)
+			if let .some(failure) = materialized.failure {
+				return decl_wrapper_failure(code: failure.code, message: failure.message, span: failure.span)
+			}
+			if let .some(value) = materialized.value {
+				let metadata = syntax_metadata_output(materialized: value)
+				return DeclWrapperOutput(
+					source: value.source,
+					outcome: .some(value.outcome),
+					metadata: metadata,
+					removed: false,
+					failure_code: .none,
+					failure_message: .none,
+					failure_start: 0,
+					failure_end: 0
+				)
+			}
+			decl_wrapper_failure(code: "macro.empty-result", message: "Wrapper returned no declaration syntax", span: 0..<0)
+		}
+	}
+}
+
 func quote_expr_result(result: RawQuoteResult) -> SyntaxResult<Expr> {
 	if let .some(failure) = result.failure { return SyntaxResult<Expr>(value: .none, failure: .some(failure)) }
 	if let .some(raw) = result.raw {
@@ -765,13 +980,28 @@ pub func quote_decl(input: MacroInput, splices: [SyntaxSplice<Decl>], context: &
 	let result = quote_raw(input: input, splices: raw_decl_splices(splices: splices), context: context, category: .decl)
 	if let .some(failure) = result.failure { return SyntaxResult<Decl>(value: .none, failure: .some(failure)) }
 	if let .some(raw) = result.raw {
-		let materialized = materialize(raw: raw, group_splices: false)
-		if let .some(failure) = parse_failure(outcome: parse_decl_tokens(source: materialized.source, input: materialized.input), fallback: materialized.input.span) {
-			return SyntaxResult<Decl>(value: .none, failure: .some(failure))
-		}
+		// Declaration grammar depends on the declaration context the result
+		// lands in (a `func` member is a method, `init` is context-gated), so
+		// the category parse runs once at the wrapper service boundary where
+		// that context is known; only structural splice checks happen here.
 		return SyntaxResult<Decl>(value: .some(Syntax<Decl>(raw: raw)), failure: .none)
 	}
 	SyntaxResult<Decl>(value: .none, failure: .some(SyntaxFailure(code: "syntax.quote.invalid", message: "Invalid declaration quotation", span: 0..<0)))
+}
+
+// Lowering target for `quote decl { ... }` (ADR 0026 wrapper macros).
+pub func quote_decl_encoded(source_id: Int, source: String, encoded: String, splices: [SyntaxSplice<Decl>], context: &QuoteContext) -> SyntaxResult<Decl> {
+	if let .some(input) = capture_macro_input(source_id: source_id, source: source, encoded: encoded) {
+		return quote_decl(input: input, splices: splices, context: context)
+	}
+	SyntaxResult<Decl>(
+		value: .none,
+		failure: .some(SyntaxFailure(
+			code: "syntax.quote.invalid-tokens",
+			message: "Quotation token records are invalid",
+			span: 0..<0
+		))
+	)
 }
 
 pub func materialize_expr_syntax(syntax: &Syntax<Expr>) -> MaterializedResult<Expr> {
@@ -888,6 +1118,343 @@ pub func materialize_expr_macro_result(consume result: SyntaxResult<Expr>) -> Ex
 		}
 	}
 	expr_macro_failure(code: "macro.empty-result", message: "Macro returned no expression syntax", span: 0..<0)
+}
+
+// MARK: Declaration lens (ADR 0026): category-safe views and rebuilders.
+//
+// A view locates a declaration's structure by parsing its own canonical
+// tokens through the real grammar in the declaration context the target
+// occupies. Rebuilders re-splice the original provenance-carrying tokens
+// around the replaced child syntax, so untouched tokens keep their source
+// identity and hygiene contexts, and the rebuilt declaration is still
+// category-checked at the wrapper service boundary.
+
+// The grammatical shape a viewed declaration parsed as. Functions,
+// methods, and initializers report a body; every shape reports a name
+// when the grammar declares one.
+pub enum DeclShape {
+	case func_shape
+	case init_shape
+	case struct_shape
+	case enum_shape
+	case protocol_shape
+	case extend_shape
+	case let_shape
+	case property_shape
+	case variant_shape
+	case typealias_shape
+	case effect_shape
+	case import_shape
+	case signature_shape
+	case associated_shape
+	case other_shape
+}
+
+pub struct DeclView {
+	let shape: DeclShape
+	let name: String?
+	let atoms: [SyntaxToken]
+	// Token index of the declared name, or -1 when the grammar declares
+	// none (or records no span for it, as with requirement signatures).
+	let name_index: Int
+	// Token index extent of the body block, braces included; -1/-1 when
+	// the shape has no expression body.
+	let body_lower: Int
+	let body_upper: Int
+
+	init(shape: DeclShape, name: String?, atoms: [SyntaxToken], name_index: Int, body_lower: Int, body_upper: Int) {
+		self.shape = shape
+		self.name = name
+		self.atoms = atoms
+		self.name_index = name_index
+		self.body_lower = body_lower
+		self.body_upper = body_upper
+	}
+}
+
+pub func decl_context_tag(context: &DeclContext) -> Int {
+	match context {
+		.top_level -> 0,
+		.block -> 1,
+		.struct_body -> 2,
+		.enum_body -> 3,
+		.protocol_body -> 4,
+		.extend_body -> 5
+	}
+}
+
+func token_index_for_lexeme(tokens: &[Token], lower: Int, upper: Int) -> Int {
+	let index = 0
+	loop index < tokens.count {
+		if tokens[index].lexeme.lower == lower && tokens[index].lexeme.upper == upper {
+			return index
+		}
+		index = index + 1
+	}
+	0 - 1
+}
+
+// The inclusive-lower/exclusive-upper token extent covered by one byte
+// range of the materialized source.
+func token_extent(tokens: &[Token], lower: Int, upper: Int) -> (Int, Int) {
+	let first = 0 - 1
+	let after = 0 - 1
+	let index = 0
+	loop index < tokens.count {
+		if tokens[index].span.lower >= lower && tokens[index].span.upper <= upper {
+			if first < 0 { first = index }
+			after = index + 1
+		}
+		index = index + 1
+	}
+	(first, after)
+}
+
+func build_view(consume decl: Decl, consume materialized: MaterializedTokens) -> DeclView {
+	let shape: DeclShape = .other_shape
+	let name: String? = .none
+	let name_lo = 0 - 1
+	let name_hi = 0 - 1
+	let body_lo = 0 - 1
+	let body_hi = 0 - 1
+	match decl.kind {
+		.func_decl(f) -> {
+			shape = .func_shape
+			name = .some(f.name.clone())
+			name_lo = f.name_start
+			name_hi = f.name_end
+			body_lo = f.body.start
+			body_hi = f.body.end
+		},
+		.method(f, _, _) -> {
+			shape = .func_shape
+			name = .some(f.name.clone())
+			name_lo = f.name_start
+			name_hi = f.name_end
+			body_lo = f.body.start
+			body_hi = f.body.end
+		},
+		.init_decl(_, block) -> {
+			shape = .init_shape
+			body_lo = block.start
+			body_hi = block.end
+		},
+		.func_signature(sig) -> {
+			shape = .signature_shape
+			name = .some(sig.name.clone())
+		},
+		.method_requirement(sig, _) -> {
+			shape = .signature_shape
+			name = .some(sig.name.clone())
+		},
+		.init_requirement(sig) -> {
+			shape = .signature_shape
+			name = .some(sig.name.clone())
+		},
+		.struct_decl(declared, lo, hi, _, _, _, _, _) -> {
+			shape = .struct_shape
+			name = .some(declared.clone())
+			name_lo = lo
+			name_hi = hi
+		},
+		.enum_decl(declared, lo, hi, _, _, _, _, _) -> {
+			shape = .enum_shape
+			name = .some(declared.clone())
+			name_lo = lo
+			name_hi = hi
+		},
+		.protocol_decl(declared, lo, hi, _, _, _, _) -> {
+			shape = .protocol_shape
+			name = .some(declared.clone())
+			name_lo = lo
+			name_hi = hi
+		},
+		.enum_variant(declared, lo, hi, _, _, _, _) -> {
+			shape = .variant_shape
+			name = .some(declared.clone())
+			name_lo = lo
+			name_hi = hi
+		},
+		.property(declared, lo, hi, _, _, _) -> {
+			shape = .property_shape
+			name = .some(declared.clone())
+			name_lo = lo
+			name_hi = hi
+		},
+		.typealias_decl(declared, lo, hi, _) -> {
+			shape = .typealias_shape
+			name = .some(declared.clone())
+			name_lo = lo
+			name_hi = hi
+		},
+		.effect_decl(declared, lo, hi, _, _, _, _) -> {
+			shape = .effect_shape
+			name = .some(declared.clone())
+			name_lo = lo
+			name_hi = hi
+		},
+		.let_decl(_, _, _) -> shape = .let_shape,
+		.import_decl(_) -> shape = .import_shape,
+		.extend_decl(_, _, _, _, _) -> shape = .extend_shape,
+		.associated_decl(_, _) -> shape = .associated_shape,
+		.macro_decl(_, _, _, _, _, _, _) -> shape = .other_shape,
+		.macro_call_decl(_, _, _, _, _, _, _) -> shape = .other_shape,
+		.wrapper_decl(_, _, _, _, _, _, _, _) -> shape = .other_shape
+	}
+	let name_index = 0 - 1
+	if name_lo >= 0 {
+		name_index = token_index_for_lexeme(tokens: materialized.input.tokens, lower: name_lo, upper: name_hi)
+	}
+	let body_lower = 0 - 1
+	let body_upper = 0 - 1
+	if body_lo >= 0 {
+		let (first, after) = token_extent(tokens: materialized.input.tokens, lower: body_lo, upper: body_hi)
+		body_lower = first
+		body_upper = after
+	}
+	DeclView(shape: shape, name: name, atoms: materialized.atoms, name_index: name_index, body_lower: body_lower, body_upper: body_upper)
+}
+
+// Build a structural view of a declaration in the context it occupies.
+// `.none` reports syntax the declaration grammar rejects, which a wrapper
+// target can only be when a previous rebuild produced it.
+pub func view_decl(target: &Syntax<Decl>, declaration: &DeclContext) -> DeclView? {
+	let materialized = materialize_collect(raw: target.raw, group_splices: true, collect_atoms: true)
+	let outcome = parse_decl_tokens_in(source: materialized.source, input: materialized.input, context_tag: decl_context_tag(context: declaration))
+	if let .some(_) = outcome.failure { return .none }
+	let items = outcome.items
+	for item in items {
+		match item {
+			.decl_item(decl) -> return .some(build_view(decl: decl, materialized: materialized)),
+			_ -> return .none
+		}
+	}
+	.none
+}
+
+pub func view_shape(view: &DeclView) -> DeclShape {
+	match view.shape {
+		.func_shape -> .func_shape,
+		.init_shape -> .init_shape,
+		.struct_shape -> .struct_shape,
+		.enum_shape -> .enum_shape,
+		.protocol_shape -> .protocol_shape,
+		.extend_shape -> .extend_shape,
+		.let_shape -> .let_shape,
+		.property_shape -> .property_shape,
+		.variant_shape -> .variant_shape,
+		.typealias_shape -> .typealias_shape,
+		.effect_shape -> .effect_shape,
+		.import_shape -> .import_shape,
+		.signature_shape -> .signature_shape,
+		.associated_shape -> .associated_shape,
+		.other_shape -> .other_shape
+	}
+}
+
+pub func view_name(view: &DeclView) -> String? {
+	if let .some(name) = view.name {
+		return .some(name.clone())
+	}
+	.none
+}
+
+// The body block as expression syntax (braces included), preserving each
+// token's provenance and hygiene context, so it can be spliced into an
+// expression quotation.
+pub func view_body(view: &DeclView) -> Syntax<Expr>? {
+	if view.body_lower < 0 { return .none }
+	let pieces: [SyntaxPiece] = []
+	let index = view.body_lower
+	loop index < view.body_upper {
+		pieces.push(.token(copy_syntax_token(token: view.atoms[index])))
+		index = index + 1
+	}
+	.some(Syntax<Expr>(raw: RawSyntax(category: .expr, pieces: pieces, trailing: "", group_when_spliced: true)))
+}
+
+func push_atom_pieces(mut pieces: [SyntaxPiece], view: &DeclView, lower: Int, upper: Int) -> Void {
+	let index = lower
+	loop index < upper {
+		pieces.push(.token(copy_syntax_token(token: view.atoms[index])))
+		index = index + 1
+	}
+}
+
+func lens_failure(code: String, message: String) -> SyntaxResult<Decl> {
+	SyntaxResult<Decl>(value: .none, failure: .some(SyntaxFailure(code: code, message: message, span: 0..<0)))
+}
+
+// Rebuild the declaration with a new body block containing the given
+// expression: a block expression re-embeds wholesale, anything else
+// becomes the new body's trailing expression.
+pub func view_with_body(view: &DeclView, consume body: Syntax<Expr>, context: &QuoteContext) -> SyntaxResult<Decl> {
+	if view.body_lower < 0 {
+		return lens_failure(code: "syntax.lens.no-body", message: "The viewed declaration has no body block")
+	}
+	let pieces: [SyntaxPiece] = []
+	push_atom_pieces(pieces: pieces, view: view, lower: 0, upper: view.body_lower)
+	pieces.push(.token(generated_syntax_token(kind: .left_brace, spelling: "{", leading: " ", source_id: 0 - 1, source_span: 0..<0, context: context)))
+	pieces.push(.splice(" ", [body.raw]))
+	pieces.push(.token(generated_syntax_token(kind: .right_brace, spelling: "}", leading: " ", source_id: 0 - 1, source_span: 0..<0, context: context)))
+	push_atom_pieces(pieces: pieces, view: view, lower: view.body_upper, upper: view.atoms.count)
+	SyntaxResult<Decl>(value: .some(Syntax<Decl>(raw: RawSyntax(category: .decl, pieces: pieces, trailing: "", group_when_spliced: false))), failure: .none)
+}
+
+func rebuilt_with_name(view: &DeclView, consume token: SyntaxToken) -> SyntaxResult<Decl> {
+	let pieces: [SyntaxPiece] = []
+	push_atom_pieces(pieces: pieces, view: view, lower: 0, upper: view.name_index)
+	pieces.push(.token(consume token))
+	push_atom_pieces(pieces: pieces, view: view, lower: view.name_index + 1, upper: view.atoms.count)
+	SyntaxResult<Decl>(value: .some(Syntax<Decl>(raw: RawSyntax(category: .decl, pieces: pieces, trailing: "", group_when_spliced: false))), failure: .none)
+}
+
+// Rebuild the declaration with a fresh, hygienically introduced name: the
+// binder carries the definition site plus the expansion scope, so it
+// neither captures caller names nor leaks into caller scope.
+pub func view_with_name(view: &DeclView, name: String, context: &QuoteContext) -> SyntaxResult<Decl> {
+	if view.name_index < 0 {
+		return lens_failure(code: "syntax.lens.no-name", message: "The viewed declaration declares no replaceable name")
+	}
+	let leading = view.atoms[view.name_index].leading.clone()
+	let token = SyntaxToken(
+		kind: .identifier,
+		leading: leading,
+		spelling: name.clone(),
+		lexeme_start: 0,
+		lexeme_end: name.utf8().count(),
+		source_id: 0 - 1,
+		source_span: 0..<0,
+		context: introduced_context(context: context),
+		origin: .definition_site
+	)
+	rebuilt_with_name(view: view, token: token)
+}
+
+// Rebuild the declaration with a caller-provided identifier as the binder
+// (ADR 0026's intentional exposure path). The token must come from use-site
+// syntax — typically the wrapper's argument tree — and keeps its use-site
+// context, so callers can see the rebuilt name.
+pub func view_with_name_token(view: &DeclView, source_id: Int, source: String, token: Token, use_site: &SyntaxContext) -> SyntaxResult<Decl> {
+	if view.name_index < 0 {
+		return lens_failure(code: "syntax.lens.no-name", message: "The viewed declaration declares no replaceable name")
+	}
+	if token.kind != .identifier {
+		return lens_failure(code: "syntax.lens.not-identifier", message: "A declaration name must be spliced from an identifier token")
+	}
+	let leading = view.atoms[view.name_index].leading.clone()
+	let named = SyntaxToken(
+		kind: .identifier,
+		leading: leading,
+		spelling: source_slice(view: source.utf8(), range: token.span),
+		lexeme_start: token.lexeme.lower - token.span.lower,
+		lexeme_end: token.lexeme.upper - token.span.lower,
+		source_id: source_id,
+		source_span: token.span.lower..<token.span.upper,
+		context: copy_syntax_context(context: use_site),
+		origin: .use_site
+	)
+	rebuilt_with_name(view: view, token: named)
 }
 
 pub func syntax_text<Category>(syntax: &Syntax<Category>) -> String {

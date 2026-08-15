@@ -5336,6 +5336,44 @@ pub mod tests {
     }
 
     #[test]
+    fn gadt_arm_reports_unproven_associated_result_as_mismatch() {
+        let typed = check(
+            "// no-core
+            protocol Add<RHS> {
+                associated Ret
+                func add(rhs: RHS) -> Ret
+            }
+
+            enum Expr<T> {
+                case int(Int) -> Expr<Int>
+                case add<U: Add<U>>(Expr<U>, Expr<U>) -> Expr<U>
+            }
+
+            func eval<T: Add<T>>(expr: Expr<T>) -> T {
+                match expr {
+                    .int(i) -> i,
+                    .add(a, b) -> eval(expr: a) + eval(expr: b)
+                }
+            }
+            ",
+        );
+        let errors = type_errors(&typed);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("requires T") && error.contains("T.Ret")),
+            "{errors:?}"
+        );
+        assert!(
+            !errors
+                .iter()
+                .any(|error| error.contains("escapes this pattern arm")
+                    || error.contains("TypeParameter(")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
     fn gadt_match_rejects_escaping_existential_payloads() {
         let typed = check(
             "// no-core

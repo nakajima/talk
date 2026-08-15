@@ -74,7 +74,7 @@ func expr_label(kind: &ExprKind) -> String {
 		.record_literal(_, _) -> "Expr::RecordLiteral",
 		.inline_ir(_, _) -> "Expr::InlineIR",
 		.macro_call(_, _, _, _, _, _, _) -> "Expr::MacroCall",
-		.syntax_quote(_, _, _) -> "Expr::SyntaxQuote"
+		.syntax_quote(_, _, _, _) -> "Expr::SyntaxQuote"
 	}
 }
 
@@ -577,7 +577,8 @@ func decl_label(kind: &DeclKind) -> String {
 		.effect_decl(_, _, _, _, _, _, _) -> "Decl::Effect",
 		.associated_decl(_, _) -> "Decl::Associated",
 		.macro_decl(_, _, _, _, _, _, _) -> "Decl::Macro",
-		.macro_call_decl(_, _, _, _, _, _, _) -> "Decl::MacroCall"
+		.macro_call_decl(_, _, _, _, _, _, _) -> "Decl::MacroCall",
+		.wrapper_decl(_, _, _, _, _, _, _, _) -> "Decl::Wrapper"
 	}
 }
 
@@ -682,7 +683,13 @@ func render_decl(mut buf: [Byte], view: UTF8View, decl: &Decl, depth: Int) -> Vo
 			render_optional_where(buf: buf, view: view, wc: wc, depth: child)
 		},
 		.macro_decl(_, _, _, _, _, _, tokens) -> render_macro_tokens(buf: buf, view: view, tokens: tokens, depth: child),
-		.macro_call_decl(_, _, _, _, _, tokens, _) -> render_macro_tokens(buf: buf, view: view, tokens: tokens, depth: child)
+		.macro_call_decl(_, _, _, _, _, tokens, _) -> render_macro_tokens(buf: buf, view: view, tokens: tokens, depth: child),
+		.wrapper_decl(_, _, _, _, _, args, _, targets) -> {
+			render_macro_tokens(buf: buf, view: view, tokens: args, depth: child)
+			for target in targets {
+				render_decl(buf: buf, view: view, decl: target, depth: child)
+			}
+		}
 	}
 }
 

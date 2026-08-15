@@ -22,12 +22,25 @@ pub struct Interners {
     /// deduplicates them.
     pub statics: Vec<u8>,
     static_offsets: HashMap<Vec<u8>, u32>,
+    /// Fully formed immutable string descriptors. The bytes live in
+    /// `statics`; generated code loads one cached aggregate instead of
+    /// rebuilding the String shape at every literal evaluation.
+    pub static_strings: Vec<StaticString>,
+    static_string_ids: HashMap<(u32, u32, u32, u32), u32>,
     /// Struct and enum symbols numbered densely from one; zero is the
     /// anonymous product.
     pub display_ids: HashMap<MirSymbol, u32>,
     /// Of those, the ids belonging to protocol existentials, which have
     /// no catalog entry and render as their payload.
     pub existential_ids: HashSet<u32>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct StaticString {
+    pub offset: u32,
+    pub len: u32,
+    pub layout: u32,
+    pub display: u32,
 }
 
 impl Interners {
@@ -50,6 +63,83 @@ impl Interners {
         self.static_offsets.insert(bytes.to_vec(), offset);
         offset
     }
+
+    pub fn intern_static_string(&mut self, bytes: &[u8], layout: u32, symbol: MirSymbol) -> u32 {
+        let offset = self.intern_static(bytes);
+        let len = u32::try_from(bytes.len()).unwrap_or_default();
+        let display = self.display_id(symbol);
+        let key = (offset, len, layout, display);
+        *self.static_string_ids.entry(key).or_insert_with(|| {
+            let id = u32::try_from(self.static_strings.len()).unwrap_or_default();
+            self.static_strings.push(StaticString {
+                offset,
+                len,
+                layout,
+                display,
+            });
+            id
+        })
+    }
+}
+
+/// Emit the immutable descriptor cache shared by both native backends.
+/// The cache's malloc-backed aggregates intentionally have process lifetime:
+/// module statics and every Static value referring to them have the same
+/// lifetime, including across native library calls that clear the arena.
+pub fn static_strings(out: &mut String, interners: &Interners) {
+    let count = interners.static_strings.len().max(1);
+    let _ = writeln!(out, "static TalkValue talk_static_string_cache[{count}];");
+    let _ = writeln!(
+        out,
+        "static TalkValue talk_static_string_tagged_cache[{count}];"
+    );
+    let _ = writeln!(
+        out,
+        "static const uint32_t talk_static_string_count = {};",
+        interners.static_strings.len()
+    );
+    out.push_str(
+        "typedef struct { uint32_t offset, len, layout, display; } TalkStaticStringDesc;\n",
+    );
+    let _ = writeln!(
+        out,
+        "static const TalkStaticStringDesc talk_static_string_descs[{count}] = {{"
+    );
+    if interners.static_strings.is_empty() {
+        out.push_str("    { 0, 0, 0, 0 },\n");
+    } else {
+        for string in &interners.static_strings {
+            let _ = writeln!(
+                out,
+                "    {{ {}, {}, {}, {} }},",
+                string.offset, string.len, string.layout, string.display
+            );
+        }
+    }
+    out.push_str("};\n");
+    out.push_str(
+        "static TalkValue talk_static_string(uint32_t id) {\n\
+         \x20   if (id >= talk_static_string_count) talk_trap(\"static string index out of range\");\n\
+         \x20   if (talk_static_string_cache[id].tag != TALK_NATIVE) {\n\
+         \x20       const TalkStaticStringDesc *desc = &talk_static_string_descs[id];\n\
+         \x20       talk_static_string_cache[id] = talk_static_string_value(\n\
+         \x20           desc->layout, desc->display, talk_statics + desc->offset, (int64_t)desc->len);\n\
+         \x20   }\n\
+         \x20   return talk_static_string_cache[id];\n\
+         }\n\
+         static TalkValue talk_static_string_tagged(uint32_t id) {\n\
+         \x20   if (id >= talk_static_string_count) talk_trap(\"static string index out of range\");\n\
+         \x20   if (talk_static_string_tagged_cache[id].tag != TALK_AGG) {\n\
+         \x20       const TalkStaticStringDesc *desc = &talk_static_string_descs[id];\n\
+         \x20       TalkValue value = talk_static_agg(desc->layout, desc->display, 0, 3);\n\
+         \x20       value.v.agg->fields[0] = talk_pointer(talk_statics + desc->offset);\n\
+         \x20       value.v.agg->fields[1] = talk_int((int64_t)desc->len);\n\
+         \x20       value.v.agg->fields[2] = talk_int((int64_t)desc->len);\n\
+         \x20       talk_static_string_tagged_cache[id] = value;\n\
+         \x20   }\n\
+         \x20   return talk_static_string_tagged_cache[id];\n\
+         }\n",
+    );
 }
 
 /// The display-id-to-module-symbol table (ADR 0048): one row per type

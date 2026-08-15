@@ -21,6 +21,9 @@
       "include": "#numbers"
     },
     {
+      "include": "#wrapper-markers"
+    },
+    {
       "include": "#attributes"
     },
     {
@@ -90,6 +93,18 @@
     "attributes": {
       "name": "storage.modifier.attribute.talktalk",
       "match": "@[A-Za-z0-9_]+"
+    },
+    "wrapper-markers": {
+      "comment": "A #[name] declaration wrapper marker (ADR 0026); arguments highlight as ordinary tokens.",
+      "match": "(#\\[)([A-Za-z0-9_]+)",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.wrapper.talktalk"
+        },
+        "2": {
+          "name": "storage.modifier.attribute.talktalk"
+        }
+      }
     },
     "bound-vars": {
       "name": "variable.other.bound.talktalk",

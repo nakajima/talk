@@ -8,6 +8,7 @@
     <link href="/style.css" rel="stylesheet">
   </head>
   <body>
+{GLOBAL_NAV}
     <main>
       <header>
         <h1><code>print(<span class="string">"hi, it’s talktalk"</span>)</code></h1>

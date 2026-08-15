@@ -8,13 +8,12 @@ cleanup() {
 
 trap cleanup EXIT
 
-echo "starting server"
-python -m http.server 8000 -d ./assets &
+echo "starting dev server"
+cargo run -- dev &
+server_pid=$!
 sleep 1
 
-echo "serving"
+echo "serving with tailscale funnel"
 tailscale funnel 8000 &
-sleep 1
 
-echo "watching"
-watchexec --exts css,template,md,rs,js,tlk "(cargo run > ./assets/index.html)"
+wait "$server_pid"

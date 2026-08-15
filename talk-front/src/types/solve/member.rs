@@ -307,6 +307,21 @@ impl<'s> Solver<'s> {
         let label_str = label.to_string();
         let (member_receiver, self_receiver) = self.member_receivers(&receiver);
         let diagnostic_receiver = self_receiver.clone();
+        // Static<T> transparently exposes T's stored fields for shared
+        // reads. Methods and protocol requirements still dispatch on
+        // Static<T> itself, so consuming or mutating T operations are not
+        // accidentally made available.
+        if let Ty::Nominal(symbol, args) = self.store.shallow(&member_receiver)
+            && symbol == Symbol::Static
+            && let [inner @ Ty::Nominal(inner_symbol, _)] = args.as_slice()
+            && self
+                .catalog
+                .structs
+                .get(inner_symbol)
+                .is_some_and(|info| info.fields.contains_key(&label_str))
+        {
+            return self.try_member(inner.clone(), label, member, origin, queue);
+        }
         if stuck_projection(self.store, &member_receiver) {
             return Some(Constraint::HasMember {
                 receiver,

@@ -342,6 +342,7 @@ pub(super) fn decl_kind_name(kind: &DeclKind) -> &'static str {
         DeclKind::Import(_) => "imports",
         DeclKind::Macro { .. } => "macro declarations",
         DeclKind::MacroCall { .. } => "macro invocations",
+        DeclKind::Wrapper { .. } => "wrapper macro applications",
         DeclKind::Effect { .. } => "effect declarations",
         DeclKind::Struct { .. } => "struct declarations",
         DeclKind::Let { .. } => "destructuring let bindings",

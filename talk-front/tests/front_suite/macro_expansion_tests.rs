@@ -6,6 +6,7 @@
     use talk_front::macro_expansion::MacroError;
     use talk_front::macro_expansion::expand_macros_with_sources;
     use talk_front::node::Node;
+    use talk_front::node_id::FileID;
     use talk_front::node_kinds::decl::Decl;
     use talk_front::node_kinds::decl::DeclKind;
     use talk_front::node_kinds::expr::ExprKind;
@@ -59,6 +60,74 @@
                 [input_span.start as usize..input_span.end as usize],
             "{ div class=@card { <not talk> } }"
         );
+    }
+
+    #[test]
+    fn parser_captures_wrapper_markers_with_nesting() {
+        let source = "#[outer]\n#[logged(level: \"debug\")]\npub func loud() -> Int { 1 }";
+        let ast = parse(source);
+        let Node::Decl(decl) = &ast.roots[0] else {
+            panic!("expected a wrapper declaration");
+        };
+        let DeclKind::Wrapper {
+            name,
+            input_tokens,
+            target_tokens,
+            target,
+            ..
+        } = &decl.kind
+        else {
+            panic!("expected the outer wrapper");
+        };
+        assert_eq!(name, "outer");
+        assert!(input_tokens.is_empty(), "the bare form captures no tokens");
+        assert!(!target_tokens.is_empty());
+        let DeclKind::Wrapper {
+            name: inner_name,
+            input_span,
+            input_tokens: inner_tokens,
+            target: inner_target,
+            ..
+        } = &target.kind
+        else {
+            panic!("expected the inner wrapper");
+        };
+        assert_eq!(inner_name, "logged");
+        assert_eq!(
+            &source[input_span.start as usize..input_span.end as usize],
+            "(level: \"debug\")"
+        );
+        assert!(!inner_tokens.is_empty());
+        let DeclKind::Func(func) = &inner_target.kind else {
+            panic!("expected the wrapped function");
+        };
+        assert_eq!(
+            inner_target.visibility,
+            talk_front::node_kinds::decl::Visibility::Public,
+            "the target keeps its own visibility"
+        );
+        assert_eq!(func.name.name_str(), "loud");
+    }
+
+    #[test]
+    fn wrappers_reject_imports_and_macro_definitions_as_targets() {
+        let error =
+            talk::compiling::frontend::parse_ast("#[w]\nuse foo::{ bar }", FileID(0), "-")
+                .expect_err("a wrapped import must fail to parse");
+        assert!(error.to_string().contains("import"), "{error}");
+        let error =
+            talk::compiling::frontend::parse_ast("#[w]\nmacro m($x) { $x }", FileID(0), "-")
+                .expect_err("a wrapped macro definition must fail to parse");
+        assert!(error.to_string().contains("macro definition"), "{error}");
+    }
+
+    #[test]
+    fn visibility_before_a_wrapper_marker_is_rejected() {
+        let error =
+            talk::compiling::frontend::parse_ast("pub #[x] func f() -> Int { 1 }", FileID(0), "-")
+                .expect_err("`pub` before a marker must fail to parse");
+        let rendered = error.to_string();
+        assert!(rendered.contains("wrapper marker first"), "{rendered}");
     }
 
     #[test]

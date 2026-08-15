@@ -53,12 +53,12 @@ let b: Float = 2.0
 ```
 They’ll be checked. 
 
-```tlk accumulate(types)
+```tlk error
 let c = a + b // Uh oh, type error!
 ```
 But you can also not specify them and types will still be checked:
 
-```tlk
+```tlk error
 let a = 1
 let b = 2.0
 let c = a + b
@@ -228,7 +228,7 @@ definitely!
 # protocols
 *visits Glasgow once* what about ~~traits~~ ~~type classes~~ ~~interfaces~~ protocols? For making ad-hoc polymorphism less ad-hoc? Yea we've got those.
 
-Let's write a super basic protocol that let's a type be added to itself.
+Let's write a super basic protocol that lets a type be added to itself.
 
 ```tlk accumulate(protocols) norun
 protocol Addable {
@@ -304,7 +304,7 @@ extend Addable {
 Not only can we pronounce "GADTs"[^1], we can use them.
 
 ```tlk accumulate(protocols)
-enum Expr<Returns> 'heap {
+enum Expr<Returns> {
 	case int(Int) -> Expr<Int>
 	case string(String) -> Expr<String>
 	case add<T: Addable>(Expr<T>, Expr<T>) -> Expr<T>
@@ -323,7 +323,6 @@ print(eval(.add(.string("hello "), .string("world"))))
 ```
 Each arm of the `match` knows what `T` actually is, so `eval` can give you back `Int` or `String`, not `T`. Because everyone hates `T`[^2]
 
-PS: That `'heap` thing will be explained later. Probably?
 ## effects
 What are effects? Great question. I don't know. But i think they're like weird lil functions. Functions that can suspend execution, hand control off somewhere else, then return it. Think like, `async`/`await` in other languages, but more generalized.
 

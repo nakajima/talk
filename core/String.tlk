@@ -8,11 +8,24 @@ use package::Array::{ Array }
 use package::Operators::{ Add, Comparable, Equatable, Subtract }
 use package::Memory::{ ByteStorage, _alloc, _copy, _ptr_add, _store }
 use package::Ownership::{ Borrowed, CheapClone }
+use package::Convert::{ Into }
 use package::Result::{ Result }
 use package::Iterable::{ IndexIterable }
 
 pub struct UTF8Error {
 	pub let offset: Int
+}
+
+// An immutable value whose complete reachable storage has program lifetime.
+// Construction is compiler-owned; source code receives Static values from
+// literals and, later, static declarations.
+pub struct Static<Value> {
+	let value: Value
+
+	init(value: Value) {
+		self.value = value
+		self
+	}
 }
 
 extend UTF8Error: Equatable<UTF8Error> {
@@ -224,6 +237,7 @@ extend Substring: Borrowed {}
 extend Substring: CheapClone {}
 
 extend String: CheapClone {}
+extend<Value: CheapClone> Static<Value>: CheapClone {}
 
 // A borrowed view of a string's raw UTF-8 bytes. Offsets are byte
 // offsets: `slice` can split a multi-byte character, so anything
@@ -280,6 +294,34 @@ extend Substring: StringMethods {
 
 	pub func utf8() -> UTF8View {
 		UTF8View(storage: self.storage, start: self.start, byte_count: self.byte_count)
+	}
+}
+
+extend Static<String>: StringMethods {
+	pub func as_substring() -> Substring {
+		self.value.as_substring()
+	}
+
+	pub func utf8() -> UTF8View {
+		self.value.utf8()
+	}
+}
+
+extend Static<String> {
+	pub func to_string() -> String {
+		self.value.to_string()
+	}
+}
+
+extend Static<String>: Into<String> {
+	pub consuming func into() -> String {
+		self.value
+	}
+}
+
+extend Static<String>: Into<Substring> {
+	pub consuming func into() -> Substring {
+		self.value.as_substring()
 	}
 }
 
@@ -343,6 +385,18 @@ extend String: Add<String> {
 	}
 }
 
+extend Static<String>: Add<Static<String>> {
+	pub func add(_ rhs: Static<String>) -> String {
+		self.value + rhs.value
+	}
+}
+
+extend Static<String>: Add<String> {
+	pub func add(_ rhs: String) -> String {
+		self.value + rhs
+	}
+}
+
 extend String: Equatable<String> {
 	pub func equals(_ rhs: String) -> Bool {
 		if self.byte_count != rhs.byte_count { return false }
@@ -356,5 +410,23 @@ extend String: Equatable<String> {
 			i = i + 1
 		}
 		true
+	}
+}
+
+extend Static<String>: Equatable<Static<String>> {
+	pub func equals(_ rhs: Static<String>) -> Bool {
+		self.value == rhs.value
+	}
+}
+
+extend Static<String>: Equatable<String> {
+	pub func equals(_ rhs: String) -> Bool {
+		self.value == rhs
+	}
+}
+
+extend String: Equatable<Static<String>> {
+	pub func equals(_ rhs: Static<String>) -> Bool {
+		self == rhs.value
 	}
 }
