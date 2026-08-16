@@ -3,8 +3,79 @@
 //! entries, and the guarded global teardown wrapper (ADR 0033).
 
 use super::*;
+use rustc_hash::FxHashSet;
 
 impl<'a> ProgramBuilder<'a> {
+    /// Demand the full task host and, when core publishes it, the narrower
+    /// blocking-only specialization selected after the reachable MIR closes.
+    fn demand_host(&mut self) -> Result<FuncId, BackendError> {
+        let host = self.demand(Symbol::WithHost, Vec::new(), Span::SYNTHESIZED)?;
+        if self.callables.contains_key(&Symbol::WithBlockingHost) {
+            self.demand(Symbol::WithBlockingHost, Vec::new(), Span::SYNTHESIZED)?;
+        }
+        Ok(host)
+    }
+
+    /// Replace calls to the full task host with the blocking specialization
+    /// when reachable code performs none of the effects admitted only by the
+    /// full host callback. The trigger set comes from the two source-level
+    /// callback rows; the backend does not name task effects.
+    pub(super) fn select_host_specialization(&mut self) {
+        let Some(&task_host) = self.func_ids.get(&(Symbol::WithHost, Vec::new())) else {
+            return;
+        };
+        let Some(&blocking_host) = self.func_ids.get(&(Symbol::WithBlockingHost, Vec::new()))
+        else {
+            return;
+        };
+        let callback_effects = |symbol| {
+            self.programs
+                .iter()
+                .find_map(|input| input.program.types().schemes.get(&symbol))
+                .and_then(|scheme| match &scheme.ty {
+                    Ty::Func(params, _, _) => params.first(),
+                    _ => None,
+                })
+                .and_then(|callback| match callback {
+                    Ty::Func(_, _, row) => Some(
+                        row.effects
+                            .iter()
+                            .map(|entry| entry.effect)
+                            .collect::<FxHashSet<_>>(),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        let blocking_effects = callback_effects(Symbol::WithBlockingHost);
+        let task_only: FxHashSet<_> = callback_effects(Symbol::WithHost)
+            .difference(&blocking_effects)
+            .filter_map(|effect| from_source(*effect))
+            .collect();
+        if task_only.is_empty()
+            || self.functions.iter().any(|function| {
+                function.blocks.iter().any(|block| {
+                    block.insts.iter().any(|inst| {
+                        matches!(inst, Inst::FindHandler { effect, .. } if task_only.contains(effect))
+                    })
+                })
+            })
+        {
+            return;
+        }
+        for function in &mut self.functions {
+            for block in &mut function.blocks {
+                for inst in &mut block.insts {
+                    if let Inst::Call { func, .. } = inst
+                        && *func == task_host
+                    {
+                        *func = blocking_host;
+                    }
+                }
+            }
+        }
+    }
+
     /// Find the requested `--entry` function among the root program's
     /// top-level functions. An explicit request crosses the package
     /// boundary, so it must name a public function; the implicit
@@ -275,7 +346,7 @@ impl<'a> ProgramBuilder<'a> {
         // teardown. Programs without core have no wrapper (and no
         // ambient effects to supply) and run directly.
         let hosted = if self.callables.contains_key(&Symbol::WithHost) {
-            let host = self.demand(Symbol::WithHost, Vec::new(), Span::SYNTHESIZED)?;
+            let host = self.demand_host()?;
             let slot = u32::try_from(self.global_slots.len()).unwrap_or_default();
             self.result_slot = Some(slot);
             let body_id = self.reserve("entry_body");
@@ -728,7 +799,7 @@ impl<'a> ProgramBuilder<'a> {
             return Ok(outer);
         }
 
-        let host = self.demand(Symbol::WithHost, Vec::new(), Span::SYNTHESIZED)?;
+        let host = self.demand_host()?;
         let slot = u32::try_from(self.global_slots.len()).unwrap_or_default();
         self.result_slot = Some(slot);
 

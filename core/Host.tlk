@@ -1,7 +1,9 @@
 // no-core
+use package::Array::{ Array }
 use package::IO::{ IORequest, io, STDERR_FD, write_string }
 use package::Memory::{ alloc }
-use package::Async::{ yield_now, park_recv, park_send, park_sleep, park_recv2, _chan_ctl }
+use package::Operators::{ Add, Comparable, Equatable, Not }
+use package::Async::{ yield_now, park_recv, park_send, park_sleep, park_recv2, _chan_ctl, Resumption, resume }
 use package::String::{ String }
 
 pub effect 'panic(message: String) -> Never
@@ -43,6 +45,145 @@ pub func _io_host(request: IORequest) -> Int {
 	}
 }
 
+// Cooperative task operations belong to the executable entry surface.
+// Every program runs as one root task; a nearer `coop::run` may install
+// another scheduler for an explicit nested scope.
+pub effect 'pause() -> ()
+
+pub typealias Task = () '[pause, spawn, park_recv, park_send, park_sleep, park_recv2, io, alloc, yield_now, panic] -> ()
+
+typealias BlockingTask = () '[park_recv, park_send, park_sleep, park_recv2, io, alloc, yield_now, panic] -> ()
+
+pub effect 'spawn(task: Task) -> ()
+
+enum TaskStep {
+	case finished
+	case wants_recv(Int, Resumption<(), TaskStep>)
+	case wants_send(Int, Resumption<(), TaskStep>)
+	case wants_either(Int, Int, Resumption<(), TaskStep>)
+	case sleeping(Int, Resumption<(), TaskStep>)
+	case paused(Resumption<(), TaskStep>)
+	case spawned(Task, Resumption<(), TaskStep>)
+}
+
+func _drive_task(consume task: Task) -> TaskStep {
+	#handle 'park_recv { handle, k in TaskStep.wants_recv(handle, k) }
+	#handle 'park_send { handle, k in TaskStep.wants_send(handle, k) }
+	#handle 'park_recv2 { a, b, k in TaskStep.wants_either(a, b, k) }
+	#handle 'park_sleep { deadline_ms, k in TaskStep.sleeping(deadline_ms, k) }
+	#handle 'pause { k in TaskStep.paused(k) }
+	#handle 'spawn { task, k in TaskStep.spawned(task, k) }
+	task()
+	TaskStep.finished
+}
+
+// Drain a root step that suspended, and everything it spawns, to
+// completion. The arrays stay off the synchronous root path.
+func _drain_cooperative(consume first: TaskStep) -> () {
+	let steps: [TaskStep] = []
+	steps.push(first)
+	loop {
+		let next: [TaskStep] = []
+		let progressed = false
+		let reg_kind: [Int] = []
+		let reg_handle: [Int] = []
+		loop {
+			if let .some(popped) = steps.pop() {
+				let step: TaskStep = popped
+				match step {
+					.finished -> {},
+					.paused(k) -> {
+						progressed = true
+						next.push(resume(k: k, value: ()))
+					},
+					.spawned(task, k) -> {
+						progressed = true
+						next.push(_drive_task(task: task))
+						next.push(resume(k: k, value: ()))
+					},
+					.wants_recv(handle, k) -> {
+						if _chan_ctl(handle: handle, op: 0) != 1 {
+							progressed = true
+							next.push(resume(k: k, value: ()))
+						} else {
+							reg_kind.push(0)
+							reg_handle.push(handle)
+							next.push(TaskStep.wants_recv(handle, k))
+						}
+					},
+					.wants_send(handle, k) -> {
+						if _chan_ctl(handle: handle, op: 17) == 1 {
+							progressed = true
+							next.push(resume(k: k, value: ()))
+						} else {
+							reg_kind.push(1)
+							reg_handle.push(handle)
+							next.push(TaskStep.wants_send(handle, k))
+						}
+					},
+					.wants_either(a, b, k) -> {
+						if _chan_ctl(handle: a, op: 0) != 1 || _chan_ctl(handle: b, op: 0) != 1 {
+							progressed = true
+							next.push(resume(k: k, value: ()))
+						} else {
+							reg_kind.push(0)
+							reg_handle.push(a)
+							reg_kind.push(0)
+							reg_handle.push(b)
+							next.push(TaskStep.wants_either(a, b, k))
+						}
+					},
+					.sleeping(deadline, k) -> {
+						if _chan_ctl(handle: 0, op: 13) >= deadline {
+							progressed = true
+							next.push(resume(k: k, value: ()))
+						} else {
+							reg_kind.push(2)
+							reg_handle.push(deadline)
+							next.push(TaskStep.sleeping(deadline, k))
+						}
+					}
+				}
+			} else {
+				break
+			}
+		}
+		steps = next
+		if steps.count == 0 {
+			break
+		}
+		if !progressed {
+			let i = 0
+			loop i < reg_kind.count {
+				let kind = reg_kind.get(i)
+				let handle = reg_handle.get(i)
+				let op = if kind == 0 { 4 } else { if kind == 1 { 11 } else { 14 } }
+				let registered = _chan_ctl(handle: handle, op: op)
+				i = i + 1
+			}
+			let parked = _chan_ctl(handle: 0, op: 6)
+			let j = 0
+			loop j < reg_kind.count {
+				let kind = reg_kind.get(j)
+				let handle = reg_handle.get(j)
+				let op = if kind == 0 { 5 } else { if kind == 1 { 12 } else { 15 } }
+				let released = _chan_ctl(handle: handle, op: op)
+				j = j + 1
+			}
+		}
+	}
+}
+
+// Run one root task and everything it spawns to completion on this
+// worker. If every task is waiting, register every interest and block
+// through the runtime until work becomes ready.
+pub func _run_cooperative(consume main_task: Task) -> () {
+	match _drive_task(task: main_task) {
+		.finished -> (),
+		first -> _drain_cooperative(first: first)
+	}
+}
+
 // The executable's host fallbacks (ADR 0039): ordinary handlers below
 // every user handler, installed around the whole program by the entry
 // wrapper. Which effects are ambient at the top level is exactly the
@@ -53,7 +194,7 @@ pub func _io_host(request: IORequest) -> Int {
 // closure: a closure captures its effect capabilities at CREATION, and
 // any adapter made here would capture before these fallbacks exist.
 // The handler set is duplicated below instead.
-pub func _with_host(consume body: () '[io, alloc, yield_now, panic, park_recv, park_send, park_sleep, park_recv2] -> ()) -> () {
+pub func _with_host(consume body: Task) -> () {
 	#handle 'io { request in
 		'continue _io_host(request: request)
 	}
@@ -75,6 +216,56 @@ pub func _with_host(consume body: () '[io, alloc, yield_now, panic, park_recv, p
 	// frame moves, so a long-lived producer parks in constant stack.
 	// The resumed operation re-checks its source itself, so a spurious
 	// wake just parks again.
+	#handle 'park_recv { handle in
+		let registered = _chan_ctl(handle: handle, op: 4)
+		let parked = _chan_ctl(handle: 0, op: 6)
+		let released = _chan_ctl(handle: handle, op: 5)
+		'continue
+	}
+	#handle 'park_send { handle in
+		let registered = _chan_ctl(handle: handle, op: 11)
+		let parked = _chan_ctl(handle: 0, op: 6)
+		let released = _chan_ctl(handle: handle, op: 12)
+		'continue
+	}
+	#handle 'park_sleep { deadline_ms in
+		let registered = _chan_ctl(handle: deadline_ms, op: 14)
+		let parked = _chan_ctl(handle: 0, op: 6)
+		let released = _chan_ctl(handle: deadline_ms, op: 15)
+		'continue
+	}
+	#handle 'park_recv2 { a, b in
+		let first = _chan_ctl(handle: a, op: 4)
+		let second = _chan_ctl(handle: b, op: 4)
+		let parked = _chan_ctl(handle: 0, op: 6)
+		let drop_second = _chan_ctl(handle: b, op: 5)
+		let drop_first = _chan_ctl(handle: a, op: 5)
+		'continue
+	}
+	_run_cooperative(main_task: body)
+}
+
+// The no-cooperative-effects entry specialization. The backend selects
+// this wrapper only after proving that the reachable entry performs none
+// of the effects admitted by Task but not BlockingTask. Keeping the
+// scheduler unreachable preserves direct blocking park calls and avoids
+// resumable C frames for blocking-only programs.
+pub func _with_blocking_host(consume body: BlockingTask) -> () {
+	#handle 'io { request in
+		'continue _io_host(request: request)
+	}
+	#handle 'alloc { allocation in
+		'continue
+	}
+	#handle 'yield_now {
+		'continue
+	}
+	#handle 'panic { message in
+		write_string(fd: STDERR_FD, s: message)
+		write_string(fd: STDERR_FD, s: "\n")
+		_io_host(request: .exit(1))
+		loop {}
+	}
 	#handle 'park_recv { handle in
 		let registered = _chan_ctl(handle: handle, op: 4)
 		let parked = _chan_ctl(handle: 0, op: 6)

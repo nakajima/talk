@@ -65,8 +65,10 @@ fn mir_is_optimized_by_default_and_no_opt_renders_raw_mir() {
         "optimized MIR retained the unreachable function:\n{optimized}"
     );
     assert!(
-        !optimized.contains("PushHandler") && !optimized.contains(" _io_host "),
-        "optimized MIR retained unused host handlers:\n{optimized}"
+        !optimized.contains(" _run_cooperative ")
+            && !optimized.contains("PushHandler")
+            && !optimized.contains(" _io_host "),
+        "optimized MIR retained the unused task host:\n{optimized}"
     );
 
     let raw = String::from_utf8(raw.stdout).expect("raw MIR is UTF-8");
@@ -81,6 +83,10 @@ fn mir_is_optimized_by_default_and_no_opt_renders_raw_mir() {
     assert!(
         raw.contains("PushHandler") && raw.contains(" _io_host "),
         "--no-opt did not retain host handlers:\n{raw}"
+    );
+    assert!(
+        optimized.matches("PushHandler").count() < raw.matches("PushHandler").count(),
+        "optimization did not remove any unreachable host handlers"
     );
 }
 
@@ -2582,9 +2588,8 @@ fn structural_drops_share_one_teardown_body() {
         .lines()
         .filter(|line| line.contains(" shared_drop "))
         .count();
-    // One body for Pair, one for Wrap - and exactly one each, however
-    // many sites drop them. Unreferenced core glue does not survive
-    // whole-program function DCE.
+    // One body for Pair and one for Wrap. The unused scheduler and its
+    // array glue do not survive whole-program function DCE.
     assert_eq!(
         shared_bodies, 2,
         "expected one shared drop body per type, found {shared_bodies}:\n{rendered}"
@@ -4993,8 +4998,9 @@ fn run_parallel_workers_corpus_matches_pin() {
 
 #[test]
 fn run_coop_scheduler_interleaves_matches_pin() {
-    // ADR 0067: cooperative tasks interleave over 'pause and a channel
-    // on one worker; the same program runs through the C sweep.
+    // ADR 0069: top-level code is the cooperative root task, so spawned
+    // work interleaves over 'pause without an explicit `run` wrapper and
+    // is drained before exit. The same program runs through the C sweep.
     assert_parity_program("coop_interleave");
 }
 

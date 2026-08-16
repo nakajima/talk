@@ -346,6 +346,13 @@ impl Symbol {
         module_id: ModuleId::Core,
         local_id: u32::MAX,
     });
+    /// Core's narrower blocking-only entry wrapper. The backend may select
+    /// it when the entry's reachable code performs none of the task effects
+    /// admitted only by `_with_host`.
+    pub const WithBlockingHost: Symbol = Symbol::Global(GlobalId {
+        module_id: ModuleId::Core,
+        local_id: u32::MAX - 1,
+    });
 
     pub const String: Symbol = Symbol::Struct(StructId {
         module_id: ModuleId::Core,
@@ -464,6 +471,7 @@ impl Symbol {
     pub fn well_known_core_global(name: &str) -> Option<Symbol> {
         match name {
             "_with_host" => Some(Symbol::WithHost),
+            "_with_blocking_host" => Some(Symbol::WithBlockingHost),
             _ => None,
         }
     }

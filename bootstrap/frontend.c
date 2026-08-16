@@ -4811,6 +4811,8 @@ static const char *const talk_members_80[] = { "leaf", "group" };
 static const char *const talk_members_81[] = { "delimiter", "open", "close", "children" };
 static const char *const talk_members_82[] = { "opener", "expected", "parent" };
 static const char *const talk_members_83[] = { "read", "write", "open", "close", "sleep", "poll", "ctl", "socket", "bind", "listen", "connect", "accept", "cwd_len", "cwd_copy", "getenv_len", "getenv_copy", "argc", "arg_len", "arg_copy", "dir_count", "dir_entry_kind", "dir_entry_len", "dir_entry_copy", "exit", "realpath_len", "realpath_copy", "seek", "file_size" };
+static const char *const talk_members_84[] = { "slot" };
+static const char *const talk_members_85[] = { "finished", "wants_recv", "wants_send", "wants_either", "sleeping", "paused", "spawned" };
 static const TalkTypeInfo talk_type_table[] = {
     { "", TALK_TYPE_TUPLE, 0, NULL },
     { "String", TALK_TYPE_STRING, 3, talk_members_1 },
@@ -4896,6 +4898,8 @@ static const TalkTypeInfo talk_type_table[] = {
     { "Group", TALK_TYPE_RECORD, 4, talk_members_81 },
     { "Frame", TALK_TYPE_RECORD, 3, talk_members_82 },
     { "IORequest", TALK_TYPE_ENUM, 28, talk_members_83 },
+    { "Resumption", TALK_TYPE_RECORD, 1, talk_members_84 },
+    { "TaskStep", TALK_TYPE_ENUM, 7, talk_members_85 },
 };
 
 typedef struct {
@@ -4930,7 +4934,7 @@ static const TalkLibSymbolRow talk_lib_symbols[] = {
     { 0, 65535, 36 },
     { 1, 65535, 68 },
     { 0, 65535, 15 },
-    { 0, 1, 20 },
+    { 0, 1, 21 },
     { 0, 1, 4294967272 },
     { 1, 65535, 27 },
     { 1, 65535, 32 },
@@ -4988,6 +4992,8 @@ static const TalkLibSymbolRow talk_lib_symbols[] = {
     { 0, 65535, 58 },
     { 0, 65535, 63 },
     { 1, 1, 16 },
+    { 0, 1, 4294967280 },
+    { 1, 1, 20 },
 };
 static const TalkField talk_lfields_0[] = { { 0, 1, UINT32_MAX, 0 } };
 static const TalkField talk_lfields_1[] = { { 0, 1, 0u, 39 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 } };
@@ -5162,6 +5168,11 @@ static const uint32_t talk_lvars_135[] = { 0, 1, 1 };
 static const TalkField talk_lfields_136[] = { { 0, 1, UINT32_MAX, 0 }, { 1, 1, 132u, 37 }, { 2, 3, 3u, 41 } };
 static const TalkField talk_lfields_137[] = { { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 } };
 static const uint32_t talk_lvars_137[] = { 0, 3, 6, 9, 10, 11, 14, 17, 20, 23, 25, 28, 29, 29, 30, 32, 35, 35, 36, 38, 39, 41, 43, 46, 47, 48, 50, 53, 54 };
+static const TalkField talk_lfields_138[] = { { 0, 1, UINT32_MAX, 0 } };
+static const TalkField talk_lfields_139[] = { { 1, 1, UINT32_MAX, 0 }, { 2, 1, 138u, 84 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, 138u, 84 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, 138u, 84 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, 138u, 84 }, { 1, 1, 138u, 84 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, 138u, 84 } };
+static const uint32_t talk_lvars_139[] = { 0, 0, 2, 4, 7, 9, 10, 12 };
+static const TalkField talk_lfields_140[] = { { 1, 4, 139u, 85 } };
+static const uint32_t talk_lvars_140[] = { 0, 1, 1 };
 static const TalkLayoutInfo talk_layout_table[] = {
     { 1, 0, talk_lfields_0, 1, NULL, 0 },
     { 3, 0, talk_lfields_1, 3, NULL, 0 },
@@ -5301,6 +5312,9 @@ static const TalkLayoutInfo talk_layout_table[] = {
     { 2, 1, talk_lfields_135, 1, talk_lvars_135, 2 },
     { 5, 0, talk_lfields_136, 3, NULL, 0 },
     { 4, 1, talk_lfields_137, 54, talk_lvars_137, 28 },
+    { 1, 0, talk_lfields_138, 1, NULL, 0 },
+    { 4, 1, talk_lfields_139, 12, talk_lvars_139, 7 },
+    { 5, 1, talk_lfields_140, 1, talk_lvars_140, 2 },
 };
 
 typedef struct {
@@ -8441,6 +8455,34 @@ static inline TalkL137 talk_unbox_l137(TalkValue b) {
     return v;
 }
 
+typedef struct {
+    int64_t m0;
+} TalkL138;
+static inline TalkValue talk_box_l138(TalkL138 v) {
+    TalkValue built = talk_native_box(138u, 84, sizeof(TalkL138));
+    *(TalkL138 *)TALK_NATIVE_PAYLOAD(built) = v;
+    return built;
+}
+static inline TalkValue talk_box_l138_in(void *storage, TalkL138 v) {
+    TalkValue built = talk_native_box_in(storage, 138u, 84);
+    *(TalkL138 *)TALK_NATIVE_PAYLOAD(built) = v;
+    return built;
+}
+static inline TalkL138 talk_unbox_l138(TalkValue b) {
+    if (b.tag == TALK_NATIVE) {
+        return *(const TalkL138 *)TALK_NATIVE_PAYLOAD(b);
+    }
+    TalkL138 v;
+    v.m0 = b.v.agg->fields[0].v.i;
+    return v;
+}
+static TalkValue talk_retag_l138(TalkL138 v) {
+    (void)v;
+    TalkValue built = talk_agg(138u, 84, 0, 1);
+    built.v.agg->fields[0] = talk_int(v.m0);
+    return built;
+}
+
 static TalkValue talk_native_retag(TalkValue value) {
     switch (value.v.native->layout) {
     case 0: return talk_retag_l0(*(const TalkL0 *)TALK_NATIVE_PAYLOAD(value));
@@ -8510,6 +8552,7 @@ static TalkValue talk_native_retag(TalkValue value) {
     case 126: return talk_retag_l126(*(const TalkL126 *)TALK_NATIVE_PAYLOAD(value));
     case 134: return talk_retag_l134(*(const TalkL134 *)TALK_NATIVE_PAYLOAD(value));
     case 136: return talk_retag_l136(*(const TalkL136 *)TALK_NATIVE_PAYLOAD(value));
+    case 138: return talk_retag_l138(*(const TalkL138 *)TALK_NATIVE_PAYLOAD(value));
     }
     return talk_unit();
 }
@@ -8583,6 +8626,7 @@ static TalkValue talk_rebox(uint32_t layout, TalkValue flat) {
     case 126: return talk_box_l126(talk_unbox_l126(flat));
     case 134: return talk_box_l134(talk_unbox_l134(flat));
     case 136: return talk_box_l136(talk_unbox_l136(flat));
+    case 138: return talk_box_l138(talk_unbox_l138(flat));
     }
     return flat;
 }
@@ -8641,7 +8685,7 @@ static unsigned char talk_globals[424];
 static TalkValue talk_fn0(const TalkValue *env); /* globals_init */
 static TalkL1 talk_fn1(const TalkValue *env, TalkL1 p0); /* lex */
 static TalkValue talk_fn2(const TalkValue *env, TalkValue p0); /* export:lex */
-static TalkValue talk_fn3(const TalkValue *env, TalkValue p0); /* _with_host */
+static TalkValue talk_fn3(const TalkValue *env, TalkValue p0); /* _with_blocking_host */
 static TalkValue talk_fn4(const TalkValue *env); /* export_body */
 static TalkL1 talk_fn5(const TalkValue *env, TalkL1 p0); /* trees */
 static TalkValue talk_fn6(const TalkValue *env, TalkValue p0); /* export:trees */
@@ -10113,7 +10157,7 @@ b0:
     return l[1];
 }
 
-/* _with_host */
+/* _with_blocking_host */
 static TalkValue talk_fn3(const TalkValue *env, TalkValue p0) {
     TalkValue l[3];
     memset(l, 0, sizeof l);

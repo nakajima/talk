@@ -1089,6 +1089,7 @@ pub(crate) fn build(
         }
     }
     builder.drain_worklist()?;
+    builder.select_host_specialization();
     // Rigid instances — any whose substitution still carries type
     // parameters — exist only under check-all, where the identity seeds
     // manufacture them. They verified above; what ships in their place
