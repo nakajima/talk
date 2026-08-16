@@ -1,7 +1,7 @@
 // One-shot resumptions (ADR 0064) and the channel/clock runtime surface
 // (ADR 0067), tested at the core level.
 
-effect 'step(value: Int) -> Int 'suspending
+effect 'step(value: Int) -> Int
 
 enum Held {
 	case parked(Resumption<Int, Held>)

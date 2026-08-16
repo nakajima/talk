@@ -424,7 +424,7 @@ impl Symbol {
         local_id: Self::WELL_KNOWN_CORE_SYNC_ID,
     });
     /// ADR 0064 one-shot resumption handle: the linear core struct a
-    /// suspending handler's final binder carries.
+    /// resumption-binding handler's final binder carries (ADR 0068).
     pub const Resumption: Symbol = Symbol::Struct(StructId {
         module_id: ModuleId::Core,
         local_id: Self::WELL_KNOWN_CORE_RESUMPTION_ID,

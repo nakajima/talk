@@ -128,9 +128,12 @@ fn verify_function(module: &Module, id: usize, function: &Function, findings: &m
                     operands.push(*handle);
                     operands.push(*op);
                 }
-                Inst::Suspend { dest, args, .. } => {
+                Inst::Suspend {
+                    dest, args, entry, ..
+                } => {
                     dests.push(*dest);
                     operands.extend(args.iter().copied());
+                    operands.push(*entry);
                 }
                 Inst::Resume { dest, cont, value } => {
                     dests.push(*dest);
@@ -278,9 +281,10 @@ fn verify_function(module: &Module, id: usize, function: &Function, findings: &m
                     clause,
                     cont,
                     index,
+                    binds,
                     ..
                 } => {
-                    dests.extend([*clause, *cont, *index]);
+                    dests.extend([*clause, *cont, *index, *binds]);
                 }
                 Inst::GlobalLoad { dest, global: g } => {
                     dests.push(*dest);

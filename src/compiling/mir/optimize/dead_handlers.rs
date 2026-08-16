@@ -21,8 +21,9 @@ pub(super) fn run(program: &mut Program) -> PassResult {
         .flat_map(|block| &block.insts)
         .filter_map(|inst| match inst {
             Inst::FindHandler { effect, .. } => Some(*effect),
-            // A suspending perform (ADR 0064) routes to its handler
-            // inside the VM, without a FindHandler — it is a use.
+            // A suspend arm (ADR 0068) consumes the entry its
+            // FindHandler located — counted independently so the pair
+            // never disagrees about liveness.
             Inst::Suspend { effect, .. } => Some(*effect),
             _ => None,
         })
@@ -65,16 +66,18 @@ pub(super) fn run(program: &mut Program) -> PassResult {
                             effect,
                             clause: Operand::Local(pushed_clause),
                             cont: Operand::Local(pushed_cont),
+                            ..
                         },
                     ) => {
                         !requested.contains(effect)
                             && *clause == *pushed_clause
                             && *cont == *pushed_cont
                             // A plain clause's env is exactly the
-                            // delimiter; a suspending clause (ADR 0064)
-                            // has no delimiter slot, so a capture-free
-                            // one has an empty env. Either shape owns
-                            // nothing, so the triple erases cleanly.
+                            // delimiter; a resumption-binding clause
+                            // (ADR 0064/0068) has no delimiter slot, so
+                            // a capture-free one has an empty env.
+                            // Either shape owns nothing, so the triple
+                            // erases cleanly.
                             && (env.as_slice() == [Operand::Local(*cont)]
                                 || env.is_empty())
                             && (uses.get(cont) == Some(&2)
@@ -139,6 +142,7 @@ mod tests {
                 effect,
                 clause: Operand::Local(1),
                 cont: Operand::Local(0),
+                binds: false,
             },
         ]
     }
@@ -178,6 +182,7 @@ mod tests {
             clause: 2,
             cont: 3,
             index: 4,
+            binds: 5,
             effect: EFFECT,
         });
         let mut program = program(vec![function(requester), function(Vec::new())]);
@@ -224,6 +229,7 @@ mod tests {
             clause: 2,
             cont: 3,
             index: 4,
+            binds: 5,
             effect: requested_effect,
         });
         let mut program = program(vec![

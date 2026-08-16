@@ -378,9 +378,20 @@ pub struct EffectSig {
     pub predicates: Vec<Predicate>,
     pub params: Vec<Ty>,
     pub ret: Ty,
-    /// ADR 0064: performs suspend their extent into a stored one-shot
-    /// resumption; every handler clause binds it as a final parameter.
-    pub suspending: bool,
+}
+
+impl EffectSig {
+    /// ADR 0068: a resumption-binding clause is legal for this effect —
+    /// no generics (a binding perform ships exactly the payloads, no
+    /// witness blocks) and no exclusive-borrow parameters (a `mut`
+    /// payload's writeback needs the tail resume).
+    pub fn bindable(&self) -> bool {
+        self.generics.is_empty()
+            && !self
+                .params
+                .iter()
+                .any(|ty| matches!(ty, Ty::Borrow(crate::types::ty::Perm::Exclusive, _)))
+    }
 }
 
 /// A transparent type alias. `params` are captured nominal parameters when

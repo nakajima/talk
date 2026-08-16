@@ -833,6 +833,9 @@ typedef struct {
     uint32_t effect;
     TalkValue clause;
     TalkValue cont;
+    /* ADR 0068: the clause binds the stored resumption — performs that
+     * match this entry suspend their extent instead of calling. */
+    int binds;
     size_t depth;
     uint32_t frame_id;
 } TalkHandler;
@@ -892,8 +895,8 @@ static inline TalkValue talk_unwind_take(void) {
     return talk_unwind_value;
 }
 
-static void talk_push_handler(uint32_t effect, TalkValue clause, TalkValue cont, size_t depth,
-                              uint32_t frame_id) {
+static void talk_push_handler(uint32_t effect, TalkValue clause, TalkValue cont, int binds,
+                              size_t depth, uint32_t frame_id) {
     /* Entries whose installing frame has exited are stale; the VM drops
      * them here rather than on return, and so do we. */
     while (talk_handler_count > 0) {
@@ -917,6 +920,7 @@ static void talk_push_handler(uint32_t effect, TalkValue clause, TalkValue cont,
     entry->effect = effect;
     entry->clause = clause;
     entry->cont = cont;
+    entry->binds = binds;
     entry->depth = depth;
     entry->frame_id = frame_id;
 }
@@ -924,7 +928,7 @@ static void talk_push_handler(uint32_t effect, TalkValue clause, TalkValue cont,
 /* Nearest installed handler for the effect, searching below the floor so a
  * clause does not re-find the handler it is running under. */
 static void talk_find_handler(uint32_t effect, TalkValue *clause, TalkValue *cont,
-                              TalkValue *index) {
+                              TalkValue *index, TalkValue *binds) {
     size_t limit = talk_handler_floor < talk_handler_count ? talk_handler_floor : talk_handler_count;
     for (size_t position = limit; position > 0; position--) {
         TalkHandler *entry = &talk_handlers[position - 1];
@@ -932,6 +936,7 @@ static void talk_find_handler(uint32_t effect, TalkValue *clause, TalkValue *con
             *clause = entry->clause;
             *cont = entry->cont;
             *index = talk_int((int64_t)(position - 1));
+            *binds = talk_bool(entry->binds != 0);
             return;
         }
     }
@@ -1057,29 +1062,26 @@ static void talk_reenter_identity(uint32_t id) {
     talk_frames[talk_depth++] = id;
 }
 
-/* Record an in-flight suspension: resolve the handler exactly as a
- * perform would, allocate the resumption slot, and stash the clause and
- * arguments for the installer's landing site. */
-static void talk_suspend_begin(uint32_t effect, const TalkValue *args, size_t argc) {
+/* Record an in-flight suspension. ADR 0068: the perform's preceding
+ * find-handler located the entry (and branched on its clause kind);
+ * this takes that index — one handler search per perform — validates
+ * it, and stashes the clause and arguments for the installer's landing
+ * site. */
+static void talk_suspend_begin(uint32_t effect, const TalkValue *args, size_t argc,
+                               TalkValue entry) {
     if (talk_unwinding) {
         talk_trap("suspend during an unwind");
     }
     if (talk_suspend_pending) {
         talk_trap("suspend during a suspension");
     }
-    size_t limit = talk_handler_floor < talk_handler_count
-        ? talk_handler_floor
-        : talk_handler_count;
-    size_t found = SIZE_MAX;
-    for (size_t scan = limit; scan > 0; scan--) {
-        TalkHandler *entry = &talk_handlers[scan - 1];
-        if (entry->effect == effect && talk_frame_live(entry->depth, entry->frame_id)) {
-            found = scan - 1;
-            break;
-        }
+    size_t found = entry.v.i < 0 ? SIZE_MAX : (size_t)entry.v.i;
+    if (found >= talk_handler_count) {
+        talk_trap("suspend without a located handler entry");
     }
-    if (found == SIZE_MAX) {
-        talk_trap("perform with no installed handler");
+    TalkHandler *target = &talk_handlers[found];
+    if (target->effect != effect || !talk_frame_live(target->depth, target->frame_id)) {
+        talk_trap("suspending handler entry lost its clause");
     }
     size_t slot = talk_segment_count;
     for (size_t scan = 0; scan < talk_segment_count; scan++) {

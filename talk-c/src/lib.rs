@@ -956,24 +956,27 @@ static TalkValue {}_impl(TalkResumeFrame *fr);",
                 effect,
                 clause,
                 cont,
+                binds,
             } => {
                 let _ = writeln!(
                     out,
-                    "    talk_push_handler({}, {}, {}, frame_depth, frame_id);",
+                    "    talk_push_handler({}, {}, {}, {}, frame_depth, frame_id);",
                     self.interners.effect(*effect),
                     frame.value(*clause)?,
-                    frame.value(*cont)?
+                    frame.value(*cont)?,
+                    i32::from(*binds)
                 );
             }
             Inst::FindHandler {
                 clause,
                 cont,
                 index,
+                binds,
                 effect,
             } => {
                 let _ = writeln!(
                     out,
-                    "    talk_find_handler({}, &l[{clause}], &l[{cont}], &l[{index}]);",
+                    "    talk_find_handler({}, &l[{clause}], &l[{cont}], &l[{index}], &l[{binds}]);",
                     self.interners.effect(*effect)
                 );
             }
@@ -1218,6 +1221,7 @@ static TalkValue {}_impl(TalkResumeFrame *fr);",
                 dest,
                 effect,
                 args,
+                entry,
                 unwind,
             } => {
                 // ADR 0065: record the in-flight suspension, link this
@@ -1225,9 +1229,16 @@ static TalkValue {}_impl(TalkResumeFrame *fr);",
                 // handler: run the clause and return its result on the
                 // native return path) or propagate the status outward.
                 if !sus.active {
-                    return Err(internal(
-                        "a suspend site outside the resumable set",
-                    ));
+                    // ADR 0068: this function is outside the resumable
+                    // set, which the fixpoint derived from binding
+                    // PushHandlers — no binding clause exists for this
+                    // effect anywhere in the program, so the branch arm
+                    // holding this site is unreachable.
+                    let _ = writeln!(
+                        out,
+                        "    talk_trap(\"a perform matched a resumption-binding handler the compiler proved absent\");"
+                    );
+                    return Ok(());
                 }
                 let k = sus.reserve();
                 let effect = self.interners.effect(*effect);
@@ -1241,8 +1252,9 @@ static TalkValue {}_impl(TalkResumeFrame *fr);",
                 }
                 let _ = writeln!(
                     out,
-                    "        talk_suspend_begin({effect}, sa, {});",
-                    args.len()
+                    "        talk_suspend_begin({effect}, sa, {}, {});",
+                    args.len(),
+                    frame.value(*entry)?
                 );
                 let _ = writeln!(out, "    }}");
                 let _ = writeln!(out, "    fr->rpc = {k};");

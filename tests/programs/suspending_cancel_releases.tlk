@@ -1,7 +1,7 @@
 // ADR 0064: cancelling a stored resumption unwinds every captured frame
 // through its cleanup entries — the buffer owned across the suspension
 // frees, and the VM's exit balance proves it.
-effect 'park() -> Int 'suspending
+effect 'park() -> Int
 
 func worker_body() -> Int {
 	let owned = "held across the suspension".to_string()

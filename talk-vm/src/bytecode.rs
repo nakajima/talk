@@ -8,11 +8,12 @@ const MAGIC: &[u8; 7] = b"TALKBC\0";
 // Version 8 adds `StringLit`: complete immutable literal descriptors are
 // cached by the machine instead of being rebuilt from two `AggNew`
 // instructions at every evaluation. Version 9 adds the task, channel,
-// and suspension opcodes (ADRs 0058/0059/0064). Versions 7 and 8 remain
-// readable because the module sections are unchanged and each version's
-// opcode set is a strict subset of the next.
-pub const FORMAT_VERSION: u32 = 9;
-const MIN_SUPPORTED_FORMAT_VERSION: u32 = 7;
+// and suspension opcodes (ADRs 0058/0059/0064). Version 10 re-lays
+// `PushHandler`/`FindHandler`/`Suspend` for clause-derived suspension
+// (ADR 0068: entries carry the clause kind, performs branch on it), so
+// older layouts are no longer decodable and the floor rises with it.
+pub const FORMAT_VERSION: u32 = 10;
+const MIN_SUPPORTED_FORMAT_VERSION: u32 = 10;
 
 pub fn supports_format(version: u32) -> bool {
     (MIN_SUPPORTED_FORMAT_VERSION..=FORMAT_VERSION).contains(&version)
@@ -374,16 +375,19 @@ impl Encoder {
                 effect,
                 clause,
                 cont,
+                binds,
             } => {
                 self.u8(51);
                 self.u32(effect);
                 self.u16(clause);
                 self.u16(cont);
+                self.u8(u8::from(binds));
             }
             Insn::FindHandler {
                 clause,
                 cont,
                 index,
+                binds,
                 effect,
             } => {
                 self.u8(52);
@@ -391,6 +395,7 @@ impl Encoder {
                 self.u16(clause);
                 self.u16(cont);
                 self.u16(index);
+                self.u16(binds);
             }
             Insn::GetFloor { dest } => {
                 self.u8(53);
@@ -477,12 +482,14 @@ impl Encoder {
                 effect,
                 args_start,
                 args_len,
+                entry,
             } => {
                 self.u8(71);
                 self.u16(dest);
                 self.u32(effect);
                 self.u32(args_start);
                 self.u16(args_len);
+                self.u16(entry);
             }
             Insn::Resume { dest, cont, value } => {
                 self.u8(72);
@@ -1060,12 +1067,14 @@ impl<'a> Decoder<'a> {
                 effect: self.u32()?,
                 clause: self.u16()?,
                 cont: self.u16()?,
+                binds: self.u8()? != 0,
             }),
             52 => Ok(Insn::FindHandler {
                 effect: self.u32()?,
                 clause: self.u16()?,
                 cont: self.u16()?,
                 index: self.u16()?,
+                binds: self.u16()?,
             }),
             53 => Ok(Insn::GetFloor { dest: self.u16()? }),
             54 => Ok(Insn::SetFloor { src: self.u16()? }),
@@ -1112,6 +1121,7 @@ impl<'a> Decoder<'a> {
                 effect: self.u32()?,
                 args_start: self.u32()?,
                 args_len: self.u16()?,
+                entry: self.u16()?,
             }),
             72 => Ok(Insn::Resume {
                 dest: self.u16()?,
@@ -1460,9 +1470,10 @@ impl Insn {
                 clause,
                 cont,
                 index,
+                binds,
                 ..
             } => {
-                Register::new(n_regs).check_many(&[clause, cont, index])?;
+                Register::new(n_regs).check_many(&[clause, cont, index, binds])?;
             }
             Insn::GetFloor { dest } => Register::new(n_regs).check(dest)?,
             Insn::SetFloor { src } => Register::new(n_regs).check(src)?,
@@ -1628,9 +1639,10 @@ impl Insn {
                 dest,
                 args_start,
                 args_len,
+                entry,
                 ..
             } => {
-                Register::new(n_regs).check(dest)?;
+                Register::new(n_regs).check_many(&[dest, entry])?;
                 module.check_arg_registers(args_start, args_len, n_regs)?;
             }
             Insn::Resume { dest, cont, value } => {

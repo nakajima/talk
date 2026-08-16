@@ -328,14 +328,17 @@ pub enum Inst {
         handle: Operand,
         op: Operand,
     },
-    /// ADR 0064: perform a suspending effect — capture the extent from
-    /// the installing frame through this site into a stored one-shot
-    /// resumption and run the handler clause in the installer's place.
-    /// `dest` receives the value a later `Resume` supplies.
+    /// ADR 0064/0068: perform against a resumption-binding handler —
+    /// capture the extent from the installing frame through this site
+    /// into a stored one-shot resumption and run the clause in the
+    /// installer's place. `dest` receives the value a later `Resume`
+    /// supplies. Emitted under a clause-kind branch on the entry a
+    /// `FindHandler` located; `entry` is that handler's stack index.
     Suspend {
         dest: LocalId,
         effect: MirSymbol,
         args: Vec<Operand>,
+        entry: Operand,
         /// Cleanup block for an abort or cancellation unwinding through
         /// the suspended frame (ADR 0027's per-call machinery; the
         /// release planner backfills it like a call's).
@@ -424,17 +427,24 @@ pub enum Inst {
     MakeCont {
         dest: LocalId,
     },
-    /// Install a deep handler for the effect.
+    /// Install a deep handler for the effect. `binds` records the
+    /// clause's kind (ADR 0068): true when it binds the stored
+    /// resumption as a final parameter, false when it is
+    /// tail-resumptive and runs as a call at the perform site.
     PushHandler {
         effect: MirSymbol,
         clause: Operand,
         cont: Operand,
+        binds: bool,
     },
-    /// Nearest-handler routing for a perform site.
+    /// Nearest-handler routing for a perform site. `binds` receives the
+    /// matched entry's clause kind (ADR 0068), the runtime branch
+    /// between the suspend and call protocols.
     FindHandler {
         clause: LocalId,
         cont: LocalId,
         index: LocalId,
+        binds: LocalId,
         effect: MirSymbol,
     },
     GetFloor {

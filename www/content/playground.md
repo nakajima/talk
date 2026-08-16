@@ -8,14 +8,14 @@ Evaluation returns the type carried by each expression—without casts.
 enum Expr<Returns> {
 	case int(Int) -> Expr<Int>
 	case string(String) -> Expr<String>
-	case add<T: Addable>(Expr<T>, Expr<T>) -> Expr<T>
+	case add<T: Add<T>>(Expr<T>, Expr<T>) -> Expr<T>
 }
 
-func eval<T: Addable>(_ expr: Expr<T>) -> T {
+func eval<T: Add<T>>(_ expr: Expr<T>) -> T {
 	match expr {
 		.int(i) -> i,
 		.string(s) -> s,
-		.add(a, b) -> eval(a).add(to: eval(b))
+		.add(a, b) -> eval(a).add(eval(b))
 	}
 }
 
@@ -23,59 +23,87 @@ print(eval(.add(.int(20), .add(.int(19), .int(3)))))
 print(eval(.add(.string("hello "), .string("world"))))
 ```
 
-## Nested behavior by scope
+## Generators are handlers
 
-The same function changes behavior according to its nearest dynamic handler.
+A handler that binds its resumption returns the rest of the generator as a linear value.
 
-```talk playground(nested-handlers)
-effect 'theme() -> String
+```talk playground(suspending-generator)
+effect 'emit(value: Int) -> ()
 
-func label() 'theme -> String { 'theme() }
-
-func darkLabel() -> String {
-	#handle 'theme { 'continue "dark" }
-	label()
+enum Step {
+	case yielded(Int, Resumption<(), Step>)
+	case done
 }
 
-#handle 'theme { 'continue "light" }
-print(label())
-darkLabel()
+func generate() -> Step {
+	#handle 'emit { value, k in Step.yielded(value, k) }
+	'emit(value: 1)
+	'emit(value: 2)
+	'emit(value: 3)
+	Step.done
+}
+
+func drain(consume step: Step) -> () {
+	match step {
+		.yielded(value, k) -> {
+			print(value)
+			drain(step: resume(k: k, value: ()))
+		},
+		.done -> {}
+	}
+}
+
+drain(step: generate())
 ```
 
-## Exit across call frames
+## Concurrency is a library
 
-A typed effect can escape several callers without threading an error value through each one.
+A handler schedules ordinary direct-style tasks whenever they pause.
 
-```talk playground(early-exit)
-effect 'stop(message: String) -> Never
+```talk playground(cooperative-tasks)
+use coop::{ run, pause, spawn }
 
-func deep() 'stop { 'stop(message: "caught") }
-func middle() 'stop { deep() }
+run {
+	'spawn(task: func() -> () {
+		print("task started")
+		'pause()
+		print("task resumed")
+	})
+	print("main continues")
+}
+```
 
-func attempt() {
-	#handle 'stop { message in print(message) }
-	middle()
+## Cancellation runs cleanup
+
+Cancelling a suspended computation deterministically unwinds its captured frames.
+
+```talk playground(cancel-cleanup)
+let cleaned = 0
+
+struct Guard { let id: Int }
+
+extend Guard: Deinit {
+	consuming func deinit() -> Void {
+		cleaned = cleaned + 1
+		()
+	}
+}
+
+effect 'pause() -> ()
+
+func work() -> () {
+	let guard = Guard(id: 1)
+	'pause()
 	print("unreachable")
 }
 
-attempt()
-```
-
-## One effect, multiple types
-
-A generic handler serves both `Int` and `Bool` requests while preserving their types.
-
-```talk playground(generic-effect)
-effect 'ask<T>(value: T) -> T
-
-func request<T>(consume value: T) -> T {
-	'ask(value: value)
+func reject() -> () {
+	#handle 'pause { k in cancel(k: k) }
+	work()
 }
 
-#handle 'ask { value in 'continue value }
-let number = request(value: 21)
-let enabled = request(value: true)
-if enabled { number * 2 } else { 0 }
+reject()
+print(cleaned)
 ```
 
 ## Values in types

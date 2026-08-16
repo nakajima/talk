@@ -1,25 +1,39 @@
 // ADR 0067: the cooperative scheduler — spawned tasks interleave over
 // 'pause, a producer task feeds the main task through a channel, and
 // everything runs on one worker with pure clause state (the Step-knot).
-use coop::{ run, pause, spawn_task }
+use coop::{ run, pause, spawn }
 use task::{ channel, Sender }
 
-run(main_task: func() -> () {
-	'spawn_task(task: func() -> () {
-		print(10)
+run(
+	main_task: func() -> () {
+		'spawn(
+			task: func() -> () {
+				print(10)
+				'pause()
+				print(12)
+			}
+		)
+		let (sender, receiver) = channel<Int>()
+		'spawn(
+			task: func() -> () {
+				sender.send(value: 71)
+				'pause()
+				sender.send(value: 72)
+			}
+		)
+		print(1)
 		'pause()
-		print(12)
-	})
-	let (sender, receiver) = channel<Int>()
-	'spawn_task(task: func() -> () {
-		sender.send(value: 71)
-		'pause()
-		sender.send(value: 72)
-	})
-	print(1)
-	'pause()
-	print(2)
-	if let .some(first) = receiver.recv() { print(first) } else { print(0 - 1) }
-	if let .some(second) = receiver.recv() { print(second) } else { print(0 - 2) }
-})
+		print(2)
+		if let .some(first) = receiver.recv() {
+			print(first)
+		} else {
+			print(0 - 1)
+		}
+		if let .some(second) = receiver.recv() {
+			print(second)
+		} else {
+			print(0 - 2)
+		}
+	}
+)
 print(0)

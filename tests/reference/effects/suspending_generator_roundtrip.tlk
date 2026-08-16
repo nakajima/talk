@@ -2,7 +2,7 @@
 // the resumption, and resuming delivers a value to the perform site and
 // runs the extent to its next suspension or completion — the extent's
 // answer arrives as `resume`'s return, through every generation.
-effect 'emit(value: Int) -> Int 'suspending
+effect 'emit(value: Int) -> Int
 
 func count_up(limit: Int) -> Int {
 	let i = 1

@@ -424,13 +424,14 @@ struct Ctx {
     ret: Ty,
     eff: EffectRow,
     handler_ret: Option<Ty>,
-    /// Inside a suspending handler clause (ADR 0064): `'continue` is
-    /// replaced by the bound resumption, and gets a dedicated error.
-    suspending_clause: bool,
+    /// Inside a resumption-binding handler clause (ADR 0068):
+    /// `'continue` is replaced by the bound resumption, and gets a
+    /// dedicated error.
+    binding_clause: bool,
     /// The enclosing function takes borrowed parameters — references
     /// that would dangle if one of its extents were suspended and
-    /// resumed after the lender unwound. A suspending `#handle` is
-    /// rejected here (ADR 0064 phase 1's conservative rule).
+    /// resumed after the lender unwound. A resumption-binding `#handle`
+    /// is rejected here (ADR 0064 phase 1's conservative rule).
     borrow_params: bool,
     binder: Option<Symbol>,
     has_return_boundary: bool,
@@ -443,7 +444,7 @@ impl Ctx {
             ret: Ty::Error,
             eff: EffectRow::pure(),
             handler_ret: None,
-            suspending_clause: false,
+            binding_clause: false,
             borrow_params: false,
             binder: None,
             has_return_boundary: false,
@@ -464,7 +465,7 @@ impl Ctx {
             ret,
             eff,
             handler_ret: None,
-            suspending_clause: false,
+            binding_clause: false,
             borrow_params,
             binder: self.binder,
             has_return_boundary: true,
@@ -493,10 +494,10 @@ impl Ctx {
         }
     }
 
-    fn enter_suspending_clause(&self) -> Self {
+    fn enter_binding_clause(&self) -> Self {
         Ctx {
             handler_ret: None,
-            suspending_clause: true,
+            binding_clause: true,
             ..self.clone()
         }
     }

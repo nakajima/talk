@@ -77,9 +77,9 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         Some(expr) => self.check_expr(expr, &expected, CtReason::Apply, ctx),
                         None => self.emit_eq(expected, Ty::unit(), stmt.id, CtReason::Apply),
                     },
-                    None if ctx.suspending_clause => self.unsupported(
+                    None if ctx.binding_clause => self.unsupported(
                         stmt.id,
-                        "`'continue` inside a suspending handler; consume the bound resumption with `resume` or `cancel` instead",
+                        "`'continue` inside a handler that binds its resumption; consume the bound resumption with `resume` or `cancel` instead",
                     ),
                     None => self.unsupported(stmt.id, "`'continue` outside an effect handler"),
                 }
@@ -295,19 +295,47 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                     .as_ref()
                     .map(|sig| sig.params.clone())
                     .unwrap_or_default();
+                // ADR 0068: the clause's own binder count derives its
+                // kind. A clause ignores every payload (no arguments) or
+                // names all of them — tail-resumptive, resuming with
+                // `'continue` — or names all of them plus a final binder
+                // for the stored resumption, which suspends the perform's
+                // extent into it (ADR 0064's capture, chosen at the
+                // clause, never declared on the effect).
+                let binds_resumption = body.args.len() == params.len() + 1;
+                if binds_resumption && ctx.borrow_params {
+                    // A suspended extent captures the installing frame,
+                    // and a borrowed parameter in it could outlive its
+                    // lender across the suspension.
+                    self.unsupported(
+                        stmt.id,
+                        "a resumption-binding handler in a function with borrowed parameters",
+                    );
+                }
+                if binds_resumption && sig.as_ref().is_some_and(|sig| !sig.generics.is_empty()) {
+                    // A binding perform ships exactly the payloads — no
+                    // witness blocks, so no effect generics.
+                    self.unsupported(
+                        stmt.id,
+                        "a resumption-binding handler for an effect with generics",
+                    );
+                }
+                if binds_resumption
+                    && params
+                        .iter()
+                        .any(|ty| matches!(ty, Ty::Borrow(crate::types::ty::Perm::Exclusive, _)))
+                {
+                    // A `mut` payload writes back when the clause resumes
+                    // to the perform site; a stored resumption defers
+                    // that past the argument's place.
+                    self.unsupported(
+                        stmt.id,
+                        "a resumption-binding handler for an effect with `mut` parameters",
+                    );
+                }
                 // Publish the handler's checked contract (ADR 0038):
                 // clause parameter types and the type-generic
                 // witness-block layout the perform site appends.
-                let suspending = sig.as_ref().is_some_and(|sig| sig.suspending);
-                if suspending && ctx.borrow_params {
-                    // ADR 0064 phase 1: a suspended extent captures the
-                    // installing frame, and a borrowed parameter in it
-                    // could outlive its lender across the suspension.
-                    self.unsupported(
-                        stmt.id,
-                        "a suspending handler in a function with borrowed parameters",
-                    );
-                }
                 self.artifacts.effect_contracts.insert(
                     stmt.id,
                     crate::types::output::EffectContract {
@@ -324,29 +352,29 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                                     .collect()
                             })
                             .unwrap_or_default(),
-                        suspending,
+                        binds_resumption,
+                        bindable: sig.as_ref().is_some_and(|sig| sig.bindable()),
                     },
                 );
                 // A handler block either ignores every payload (no
-                // arguments) or names all of them — except a suspending
-                // handler (ADR 0064), which must additionally name the
-                // resumption as a final binder: it is linear, so it
-                // cannot be silently ignored.
-                let expected_binders = if suspending {
-                    params.len() + 1
-                } else {
-                    params.len()
-                };
-                if (suspending || !body.args.is_empty()) && body.args.len() != expected_binders {
+                // arguments), names all of them, or names all of them
+                // plus the resumption; the resumption is linear, so a
+                // binding clause cannot leave any binder implicit.
+                if !body.args.is_empty() && body.args.len() != params.len() && !binds_resumption {
+                    let expected = if body.args.len() > params.len() {
+                        params.len() + 1
+                    } else {
+                        params.len()
+                    };
                     self.diagnostics.argument_arity(
                         stmt.id,
                         format!("Handler for effect '{}'", effect_name.name_str()),
-                        expected_binders,
+                        expected,
                         body.args.len(),
                     );
                 }
                 let mut params = params;
-                if suspending {
+                if binds_resumption {
                     // The final binder is the one-shot resumption:
                     // Resumption<R, A> with R the effect's answer at the
                     // perform site and A the handled extent's answer.
@@ -370,8 +398,8 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                 }
                 // `continue v` inside this block resumes the perform: v
                 // checks against the effect's return type.
-                let body_ty = if suspending {
-                    self.infer_block_value(body, &ctx.enter_suspending_clause())
+                let body_ty = if binds_resumption {
+                    self.infer_block_value(body, &ctx.enter_binding_clause())
                 } else {
                     let resume_ty = sig.map(|sig| sig.ret).unwrap_or(Ty::Error);
                     self.infer_block_value(body, &ctx.with_handler_ret(resume_ty))

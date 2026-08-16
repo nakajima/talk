@@ -1,7 +1,7 @@
 // no-core
 use package::IO::{ IORequest, io, STDERR_FD, write_string }
 use package::Memory::{ alloc }
-use package::Async::{ yield_now, park_recv, park_send, park_sleep, park_recv2, resume, _chan_ctl, Resumption }
+use package::Async::{ yield_now, park_recv, park_send, park_sleep, park_recv2, _chan_ctl }
 use package::String::{ String }
 
 pub effect 'panic(message: String) -> Never
@@ -69,63 +69,37 @@ pub func _with_host(consume body: () '[io, alloc, yield_now, panic, park_recv, p
 		_io_host(request: .exit(1))
 		loop {}
 	}
-	// The blocking park fallbacks (ADR 0067), TRAMPOLINED: each clause
-	// returns its park as a value, and the flat loop below blocks the
-	// worker then resumes — a resume inside a clause would stack one
-	// native frame tower per park, and a long-lived producer parks
-	// unboundedly. The resumed operation re-checks its source itself,
-	// so a spurious wake just parks again.
-	let step = _host_extent(body: body)
-	loop {
-		match step {
-			.finished -> {
-				break
-			},
-			.recv(handle, k) -> {
-				let registered = _chan_ctl(handle: handle, op: 4)
-				let parked = _chan_ctl(handle: 0, op: 6)
-				let released = _chan_ctl(handle: handle, op: 5)
-				step = resume(k: k, value: ())
-			},
-			.send(handle, k) -> {
-				let registered = _chan_ctl(handle: handle, op: 11)
-				let parked = _chan_ctl(handle: 0, op: 6)
-				let released = _chan_ctl(handle: handle, op: 12)
-				step = resume(k: k, value: ())
-			},
-			.slept(deadline_ms, k) -> {
-				let registered = _chan_ctl(handle: deadline_ms, op: 14)
-				let parked = _chan_ctl(handle: 0, op: 6)
-				let released = _chan_ctl(handle: deadline_ms, op: 15)
-				step = resume(k: k, value: ())
-			},
-			.either(a, b, k) -> {
-				let first = _chan_ctl(handle: a, op: 4)
-				let second = _chan_ctl(handle: b, op: 4)
-				let parked = _chan_ctl(handle: 0, op: 6)
-				let drop_second = _chan_ctl(handle: b, op: 5)
-				let drop_first = _chan_ctl(handle: a, op: 5)
-				step = resume(k: k, value: ())
-			}
-		}
+	// The blocking park fallbacks (ADR 0067/0068): tail-resumptive
+	// clauses — register the interest, block the worker, unregister,
+	// continue at the perform site. No resumption is reified and no
+	// frame moves, so a long-lived producer parks in constant stack.
+	// The resumed operation re-checks its source itself, so a spurious
+	// wake just parks again.
+	#handle 'park_recv { handle in
+		let registered = _chan_ctl(handle: handle, op: 4)
+		let parked = _chan_ctl(handle: 0, op: 6)
+		let released = _chan_ctl(handle: handle, op: 5)
+		'continue
 	}
-}
-
-// One host extent, stepped: the body runs until it finishes or parks,
-// and each park arrives as a value carrying its resumption.
-pub enum HostPark {
-	case finished
-	case recv(Int, Resumption<(), HostPark>)
-	case send(Int, Resumption<(), HostPark>)
-	case slept(Int, Resumption<(), HostPark>)
-	case either(Int, Int, Resumption<(), HostPark>)
-}
-
-func _host_extent(consume body: () '[io, alloc, yield_now, panic, park_recv, park_send, park_sleep, park_recv2] -> ()) -> HostPark {
-	#handle 'park_recv { handle, k in HostPark.recv(handle, k) }
-	#handle 'park_send { handle, k in HostPark.send(handle, k) }
-	#handle 'park_sleep { deadline_ms, k in HostPark.slept(deadline_ms, k) }
-	#handle 'park_recv2 { a, b, k in HostPark.either(a, b, k) }
+	#handle 'park_send { handle in
+		let registered = _chan_ctl(handle: handle, op: 11)
+		let parked = _chan_ctl(handle: 0, op: 6)
+		let released = _chan_ctl(handle: handle, op: 12)
+		'continue
+	}
+	#handle 'park_sleep { deadline_ms in
+		let registered = _chan_ctl(handle: deadline_ms, op: 14)
+		let parked = _chan_ctl(handle: 0, op: 6)
+		let released = _chan_ctl(handle: deadline_ms, op: 15)
+		'continue
+	}
+	#handle 'park_recv2 { a, b in
+		let first = _chan_ctl(handle: a, op: 4)
+		let second = _chan_ctl(handle: b, op: 4)
+		let parked = _chan_ctl(handle: 0, op: 6)
+		let drop_second = _chan_ctl(handle: b, op: 5)
+		let drop_first = _chan_ctl(handle: a, op: 5)
+		'continue
+	}
 	body()
-	HostPark.finished
 }

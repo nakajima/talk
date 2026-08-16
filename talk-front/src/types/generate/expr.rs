@@ -1527,19 +1527,10 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                             .filter(|param| matches!(param.kind, crate::types::ty::ParamKind::Type))
                             .map(|param| param.symbol)
                             .collect(),
-                        suspending: sig.suspending,
+                        binds_resumption: false,
+                        bindable: sig.bindable(),
                     },
                 );
-                if sig.suspending
-                    && args
-                        .iter()
-                        .any(|arg| matches!(arg.mode, Some(crate::node_kinds::call_arg::ArgMode::Mut)))
-                {
-                    self.unsupported(
-                        expr.id,
-                        "`mut` arguments on a suspending effect",
-                    );
-                }
                 // A generic effect instantiates fresh at each perform
                 // (Damas-Milner instantiation, exactly like schemes);
                 // explicit type arguments equate positionally by the

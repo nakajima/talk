@@ -556,7 +556,7 @@ pub enum DeclKind {
 	case init_requirement(FuncSignature)
 	case typealias_decl(String, Int, Int, TypeAnnotation)
 	// name + its token span, generics, where, params, return type.
-	case effect_decl(String, Int, Int, [GenericDecl], WhereClause?, [Parameter], TypeAnnotation, Bool)
+	case effect_decl(String, Int, Int, [GenericDecl], WhereClause?, [Parameter], TypeAnnotation)
 	case associated_decl(GenericDecl, WhereClause?)
 	// name + its token span, parameters, template body range + canonical tokens.
 	// The body is an unparsed token template: the invocation position's

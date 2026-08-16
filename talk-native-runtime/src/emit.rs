@@ -227,15 +227,34 @@ pub fn type_table(out: &mut String, interners: &Interners, display: &DisplayName
 /// (ADR 0065): a suspension's return-status propagates through every
 /// activation between the perform and its installer, so every function
 /// that can dynamically sit on such a path needs a heap frame and
-/// re-entry dispatch. Seeds are the `Suspend` sites; propagation is a
+/// re-entry dispatch. Seeds are the `Suspend` sites of *capturable*
+/// effects — those with a resumption-binding `PushHandler` anywhere in
+/// the finalized program (ADR 0068: the clause kind is derived at the
+/// handler, so a perform of an effect nobody binds can never suspend,
+/// and its suspend arm is emitted as a trap). Propagation is a
 /// call-graph fixpoint over direct calls, with the conservative
 /// indirect rule: once any address-taken function is marked, every
 /// function containing an indirect call is too. Propagation runs all
 /// the way up — a position-aware cutoff at installers is a later
 /// precision win, not a correctness need. Sound by construction: an
-/// unmarked function contains no suspend and calls only unmarked code,
-/// so no suspension can ever arise inside it.
+/// unmarked function contains no reachable suspend and calls only
+/// unmarked code, so no suspension can ever arise inside it.
 pub fn resumable_functions(functions: &[Function]) -> Vec<bool> {
+    let mut capturable: HashSet<MirSymbol> = HashSet::new();
+    for function in functions {
+        for block in &function.blocks {
+            for inst in &block.insts {
+                if let Inst::PushHandler {
+                    effect,
+                    binds: true,
+                    ..
+                } = inst
+                {
+                    capturable.insert(*effect);
+                }
+            }
+        }
+    }
     let mut marked = vec![false; functions.len()];
     let mut address_taken: Vec<usize> = Vec::new();
     let mut has_indirect = vec![false; functions.len()];
@@ -244,7 +263,10 @@ pub fn resumable_functions(functions: &[Function]) -> Vec<bool> {
         for block in &function.blocks {
             for inst in &block.insts {
                 match inst {
-                    Inst::Suspend { .. } => marked[id] = true,
+                    Inst::Suspend { effect, .. } if capturable.contains(effect) => {
+                        marked[id] = true
+                    }
+                    Inst::Suspend { .. } => {}
                     Inst::Call { func, .. } => direct[id].push(*func),
                     Inst::MakeClosure { func, .. } => address_taken.push(*func),
                     Inst::CallIndirect { .. } => has_indirect[id] = true,

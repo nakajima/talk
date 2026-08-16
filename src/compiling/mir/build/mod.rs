@@ -7183,21 +7183,77 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     payload_tys.push(payload_ty);
                     operands.push(operand);
                 }
-                if contract.suspending {
-                    // ADR 0064: the perform suspends its extent. The
-                    // checker rejected type generics and `mut` arguments
-                    // on suspending effects, so the operands are exactly
-                    // the payloads, and there are no writebacks. The
-                    // resumed value arrives owned.
-                    let dest = self.fresh_local();
+                if contract.bindable {
+                    // ADR 0068: the matched clause's kind is a runtime
+                    // fact of the handler entry — one FindHandler serves
+                    // both protocols. A resumption-binding clause
+                    // suspends the extent into the found entry
+                    // (ADR 0064's capture); a tail-resumptive clause
+                    // runs as a call at the perform site (ADR 0011's
+                    // protocol). A bindable effect has no type generics
+                    // and no `mut` parameters (binding clauses are
+                    // checker-rejected otherwise), so the operands are
+                    // exactly the payloads and there are no writebacks.
+                    let (clause, index, binds) = self.capability(effect);
+                    let result = self.fresh_local();
+                    let bind_arm = self.new_block();
+                    let join = self.new_block();
+                    let call_arm = self.new_block();
+                    self.terminate(Term::Branch {
+                        cond: Operand::Local(binds),
+                        then_block: bind_arm,
+                        else_block: call_arm,
+                    });
+                    let moved_before = self.moved.clone();
+                    let temps_before = self.stmt_temps.clone();
+                    let mut arm_ends: Vec<ArmEnd> = Vec::new();
+
+                    self.switch_to(bind_arm);
+                    let suspended = self.fresh_local();
                     self.push(Inst::Suspend {
-                        dest,
+                        dest: suspended,
                         effect: executable(effect),
+                        args: operands.clone(),
+                        entry: Operand::Local(index),
+                        unwind: None,
+                    });
+                    self.produce_temp(suspended, &ty);
+                    arm_ends.push(ArmEnd {
+                        block: self.current,
+                        value: Operand::Local(suspended),
+                        moved: std::mem::take(&mut self.moved),
+                        temps: std::mem::take(&mut self.stmt_temps),
+                    });
+
+                    self.switch_to(call_arm);
+                    self.moved = moved_before.clone();
+                    self.stmt_temps = temps_before.clone();
+                    let saved_floor = self.fresh_local();
+                    self.push(Inst::GetFloor { dest: saved_floor });
+                    self.push(Inst::SetFloor {
+                        src: Operand::Local(index),
+                    });
+                    let called = self.fresh_local();
+                    self.push(Inst::CallIndirect {
+                        dest: called,
+                        callee: Operand::Local(clause),
                         args: operands,
                         unwind: None,
                     });
-                    self.produce_temp(dest, &ty);
-                    return Ok(Operand::Local(dest));
+                    self.push(Inst::SetFloor {
+                        src: Operand::Local(saved_floor),
+                    });
+                    self.produce_temp(called, &ty);
+                    arm_ends.push(ArmEnd {
+                        block: self.current,
+                        value: Operand::Local(called),
+                        moved: std::mem::take(&mut self.moved),
+                        temps: std::mem::take(&mut self.stmt_temps),
+                    });
+
+                    self.merge_arms(arm_ends, result, join, temps_before, moved_before);
+                    self.produce_temp(result, &ty);
+                    return Ok(Operand::Local(result));
                 }
                 // Writeback targets align against the declared parameters
                 // before the witness blocks are appended.
@@ -7302,7 +7358,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // extent. The clause runs outside its own handler (CHG-01):
                 // the search floor is the handler's index for the clause
                 // call's extent.
-                let (clause, index) = self.capability(effect);
+                let (clause, index, _binds) = self.capability(effect);
                 let saved_floor = self.fresh_local();
                 self.push(Inst::GetFloor { dest: saved_floor });
                 self.push(Inst::SetFloor {
@@ -9543,11 +9599,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         body: &Block,
         contract: &crate::types::output::EffectContract,
     ) -> Result<(), BackendError> {
-        // ADR 0064: a suspending clause takes over the installer's stack
-        // position and outward linkage at runtime, so it has no
-        // delimiter — completing IS the abort, by plain return — and its
-        // environment starts at the captures.
-        let suspending = contract.suspending;
+        // ADR 0064/0068: a resumption-binding clause (derived from its
+        // binder count, published by the checker) takes over the
+        // installer's stack position and outward linkage at runtime, so
+        // it has no delimiter — completing IS the abort, by plain
+        // return — and its environment starts at the captures.
+        let binds = contract.binds_resumption;
         let captured = self.live_captures(body);
         let captured_names: Vec<Option<String>> = captured
             .iter()
@@ -9593,7 +9650,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // arguments.
         let arity = fx.bind_witness_params(&sig_generics, declared_arity);
         fx.frame.resize(usize::from(arity), BuildLocal::default());
-        let k_binder = suspending.then(|| body.args.len().saturating_sub(1));
+        let k_binder = binds.then(|| body.args.len().saturating_sub(1));
         for (ix, param) in body.args.iter().enumerate() {
             let local = u16::try_from(ix).unwrap_or_default();
             // Typing published every clause binder's type on its node
@@ -9652,7 +9709,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         } else {
             None
         };
-        let delimiter = if suspending {
+        let delimiter = if binds {
             fx.clause_delimiter = None;
             None
         } else {
@@ -9669,7 +9726,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             fx.clause_delimiter = Some(delimiter);
             Some(delimiter)
         };
-        let env_base = usize::from(!suspending);
+        let env_base = usize::from(!binds);
         for (index, symbol) in captured.iter().enumerate() {
             let local = fx.fresh_local();
             let env_index = u16::try_from(index + env_base).unwrap_or_default();
@@ -9750,7 +9807,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 Some(delimiter) => {
                     fx.emit_discontinue(Operand::Local(delimiter), value)
                 }
-                // A suspending clause holds the installer's outward
+                // A resumption-binding clause holds the installer's outward
                 // linkage: completing IS the abort, by plain return.
                 None => fx.emit_frame_return(value),
             }
@@ -9770,7 +9827,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             blocks,
         };
 
-        let mut env = if suspending {
+        let mut env = if binds {
             Vec::new()
         } else {
             vec![Operand::Local(cont)]
@@ -9792,6 +9849,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             effect: executable(effect),
             clause: Operand::Local(clause),
             cont: Operand::Local(cont),
+            binds,
         });
         Ok(())
     }
@@ -9800,19 +9858,22 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// own chunk over `[captures…]`, parameters from the block's argument
     /// list.
     /// Resolve a user effect against the nearest handler in this call's
-    /// dynamic extent. Returns the handler's clause and its stack index
-    /// (the search floor for the clause call's extent).
-    fn capability(&mut self, effect: Symbol) -> (LocalId, LocalId) {
+    /// dynamic extent. Returns the handler's clause, its stack index
+    /// (the search floor for the clause call's extent), and its clause
+    /// kind (ADR 0068: true when the clause binds the resumption).
+    fn capability(&mut self, effect: Symbol) -> (LocalId, LocalId, LocalId) {
         let clause = self.fresh_local();
         let cont = self.fresh_local();
         let index = self.fresh_local();
+        let binds = self.fresh_local();
         self.push(Inst::FindHandler {
             clause,
             cont,
             index,
+            binds,
             effect: executable(effect),
         });
-        (clause, index)
+        (clause, index, binds)
     }
 
     /// The closure-environment contract, build side: captured frame

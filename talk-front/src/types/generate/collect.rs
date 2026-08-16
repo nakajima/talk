@@ -122,18 +122,10 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                     where_clause,
                     params,
                     ret,
-                    suspending,
                     ..
                 } => {
                     if let Ok(symbol) = name.symbol() {
-                        self.register_effect(
-                            symbol,
-                            generics,
-                            where_clause.as_ref(),
-                            params,
-                            ret,
-                            *suspending,
-                        );
+                        self.register_effect(symbol, generics, where_clause.as_ref(), params, ret);
                         self.register_callable_contract(
                             symbol,
                             &name.name_str(),
@@ -1747,7 +1739,6 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         where_clause: Option<&WhereClause>,
         params: &[Parameter],
         ret: &TypeAnnotation,
-        suspending: bool,
     ) {
         let sig = self.in_declaration_context(None, generics, where_clause, |this, context| {
             let params = params
@@ -1768,15 +1759,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                 predicates: context.predicates.clone(),
                 params,
                 ret,
-                suspending,
             }
         });
-        if suspending && !sig.generics.is_empty() {
-            self.unsupported(
-                params.first().map_or(ret.id, |param| param.id),
-                "type generics on a suspending effect",
-            );
-        }
         self.catalog.effects.insert(symbol, sig);
     }
 

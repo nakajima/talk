@@ -574,7 +574,7 @@ func decl_label(kind: &DeclKind) -> String {
 		.method_requirement(_, _) -> "Decl::MethodRequirement",
 		.init_requirement(_) -> "Decl::InitRequirement",
 		.typealias_decl(_, _, _, _) -> "Decl::TypeAlias",
-		.effect_decl(_, _, _, _, _, _, _, _) -> "Decl::Effect",
+		.effect_decl(_, _, _, _, _, _, _) -> "Decl::Effect",
 		.associated_decl(_, _) -> "Decl::Associated",
 		.macro_decl(_, _, _, _, _, _, _) -> "Decl::Macro",
 		.macro_call_decl(_, _, _, _, _, _, _) -> "Decl::MacroCall",
@@ -668,7 +668,7 @@ func render_decl(mut buf: [Byte], view: UTF8View, decl: &Decl, depth: Int) -> Vo
 		.method_requirement(sig, _) -> render_func_signature(buf: buf, view: view, sig: sig, depth: child),
 		.init_requirement(sig) -> render_func_signature(buf: buf, view: view, sig: sig, depth: child),
 		.typealias_decl(_, _, _, rhs) -> render_type(buf: buf, view: view, annotation: rhs, depth: child),
-		.effect_decl(_, _, _, generics, wc, params, ret, _) -> {
+		.effect_decl(_, _, _, generics, wc, params, ret) -> {
 			for generic in generics {
 				render_generic_decl(buf: buf, view: view, generic: generic, depth: child)
 			}

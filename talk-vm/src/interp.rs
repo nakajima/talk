@@ -611,6 +611,9 @@ struct HandlerEntry {
     effect: u32,
     clause: Value,
     cont: Value,
+    /// ADR 0068: the clause binds the stored resumption — performs that
+    /// match this entry suspend their extent instead of calling.
+    binds: bool,
     depth: usize,
     frame_id: u64,
 }
@@ -957,6 +960,7 @@ fn run_loop<S: StatsSink>(
                 effect,
                 clause,
                 cont,
+                binds,
             } => {
                 while worker.handlers.last().is_some_and(|entry| {
                     worker.frames
@@ -970,6 +974,7 @@ fn run_loop<S: StatsSink>(
                     effect,
                     clause: frame.regs[clause as usize].clone(),
                     cont: frame.regs[cont as usize].clone(),
+                    binds,
                     depth: frame_index,
                     frame_id: frame.id,
                 });
@@ -978,6 +983,7 @@ fn run_loop<S: StatsSink>(
                 clause,
                 cont,
                 index,
+                binds,
                 effect,
             } => {
                 let limit = worker.handler_floor.min(worker.handlers.len());
@@ -994,11 +1000,13 @@ fn run_loop<S: StatsSink>(
                 let Some((position, entry)) = found else {
                     return Err("vm: perform with no installed handler".into());
                 };
-                let (clause_value, cont_value) = (entry.clause.clone(), entry.cont.clone());
+                let (clause_value, cont_value, binds_value) =
+                    (entry.clause.clone(), entry.cont.clone(), entry.binds);
                 let regs = &mut worker.frames[frame_index].regs;
                 regs[clause as usize] = clause_value;
                 regs[cont as usize] = cont_value;
                 regs[index as usize] = Value::I64(position as i64);
+                regs[binds as usize] = Value::Bool(binds_value);
             }
             Insn::GetFloor { dest } => {
                 let floor = i64::try_from(worker.handler_floor).unwrap_or(i64::MAX);
@@ -1158,6 +1166,7 @@ fn run_loop<S: StatsSink>(
                 effect,
                 args_start,
                 args_len,
+                entry,
             } => {
                 // ADR 0064: capture the extent from the installing frame
                 // through this perform site into a stored resumption and
@@ -1186,31 +1195,25 @@ fn run_loop<S: StatsSink>(
                 for &src in arg_regs {
                     args.push(rk_value(module, frame, src)?);
                 }
-                // Trim stale handler entries, then find the innermost
-                // live handler for this effect below the floor.
-                while let Some(entry) = worker.handlers.last() {
-                    let live = worker
-                        .frames
-                        .get(entry.depth)
-                        .is_some_and(|frame| frame.id == entry.frame_id);
-                    if live {
-                        break;
-                    }
-                    worker.handlers.pop();
-                }
-                let limit = worker.handler_floor.min(worker.handlers.len());
-                let Some(position) = worker.handlers[..limit]
-                    .iter()
-                    .rposition(|entry| {
-                        entry.effect == effect
-                            && worker
-                                .frames
-                                .get(entry.depth)
-                                .is_some_and(|frame| frame.id == entry.frame_id)
-                    })
-                else {
-                    return Err("vm: perform with no installed handler".into());
+                // ADR 0068: the preceding FindHandler located the entry
+                // (and branched on its clause kind); this instruction
+                // consumes that index — one handler search per perform.
+                let Value::I64(position) = frame.regs[entry as usize] else {
+                    return Err("vm: suspend without a located handler entry".into());
                 };
+                let Ok(position) = usize::try_from(position) else {
+                    return Err("vm: suspend without a located handler entry".into());
+                };
+                let live = worker.handlers.get(position).is_some_and(|entry| {
+                    entry.effect == effect
+                        && worker
+                            .frames
+                            .get(entry.depth)
+                            .is_some_and(|frame| frame.id == entry.frame_id)
+                });
+                if !live {
+                    return Err("vm: suspending handler entry lost its clause".into());
+                }
                 let base = worker.handlers[position].depth;
                 // Every handler installed by a frame of the extent
                 // travels with it (the triggering entry included, so a

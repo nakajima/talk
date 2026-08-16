@@ -2,9 +2,11 @@
 use package::Array::{ Array }
 
 // Direct-style concurrency (ADR 0067) over one-shot resumptions
-// (ADR 0064): waiting is a family of suspending effects. The blocking
-// host fallbacks live in core/Host.tlk; a cooperative scheduler
-// (stdlib `coop`) is just a nearer handler for the same effects.
+// (ADR 0064/0068): waiting is a family of park effects. What a park
+// does is the handler's choice (ADR 0068): the blocking host fallbacks
+// (core/Host.tlk) `'continue` after blocking the worker, and a
+// cooperative scheduler (stdlib `coop`) binds the resumption instead —
+// just a nearer handler for the same effects.
 
 // Typed readiness operation: the performing computation volunteers to
 // yield the worker. The reference host resumes immediately
@@ -13,17 +15,17 @@ pub effect 'yield_now() -> ()
 
 // Park until the channel behind `handle` has a value or closes
 // (ADR 0067; a resumed receiver re-checks and takes itself).
-pub effect 'park_recv(handle: Int) -> () 'suspending
+pub effect 'park_recv(handle: Int) -> ()
 
 // Park until the bounded channel behind `handle` has room or its
 // receiver is gone.
-pub effect 'park_send(handle: Int) -> () 'suspending
+pub effect 'park_send(handle: Int) -> ()
 
 // Park until the monotonic clock reaches `deadline_ms`.
-pub effect 'park_sleep(deadline_ms: Int) -> () 'suspending
+pub effect 'park_sleep(deadline_ms: Int) -> ()
 
 // Park until either channel has a value or closes (two-way select).
-pub effect 'park_recv2(a: Int, b: Int) -> () 'suspending
+pub effect 'park_recv2(a: Int, b: Int) -> ()
 
 // === Task runtime (ADR 0058) ==========================================
 //

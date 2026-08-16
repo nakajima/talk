@@ -2501,9 +2501,6 @@ impl ResultAdapter<'_, '_> {
                     params
                 },
                 ret: self.type_annotation(&p[6])?,
-                // The pre-ADR-0064 frontend artifact emits 7 payloads;
-                // tolerate it during the bootstrap transition.
-                suspending: if p.len() > 7 { boolean(&p[7])? } else { false },
             },
             "associated_decl" => DeclKind::Associated {
                 generic: self.generic_decl(&p[0])?,

@@ -4809,14 +4809,16 @@ fn run_parallel_nested_scopes_match_pin() {
 
 #[test]
 fn suspending_handlers_enforce_their_static_rules() {
-    // ADR 0064: one-shot is a linear fact (double resume is a moved
-    // value, an unconsumed resumption is a linearity error), `'continue`
-    // is replaced by the binder, the binder count includes the
-    // resumption, and a suspending handler cannot install in a function
-    // with borrowed parameters (phase 1's conservative rule).
+    // ADR 0064/0068: one-shot is a linear fact (double resume is a
+    // moved value, an unconsumed resumption is a linearity error),
+    // `'continue` is replaced by the binder, the binder count is how a
+    // clause opts into binding (anything else is an arity error), a
+    // binding handler cannot install in a function with borrowed
+    // parameters (phase 1's conservative rule), and effects with
+    // generics or `mut` parameters cannot be bound at all.
     for (source, fragment) in [
         (
-            b"effect 'ping() -> Int 'suspending
+            b"effect 'ping() -> Int
 func body() -> Int {
 	'ping()
 }
@@ -4832,7 +4834,7 @@ print(driver())
             "use of moved value",
         ),
         (
-            b"effect 'ping() -> Int 'suspending
+            b"effect 'ping() -> Int
 func body() -> Int {
 	'ping()
 }
@@ -4847,7 +4849,7 @@ print(driver())
             "must be consumed exactly once",
         ),
         (
-            b"effect 'ping() -> Int 'suspending
+            b"effect 'ping() -> Int
 func body() -> Int {
 	'ping()
 }
@@ -4863,12 +4865,12 @@ print(driver())
             "consume the bound resumption",
         ),
         (
-            b"effect 'ping() -> Int 'suspending
+            b"effect 'ping() -> Int
 func body() -> Int {
 	'ping()
 }
 func driver() -> Int {
-	#handle 'ping {
+	#handle 'ping { k, extra in
 		7
 	}
 	body()
@@ -4878,7 +4880,7 @@ print(driver())
             "expects 1 argument",
         ),
         (
-            b"effect 'nap() -> Int 'suspending
+            b"effect 'nap() -> Int
 func with_view(view: &String) -> Int {
 	#handle 'nap { k in
 		let done = cancel(k: k)
@@ -4889,6 +4891,32 @@ func with_view(view: &String) -> Int {
 print(with_view(view: \"hello\"))
 ",
             "borrowed parameters",
+        ),
+        (
+            b"effect 'state<T>(value: T) -> T
+func driver() -> Int {
+	#handle 'state { value, k in
+		resume(k: k, value: value)
+	}
+	'state(value: 3)
+}
+print(driver())
+",
+            "an effect with generics",
+        ),
+        (
+            b"effect 'bump(mut counter: Int) -> ()
+func driver() -> Int {
+	#handle 'bump { counter, k in
+		resume(k: k, value: ())
+	}
+	let count = 1
+	'bump(mut count)
+	count
+}
+print(driver())
+",
+            "`mut` parameters",
         ),
     ] {
         let output = run_source(source, &[]);
@@ -4902,6 +4930,47 @@ print(with_view(view: \"hello\"))
             "expected `{fragment}` in:\n{stderr}"
         );
     }
+}
+
+#[test]
+fn clause_kind_derives_from_the_clause_not_the_declaration() {
+    // ADR 0068: no declaration marker — the same effect is handled with
+    // a bound resumption in one extent and tail-resumptively in
+    // another, and one perform site serves both routes dynamically.
+    assert_runs(
+        b"effect 'step() -> Int
+enum Held {
+\tcase parked(Resumption<Int, Held>)
+\tcase done(Int)
+}
+func body() -> Int {
+\t'step() + 1
+}
+func capture_run() -> Held {
+\t#handle 'step { k in Held.parked(k) }
+\tHeld.done(body())
+}
+func tail_run() -> Int {
+\t#handle 'step { 'continue 10 }
+\tbody()
+}
+match capture_run() {
+\t.parked(k) -> {
+\t\tmatch resume(k: k, value: 3) {
+\t\t\t.done(value) -> print(value),
+\t\t\t.parked(again) -> {
+\t\t\t\tlet dropped = cancel(k: again)
+\t\t\t\tprint(0 - 1)
+\t\t\t}
+\t\t}
+\t},
+\t.done(value) -> print(value)
+}
+print(tail_run())
+",
+        &[],
+        b"4\n11\n",
+    );
 }
 
 #[test]
@@ -6079,6 +6148,31 @@ fn gadt_evaluator_infers_same_add_result() {
           \t\t.int(i) -> i,\n\
           \t\t.string(s) -> s,\n\
           \t\t.add(a, b) -> eval(a) + eval(b)\n\
+          \t}\n\
+          }\n\
+          print(eval(.add(.int(20), .add(.int(19), .int(3)))))\n\
+          print(eval(.add(.string(\"hello \"), .string(\"world\"))))\n",
+        &[],
+        b"42\nhello world\n",
+    );
+}
+
+/// Direct requirement dispatch has the same associated result as `+`. Its
+/// equality reaches the implication as `U == U.Ret`; the projection input is
+/// not a structural occurs-check path and must qualify the evaluator scheme.
+#[test]
+fn gadt_evaluator_method_call_infers_same_add_result() {
+    assert_runs(
+        b"enum Expr<Returns> {\n\
+          \tcase int(Int) -> Expr<Int>\n\
+          \tcase string(String) -> Expr<String>\n\
+          \tcase add<T: Add<T>>(Expr<T>, Expr<T>) -> Expr<T>\n\
+          }\n\
+          func eval<U: Add<U>>(_ expr: Expr<U>) -> U {\n\
+          \tmatch expr {\n\
+          \t\t.int(i) -> i,\n\
+          \t\t.string(s) -> s,\n\
+          \t\t.add(a, b) -> eval(a).add(eval(b))\n\
           \t}\n\
           }\n\
           print(eval(.add(.int(20), .add(.int(19), .int(3)))))\n\

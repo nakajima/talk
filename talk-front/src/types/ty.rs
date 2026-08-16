@@ -1162,6 +1162,35 @@ pub(crate) fn collapse_borrow(perm: Perm, inner: Ty) -> Ty {
 }
 
 impl Ty {
+    /// Whether this type contains `param` through structural type constructors.
+    /// Associated projections are opaque type-family applications: `T.Ret`
+    /// mentions `T` as an input, but the equation `T == T.Ret` is a qualified
+    /// predicate, not the recursive type equation `T == Box<T>`.
+    pub(crate) fn structurally_mentions_param(&self, param: Symbol) -> bool {
+        match self {
+            Ty::Param(candidate) => *candidate == param,
+            Ty::Nominal(_, args) | Ty::Tuple(args) => {
+                args.iter().any(|ty| ty.structurally_mentions_param(param))
+            }
+            Ty::Borrow(_, inner) | Ty::Unique(inner) => inner.structurally_mentions_param(param),
+            Ty::Func(params, ret, _) => {
+                params
+                    .iter()
+                    .any(|ty| ty.structurally_mentions_param(param))
+                    || ret.structurally_mentions_param(param)
+            }
+            Ty::Record(row) => row
+                .fields
+                .iter()
+                .any(|(_, ty)| ty.structurally_mentions_param(param)),
+            Ty::Forall(scheme) => scheme.ty.structurally_mentions_param(param),
+            Ty::Any { assoc, .. } => assoc
+                .iter()
+                .any(|(_, ty)| ty.structurally_mentions_param(param)),
+            Ty::Proj(..) | Ty::Var(_) | Ty::Eff(_) | Ty::Static(_) | Ty::Error => false,
+        }
+    }
+
     /// Whether any unification variable (type, effect/row tail, or perm)
     /// survives in this type — the module-boundary portability check.
     pub fn has_unification_vars(&self) -> bool {
@@ -2515,6 +2544,28 @@ mod traversal_tests {
 
         assert_eq!(ty.render_mono(), "Array<_, _>");
         assert_eq!(record.render_mono(), "{ .. }");
+    }
+
+    #[test]
+    fn structural_occurs_check_treats_projection_inputs_as_opaque() {
+        use crate::front::module::ModuleId;
+        use crate::name_resolution::symbol::{AssociatedTypeId, TypeParameterId};
+
+        let param = Symbol::TypeParameter(TypeParameterId::new(ModuleId::Current, 902));
+        let projection = Ty::Proj(
+            Box::new(Ty::Param(param)),
+            ProtocolRef {
+                protocol: Symbol::Add,
+                args: vec![Ty::Param(param)],
+            },
+            Symbol::AssociatedType(AssociatedTypeId::new(ModuleId::Current, 903)),
+        );
+
+        assert!(!projection.structurally_mentions_param(param));
+        assert!(!Ty::Nominal(Symbol::Array, vec![projection]).structurally_mentions_param(param));
+        assert!(
+            Ty::Nominal(Symbol::Array, vec![Ty::Param(param)]).structurally_mentions_param(param)
+        );
     }
 
     #[test]

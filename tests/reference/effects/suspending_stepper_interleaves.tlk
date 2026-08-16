@@ -3,7 +3,7 @@
 // simultaneously and finish later, each resumed outside any handler.
 // The recursive answer type is legal: a Resumption stores only its
 // slot, so Step is not layout-recursive.
-effect 'pause() -> Int 'suspending
+effect 'pause() -> Int
 
 enum Step {
 	case done(Int)

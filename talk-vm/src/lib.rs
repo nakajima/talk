@@ -372,14 +372,17 @@ pub enum Insn {
         dest: u16,
         handle: u16,
     },
-    /// ADR 0064: perform a suspending effect — capture the extent from
-    /// the installing frame through this site into a stored one-shot
-    /// resumption and run the handler clause in the installer's place.
+    /// ADR 0064/0068: perform against a resumption-binding handler —
+    /// capture the extent from the installing frame through this site
+    /// into a stored one-shot resumption and run the clause in the
+    /// installer's place. `entry` holds the handler index a
+    /// `FindHandler` located for this perform.
     Suspend {
         dest: u16,
         effect: u32,
         args_start: u32,
         args_len: u16,
+        entry: u16,
     },
     /// ADR 0064: resume a stored resumption with a value; `dest`
     /// receives the extent's answer when it finishes or aborts.
@@ -480,20 +483,24 @@ pub enum Insn {
     UnwindRet,
     /// Install a deep handler for `effect`: the clause function value and
     /// the delimiter continuation, tied to the installing frame (popped
-    /// with it).
+    /// with it). `binds` is the clause's kind (ADR 0068): true when it
+    /// binds the stored resumption as a final parameter.
     PushHandler {
         effect: u32,
         clause: u16,
         cont: u16,
+        binds: bool,
     },
     /// Nearest-handler routing: find the innermost live handler for
     /// `effect` below the current search floor. Writes the clause, the
-    /// delimiter continuation, and the handler's index (for the clause's
-    /// own floor). Traps if no handler is installed.
+    /// delimiter continuation, the handler's index (for the clause's
+    /// own floor), and the entry's clause kind (ADR 0068's runtime
+    /// branch). Traps if no handler is installed.
     FindHandler {
         clause: u16,
         cont: u16,
         index: u16,
+        binds: u16,
         effect: u32,
     },
     /// Read the current handler-search floor (an Int; `i64::MAX` = open).
@@ -820,8 +827,9 @@ impl Module {
                 effect,
                 args_start,
                 args_len,
+                entry,
             } => format!(
-                "r{dest} = suspend @{effect}({})",
+                "r{dest} = suspend @{effect}[r{entry}]({})",
                 self.render_args(*args_start, *args_len)
             ),
             Insn::Resume { dest, cont, value } => {
@@ -903,16 +911,19 @@ impl Module {
                 effect,
                 clause,
                 cont,
+                binds,
             } => {
-                format!("push_handler eff{effect} clause r{clause} cont r{cont}")
+                let kind = if *binds { " binds" } else { "" };
+                format!("push_handler eff{effect} clause r{clause} cont r{cont}{kind}")
             }
             Insn::FindHandler {
                 clause,
                 cont,
                 index,
+                binds,
                 effect,
             } => {
-                format!("find_handler eff{effect} -> r{clause}, r{cont}, r{index}")
+                format!("find_handler eff{effect} -> r{clause}, r{cont}, r{index}, r{binds}")
             }
             Insn::GetFloor { dest } => format!("get_floor r{dest}"),
             Insn::SetFloor { src } => format!("set_floor r{src}"),

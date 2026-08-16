@@ -1287,7 +1287,7 @@ func build_view(consume decl: Decl, consume materialized: MaterializedTokens) ->
 			name_lo = lo
 			name_hi = hi
 		},
-		.effect_decl(declared, lo, hi, _, _, _, _, _) -> {
+		.effect_decl(declared, lo, hi, _, _, _, _) -> {
 			shape = .effect_shape
 			name = .some(declared.clone())
 			name_lo = lo

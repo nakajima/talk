@@ -283,7 +283,7 @@ fn suspension_crossing_a_resumption_boundary_traps_on_c() {
     let program = dir.join("crossing.tlk");
     std::fs::write(
         &program,
-        "effect 'inner() -> Int 'suspending\neffect 'outer() -> Int 'suspending\nenum Held {\n\tcase parked(Resumption<Int, Held>)\n\tcase done(Int)\n}\nfunc inner_body() -> Int {\n\tlet x = 'inner()\n\tlet y = 'outer()\n\tx + y\n}\nfunc stash_inner() -> Held {\n\t#handle 'inner { k in\n\t\tHeld.parked(k)\n\t}\n\tHeld.done(inner_body())\n}\nfunc run_all() -> Int {\n\t#handle 'outer { k in\n\t\tresume(k: k, value: 50)\n\t}\n\tlet held = stash_inner()\n\tmatch held {\n\t\t.parked(k) -> {\n\t\t\tmatch resume(k: k, value: 7) {\n\t\t\t\t.done(value) -> value,\n\t\t\t\t.parked(again) -> {\n\t\t\t\t\tlet dropped = cancel(k: again)\n\t\t\t\t\t0 - 1\n\t\t\t\t}\n\t\t\t}\n\t\t},\n\t\t.done(value) -> value\n\t}\n}\nprint(run_all())\n",
+        "effect 'inner() -> Int\neffect 'outer() -> Int\nenum Held {\n\tcase parked(Resumption<Int, Held>)\n\tcase done(Int)\n}\nfunc inner_body() -> Int {\n\tlet x = 'inner()\n\tlet y = 'outer()\n\tx + y\n}\nfunc stash_inner() -> Held {\n\t#handle 'inner { k in\n\t\tHeld.parked(k)\n\t}\n\tHeld.done(inner_body())\n}\nfunc run_all() -> Int {\n\t#handle 'outer { k in\n\t\tresume(k: k, value: 50)\n\t}\n\tlet held = stash_inner()\n\tmatch held {\n\t\t.parked(k) -> {\n\t\t\tmatch resume(k: k, value: 7) {\n\t\t\t\t.done(value) -> value,\n\t\t\t\t.parked(again) -> {\n\t\t\t\t\tlet dropped = cancel(k: again)\n\t\t\t\t\t0 - 1\n\t\t\t\t}\n\t\t\t}\n\t\t},\n\t\t.done(value) -> value\n\t}\n}\nprint(run_all())\n",
     )
     .expect("write program");
     let emitted = talk(&["c", &program.to_string_lossy()]);
@@ -317,12 +317,50 @@ fn suspension_crossing_a_resumption_boundary_traps_on_c() {
 
 #[test]
 fn suspending_handlers_run_on_the_c_target() {
-    // ADR 0065: suspending handlers compile natively as resumable
-    // functions — the clause resumes with a value and the extent's
-    // answer returns through the whole chain.
+    // ADR 0065/0068: resumption-binding handlers compile natively as
+    // resumable functions — the clause resumes with a value and the
+    // extent's answer returns through the whole chain. No declaration
+    // marker: the clause's binder derives the kind.
     assert_agrees(
         "suspend_roundtrip",
-        "effect 'ping() -> Int 'suspending\nfunc body() -> Int {\n\t'ping() + 5\n}\nfunc driver() -> Int {\n\t#handle 'ping { k in\n\t\tresume(k: k, value: 100)\n\t}\n\tbody()\n}\npub func bench() -> () {\n\tprint(driver())\n}\n",
+        "effect 'ping() -> Int\nfunc body() -> Int {\n\t'ping() + 5\n}\nfunc driver() -> Int {\n\t#handle 'ping { k in\n\t\tresume(k: k, value: 100)\n\t}\n\tbody()\n}\npub func bench() -> () {\n\tprint(driver())\n}\n",
+    );
+}
+
+#[test]
+fn blocking_only_channel_programs_pay_no_resumable_tax() {
+    // ADR 0068: the resumable set seeds from performs of effects that
+    // have a resumption-binding clause somewhere in the program. A
+    // program whose only park handlers are the blocking fallbacks
+    // (tail-resumptive `'continue` clauses in core/Host.tlk) must
+    // compile with no resumable functions — no heap frames, no status
+    // checks — even though it uses channels.
+    let dir = scratch("blocking_only");
+    let program = write_program(
+        &dir,
+        "use task::{ channel }\nlet (sender, receiver) = channel<Int>()\nsender.send(value: 5)\nif let .some(value) = receiver.recv() { print(value) } else { print(0 - 1) }\n",
+    );
+    let emitted = talk(&["c", &program.to_string_lossy()]);
+    assert!(
+        emitted.status.success(),
+        "emission must succeed:\n{}",
+        String::from_utf8_lossy(&emitted.stderr)
+    );
+    let source = String::from_utf8_lossy(&emitted.stdout);
+    assert!(
+        !source.contains("(resumable)"),
+        "a blocking-only program was taxed with resumable functions"
+    );
+}
+
+#[test]
+fn mixed_clause_kinds_agree_on_the_c_target() {
+    // ADR 0068: one perform site serves a binding handler in one extent
+    // and a tail-resumptive handler in another, chosen at runtime by
+    // the matched entry's clause kind.
+    assert_agrees(
+        "mixed_clause_kinds",
+        "effect 'step() -> Int\nenum Held {\n\tcase parked(Resumption<Int, Held>)\n\tcase done(Int)\n}\nfunc body() -> Int {\n\t'step() + 1\n}\nfunc capture_run() -> Held {\n\t#handle 'step { k in Held.parked(k) }\n\tHeld.done(body())\n}\nfunc tail_run() -> Int {\n\t#handle 'step { 'continue 10 }\n\tbody()\n}\npub func bench() -> () {\n\tmatch capture_run() {\n\t\t.parked(k) -> {\n\t\t\tmatch resume(k: k, value: 3) {\n\t\t\t\t.done(value) -> print(value),\n\t\t\t\t.parked(again) -> {\n\t\t\t\t\tlet dropped = cancel(k: again)\n\t\t\t\t\tprint(0 - 1)\n\t\t\t\t}\n\t\t\t}\n\t\t},\n\t\t.done(value) -> print(value)\n\t}\n\tprint(tail_run())\n}\n",
     );
 }
 

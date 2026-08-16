@@ -186,13 +186,15 @@ impl<'s> Solver<'s> {
             if !params.contains(&param) {
                 continue;
             }
-            let haystack = self.store.shallow(haystack);
-            // The identity equation `U ~ U` is no violation: only a
-            // skolem occurring inside structure makes the type infinite.
+            let haystack = self.store.zonk_ty(haystack);
             if matches!(haystack, Ty::Param(other) if other == param) {
                 continue;
             }
-            if self.ty_mentions_params(&haystack, &[param]).is_some() {
+            // Projection inputs are not structural occurrences: `U.Ret`
+            // may equal `U` for selected conformances and remains a qualified
+            // predicate. A real constructor path such as `Expr<U>` is still
+            // an infinite type.
+            if haystack.structurally_mentions_param(param) {
                 let haystack = self.store.render(&haystack);
                 let param = self.store.render(&Ty::Param(param));
                 return Some(format!("{param} = {haystack}"));

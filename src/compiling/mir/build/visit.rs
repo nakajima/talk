@@ -72,10 +72,13 @@ pub(crate) fn visit_inst(inst: &mut Inst, visit: &mut impl FnMut(Slot, &mut Loca
             read(op, visit);
             visit(Slot::Def, dest);
         }
-        Inst::Suspend { dest, args, .. } => {
+        Inst::Suspend {
+            dest, args, entry, ..
+        } => {
             for arg in args {
                 read(arg, visit);
             }
+            read(entry, visit);
             visit(Slot::Def, dest);
         }
         Inst::Resume { dest, cont, value } => {
@@ -207,11 +210,13 @@ pub(crate) fn visit_inst(inst: &mut Inst, visit: &mut impl FnMut(Slot, &mut Loca
             clause,
             cont,
             index,
+            binds,
             ..
         } => {
             visit(Slot::Def, clause);
             visit(Slot::Def, cont);
             visit(Slot::Def, index);
+            visit(Slot::Def, binds);
         }
         Inst::GlobalStore { src, .. } => sink(src, visit),
         Inst::ExistentialPack {

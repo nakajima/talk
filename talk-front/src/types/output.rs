@@ -77,9 +77,15 @@ pub struct IntoCoercion {
 pub struct EffectContract {
     pub params: Vec<Ty>,
     pub type_generics: Vec<Symbol>,
-    /// ADR 0064: this effect's performs suspend their extent; handler
-    /// clauses bind the stored resumption as a final parameter.
-    pub suspending: bool,
+    /// ADR 0068: this `#handle` clause binds the stored resumption as a
+    /// final parameter — derived from the clause's binder count, never
+    /// declared. Always false on perform-site contracts.
+    pub binds_resumption: bool,
+    /// ADR 0068: a resumption-binding clause is legal for this effect —
+    /// its signature has no generics and no exclusive-borrow (`mut`)
+    /// parameters. Perform lowering emits the runtime clause-kind
+    /// branch exactly for bindable effects.
+    pub bindable: bool,
 }
 
 /// A checked inline-IR operation (ADR 0038): canonical operation

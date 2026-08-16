@@ -1058,6 +1058,7 @@ impl Lowering<'_> {
                 effect,
                 clause,
                 cont,
+                binds,
             } => {
                 let effect = self.effects.intern(*effect);
                 let clause = self.reg(*clause);
@@ -1066,12 +1067,14 @@ impl Lowering<'_> {
                     effect,
                     clause,
                     cont,
+                    binds: *binds,
                 });
             }
             Inst::FindHandler {
                 clause,
                 cont,
                 index,
+                binds,
                 effect,
             } => {
                 let effect = self.effects.intern(*effect);
@@ -1079,6 +1082,7 @@ impl Lowering<'_> {
                     clause: *clause,
                     cont: *cont,
                     index: *index,
+                    binds: *binds,
                     effect,
                 });
             }
@@ -1213,15 +1217,18 @@ impl Lowering<'_> {
                 dest,
                 effect,
                 args,
+                entry,
                 unwind,
             } => {
                 let effect = self.effects.intern(*effect);
                 let (args_start, args_len) = self.arg_range(args);
+                let entry = self.reg(*entry);
                 self.code.push(Insn::Suspend {
                     dest: *dest,
                     effect,
                     args_start,
                     args_len,
+                    entry,
                 });
                 if let Some(block) = unwind {
                     self.unwind_sites.push((self.pc(), *block));

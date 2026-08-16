@@ -8,12 +8,12 @@
 // channels compose.
 
 // Cooperative yield: reschedule this task behind its peers.
-pub effect 'pause() -> () 'suspending
+pub effect 'pause() -> ()
 
-pub typealias Task = () '[pause, spawn_task, park_recv, park_send, park_sleep, park_recv2, io, alloc, yield_now, panic] -> ()
+pub typealias Task = () '[pause, spawn, park_recv, park_send, park_sleep, park_recv2, io, alloc, yield_now, panic] -> ()
 
 // Start another cooperative task on this scheduler.
-pub effect 'spawn_task(task: Task) -> () 'suspending
+pub effect 'spawn(task: Task) -> ()
 
 enum TaskStep {
 	case finished
@@ -27,24 +27,12 @@ enum TaskStep {
 
 // One task's extent, stepped: each clause returns the park as a value.
 func drive(consume task: Task) -> TaskStep {
-	#handle 'park_recv { handle, k in
-		TaskStep.wants_recv(handle, k)
-	}
-	#handle 'park_send { handle, k in
-		TaskStep.wants_send(handle, k)
-	}
-	#handle 'park_recv2 { a, b, k in
-		TaskStep.wants_either(a, b, k)
-	}
-	#handle 'park_sleep { deadline_ms, k in
-		TaskStep.sleeping(deadline_ms, k)
-	}
-	#handle 'pause { k in
-		TaskStep.paused(k)
-	}
-	#handle 'spawn_task { task, k in
-		TaskStep.spawned(task, k)
-	}
+	#handle 'park_recv { handle, k in TaskStep.wants_recv(handle, k) }
+	#handle 'park_send { handle, k in TaskStep.wants_send(handle, k) }
+	#handle 'park_recv2 { a, b, k in TaskStep.wants_either(a, b, k) }
+	#handle 'park_sleep { deadline_ms, k in TaskStep.sleeping(deadline_ms, k) }
+	#handle 'pause { k in TaskStep.paused(k) }
+	#handle 'spawn { task, k in TaskStep.spawned(task, k) }
 	task()
 	TaskStep.finished
 }
@@ -133,7 +121,15 @@ pub func run(consume main_task: Task) -> () {
 			loop i < reg_kind.count {
 				let kind = reg_kind.get(i)
 				let handle = reg_handle.get(i)
-				let op = if kind == 0 { 4 } else if kind == 1 { 11 } else { 14 }
+				let op = if kind == 0 {
+					4
+				} else {
+					if kind == 1 {
+						11
+					} else {
+						14
+					}
+				}
 				let registered = _chan_ctl(handle: handle, op: op)
 				i = i + 1
 			}
@@ -142,7 +138,15 @@ pub func run(consume main_task: Task) -> () {
 			loop j < reg_kind.count {
 				let kind = reg_kind.get(j)
 				let handle = reg_handle.get(j)
-				let op = if kind == 0 { 5 } else if kind == 1 { 12 } else { 15 }
+				let op = if kind == 0 {
+					5
+				} else {
+					if kind == 1 {
+						12
+					} else {
+						15
+					}
+				}
 				let released = _chan_ctl(handle: handle, op: op)
 				j = j + 1
 			}

@@ -63,7 +63,7 @@ reserved in bare row positions).
 3. **The cooperative scheduler is a stdlib module (`coop`) built on the
    Step-knot, with no mutable clause captures.** Two more effects,
    `'pause() -> () 'suspending` (cooperative yield) and
-   `'spawn_task(task: Task) -> () 'suspending`, plus:
+   `'spawn(task: Task) -> () 'suspending`, plus:
 
    ```talk
    enum TaskStep {
