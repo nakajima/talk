@@ -21,8 +21,8 @@ use crate::{
 use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::hash::Hash;
+use std::sync::Arc;
 use std::{
     path::{Path, PathBuf},
     rc::Rc,
@@ -757,13 +757,15 @@ impl Driver<Parsed> {
         let procedural_macros = self.phase.procedural_macros.local_artifact();
         let file_dependencies = self.phase.file_dependencies;
         let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
-        self.phase.diagnostics.extend(crate::macro_expansion::expand_macros_with_sources(
-            &mut asts,
-            &self.phase.source_texts,
-            &crate::procedural_macros::ToolchainMacroHost {
-                procedural: Some(&self.phase.procedural_macros),
-            },
-        ));
+        self.phase
+            .diagnostics
+            .extend(crate::macro_expansion::expand_macros_with_sources(
+                &mut asts,
+                &self.phase.source_texts,
+                &crate::procedural_macros::ToolchainMacroHost {
+                    procedural: Some(&self.phase.procedural_macros),
+                },
+            ));
         crate::desugar::desugar(&mut asts);
         let (asts, resolved) = resolver.resolve(asts);
         let asts = paths.into_iter().zip(asts).collect();
@@ -1233,7 +1235,7 @@ pub mod tests {
     }
 
     fn service_executable(source: &str, exports: &[&str]) -> Result<Executable, String> {
-        service_with_effects(source, exports, &["io", "alloc", "yield_now", "panic"])
+        service_with_effects(source, exports, &["io", "alloc", "yield", "panic"])
     }
 
     #[test]

@@ -1975,22 +1975,6 @@ struct VmChannel {
     receiver_live: bool,
 }
 
-/// Monotonic milliseconds from an arbitrary per-process anchor
-/// (ADR 0063). Wall-clock time is host-effect territory; deadlines only
-/// care about deltas.
-fn now_ms() -> i64 {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-        let start = START.get_or_init(std::time::Instant::now);
-        i64::try_from(start.elapsed().as_millis()).unwrap_or(i64::MAX)
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        js_sys::Date::now() as i64
-    }
-}
-
 fn channels() -> &'static (
     std::sync::Mutex<Vec<Option<VmChannel>>>,
     std::sync::Condvar,
@@ -2017,8 +2001,8 @@ fn channels_locked()
 /// capacity; 0 = unbounded), 8 count this worker's external waits,
 /// 9 whether the receiver is still live, 10 atomically reserve a send
 /// slot (1 on success), 11 register a send-wait, 12 unregister one,
-/// 13 monotonic now (ms), 14 register a deadline (the handle operand,
-/// absolute ms), 15 unregister one, 17 non-reserving send-room probe.
+/// 13 monotonic now (ns), 14 register a deadline (the handle operand,
+/// absolute ns), 15 unregister one, 17 non-reserving send-room probe.
 fn chan_ctl(machine: &mut Machine, handle: i64, op: i64) -> Result<i64, String> {
     let slot_index = usize::try_from(handle).ok();
     match op {
@@ -2111,11 +2095,11 @@ fn chan_ctl(machine: &mut Machine, handle: i64, op: i64) -> Result<i64, String> 
                     // for a timer IS the timeout elapsing.
                     match machine.deadlines.iter().min() {
                         Some(&earliest) => {
-                            let wait = earliest.saturating_sub(now_ms());
+                            let wait = earliest.saturating_sub(machine.io.monotonic_nanos());
                             if wait > 0 {
                                 let _guard = match channels().1.wait_timeout(
                                     guard,
-                                    std::time::Duration::from_millis(wait as u64),
+                                    std::time::Duration::from_nanos(wait as u64),
                                 ) {
                                     Ok(woken) => woken.0,
                                     Err(poisoned) => poisoned.into_inner().0,
@@ -2139,7 +2123,7 @@ fn chan_ctl(machine: &mut Machine, handle: i64, op: i64) -> Result<i64, String> 
                 // nothing can ever wake this park.
                 match machine.deadlines.iter().min() {
                     Some(&earliest) => {
-                        while now_ms() < earliest {}
+                        while machine.io.monotonic_nanos() < earliest {}
                         Ok(0)
                     }
                     None => Err(
@@ -2150,7 +2134,7 @@ fn chan_ctl(machine: &mut Machine, handle: i64, op: i64) -> Result<i64, String> 
             }
         }
         8 => Ok((machine.external.len() + machine.deadlines.len()) as i64),
-        13 => Ok(now_ms()),
+        13 => Ok(machine.io.monotonic_nanos()),
         14 => {
             machine.deadlines.push(handle);
             Ok(0)
@@ -3135,6 +3119,7 @@ fn run_io(
         }
         IoOp::Seek => machine.io.seek(int(a)?, int(b)?, int(c)?),
         IoOp::FileSize => machine.io.file_size(int(a)?),
+        IoOp::MonotonicNanos => machine.io.monotonic_nanos(),
         // Terminal for every host. `StdioIO` never comes back from
         // `process::exit`, so Core types its exit tails with an idle
         // `loop {}` (`Host.tlk`'s panic fallback, `IO.tlk`'s `_io_exit`).

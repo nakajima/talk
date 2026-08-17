@@ -312,12 +312,19 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         "a resumption-binding handler in a function with borrowed parameters",
                     );
                 }
-                if binds_resumption && sig.as_ref().is_some_and(|sig| !sig.generics.is_empty()) {
-                    // A binding perform ships exactly the payloads — no
-                    // witness blocks, so no effect generics.
+                if binds_resumption
+                    && sig.as_ref().is_some_and(|sig| {
+                        sig.generics.iter().any(|param| {
+                            matches!(param.kind, crate::types::ty::ParamKind::Type)
+                        })
+                    })
+                {
+                    // Static generics specialize the operation identity and
+                    // clause. Type generics still need trailing witness
+                    // blocks, which Suspend does not carry.
                     self.unsupported(
                         stmt.id,
-                        "a resumption-binding handler for an effect with generics",
+                        "a resumption-binding handler for an effect with type generics",
                     );
                 }
                 if binds_resumption
@@ -347,6 +354,21 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                                     .iter()
                                     .filter(|param| {
                                         matches!(param.kind, crate::types::ty::ParamKind::Type)
+                                    })
+                                    .map(|param| param.symbol)
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        static_generics: sig
+                            .as_ref()
+                            .map(|sig| {
+                                sig.generics
+                                    .iter()
+                                    .filter(|param| {
+                                        matches!(
+                                            param.kind,
+                                            crate::types::ty::ParamKind::Static(_)
+                                        )
                                     })
                                     .map(|param| param.symbol)
                                     .collect()

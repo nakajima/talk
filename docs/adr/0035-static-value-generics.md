@@ -275,6 +275,13 @@ publishes only solved, canonical arguments. The ADR 0034 backend specializes
 reachable generic bodies over both type and static assignments. Static values
 that affect field types or layout therefore produce distinct concrete layouts.
 
+Static effect operations follow the same rule. A perform's concrete static
+assignment forms part of its executable operation identity, and one source
+handler installs a monomorphized clause for each reachable operation instance.
+The backend discovers that finite set to a fixed point; it does not pass a
+symbolic static value into a universal runtime clause. Type-generic effect
+parameters remain witness-passed and do not affect operation identity.
+
 Normalized static arguments are part of nominal type identity, specialization
 keys, and any symbol or module identity that crosses a real compilation seam.
 An implementation may share machine code between layout-compatible

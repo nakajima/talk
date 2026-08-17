@@ -1,15 +1,15 @@
 // Every executable runs as a cooperative root task. Spawned tasks
-// interleave over 'pause on one worker without an explicit `run`
+// interleave over 'yield on one worker without an explicit `run`
 // wrapper, and the executable waits for the child to finish.
 
 'spawn(
 	task: func() -> () {
 		print(10)
-		'pause()
+		'yield()
 		print(12)
 	}
 )
 print(1)
-'pause()
+'yield()
 print(2)
 print(0)

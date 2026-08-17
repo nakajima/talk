@@ -94,6 +94,7 @@ pub(crate) fn mir_inline_array() -> MirSymbol {
 /// latent effect row must stay within it. Typing already guarantees a
 /// body cannot perform outside its row, so the row check IS the denial —
 /// no restricted host wrapper exists.
+#[derive(Clone, Copy)]
 pub(crate) enum Entry<'a> {
     Script,
     Named(&'a str),
@@ -951,7 +952,42 @@ pub(crate) fn build(
     check_all: bool,
     collect_debug: bool,
 ) -> Result<Program, BackendError> {
-    let mut builder = ProgramBuilder::new(programs, collect_debug);
+    // Static effect operations obey ADR 0035's ordinary monomorphization:
+    // a source handler is emitted once per concrete operation instance. A
+    // pass can discover a new instance while compiling a previously-known
+    // clause, so rebuild to the finite reachable fixed point. No symbolic
+    // static value reaches executable MIR.
+    let mut effect_specializations = FxHashMap::default();
+    for _ in 0..=INSTANTIATION_DEPTH_LIMIT {
+        let previous = effect_specializations.len();
+        let (program, discovered) = build_pass(
+            programs,
+            entry,
+            check_all,
+            collect_debug,
+            effect_specializations,
+        )?;
+        if discovered.len() == previous {
+            return Ok(program);
+        }
+        effect_specializations = discovered;
+    }
+    Err(BackendError::new(
+        format!(
+            "static effect specialization did not reach a fixed point within {INSTANTIATION_DEPTH_LIMIT} passes"
+        ),
+        Span::SYNTHESIZED,
+    ))
+}
+
+fn build_pass(
+    programs: &[ProgramInput<'_>],
+    entry: Entry,
+    check_all: bool,
+    collect_debug: bool,
+    effect_specializations: FxHashMap<EffectInstance, MirSymbol>,
+) -> Result<(Program, FxHashMap<EffectInstance, MirSymbol>), BackendError> {
+    let mut builder = ProgramBuilder::new(programs, collect_debug, effect_specializations);
     builder.index_callables();
 
     // Stored positions cannot hold borrows (CHG-04's storage face): a
@@ -1119,19 +1155,23 @@ pub(crate) fn build(
     }
     let layout_table = builder.layouts.borrow().table();
 
-    Ok(Program {
-        debug_files: builder.debug_files,
-        debug_sources: builder.debug_sources,
-        functions: builder.functions,
-        entry: entry_id,
-        global_slots: u32::try_from(builder.global_slots.len()).unwrap_or_default()
-            + u32::from(builder.result_slot.is_some()),
-        exports: builder.exports,
-        layout_table,
-        display: display_names(programs),
-        string_symbol: mir_string(),
-        storage_symbol: mir_storage(),
-    })
+    let effect_specializations = builder.effect_specializations;
+    Ok((
+        Program {
+            debug_files: builder.debug_files,
+            debug_sources: builder.debug_sources,
+            functions: builder.functions,
+            entry: entry_id,
+            global_slots: u32::try_from(builder.global_slots.len()).unwrap_or_default()
+                + u32::from(builder.result_slot.is_some()),
+            exports: builder.exports,
+            layout_table,
+            display: display_names(programs),
+            string_symbol: mir_string(),
+            storage_symbol: mir_storage(),
+        },
+        effect_specializations,
+    ))
 }
 
 /// Type and member names for result rendering: the one production point
@@ -1188,6 +1228,7 @@ fn display_names(programs: &[ProgramInput<'_>]) -> DisplayNames {
 /// types substituted for its scheme parameters (whole-program
 /// monomorphization in the MLton/TIL sense).
 type Instance = (Symbol, Vec<(Symbol, Ty)>);
+type EffectInstance = (Symbol, Vec<(Symbol, Ty)>);
 
 /// Compiler-generated value glue for existential witness tables.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -1227,6 +1268,10 @@ struct ProgramBuilder<'a> {
     global_tys: FxHashMap<u32, Ty>,
     functions: Vec<Function>,
     func_ids: FxHashMap<Instance, FuncId>,
+    /// Concrete static operation instances discovered across fixed-point
+    /// build passes. Their synthetic effect identities let ordinary handler
+    /// lookup select the matching monomorphized clause.
+    effect_specializations: FxHashMap<EffectInstance, MirSymbol>,
     /// Hidden witness parameters per instance, in append order: rigid
     /// effect-generics the instance's substitution mentions.
     instance_witnesses: FxHashMap<FuncId, Vec<Symbol>>,
@@ -1282,7 +1327,11 @@ struct ProgramBuilder<'a> {
 }
 
 impl<'a> ProgramBuilder<'a> {
-    fn new(programs: &'a [ProgramInput<'a>], collect_debug: bool) -> Self {
+    fn new(
+        programs: &'a [ProgramInput<'a>],
+        collect_debug: bool,
+        effect_specializations: FxHashMap<EffectInstance, MirSymbol>,
+    ) -> Self {
         // ADR 0053: the main program's catalog IS the compilation's one
         // fact table — typing evolved the shared table module by module,
         // and the root compile (index 0, last to typecheck) carries it
@@ -1358,6 +1407,7 @@ impl<'a> ProgramBuilder<'a> {
             global_tys: FxHashMap::default(),
             functions: Vec::new(),
             func_ids: FxHashMap::default(),
+            effect_specializations,
             instance_witnesses: FxHashMap::default(),
             writeback_widths: FxHashMap::default(),
             writeback_expectations: Vec::new(),
@@ -1735,6 +1785,45 @@ impl<'a> ProgramBuilder<'a> {
             blocks: Vec::new(),
         });
         id
+    }
+
+    /// Intern one concrete static effect operation. The compiler-owned
+    /// module namespace cannot collide with a declared source effect; the
+    /// identity is otherwise an ordinary effect key to every target.
+    fn specialize_effect(
+        &mut self,
+        effect: Symbol,
+        subst: Vec<(Symbol, Ty)>,
+        span: Span,
+    ) -> Result<MirSymbol, BackendError> {
+        let instance = (effect, subst);
+        if let Some(identity) = self.effect_specializations.get(&instance) {
+            return Ok(*identity);
+        }
+        let local = u32::try_from(self.effect_specializations.len()).map_err(|_| {
+            BackendError::new("too many static effect specializations".into(), span)
+        })?;
+        let identity = MirSymbol {
+            kind: MirSymbolKind::Effect,
+            module: u16::MAX,
+            local,
+        };
+        self.effect_specializations.insert(instance, identity);
+        Ok(identity)
+    }
+
+    /// Every concrete operation variant a source handler must install,
+    /// ordered by synthetic identity so MIR is deterministic across passes.
+    fn effect_variants(&self, effect: Symbol) -> Vec<(MirSymbol, Vec<(Symbol, Ty)>)> {
+        let mut variants: Vec<_> = self
+            .effect_specializations
+            .iter()
+            .filter_map(|((candidate, subst), identity)| {
+                (*candidate == effect).then(|| (*identity, subst.clone()))
+            })
+            .collect();
+        variants.sort_by_key(|(identity, _)| identity.local);
+        variants
     }
 
     /// Assign (or return) the function id for a callee instance, queueing
@@ -7148,6 +7237,43 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     ));
                 };
                 let effect = *effect;
+                let mut instantiation: Vec<(Symbol, Ty)> = Vec::new();
+                if let Some(recorded) = &expr.instantiation {
+                    for (param, arg_ty) in recorded {
+                        instantiation.push((*param, self.resolved(arg_ty)));
+                    }
+                }
+                // Type parameters use the universal witness ABI below;
+                // static parameters use ADR 0035 monomorphization. A rigid
+                // static assignment occurs only in check-all instances,
+                // which are replaced by traps before execution.
+                let effect_identity = if contract.static_generics.is_empty() {
+                    executable(effect)
+                } else {
+                    let mut static_subst = Vec::new();
+                    let mut concrete = true;
+                    for generic in &contract.static_generics {
+                        let solved = instantiation
+                            .iter()
+                            .find(|(param, _)| param == generic)
+                            .map(|(_, arg_ty)| arg_ty.clone())
+                            .expect(
+                                "typed facts invariant: a generic effect perform carries its checked instantiation",
+                            );
+                        concrete &= match &solved {
+                            Ty::Static(StaticValue::Int(value)) => value.terms.is_empty(),
+                            Ty::Static(StaticValue::Bool(_) | StaticValue::Case(_, _)) => true,
+                            _ => false,
+                        };
+                        static_subst.push((*generic, solved));
+                    }
+                    if concrete {
+                        self.program_builder
+                            .specialize_effect(effect, static_subst, expr.span)?
+                    } else {
+                        executable(effect)
+                    }
+                };
                 // One clause body serves every instantiation over rigid
                 // payload types: payloads travel in native layout and the
                 // perform site appends one `[drop, retain]` witness pair
@@ -7195,7 +7321,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     // and no `mut` parameters (binding clauses are
                     // checker-rejected otherwise), so the operands are
                     // exactly the payloads and there are no writebacks.
-                    let (clause, index, binds) = self.capability(effect);
+                    let (clause, index, binds) = self.capability(effect_identity);
                     let result = self.fresh_local();
                     let bind_arm = self.new_block();
                     let join = self.new_block();
@@ -7213,7 +7339,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     let suspended = self.fresh_local();
                     self.push(Inst::Suspend {
                         dest: suspended,
-                        effect: executable(effect),
+                        effect: effect_identity,
                         args: operands.clone(),
                         entry: Operand::Local(index),
                         unwind: None,
@@ -7277,12 +7403,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // Resolve each generic to this perform's concrete type
                 // from the checker's recorded instantiation — typing
                 // instantiates every generic effect perform (ADR 0038).
-                let mut instantiation: Vec<(Symbol, Ty)> = Vec::new();
-                if let Some(recorded) = &expr.instantiation {
-                    for (param, arg_ty) in recorded {
-                        instantiation.push((*param, self.resolved(arg_ty)));
-                    }
-                }
                 for generic in sig_generics {
                     // The contract's generics and the recorded
                     // instantiation keys are both checker-minted, so the
@@ -7359,7 +7479,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // extent. The clause runs outside its own handler (CHG-01):
                 // the search floor is the handler's index for the clause
                 // call's extent.
-                let (clause, index, _binds) = self.capability(effect);
+                let (clause, index, _binds) = self.capability(effect_identity);
                 let saved_floor = self.fresh_local();
                 self.push(Inst::GetFloor { dest: saved_floor });
                 self.push(Inst::SetFloor {
@@ -9600,6 +9720,24 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         body: &Block,
         contract: &crate::types::output::EffectContract,
     ) -> Result<(), BackendError> {
+        let variants = if contract.static_generics.is_empty() {
+            vec![(executable(effect), Vec::new())]
+        } else {
+            self.program_builder.effect_variants(effect)
+        };
+        for (identity, subst) in variants {
+            self.install_handler_variant(identity, &subst, body, contract)?;
+        }
+        Ok(())
+    }
+
+    fn install_handler_variant(
+        &mut self,
+        effect: MirSymbol,
+        static_subst: &[(Symbol, Ty)],
+        body: &Block,
+        contract: &crate::types::output::EffectContract,
+    ) -> Result<(), BackendError> {
         // ADR 0064/0068: a resumption-binding clause (derived from its
         // binder count, published by the checker) takes over the
         // installer's stack position and outward linkage at runtime, so
@@ -9641,6 +9779,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
         let mut fx = FunctionBuilder::new(self.program_builder, 0, self.program);
         fx.subst = self.subst.clone();
+        fx.subst.extend(static_subst.iter().cloned());
         // Clause bodies read last-use liveness like any frame: seed
         // their use counts (cell conversion stays the enclosing
         // frame's concern).
@@ -9847,7 +9986,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             env,
         });
         self.push(Inst::PushHandler {
-            effect: executable(effect),
+            effect,
             clause: Operand::Local(clause),
             cont: Operand::Local(cont),
             binds,
@@ -9862,7 +10001,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// dynamic extent. Returns the handler's clause, its stack index
     /// (the search floor for the clause call's extent), and its clause
     /// kind (ADR 0068: true when the clause binds the resumption).
-    fn capability(&mut self, effect: Symbol) -> (LocalId, LocalId, LocalId) {
+    fn capability(&mut self, effect: MirSymbol) -> (LocalId, LocalId, LocalId) {
         let clause = self.fresh_local();
         let cont = self.fresh_local();
         let index = self.fresh_local();
@@ -9872,7 +10011,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             cont,
             index,
             binds,
-            effect: executable(effect),
+            effect,
         });
         (clause, index, binds)
     }

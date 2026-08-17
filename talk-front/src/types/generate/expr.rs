@@ -1527,6 +1527,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                             .filter(|param| matches!(param.kind, crate::types::ty::ParamKind::Type))
                             .map(|param| param.symbol)
                             .collect(),
+                        static_generics: sig
+                            .generics
+                            .iter()
+                            .filter(|param| {
+                                matches!(param.kind, crate::types::ty::ParamKind::Static(_))
+                            })
+                            .map(|param| param.symbol)
+                            .collect(),
                         binds_resumption: false,
                         bindable: sig.bindable(),
                     },

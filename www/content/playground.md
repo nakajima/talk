@@ -61,16 +61,14 @@ drain(step: generate())
 A handler schedules ordinary direct-style tasks whenever they pause.
 
 ```talk playground(cooperative-tasks)
-use coop::{ run, pause, spawn }
+'spawn(task: func() -> () {
+	print("task started")
+	'pause()
+	print("task resumed")
+})
 
-run {
-	'spawn(task: func() -> () {
-		print("task started")
-		'pause()
-		print("task resumed")
-	})
-	print("main continues")
-}
+print("main continues")
+
 ```
 
 ## Cancellation runs cleanup
@@ -125,7 +123,7 @@ length(values: pair) + length(values: triple)
 Heap values provide shared identity, mutation, and cycles when value semantics are not enough.
 
 ```talk playground(cyclic-graph)
-struct Node 'heap {
+struct Node {
 	let value: Int
 	let next: Node?
 }
@@ -199,5 +197,5 @@ func spendTwice() -> Pair {
 	Pair(first: token, second: token)
 }
 
-spendTwice()
+// spendTwice()
 ```

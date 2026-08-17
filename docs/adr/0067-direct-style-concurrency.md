@@ -92,7 +92,7 @@ reserved in bare row positions).
    worker per job and joins in order. Worker entries (and the new
    `run_blocking` helper that replaces the hand-written preamble in
    corpus programs) install the ambient fallbacks — io, alloc,
-   yield_now, panic, and the park family — so a worker's channel and
+   yield, panic, and the park family — so a worker's channel and
    timer calls block its thread, as before.
 
 5. **The cut is clean.** Nothing external consumes the future surface;

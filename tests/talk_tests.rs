@@ -4695,17 +4695,17 @@ fn run_shares_captured_assignments_with_the_frame() {
 #[test]
 fn run_unhandled_ambient_performs_reach_the_host_fallback() {
     // With no user handler live, an 'ambient perform routes to the host
-    // fallback the entry wrapper installed (ADR 0039): for 'yield_now the
+    // fallback the entry wrapper installed (ADR 0039): for 'yield the
     // reference host resumes with unit.
-    assert_runs(b"'yield_now()\nprint(1)\n", &[], b"1\n");
+    assert_runs(b"'yield()\nprint(1)\n", &[], b"1\n");
 }
 
 #[test]
 fn run_user_handlers_intercept_ambient_effects() {
-    // 'yield_now is 'ambient (ADR 0039): a live user handler intercepts its
+    // 'yield is 'ambient (ADR 0039): a live user handler intercepts its
     // performs through the ordinary handler stack.
     assert_runs(
-        b"#handle 'yield_now {\n\tprint(\"yield\")\n\t'continue\n}\n'yield_now()\nprint(1)\n",
+        b"#handle 'yield {\n\tprint(\"yield\")\n\t'continue\n}\n'yield()\nprint(1)\n",
         &[],
         b"yield\n1\n",
     );
@@ -4717,7 +4717,7 @@ fn run_ambient_clause_performs_delegate_to_the_fallback() {
     // perform inside it reaches the next handler out — here the host
     // fallback, which resumes with unit.
     assert_runs(
-        b"#handle 'yield_now {\n\tprint(\"seen\")\n\t'yield_now()\n\t'continue\n}\n'yield_now()\nprint(1)\n",
+        b"#handle 'yield {\n\tprint(\"seen\")\n\t'yield()\n\t'continue\n}\n'yield()\nprint(1)\n",
         &[],
         b"seen\n1\n",
     );
@@ -4728,7 +4728,7 @@ fn run_nested_ambient_handlers_delegate_outward_to_the_fallback() {
     // inner user handler -> outer user handler -> host fallback: the
     // ordinary routing order for an ambient effect (ADR 0039 §4).
     assert_runs(
-        b"#handle 'yield_now {\n\tprint(\"outer\")\n\t'yield_now()\n\t'continue\n}\n#handle 'yield_now {\n\tprint(\"inner\")\n\t'yield_now()\n\t'continue\n}\n'yield_now()\nprint(1)\n",
+        b"#handle 'yield {\n\tprint(\"outer\")\n\t'yield()\n\t'continue\n}\n#handle 'yield {\n\tprint(\"inner\")\n\t'yield()\n\t'continue\n}\n'yield()\nprint(1)\n",
         &[],
         b"inner\nouter\n1\n",
     );
@@ -4740,7 +4740,7 @@ fn run_ambient_handlers_may_discontinue() {
     // a clause that completes without resuming aborts the handled scope
     // (with its value, which must match the scope's — unit here).
     assert_runs(
-        b"#handle 'yield_now {\n\tprint(\"abort\")\n}\n'yield_now()\nprint(99)\n",
+        b"#handle 'yield {\n\tprint(\"abort\")\n}\n'yield()\nprint(99)\n",
         &[],
         b"abort\n",
     );
@@ -4751,7 +4751,7 @@ fn run_function_values_reach_the_fallback_without_a_user_handler() {
     // An ambient effect with no nearer user handler reaches the host
     // fallback active when the function value runs.
     assert_runs(
-        b"let f = func() {\n\t'yield_now()\n\t7\n}\nprint(f())\n",
+        b"let f = func() {\n\t'yield()\n\t7\n}\nprint(f())\n",
         &[],
         b"7\n",
     );
@@ -4760,7 +4760,7 @@ fn run_function_values_reach_the_fallback_without_a_user_handler() {
 #[test]
 fn run_function_values_use_ambient_handlers_at_invocation() {
     assert_runs(
-        b"#handle 'yield_now {\n\tprint(\"captured\")\n\t'continue\n}\nlet f = func() {\n\t'yield_now()\n\t7\n}\nprint(f())\n",
+        b"#handle 'yield {\n\tprint(\"captured\")\n\t'continue\n}\nlet f = func() {\n\t'yield()\n\t7\n}\nprint(f())\n",
         &[],
         b"captured\n7\n",
     );
@@ -4769,7 +4769,7 @@ fn run_function_values_use_ambient_handlers_at_invocation() {
 #[test]
 fn run_named_entry_without_globals_reaches_the_host_fallback() {
     assert_runs(
-        b"pub func go() -> () {\n\t'yield_now()\n\tprint(7)\n}\n",
+        b"pub func go() -> () {\n\t'yield()\n\tprint(7)\n}\n",
         &["--entry", "go"],
         b"7\n",
     );
@@ -4778,7 +4778,7 @@ fn run_named_entry_without_globals_reaches_the_host_fallback() {
 #[test]
 fn run_implicit_main_without_globals_reaches_the_host_fallback() {
     assert_runs(
-        b"func main() -> () {\n\t'yield_now()\n\tprint(7)\n}\n",
+        b"func main() -> () {\n\t'yield()\n\tprint(7)\n}\n",
         &[],
         b"7\n",
     );
@@ -4790,7 +4790,7 @@ fn run_module_initialization_may_perform_ambient_effects() {
     // top-level binding's initializer can perform an ambient effect under a
     // named entry too, where lets still initialize first.
     assert_runs(
-        b"func f() -> Int {\n\t'yield_now()\n\t3\n}\nlet ready = f()\npub func go() -> () {\n\tprint(ready)\n}\n",
+        b"func f() -> Int {\n\t'yield()\n\t3\n}\nlet ready = f()\npub func go() -> () {\n\tprint(ready)\n}\n",
         &["--entry", "go"],
         b"3\n",
     );

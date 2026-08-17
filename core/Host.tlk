@@ -3,7 +3,7 @@ use package::Array::{ Array }
 use package::IO::{ IORequest, io, STDERR_FD, write_string }
 use package::Memory::{ alloc }
 use package::Operators::{ Add, Comparable, Equatable, Not }
-use package::Async::{ yield_now, park_recv, park_send, park_sleep, park_recv2, _chan_ctl, Resumption, resume }
+use package::Async::{ yield, park_recv, park_send, park_sleep, park_recv2, _chan_ctl, Resumption, resume }
 use package::String::{ String }
 
 pub effect 'panic(message: String) -> Never
@@ -41,7 +41,8 @@ pub func _io_host(request: IORequest) -> Int {
 		.realpath_len(path) -> #_ir(path) { %? = io 24 $0 0 0 },
 		.realpath_copy(path, buf) -> #_ir(path, buf) { %? = io 25 $0 $1 0 },
 		.seek(fd, offset, whence) -> #_ir(fd, offset, whence) { %? = io 26 $0 $1 $2 },
-		.file_size(fd) -> #_ir(fd) { %? = io 27 $0 0 0 }
+		.file_size(fd) -> #_ir(fd) { %? = io 27 $0 0 0 },
+		.monotonic_nanos -> #_ir { %? = io 28 0 0 0 }
 	}
 }
 
@@ -50,9 +51,9 @@ pub func _io_host(request: IORequest) -> Int {
 // another scheduler for an explicit nested scope.
 pub effect 'pause() -> ()
 
-pub typealias Task = () '[pause, spawn, park_recv, park_send, park_sleep, park_recv2, io, alloc, yield_now, panic] -> ()
+pub typealias Task = () '[pause, spawn, park_recv, park_send, park_sleep, park_recv2, io, alloc, yield, panic] -> ()
 
-typealias BlockingTask = () '[park_recv, park_send, park_sleep, park_recv2, io, alloc, yield_now, panic] -> ()
+typealias BlockingTask = () '[park_recv, park_send, park_sleep, park_recv2, io, alloc, yield, panic] -> ()
 
 pub effect 'spawn(task: Task) -> ()
 
@@ -157,7 +158,15 @@ func _drain_cooperative(consume first: TaskStep) -> () {
 			loop i < reg_kind.count {
 				let kind = reg_kind.get(i)
 				let handle = reg_handle.get(i)
-				let op = if kind == 0 { 4 } else { if kind == 1 { 11 } else { 14 } }
+				let op = if kind == 0 {
+					4
+				} else {
+					if kind == 1 {
+						11
+					} else {
+						14
+					}
+				}
 				let registered = _chan_ctl(handle: handle, op: op)
 				i = i + 1
 			}
@@ -166,7 +175,15 @@ func _drain_cooperative(consume first: TaskStep) -> () {
 			loop j < reg_kind.count {
 				let kind = reg_kind.get(j)
 				let handle = reg_handle.get(j)
-				let op = if kind == 0 { 5 } else { if kind == 1 { 12 } else { 15 } }
+				let op = if kind == 0 {
+					5
+				} else {
+					if kind == 1 {
+						12
+					} else {
+						15
+					}
+				}
 				let released = _chan_ctl(handle: handle, op: op)
 				j = j + 1
 			}
@@ -201,7 +218,7 @@ pub func _with_host(consume body: Task) -> () {
 	#handle 'alloc { allocation in
 		'continue
 	}
-	#handle 'yield_now {
+	#handle 'yield {
 		'continue
 	}
 	#handle 'panic { message in
@@ -257,7 +274,7 @@ pub func _with_blocking_host(consume body: BlockingTask) -> () {
 	#handle 'alloc { allocation in
 		'continue
 	}
-	#handle 'yield_now {
+	#handle 'yield {
 		'continue
 	}
 	#handle 'panic { message in

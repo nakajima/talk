@@ -123,7 +123,8 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         // `#handle` opens a fresh ambient row for the statements after it,
         // filtered into the previous one — the same label-scoped boundary
         // the block walkers give it inside functions.
-        let mut top_ctx = Ctx::root().with_ret_eff(top_ret.clone(), self.closed_base());
+        let top_eff = self.filtered_ambient(Vec::new(), NodeID::SYNTHESIZED);
+        let mut top_ctx = Ctx::root().with_ret_eff(top_ret.clone(), top_eff);
         let mut last = StmtValue::Unit;
         let mut top_level_handler: Option<NodeID> = None;
         for stmt in stmts {
@@ -165,17 +166,12 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         self.solve_deferred();
     }
 
-    /// The closed top-level base row: the effects the runtime handles
-    /// implicitly, and nothing else. An occurrence spilling into it is an
-    /// `UnhandledEffect` at the node where it tried to flow in.
+    /// The closed top-level base row. Runtime-provided handlers are applied
+    /// as label filters in `filtered_ambient`, so every generic occurrence
+    /// of an ambient effect is discharged rather than only one exact
+    /// instantiation. Anything reaching this empty row is unhandled.
     pub(super) fn closed_base(&self) -> EffectRow {
-        EffectRow::new(
-            self.ambient_effects
-                .iter()
-                .map(|&effect| EffectEntry::label(effect))
-                .collect(),
-            None,
-        )
+        EffectRow::new(Vec::new(), None)
     }
 
     /// The ambient row for top-level computation positioned at `pos`: a
@@ -210,7 +206,10 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         self.filtered_ambient(labels, node)
     }
 
-    fn filtered_ambient(&mut self, labels: Vec<Symbol>, node: NodeID) -> EffectRow {
+    fn filtered_ambient(&mut self, mut labels: Vec<Symbol>, node: NodeID) -> EffectRow {
+        labels.extend(self.ambient_effects.iter().copied());
+        labels.sort();
+        labels.dedup();
         let base = self.closed_base();
         if labels.is_empty() {
             return base;

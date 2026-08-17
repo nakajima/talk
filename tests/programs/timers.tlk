@@ -1,4 +1,4 @@
-// ADR 0063/0067: sleep parks directly until its deadline. Elapsed
+// ADR 0063/0067: sleep waits directly until its deadline. Elapsed
 // monotonic time proves the sleep slept; a worker that sleeps before
 // sending proves a parked receiver outwaits a slow producer. Margins
 // are wide on purpose — the pin is about order, not precision.
@@ -6,16 +6,16 @@ use task::{ channel, sleep, run_blocking, Sender }
 
 func produce_late(consume sender: Sender<Int>) -> Int {
 	run_blocking(arg: sender, body: func(consume sender: Sender<Int>) -> Int {
-		sleep(ms: 40)
+		sleep(.milliseconds(40))
 		sender.send(value: 99)
 		0
 	})
 }
 
-let start = _chan_ctl(handle: 0, op: 13)
-sleep(ms: 60)
-let elapsed = _chan_ctl(handle: 0, op: 13) - start
-let slept_full = if elapsed >= 60 { 1 } else { 0 }
+let start = Instant.now()
+sleep(.milliseconds(60))
+let elapsed = Instant.now().since(start)
+let slept_full = if elapsed >= Duration.milliseconds(60) { 1 } else { 0 }
 print(slept_full)
 
 let (sender, receiver) = channel<Int>()

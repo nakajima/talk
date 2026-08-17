@@ -6,7 +6,7 @@ Status: accepted, implemented
 
 ADR 0067 made asynchronous waiting direct-style and provided
 `coop::run(main)` for cooperative tasks. Ordinary top-level waiting already
-worked through blocking host fallbacks, but using `'spawn` or `'pause`
+worked through blocking host fallbacks, but using `'spawn` or `'yield`
 required wrapping the executable's statements in an explicit closure passed
 to `run`.
 
@@ -20,7 +20,7 @@ entry closure duplicates that boundary.
 Every executable runs its generated entry closure as the root task of a
 cooperative scheduler.
 
-The scheduler and the `'pause` and `'spawn` effects belong to core's entry
+The scheduler and the `'yield` and `'spawn` effects belong to core's entry
 surface. `_with_host` accepts the complete `Task` row, installs the host
 fallbacks, and then calls `_run_cooperative` with the generated entry closure.
 The type checker continues to derive the ambient top-level effect row from
@@ -55,7 +55,7 @@ Top-level task code no longer needs an explicit `run` wrapper:
     print("child")
 })
 
-'pause()
+'yield()
 print("main")
 ```
 

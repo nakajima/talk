@@ -71,12 +71,15 @@ pub struct IntoCoercion {
 /// The checked contract of one effect site — a perform or a handler
 /// (ADR 0038). Declared parameter types keep rigid generics as
 /// `Ty::Param`; the type-generic list fixes the hidden witness-block
-/// layout both sides must agree on. Lowering never reloads effect
+/// layout both sides must agree on, while the static-generic list keys
+/// ordinary whole-program specialization. Lowering never reloads effect
 /// signatures.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EffectContract {
     pub params: Vec<Ty>,
     pub type_generics: Vec<Symbol>,
+    #[serde(default)]
+    pub static_generics: Vec<Symbol>,
     /// ADR 0068: this `#handle` clause binds the stored resumption as a
     /// final parameter — derived from the clause's binder count, never
     /// declared. Always false on perform-site contracts.

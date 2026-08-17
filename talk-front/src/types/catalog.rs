@@ -381,12 +381,16 @@ pub struct EffectSig {
 }
 
 impl EffectSig {
-    /// ADR 0068: a resumption-binding clause is legal for this effect —
-    /// no generics (a binding perform ships exactly the payloads, no
-    /// witness blocks) and no exclusive-borrow parameters (a `mut`
-    /// payload's writeback needs the tail resume).
+    /// ADR 0068: a resumption-binding clause is legal when the perform
+    /// ships exactly the payloads: static generics are monomorphized into
+    /// the operation identity, while type generics would require trailing
+    /// witness blocks. Exclusive-borrow payloads still need tail-resumptive
+    /// writeback and therefore remain non-bindable.
     pub fn bindable(&self) -> bool {
-        self.generics.is_empty()
+        !self
+            .generics
+            .iter()
+            .any(|param| matches!(param.kind, crate::types::ty::ParamKind::Type))
             && !self
                 .params
                 .iter()

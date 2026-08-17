@@ -105,6 +105,11 @@ pub trait IO {
     /// negative errno.
     fn file_size(&mut self, fd: i64) -> i64;
 
+    /// Monotonic nanoseconds from an arbitrary per-process anchor (the
+    /// clock behind stdlib time's `Instant.now()`): deltas between two
+    /// reads are meaningful, the absolute value is not.
+    fn monotonic_nanos(&mut self) -> i64;
+
     /// Terminate the process with `code`; test IO returns the code.
     fn exit(&mut self, code: i64) -> i64;
 }
@@ -214,6 +219,26 @@ impl StdioIO {
 #[cfg(unix)]
 fn errno() -> i64 {
     -(std::io::Error::last_os_error().raw_os_error().unwrap_or(5) as i64)
+}
+
+/// Monotonic nanoseconds from an arbitrary per-process anchor: a
+/// process-local `Instant`, as the interpreter's millisecond deadline
+/// clock is (ADR 0063), but anchored independently of it. Only deltas
+/// between two reads of this clock are meaningful.
+fn monotonic_nanos() -> i64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        let start = START.get_or_init(std::time::Instant::now);
+        i64::try_from(start.elapsed().as_nanos()).unwrap_or(i64::MAX)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        // The wasm clock (ADR 0063): Date.now through the JS host, at
+        // millisecond resolution, scaled to nanoseconds. Epoch-based
+        // rather than process-anchored; still only deltas are meaningful.
+        (js_sys::Date::now() * 1_000_000.0) as i64
+    }
 }
 
 impl IO for StdioIO {
@@ -611,6 +636,10 @@ impl IO for StdioIO {
         }
     }
 
+    fn monotonic_nanos(&mut self) -> i64 {
+        monotonic_nanos()
+    }
+
     fn exit(&mut self, code: i64) -> i64 {
         std::process::exit(code as i32)
     }
@@ -638,6 +667,9 @@ pub struct CaptureIO {
     files: HashMap<i64, Vec<u8>>,
     cursors: HashMap<i64, usize>,
     next_fd: i64,
+    /// The simulated clock: ticks one millisecond per read, so tests
+    /// see a strictly increasing clock without sleeping for real.
+    now_nanos: i64,
 }
 
 impl CaptureIO {
@@ -827,6 +859,11 @@ impl IO for CaptureIO {
             Some(buffer) => buffer.len() as i64,
             None => EBADF,
         }
+    }
+
+    fn monotonic_nanos(&mut self) -> i64 {
+        self.now_nanos += 1_000_000;
+        self.now_nanos
     }
 
     fn exit(&mut self, code: i64) -> i64 {

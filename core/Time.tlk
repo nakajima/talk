@@ -1,0 +1,197 @@
+// no-core
+use package::IO::{ _io_monotonic_nanos }
+use package::Operators::{ Add, Comparable, Divide, Equatable, Multiply, Negatable, Subtract }
+use package::Showable::{ Showable }
+use package::String::{ String }
+
+// Monotonic time, no calendars: Instant reads the host's monotonic clock
+// and Duration is a signed nanosecond count. Wall-clock dates do not
+// belong to these types.
+
+pub struct Duration {
+	let nanos: Int
+
+	pub static func nanoseconds(_ count: Int) -> Duration {
+		Duration(nanos: count)
+	}
+
+	pub static func microseconds(_ count: Int) -> Duration {
+		Duration(nanos: count * 1000)
+	}
+
+	pub static func milliseconds(_ count: Int) -> Duration {
+		Duration(nanos: count * 1000000)
+	}
+
+	pub static func seconds(_ count: Int) -> Duration {
+		Duration(nanos: count * 1000000000)
+	}
+
+	pub static func minutes(_ count: Int) -> Duration {
+		Duration(nanos: count * 60000000000)
+	}
+
+	pub static func hours(_ count: Int) -> Duration {
+		Duration(nanos: count * 3600000000000)
+	}
+
+	pub static func days(_ count: Int) -> Duration {
+		Duration(nanos: count * 86400000000000)
+	}
+
+	pub static func weeks(_ count: Int) -> Duration {
+		Duration(nanos: count * 604800000000000)
+	}
+}
+
+extend Duration {
+	pub func as_nanoseconds() -> Int {
+		self.nanos
+	}
+
+	pub func as_microseconds() -> Int {
+		self.nanos / 1000
+	}
+
+	pub func as_milliseconds() -> Int {
+		self.nanos / 1000000
+	}
+
+	pub func as_seconds() -> Int {
+		self.nanos / 1000000000
+	}
+}
+
+extend Duration: Add<Duration> {
+	pub func add(_ rhs: Duration) -> Duration {
+		Duration(nanos: self.nanos + rhs.nanos)
+	}
+}
+
+extend Duration: Subtract<Duration> {
+	pub func minus(_ rhs: Duration) -> Duration {
+		Duration(nanos: self.nanos - rhs.nanos)
+	}
+}
+
+extend Duration: Multiply<Int> {
+	pub func multiply(_ rhs: Int) -> Duration {
+		Duration(nanos: self.nanos * rhs)
+	}
+}
+
+extend Duration: Divide<Int> {
+	pub func divide(_ rhs: Int) -> Duration {
+		Duration(nanos: self.nanos / rhs)
+	}
+}
+
+extend Duration: Divide<Duration> {
+	pub func divide(_ rhs: Duration) -> Int {
+		self.nanos / rhs.nanos
+	}
+}
+
+extend Duration: Negatable {
+	pub func negated() -> Duration {
+		Duration(nanos: 0 - self.nanos)
+	}
+}
+
+extend Duration: Equatable<Duration> {
+	pub func equals(_ rhs: Duration) -> Bool {
+		self.nanos == rhs.nanos
+	}
+}
+
+extend Duration: Comparable<Duration> {
+	pub func gt(_ rhs: Duration) -> Bool {
+		self.nanos > rhs.nanos
+	}
+}
+
+func _zeroes(count: Int) -> String {
+	let result = ""
+	let i = 0
+	loop i < count {
+		result = result + "0"
+		i = i + 1
+	}
+	result
+}
+
+extend Duration: Showable {
+	pub func show() -> String {
+		let nanos = self.nanos
+		let sign = ""
+		if nanos < 0 {
+			sign = "-"
+			nanos = 0 - nanos
+		}
+
+		let hours = nanos / 3600000000000
+		let minutes = nanos / 60000000000 - hours * 60
+		let seconds = nanos / 1000000000 - hours * 3600 - minutes * 60
+		let fraction = nanos - (hours * 3600 + minutes * 60 + seconds) * 1000000000
+
+		let minutes_text = minutes.show()
+		if minutes < 10 { minutes_text = "0" + minutes_text }
+		let seconds_text = seconds.show()
+		if seconds < 10 { seconds_text = "0" + seconds_text }
+
+		let text = sign + hours.show() + ":" + minutes_text + ":" + seconds_text
+		if fraction > 0 {
+			let width = 9
+			loop fraction - fraction / 10 * 10 == 0 {
+				fraction = fraction / 10
+				width = width - 1
+			}
+			let digits = fraction.show()
+			text = text + "." + _zeroes(count: width - digits.count()) + digits
+		}
+		text
+	}
+}
+
+pub struct Instant {
+	let nanos: Int
+
+	pub static func now() -> Instant {
+		#unsafe {
+			Instant(nanos: _io_monotonic_nanos())
+		}
+	}
+}
+
+extend Instant {
+	pub func adding(_ duration: Duration) -> Instant {
+		Instant(nanos: self.nanos + duration.nanos)
+	}
+
+	pub func since(_ earlier: Instant) -> Duration {
+		Duration(nanos: self.nanos - earlier.nanos)
+	}
+
+	// Runtime deadline registration uses the same monotonic clock.
+	pub func _nanoseconds() -> Int {
+		self.nanos
+	}
+}
+
+extend Instant: Equatable<Instant> {
+	pub func equals(_ rhs: Instant) -> Bool {
+		self.nanos == rhs.nanos
+	}
+}
+
+extend Instant: Comparable<Instant> {
+	pub func gt(_ rhs: Instant) -> Bool {
+		self.nanos > rhs.nanos
+	}
+}
+
+extend Instant: Showable {
+	pub func show() -> String {
+		"Instant(nanos: " + self.nanos.show() + ")"
+	}
+}

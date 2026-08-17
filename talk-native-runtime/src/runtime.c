@@ -1824,21 +1824,21 @@ static _Thread_local int64_t *talk_external_handles;
 static _Thread_local unsigned char *talk_external_sends;
 static _Thread_local size_t talk_external_waits;
 static _Thread_local size_t talk_external_capacity;
-/* Absolute monotonic-ms deadlines this thread's sleeping futures
+/* Absolute monotonic-ns deadlines this thread's sleeping futures
  * registered (ADR 0063): each is a reason to park, and the park waits
  * only until the earliest of them. */
 static _Thread_local int64_t *talk_deadlines;
 static _Thread_local size_t talk_deadline_count;
 static _Thread_local size_t talk_deadline_capacity;
 
-/* Monotonic milliseconds from an arbitrary per-process anchor
+/* Monotonic nanoseconds from an arbitrary per-process anchor
  * (ADR 0063). Wall-clock time is host-effect territory; deadlines only
  * care about deltas. */
-static int64_t talk_now_ms(void) {
+static int64_t talk_now_ns(void) {
 #if defined(TALK_HAS_POSIX_IO)
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+    return (int64_t)now.tv_sec * 1000000000 + (int64_t)now.tv_nsec;
 #else
     talk_trap("monotonic clock unavailable on this host");
     return 0;
@@ -1971,7 +1971,7 @@ static int64_t talk_chan_ctl(TalkValue handle, TalkValue op) {
     case 8:
         return (int64_t)(talk_external_waits + talk_deadline_count);
     case 13:
-        return talk_now_ms();
+        return talk_now_ns();
     case 14:
         if (talk_deadline_count == talk_deadline_capacity) {
             size_t grown = talk_deadline_capacity == 0 ? 4 : talk_deadline_capacity * 2;
@@ -2067,7 +2067,7 @@ static int64_t talk_chan_ctl(TalkValue handle, TalkValue op) {
                 deadline_set = 1;
             }
         }
-        if (deadline_set && talk_now_ms() >= earliest) {
+        if (deadline_set && talk_now_ns() >= earliest) {
             /* The earliest deadline already passed: the timed wake. */
             ready = 1;
         }
@@ -2080,12 +2080,12 @@ static int64_t talk_chan_ctl(TalkValue handle, TalkValue op) {
             if (deadline_set) {
                 /* A registered deadline bounds the sleep: wake at the
                  * earliest of it and any broadcast. */
-                int64_t wait = earliest - talk_now_ms();
+                int64_t wait = earliest - talk_now_ns();
                 if (wait > 0) {
                     struct timespec until;
                     clock_gettime(CLOCK_REALTIME, &until);
-                    until.tv_sec += wait / 1000;
-                    until.tv_nsec += (long)(wait % 1000) * 1000000;
+                    until.tv_sec += wait / 1000000000;
+                    until.tv_nsec += (long)(wait % 1000000000);
                     if (until.tv_nsec >= 1000000000L) {
                         until.tv_sec += 1;
                         until.tv_nsec -= 1000000000L;
@@ -2562,7 +2562,8 @@ enum {
     TALK_IO_REALPATH_LEN = 24,
     TALK_IO_REALPATH_COPY = 25,
     TALK_IO_SEEK = 26,
-    TALK_IO_FILE_SIZE = 27
+    TALK_IO_FILE_SIZE = 27,
+    TALK_IO_MONOTONIC_NANOS = 28
 };
 
 /* Negated errno, as every operation returns (core/IO.tlk's constants). */
@@ -2921,6 +2922,10 @@ static int64_t talk_io(uint8_t op, TalkValue a, TalkValue b, TalkValue c) {
             return talk_errno();
         }
         return (int64_t)info.st_size;
+    }
+    case TALK_IO_MONOTONIC_NANOS: {
+        /* The clock behind core `Instant.now` and runtime deadlines. */
+        return talk_now_ns();
     }
 #endif
     default:

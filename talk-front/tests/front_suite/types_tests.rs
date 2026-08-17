@@ -2703,9 +2703,11 @@ pub mod tests {
             .member_resolutions
             .values()
             .filter_map(|resolution| match resolution {
-                talk_front::types::output::MemberResolution::ViaConformance { row, witness, .. } => {
-                    Some((*row, *witness))
-                }
+                talk_front::types::output::MemberResolution::ViaConformance {
+                    row,
+                    witness,
+                    ..
+                } => Some((*row, *witness)),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -4284,7 +4286,10 @@ pub mod tests {
                 DeclKind::Struct { body, .. } => {
                     for member in &body.decls {
                         if let DeclKind::Method { func, .. } = &member.kind {
-                            assert_eq!(func.receiver, talk_front::node_kinds::decl::ReceiverMode::Ref);
+                            assert_eq!(
+                                func.receiver,
+                                talk_front::node_kinds::decl::ReceiverMode::Ref
+                            );
                             saw_method = true;
                         }
                     }
@@ -4497,7 +4502,8 @@ pub mod tests {
             .iter()
             .find_map(|(symbol, name)| (name == "impossible").then_some(*symbol))
             .expect("impossible symbol");
-        let _names = talk_front::name_resolution::symbol::set_symbol_names(types.display_names.clone());
+        let _names =
+            talk_front::name_resolution::symbol::set_symbol_names(types.display_names.clone());
         assert_eq!(types.schemes[&impossible].render(), "() 'panic -> Int");
     }
 
@@ -5516,9 +5522,7 @@ pub mod tests {
         );
         let errors = type_errors(&typed);
         assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("infinite type")),
+            errors.iter().any(|error| error.contains("infinite type")),
             "{errors:?}"
         );
         assert!(
@@ -5941,11 +5945,11 @@ mod with_core {
     fn host_effects_admit_handlers() {
         // Every host-list effect routes through the ordinary handler
         // stack (ADR 0039): user handlers may intercept 'io, 'alloc, and
-        // 'yield_now alike; unhandled performs reach the host fallback.
+        // 'yield alike; unhandled performs reach the host fallback.
         for source in [
             "#handle 'io { request in\n\t'continue 0\n}\n1",
             "#handle 'alloc { allocation in\n\t'continue\n}\n1",
-            "#handle 'yield_now {\n\t'continue\n}\n'yield_now()\n1",
+            "#handle 'yield {\n\t'continue\n}\n'yield()\n1",
         ] {
             let t = check_with_core(Source::from(source));
             let errors = type_errors(&t);
@@ -5993,8 +5997,8 @@ mod with_core {
         // module constructs and reads with per-construction rows, and the
         // stored effect still demands a handler — nothing is laundered by
         // the module boundary.
-        use talk_front::front::module::{ModuleEnvironment, ModuleId};
         use std::rc::Rc;
+        use talk_front::front::module::{ModuleEnvironment, ModuleId};
 
         let id_a = ModuleId::External(0);
         let module_a = compile_library(
@@ -6047,8 +6051,8 @@ mod with_core {
         // without importing each other; a consumer importing both must get
         // an ambiguity diagnostic at the use site, never import-order
         // dispatch.
-        use talk_front::front::module::{ModuleEnvironment, ModuleId};
         use std::rc::Rc;
+        use talk_front::front::module::{ModuleEnvironment, ModuleId};
 
         let (id_s, id_a, id_b) = (
             ModuleId::External(0),
@@ -6121,8 +6125,8 @@ mod with_core {
         // Compile module A, import it into module B as an external module:
         // A's schemes and catalog must arrive with symbols remapped to B's
         // view of A (milestone 6).
-        use talk_front::front::module::{ModuleEnvironment, ModuleId};
         use std::rc::Rc;
+        use talk_front::front::module::{ModuleEnvironment, ModuleId};
 
         let id_a = ModuleId::External(0);
         let module_a = compile_library(
@@ -6183,8 +6187,8 @@ mod with_core {
 
     #[test]
     fn associated_type_equalities_complete_conformance_rows_across_modules() {
-        use talk_front::front::module::{ModuleEnvironment, ModuleId};
         use std::rc::Rc;
+        use talk_front::front::module::{ModuleEnvironment, ModuleId};
 
         let id_a = ModuleId::External(0);
         let module_a = compile_library(
@@ -6230,8 +6234,8 @@ mod with_core {
 
     #[test]
     fn public_type_aliases_cross_module_boundary() {
-        use talk_front::front::module::{ModuleEnvironment, ModuleId};
         use std::rc::Rc;
+        use talk_front::front::module::{ModuleEnvironment, ModuleId};
 
         let id_a = ModuleId::External(0);
         let module_a = compile_library(
@@ -6425,7 +6429,10 @@ mod with_core {
                     .get(node)
                     .is_some_and(|pairs| {
                         pairs.iter().any(|(symbol, _)| {
-                            matches!(symbol, talk_front::name_resolution::symbol::Symbol::Protocol(_))
+                            matches!(
+                                symbol,
+                                talk_front::name_resolution::symbol::Symbol::Protocol(_)
+                            )
                         })
                     })
             });
@@ -6894,7 +6901,9 @@ mod with_core {
         ));
         let errors = type_errors(&t);
         assert!(
-            errors.iter().any(|e| e.contains("heap") || e.contains("Send")),
+            errors
+                .iter()
+                .any(|e| e.contains("heap") || e.contains("Send")),
             "expected a 'heap/Send conflict error, got {errors:?}"
         );
     }
@@ -7609,7 +7618,10 @@ struct B { let a: A }",
                 .iter()
                 .find_map(|(symbol, name)| (name == wanted).then_some(*symbol))
                 .unwrap_or_else(|| panic!("{wanted} symbol"));
-            assert_eq!(catalog.heap_origin(symbol), Some(HeapOrigin::RecursiveLayout));
+            assert_eq!(
+                catalog.heap_origin(symbol),
+                Some(HeapOrigin::RecursiveLayout)
+            );
         }
     }
 
@@ -7894,8 +7906,8 @@ func width<static N: Int>() -> Int { N }",
 
     #[test]
     fn static_generics_cross_module_boundary() {
-        use talk_front::front::module::{ModuleEnvironment, ModuleId};
         use std::rc::Rc;
+        use talk_front::front::module::{ModuleEnvironment, ModuleId};
 
         let id_a = ModuleId::External(0);
         let module_a = super::tests::compile_library(
@@ -9426,9 +9438,9 @@ mod nested_types {
         // full callable names coexist in the export table; the importer
         // gets the whole overload set.
         use super::tests::compile_library;
+        use std::rc::Rc;
         use talk::compiling::driver::{Driver, Source};
         use talk_front::front::module::{ModuleEnvironment, ModuleId};
-        use std::rc::Rc;
 
         let id_a = ModuleId::External(0);
         let module_a = compile_library(
@@ -9474,9 +9486,9 @@ mod nested_types {
     #[test]
     fn imported_bare_overload_references_are_ambiguous() {
         use super::tests::compile_library;
+        use std::rc::Rc;
         use talk::compiling::driver::{Driver, Source};
         use talk_front::front::module::{ModuleEnvironment, ModuleId};
-        use std::rc::Rc;
 
         let id_a = ModuleId::External(0);
         let module_a = compile_library(
@@ -9537,9 +9549,9 @@ mod nested_types {
         // ADR 0041: imported contracts merge alongside imported schemes,
         // surviving module serialization.
         use super::tests::compile_library;
+        use std::rc::Rc;
         use talk::compiling::driver::{Driver, Source};
         use talk_front::front::module::{ModuleEnvironment, ModuleId};
-        use std::rc::Rc;
 
         let id_a = ModuleId::External(0);
         let module_a = compile_library(
@@ -9736,9 +9748,9 @@ mod rank_n_field_tests {
 #[cfg(test)]
 mod declared_struct_field_tests {
     use super::tests::{check, compile_library, type_errors};
+    use std::rc::Rc;
     use talk::compiling::driver::{Driver, DriverConfig, Source};
     use talk_front::front::module::{ModuleEnvironment, ModuleId};
-    use std::rc::Rc;
 
     /// Declared polymorphic struct fields: the field's quantified type
     /// is a first-class scheme in the catalog; construction checks the

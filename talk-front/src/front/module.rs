@@ -27,6 +27,7 @@ pub const CORE_SOURCE_NAMES: &[&str] = &[
     "Async.tlk",
     "IO.tlk",
     "Showable.tlk",
+    "Time.tlk",
     "Range.tlk",
     "Host.tlk",
     "StringBuilder.tlk",

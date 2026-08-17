@@ -3,7 +3,8 @@
 // checks its source, acts when ready, and performs a park effect when
 // not — under core's blocking fallbacks (Host.tlk) a park blocks this
 // worker; under a cooperative scheduler (stdlib `coop`), whose clauses
-// bind the resumption (ADR 0068), it suspends the task. The channel endpoint types keep their ADR 0060 lifecycle
+// bind the resumption (ADR 0068), it suspends the task. The channel endpoint
+// types keep their ADR 0060 lifecycle
 // guards; the runtime layers (queues, reservation, registration,
 // park/wake, deadlines — ADRs 0059/0062/0063) are unchanged.
 
@@ -13,14 +14,17 @@
 // spawned worker's closure must carry a pure row to cross the
 // boundary, and a closure cannot capture owned values, so state
 // arrives as an argument.
-pub func run_blocking<A, T>(consume arg: A, consume body: (consume A) '[io, alloc, yield_now, panic, park_recv, park_send, park_sleep, park_recv2] -> T) -> T {
+pub func run_blocking<A, T>(
+	consume arg: A,
+	consume body: (consume A) '[io, alloc, yield, panic, park_recv, park_send, park_sleep, park_recv2] -> T
+) -> T {
 	#handle 'io { request in
 		'continue _io_host(request: request)
 	}
 	#handle 'alloc { allocation in
 		'continue
 	}
-	#handle 'yield_now {
+	#handle 'yield {
 		'continue
 	}
 	#handle 'panic { message in
@@ -106,9 +110,10 @@ pub struct Sender<T> {
 		// The runtime queue is untyped, so only Talk code can release a
 		// value nobody will ever take: a send to a dead receiver drops
 		// the value here instead of enqueueing it.
-		if _chan_ctl(handle: self.handle, op: 9) == 1 {
-			_chan_send(handle: self.handle, value: value)
-		}
+		if _chan_ctl(handle: self.handle, op: 9) == 1 { _chan_send(
+			handle: self.handle,
+			value: value
+		) }
 	}
 }
 
@@ -125,9 +130,7 @@ extend<T> Sender<T> {
 
 extend<T> Sender<T>: Deinit {
 	consuming func deinit() -> Void {
-		if self.guard.is_last() {
-			let ignored = _chan_ctl(handle: self.handle, op: 2)
-		}
+		if self.guard.is_last() { let ignored = _chan_ctl(handle: self.handle, op: 2) }
 	}
 }
 
@@ -141,12 +144,8 @@ pub struct Receiver<T> {
 	pub func recv() -> T? {
 		loop {
 			let status = _chan_ctl(handle: self.handle, op: 0)
-			if status == 0 {
-				return Optional.some(_chan_take<T>(handle: self.handle))
-			}
-			if status == 2 {
-				return Optional.none
-			}
+			if status == 0 { return Optional.some(_chan_take<T>(handle: self.handle)) }
+			if status == 2 { return Optional.none }
 			'park_recv(handle: self.handle)
 		}
 	}
@@ -173,10 +172,8 @@ extend<T> Receiver<T>: Deinit {
 
 pub func channel<T>() -> (Sender<T>, Receiver<T>) where T: Send {
 	let handle = _chan_ctl(handle: 0, op: 7)
-	(
-		Sender(handle: handle, guard: _drop_token()),
-		Receiver(handle: handle, guard: _drop_token())
-	)
+	(Sender(handle: handle, guard: _drop_token()),
+	Receiver(handle: handle, guard: _drop_token()))
 }
 
 // === Bounded channels (ADR 0062/0067) =================================
@@ -192,9 +189,7 @@ pub struct BoundedSender<T> {
 
 	pub func send(consume value: T) -> Bool {
 		loop {
-			if _chan_ctl(handle: self.handle, op: 9) == 0 {
-				return false
-			}
+			if _chan_ctl(handle: self.handle, op: 9) == 0 { return false }
 			if _chan_ctl(handle: self.handle, op: 10) == 1 {
 				_chan_send(handle: self.handle, value: value)
 				return true
@@ -213,19 +208,19 @@ extend<T> BoundedSender<T> {
 
 extend<T> BoundedSender<T>: Deinit {
 	consuming func deinit() -> Void {
-		if self.guard.is_last() {
-			let ignored = _chan_ctl(handle: self.handle, op: 2)
-		}
+		if self.guard.is_last() { let ignored = _chan_ctl(handle: self.handle, op: 2) }
 	}
 }
 
 pub func channel_bounded<T>(capacity: Int) -> (BoundedSender<T>, Receiver<T>) where T: Send {
-	let bound = if capacity < 1 { 1 } else { capacity }
+	let bound = if capacity < 1 {
+		1
+	} else {
+		capacity
+	}
 	let handle = _chan_ctl(handle: bound, op: 7)
-	(
-		BoundedSender(handle: handle, guard: _drop_token()),
-		Receiver(handle: handle, guard: _drop_token())
-	)
+	(BoundedSender(handle: handle, guard: _drop_token()),
+	Receiver(handle: handle, guard: _drop_token()))
 }
 
 // === Timers (ADR 0063/0067) ===========================================
@@ -233,9 +228,9 @@ pub func channel_bounded<T>(capacity: Int) -> (BoundedSender<T>, Receiver<T>) wh
 // Sleep at least `ms` of monotonic time, parking until the deadline.
 pub func sleep(ms: Int) -> () {
 	let deadline = _chan_ctl(handle: 0, op: 13) + ms
-	loop _chan_ctl(handle: 0, op: 13) < deadline {
-		'park_sleep(deadline_ms: deadline)
-	}
+	loop _chan_ctl(handle: 0, op: 13) < deadline { 'park_sleep(
+		deadline_ms: deadline
+	) }
 }
 
 // === select (ADR 0061/0067) ===========================================
@@ -250,12 +245,8 @@ pub enum Either<L, R> {
 // side's value stays queued for a later receive.
 pub func select_recv<T, U>(a: &Receiver<T>, b: &Receiver<U>) -> Either<T?, U?> {
 	loop {
-		if _chan_ctl(handle: a.handle, op: 0) != 1 {
-			return Either.left(a.recv())
-		}
-		if _chan_ctl(handle: b.handle, op: 0) != 1 {
-			return Either.right(b.recv())
-		}
+		if _chan_ctl(handle: a.handle, op: 0) != 1 { return Either.left(a.recv()) }
+		if _chan_ctl(handle: b.handle, op: 0) != 1 { return Either.right(b.recv()) }
 		'park_recv2(a: a.handle, b: b.handle)
 	}
 }

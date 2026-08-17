@@ -547,13 +547,14 @@ pub enum IoOp {
     RealpathCopy,
     Seek,
     FileSize,
+    MonotonicNanos,
 }
 
 impl IoOp {
     /// Every operation, in declaration order. This order is the wire
     /// format: core's `IORequest` variant order, the bytecode encoding,
     /// and the runtime operation table all index into it.
-    pub const ALL: [IoOp; 28] = [
+    pub const ALL: [IoOp; 29] = [
         IoOp::Read,
         IoOp::Write,
         IoOp::Open,
@@ -582,6 +583,7 @@ impl IoOp {
         IoOp::RealpathCopy,
         IoOp::Seek,
         IoOp::FileSize,
+        IoOp::MonotonicNanos,
     ];
 
     pub fn from_index(index: u8) -> Option<IoOp> {

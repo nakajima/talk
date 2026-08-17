@@ -1379,13 +1379,46 @@ impl NameResolver {
         Some(Name::Resolved(symbol, text))
     }
 
-    /// The intrinsic effect is reserved independently of ordinary value
-    /// shadowing, so a local named `unsafe` cannot change effect syntax.
+    fn lookup_effect_in_scope(&mut self, name: &str, scope_id: NodeID) -> Option<Symbol> {
+        if name.contains("::") {
+            return self
+                .lookup_qualified_set(name, scope_id)
+                .ok()
+                .and_then(|(set, _)| {
+                    set.into_iter()
+                        .find(|symbol| SymbolKind::of(symbol) == Some(SymbolKind::Effect))
+                });
+        }
+        let (found, parent) = {
+            let scope = self.scopes.get(&scope_id)?;
+            let found = scope
+                .types
+                .get(name)
+                .into_iter()
+                .chain(scope.values.get(name))
+                .copied()
+                .find(|symbol| SymbolKind::of(symbol) == Some(SymbolKind::Effect));
+            (found, scope.parent_id.filter(|parent| *parent != scope_id))
+        };
+        found.or_else(|| parent.and_then(|parent| self.lookup_effect_in_scope(name, parent)))
+    }
+
+    /// Ticked syntax has its own namespace: a method or local named `recv`
+    /// cannot hide the ambient `'recv` effect. The intrinsic `unsafe`
+    /// effect remains reserved independently of every source declaration.
     fn lookup_effect(&mut self, name: &Name) -> Option<Name> {
-        if name.name_str() == "unsafe" {
+        let text = name.name_str();
+        if text == "unsafe" {
             return Some(Name::Resolved(Symbol::Unsafe, "unsafe".into()));
         }
-        self.lookup(name)
+        let symbol = match name.syntax_context() {
+            None => self.lookup_effect_in_scope(&text, self.current_scope_id?),
+            Some(_) => self.lookup(name).and_then(|resolved| {
+                let symbol = resolved.symbol().ok()?;
+                (SymbolKind::of(&symbol) == Some(SymbolKind::Effect)).then_some(symbol)
+            }),
+        }?;
+        Some(Name::Resolved(symbol, text))
     }
 
     pub(super) fn diagnostic(&mut self, id: NodeID, err: NameResolverError) {

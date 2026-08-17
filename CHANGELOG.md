@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased (2026-08-15) — Monotonic time in the stdlib
+
+### Added
+
+- **`time` module: `Duration` and `Instant`.** `Duration` is a signed
+  nanosecond count with unit constructors (`nanoseconds` through `weeks`),
+  arithmetic, scaling, duration ratios, comparisons, and `h:mm:ss`
+  formatting that trims trailing fractional zeros and runs hours past 24.
+  `Instant` reads the host's monotonic clock: `now` returns nanoseconds
+  from an arbitrary per-process anchor, and only `since`/`adding` deltas
+  are meaningful — nothing here knows about wall-clock dates.
+- **IO operation 28, `monotonic_nanos`.** Core's `IORequest` gains a
+  `monotonic_nanos` case, appended after `file_size` so every pre-existing
+  request keeps its slot in the runtime's operation table. The VM serves
+  it from a process-local `Instant` (from `Date.now` on wasm, per ADR
+  0063), the native runtime from `clock_gettime(CLOCK_MONOTONIC)`, and the
+  test harness's simulated IO ticks one millisecond per read so tests see
+  a strictly increasing clock without sleeping for real.
+
 ## Unreleased (2026-07-11) — Language, core, lexer, and package hardening
 
 This release addresses the compiler and core-library gaps found while porting

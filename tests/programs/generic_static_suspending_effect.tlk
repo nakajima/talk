@@ -1,0 +1,21 @@
+effect 'size<static N: Int>(values: [Int; N]) -> Int
+
+func measure<static N: Int>(consume values: [Int; N]) 'size -> Int {
+	'size(values: values)
+}
+
+func run() -> Int {
+	#handle 'size { values, k in
+		let result = match values.get(values.count() - 1) {
+			.some(last) -> last,
+			.none -> 0
+		}
+		resume(k: k, value: result)
+	}
+	let one = measure(values: [10])
+	let two = measure(values: [20, 21])
+	let three = measure(values: [30, 31, 32])
+	one + two + three
+}
+
+print(run())

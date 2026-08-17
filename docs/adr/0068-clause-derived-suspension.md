@@ -121,16 +121,18 @@ exactly the clauses that use it today.
 
 5. **The ADR 0064 phase-1 restrictions relocate to the classification
    site — and all of them turn out clause-local.** A resumption-binding
-   clause is rejected for an effect with generics or with `mut`
+   clause is rejected for an effect with type generics or with `mut`
    parameters, and the borrowed-installer-params rejection already
-   lives at the clause. No whole-program consistency check is needed:
-   `mut`-ness is a declaration fact (a call-site `mut` marker demands
-   an exclusive-borrow parameter, and effect parameters lower their
-   declared modes into the signature), so "bindable" is derivable from
-   the `EffectSig` alone and perform lowering reads it off the
-   published contract — non-bindable effects (generics, `mut`
-   parameters) keep the call protocol statically, which is also why
-   the branch arms never carry witness blocks or writebacks.
+   lives at the clause. Static generics are the exception established by
+   ADR 0035: the operation identity and clause are monomorphized, so no
+   static evidence crosses the suspension boundary. No whole-program
+   consistency check is needed: `mut`-ness is a declaration fact (a
+   call-site `mut` marker demands an exclusive-borrow parameter, and
+   effect parameters lower their declared modes into the signature), so
+   "bindable" is derivable from the `EffectSig` alone and perform lowering
+   reads it off the published contract — non-bindable effects (type
+   generics, `mut` parameters) keep the call protocol statically, which is
+   also why the branch arms never carry witness blocks or writebacks.
 
 6. **The Host trampoline dissolves.** The blocking park fallbacks in
    `core/Host.tlk` become three-line `'continue` clauses
@@ -178,8 +180,8 @@ exactly the clauses that use it today.
    one perform site behave per their clause, VM and C.
 4. Diagnostics: an unconsumed final binder is a linearity error;
    `'continue` inside a resumption-binding clause keeps its dedicated
-   diagnostic; a resumption-binding clause for a generic effect and a
-   `mut`-argument perform of a bound-handled effect reject with the
+   diagnostic; a resumption-binding clause for a type-generic effect and
+   a `mut`-argument perform of a bound-handled effect reject with the
    relocated messages.
 
 ## Relationship to existing decisions

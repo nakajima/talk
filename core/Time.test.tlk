@@ -1,0 +1,85 @@
+test "duration constructors count nanoseconds" {
+	@assert(Duration.microseconds(1) == Duration.nanoseconds(1000))
+	@assert(Duration.milliseconds(1) == Duration.microseconds(1000))
+	@assert(Duration.seconds(1) == Duration.milliseconds(1000))
+	@assert(Duration.minutes(1) == Duration.seconds(60))
+	@assert(Duration.hours(1) == Duration.minutes(60))
+	@assert(Duration.days(1) == Duration.hours(24))
+	@assert(Duration.weeks(1) == Duration.days(7))
+}
+
+test "duration arithmetic and scaling" {
+	let week: Duration = .weeks(1)
+	@assert(week + .days(1) == .days(8))
+	@assert(week - .days(1) == .days(6))
+	@assert(Duration.seconds(2) * 3 == .seconds(6))
+	@assert(Duration.seconds(6) / 3 == .seconds(2))
+	@assert(Duration.minutes(2) / Duration.seconds(30) == 4)
+	@assert(-week + week == .nanoseconds(0))
+}
+
+test "duration accessors convert units" {
+	@assert(Duration.nanoseconds(1234567890).as_nanoseconds() == 1234567890)
+	@assert(Duration.nanoseconds(1234567890).as_microseconds() == 1234567)
+	@assert(Duration.nanoseconds(1234567890).as_milliseconds() == 1234)
+	@assert(Duration.nanoseconds(1234567890).as_seconds() == 1)
+	// Truncation is toward zero, not down.
+	@assert((Duration.nanoseconds(0) - .nanoseconds(1500)).as_microseconds() == 0 - 1)
+}
+
+test "duration show formats as h:mm:ss" {
+	@assert(Duration.nanoseconds(0).show() == "0:00:00")
+	@assert(Duration.nanoseconds(5).show() == "0:00:00.000000005")
+	@assert(Duration.milliseconds(123).show() == "0:00:00.123")
+	@assert(Duration.seconds(5).show() == "0:00:05")
+	@assert((Duration.hours(1) + .minutes(2) + .seconds(3) + .nanoseconds(456789000)).show() == "1:02:03.456789")
+	@assert((Duration.nanoseconds(0) - .milliseconds(1500)).show() == "-0:00:01.5")
+	// Hours run past 24 rather than rolling into days.
+	@assert(Duration.hours(25).show() == "25:00:00")
+}
+
+test "durations compare by magnitude" {
+	@assert(Duration.seconds(1) > .milliseconds(999))
+	@assert(Duration.seconds(1) >= .milliseconds(1000))
+	@assert(Duration.milliseconds(999) < .seconds(1))
+	@assert(Duration.seconds(1) <= .seconds(1))
+	@assert(Duration.seconds(1) != .seconds(2))
+}
+
+// The Instant tests script the monotonic clock through an io handler,
+// as the fs tests script HOME and the cwd; requests the handler does
+// not recognize delegate to the enclosing one.
+
+test "instant adding moves by a duration" {
+	#handle 'io { request in
+		match request {
+			.monotonic_nanos -> {
+				'continue 5000
+			},
+			other -> {
+				'continue 'io(request: other)
+			}
+		}
+	}
+	let now = Instant.now()
+	@assert(now == Instant.now())
+	@assert(now.since(now) == .nanoseconds(0))
+	@assert(now.adding(.nanoseconds(4000)).since(now) == .nanoseconds(4000))
+	@assert(now.adding(Duration.nanoseconds(0) - .nanoseconds(4000)).since(now) == .nanoseconds(0 - 4000))
+	@assert(now.adding(.seconds(2)) > now)
+	@assert(now < now.adding(.seconds(2)))
+}
+
+// No scripted clock here: the harness's simulated io ticks the clock on
+// every read, so two reads are ordered without sleeping for real. Only
+// the ordering is pinned, not the tick size.
+test "instant since measures the elapsed delta" {
+	let earlier = Instant.now()
+	let later = Instant.now()
+	@assert(later.since(earlier) > .nanoseconds(0))
+	@assert(earlier.since(later) < .nanoseconds(0))
+	@assert(earlier < later)
+	@assert(later > earlier)
+	@assert(earlier != later)
+	@assert(earlier == earlier)
+}

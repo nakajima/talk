@@ -11,7 +11,7 @@ use package::Array::{ Array }
 // Typed readiness operation: the performing computation volunteers to
 // yield the worker. The reference host resumes immediately
 // (core/Host.tlk, ADR 0039); a scheduler may intercept it.
-pub effect 'yield_now() -> ()
+pub effect 'yield() -> ()
 
 // Park until the channel behind `handle` has a value or closes
 // (ADR 0067; a resumed receiver re-checks and takes itself).
@@ -25,7 +25,7 @@ pub effect 'park_send(handle: Int) -> ()
 pub effect 'park_sleep(deadline_ms: Int) -> ()
 
 // Park until either channel has a value or closes (two-way select).
-pub effect 'park_recv2(a: Int, b: Int) -> ()
+pub effect 'park_recv2(a: Int,b: Int) -> ()
 
 // === Task runtime (ADR 0058) ==========================================
 //

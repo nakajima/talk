@@ -1,0 +1,6 @@
+use task::{ sleep }
+
+let start = Instant.now()
+sleep(.microseconds(100))
+let elapsed = Instant.now().since(start)
+print(if elapsed >= Duration.microseconds(100) { 1 } else { 0 })
