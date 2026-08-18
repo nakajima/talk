@@ -507,7 +507,7 @@ func attend_show() -> Int {
 
 attend_show()
 ```
-Some day I'll tell you all about `consume` parameters, the `Copy`/`CheapClone` marker protocols, `Deinit` destructors, and exclusive `&mut` loans, but not today. I simply don't remember how they work atm.
+Some day I'll tell you all about `consume` parameters, the `Copy`/`Clone` marker protocols, `Deinit` destructors, and exclusive `&mut` loans, but not today. I simply don't remember how they work atm.
 
 ## macros
 

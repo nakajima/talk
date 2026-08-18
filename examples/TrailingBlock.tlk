@@ -1,7 +1,9 @@
+use task::{ sleep }
+
 func fizz(foo) {
-	sleep(ms: 1000)
+	sleep(.seconds(1))
 	foo()
-	sleep(ms: 1000)
+	sleep(.seconds(1))
 }
 
 fizz { print("oh hi") }

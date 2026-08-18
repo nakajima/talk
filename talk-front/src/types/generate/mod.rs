@@ -301,7 +301,7 @@ struct CatalogBuilder<'s, 'a> {
     alias_stack: &'s mut Vec<Symbol>,
     explicit_conformances: FxHashSet<(Symbol, ProtocolRef)>,
     /// Explicit claims on the substructural marker protocols (Copy,
-    /// CheapClone, Deinit) with their blame nodes, validated once the whole
+    /// Clone, Deinit) with their blame nodes, validated once the whole
     /// catalog is collected.
     /// Marker-protocol conformance claims awaiting validation: the head,
     /// marker, EXACT row claimed (ADR 0036: disjoint rows validate

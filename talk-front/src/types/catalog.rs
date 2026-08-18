@@ -30,12 +30,12 @@ pub enum Grade {
 
 /// How a borrowed value of some head fills an owned slot (tier 2 of the
 /// borrow-coercion ladder): a `Copy` head extracts by value, a
-/// `CheapClone` head by a silent O(1) clone lowering emits at the
+/// `Clone` head by a silent O(1) clone lowering emits at the
 /// coercion node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoerceKind {
     Copy,
-    CheapClone,
+    Clone,
 }
 
 /// Why a nominal has heap-backed reference semantics.
@@ -820,7 +820,7 @@ impl TypeCatalog {
 
     /// The copy-out-of-borrow POSSIBILITY judgment: whether any application
     /// of this head could accept a borrowed value in an owned slot (Copy
-    /// grade, or any declared Copy/CheapClone row — conditional and
+    /// grade, or any declared Copy/Clone row — conditional and
     /// specialized rows included). Deliberately an over-approximation: it
     /// only preserves the `Apply` reason while types are still resolving;
     /// the actual coercion is proven per application
@@ -828,11 +828,11 @@ impl TypeCatalog {
     pub fn copies_out_of_borrow(&self, symbol: Symbol) -> bool {
         self.grade_of(symbol) == Grade::Copy
             || self.has_bare_conformance(symbol, Symbol::Copy)
-            || self.has_bare_conformance(symbol, Symbol::CheapClone)
+            || self.has_bare_conformance(symbol, Symbol::Clone)
     }
 
     /// The tier-2 classification behind [`Self::copies_out_of_borrow`]:
-    /// `Copy` heads extract by value (nothing to emit); `CheapClone` heads
+    /// `Copy` heads extract by value (nothing to emit); `Clone` heads
     /// extract by an O(1) buffer retain that lowering emits at the
     /// recorded coercion node. Every site that records a `coerce_clones`
     /// entry maps from this — the action is not re-derived per site.
@@ -840,10 +840,10 @@ impl TypeCatalog {
         if self.grade_of(symbol) == Grade::Copy {
             return Some(CoerceKind::Copy);
         }
-        // Same family rule as `grade_of`: specialized/conditional CheapClone
+        // Same family rule as `grade_of`: specialized/conditional Clone
         // rows never speak for the whole nominal at head level.
-        if self.family_unconditionally_conforms(symbol, Symbol::CheapClone) {
-            return Some(CoerceKind::CheapClone);
+        if self.family_unconditionally_conforms(symbol, Symbol::Clone) {
+            return Some(CoerceKind::Clone);
         }
         None
     }
@@ -853,8 +853,8 @@ impl TypeCatalog {
         if self.grade_of_application(symbol, args) == Grade::Copy {
             return Some(CoerceKind::Copy);
         }
-        if self.cheap_clone_rows(symbol, args) {
-            return Some(CoerceKind::CheapClone);
+        if self.clone_rows(symbol, args) {
+            return Some(CoerceKind::Clone);
         }
         None
     }
@@ -865,38 +865,38 @@ impl TypeCatalog {
         if self.bounds_satisfy(bounds, &ProtocolRef::bare(Symbol::Copy)) {
             return Some(CoerceKind::Copy);
         }
-        if self.bounds_satisfy(bounds, &ProtocolRef::bare(Symbol::CheapClone)) {
-            return Some(CoerceKind::CheapClone);
+        if self.bounds_satisfy(bounds, &ProtocolRef::bare(Symbol::Clone)) {
+            return Some(CoerceKind::Clone);
         }
         None
     }
 
-    /// A CheapClone row matching this application with its where-clause
+    /// A Clone row matching this application with its where-clause
     /// context satisfied. The collect-time marker field check reaches the same
     /// rows through [`Self::ty_satisfies_marker`].
-    pub fn cheap_clone_rows(&self, symbol: Symbol, args: &[Ty]) -> bool {
+    pub fn clone_rows(&self, symbol: Symbol, args: &[Ty]) -> bool {
         // Fast path for the common shape (`extend Array<Element>:
-        // CheapClone {}`): the row keyed at (head, CheapClone) has no
+        // Clone {}`): the row keyed at (head, Clone) has no
         // where-clause context and a fully generic self pattern, so it
         // matches every application of the head, with no row scan or context
         // check. The O(rows) scan below handles conditional and protocol-head
         // rows.
         if self.conformances_for_head(symbol).any(|(_, row)| {
-            row.protocol == ProtocolRef::bare(Symbol::CheapClone)
+            row.protocol == ProtocolRef::bare(Symbol::Clone)
                 && row.context.is_empty()
                 && unconditional_self_pattern(row)
         }) {
             return true;
         }
-        self.matching_conformances(symbol, args, &ProtocolRef::bare(Symbol::CheapClone))
+        self.matching_conformances(symbol, args, &ProtocolRef::bare(Symbol::Clone))
             .iter()
             .any(|found| self.marker_context_satisfied(found, &[]))
     }
 
-    /// Marker (Copy/CheapClone) satisfaction for a stored type. Declared
+    /// Marker (Copy/Clone) satisfaction for a stored type. Declared
     /// conformance rows are the authority: a matching row satisfies the
     /// marker when its where-clause context does (under the match
-    /// substitution), and a Copy row also satisfies CheapClone. `ambient`
+    /// substitution), and a Copy row also satisfies Clone. `ambient`
     /// carries the where-clause predicates of a conformance currently
     /// being validated, so its own rigid params can satisfy the marker.
     pub fn ty_satisfies_marker(&self, ty: &Ty, marker: Symbol, ambient: &[Predicate]) -> bool {
@@ -935,7 +935,7 @@ impl TypeCatalog {
             // Error is poison; a variable here means the field type is still
             // being collected — the conformance's own use sites will re-check.
             Ty::Error | Ty::Var(_) => true,
-            // A unique value is the sole reference: never Copy/CheapClone.
+            // A unique value is the sole reference: never Copy/Clone.
             Ty::Unique(_) => false,
             Ty::Nominal(symbol, args) => {
                 // Scalars and payload-free enums store nothing, so any
@@ -948,12 +948,12 @@ impl TypeCatalog {
                     .matching_conformances(*symbol, args, &ProtocolRef::bare(Symbol::Copy))
                     .iter()
                     .any(|found| self.marker_context_satisfied_at(found, ambient, active));
-                copy || (marker == Symbol::CheapClone
+                copy || (marker == Symbol::Clone
                     && self
                         .matching_conformances(
                             *symbol,
                             args,
-                            &ProtocolRef::bare(Symbol::CheapClone),
+                            &ProtocolRef::bare(Symbol::Clone),
                         )
                         .iter()
                         .any(|found| self.marker_context_satisfied_at(found, ambient, active)))
@@ -961,7 +961,7 @@ impl TypeCatalog {
             Ty::Param(symbol) => {
                 let bound_satisfies = |bounds: &Vec<ProtocolRef>| {
                     bounds.contains(&ProtocolRef::bare(marker))
-                        || (marker == Symbol::CheapClone
+                        || (marker == Symbol::Clone
                             && bounds.contains(&ProtocolRef::bare(Symbol::Copy)))
                 };
                 self.param_bounds.get(symbol).is_some_and(bound_satisfies)
@@ -972,7 +972,7 @@ impl TypeCatalog {
                                 if bound == symbol
                                     && protocol.args.is_empty()
                                     && (protocol.protocol == marker
-                                        || (marker == Symbol::CheapClone
+                                        || (marker == Symbol::Clone
                                             && protocol.protocol == Symbol::Copy))
                         )
                     })
@@ -987,7 +987,7 @@ impl TypeCatalog {
                     })
             }
             // An effect argument is runtime-inert: it never blocks a
-            // marker (Copy/CheapClone judge values, not rows). A static
+            // marker (Copy/Clone judge values, not rows). A static
             // argument is likewise phase-only (ADR 0035: evidence erases).
             Ty::Eff(_) | Ty::Static(_) => true,
             Ty::Borrow(..) | Ty::Func(..) | Ty::Forall(..) | Ty::Any { .. } | Ty::Proj(..) => false,
@@ -1194,7 +1194,7 @@ impl TypeCatalog {
             let Predicate::Conforms { ty, protocol } = predicate else {
                 return false;
             };
-            if !matches!(protocol.protocol, Symbol::Copy | Symbol::CheapClone)
+            if !matches!(protocol.protocol, Symbol::Copy | Symbol::Clone)
                 || !protocol.args.is_empty()
             {
                 return false;
@@ -2761,15 +2761,15 @@ mod tests {
     fn catalog_with_row(head: Symbol, mut row: Conformance) -> TypeCatalog {
         let mut catalog = TypeCatalog::default();
         row.head = head;
-        row.protocol = ProtocolRef::bare(Symbol::CheapClone);
+        row.protocol = ProtocolRef::bare(Symbol::Clone);
         catalog.insert_conformance(ModuleId::Current, row);
         catalog
     }
 
     #[test]
-    fn cheap_clone_rows_fast_paths_unconditional_rows() {
-        // `extend Box<T>: CheapClone {}`: no context, fully generic self
-        // pattern — every application is CheapClone, straight off the
+    fn clone_rows_fast_paths_unconditional_rows() {
+        // `extend Box<T>: Clone {}`: no context, fully generic self
+        // pattern — every application is Clone, straight off the
         // (head, protocol) key.
         let head = Symbol::Struct(StructId::from(1));
         let param = Symbol::DeclaredLocal(DeclaredLocalId(10));
@@ -2778,16 +2778,16 @@ mod tests {
             Conformance {
                 params: vec![param],
                 self_args: vec![Ty::Param(param)],
-                ..Conformance::new(head, ProtocolRef::bare(Symbol::CheapClone))
+                ..Conformance::new(head, ProtocolRef::bare(Symbol::Clone))
             },
         );
-        assert!(catalog.cheap_clone_rows(head, &[Ty::Nominal(Symbol::Int, vec![])]));
-        assert!(catalog.cheap_clone_rows(head, &[Ty::Nominal(Symbol::String, vec![])]));
+        assert!(catalog.clone_rows(head, &[Ty::Nominal(Symbol::Int, vec![])]));
+        assert!(catalog.clone_rows(head, &[Ty::Nominal(Symbol::String, vec![])]));
     }
 
     #[test]
-    fn cheap_clone_rows_conditional_row_consults_the_context() {
-        // `extend Box<T>: CheapClone where T: CheapClone {}`: the fast
+    fn clone_rows_conditional_row_consults_the_context() {
+        // `extend Box<T>: Clone where T: Clone {}`: the fast
         // path must NOT fire — the where-clause context decides per
         // application through the full row scan.
         let head = Symbol::Struct(StructId::from(1));
@@ -2799,23 +2799,23 @@ mod tests {
                 self_args: vec![Ty::Param(param)],
                 context: vec![Predicate::Conforms {
                     ty: Ty::Param(param),
-                    protocol: ProtocolRef::bare(Symbol::CheapClone),
+                    protocol: ProtocolRef::bare(Symbol::Clone),
                 }],
-                ..Conformance::new(head, ProtocolRef::bare(Symbol::CheapClone))
+                ..Conformance::new(head, ProtocolRef::bare(Symbol::Clone))
             },
         );
-        // String is intrinsically CheapClone-satisfying only via declared
+        // String is intrinsically Clone-satisfying only via declared
         // rows; this catalog has none for it, so the context fails…
-        assert!(!catalog.cheap_clone_rows(head, &[Ty::Nominal(Symbol::String, vec![])]));
+        assert!(!catalog.clone_rows(head, &[Ty::Nominal(Symbol::String, vec![])]));
         // …while an intrinsically-Copy scalar satisfies it.
-        assert!(catalog.cheap_clone_rows(head, &[Ty::Nominal(Symbol::Int, vec![])]));
+        assert!(catalog.clone_rows(head, &[Ty::Nominal(Symbol::Int, vec![])]));
     }
 
     #[test]
-    fn cheap_clone_rows_without_a_row_is_false() {
+    fn clone_rows_without_a_row_is_false() {
         let head = Symbol::Struct(StructId::from(1));
         let catalog = TypeCatalog::default();
-        assert!(!catalog.cheap_clone_rows(head, &[]));
+        assert!(!catalog.clone_rows(head, &[]));
     }
 
     #[test]
@@ -2826,13 +2826,13 @@ mod tests {
             Conformance {
                 context: vec![Predicate::Conforms {
                     ty: Ty::Nominal(head, vec![]),
-                    protocol: ProtocolRef::bare(Symbol::CheapClone),
+                    protocol: ProtocolRef::bare(Symbol::Clone),
                 }],
-                ..Conformance::new(head, ProtocolRef::bare(Symbol::CheapClone))
+                ..Conformance::new(head, ProtocolRef::bare(Symbol::Clone))
             },
         );
 
-        assert!(!catalog.cheap_clone_rows(head, &[]));
+        assert!(!catalog.clone_rows(head, &[]));
     }
 
     #[test]
@@ -2846,30 +2846,30 @@ mod tests {
                 self_args: vec![Ty::Param(param)],
                 context: vec![Predicate::Conforms {
                     ty: Ty::Nominal(head, vec![Ty::Nominal(head, vec![Ty::Param(param)])]),
-                    protocol: ProtocolRef::bare(Symbol::CheapClone),
+                    protocol: ProtocolRef::bare(Symbol::Clone),
                 }],
-                ..Conformance::new(head, ProtocolRef::bare(Symbol::CheapClone))
+                ..Conformance::new(head, ProtocolRef::bare(Symbol::Clone))
             },
         );
 
-        assert!(!catalog.cheap_clone_rows(head, &[Ty::Nominal(Symbol::Int, vec![])]));
+        assert!(!catalog.clone_rows(head, &[Ty::Nominal(Symbol::Int, vec![])]));
     }
 
     #[test]
-    fn cheap_clone_rows_specialized_self_pattern_skips_the_fast_path() {
+    fn clone_rows_specialized_self_pattern_skips_the_fast_path() {
         // A row whose self pattern is concrete (`extend Box<Int>:
-        // CheapClone {}`) matches only that application: the fast path
+        // Clone {}`) matches only that application: the fast path
         // must defer to the pattern match.
         let head = Symbol::Struct(StructId::from(1));
         let catalog = catalog_with_row(
             head,
             Conformance {
                 self_args: vec![Ty::Nominal(Symbol::Int, vec![])],
-                ..Conformance::new(head, ProtocolRef::bare(Symbol::CheapClone))
+                ..Conformance::new(head, ProtocolRef::bare(Symbol::Clone))
             },
         );
-        assert!(catalog.cheap_clone_rows(head, &[Ty::Nominal(Symbol::Int, vec![])]));
-        assert!(!catalog.cheap_clone_rows(head, &[Ty::Nominal(Symbol::String, vec![])]));
+        assert!(catalog.clone_rows(head, &[Ty::Nominal(Symbol::Int, vec![])]));
+        assert!(!catalog.clone_rows(head, &[Ty::Nominal(Symbol::String, vec![])]));
     }
 }
 

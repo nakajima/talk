@@ -126,9 +126,22 @@ const EPERM: i64 = -1;
 
 /// Host stdio and POSIX syscalls (fd 1 = stdout, fd 2 = stderr; other
 /// descriptors go straight to the OS).
+#[cfg(not(target_arch = "wasm32"))]
 pub struct StdioIO {
     arguments: Vec<std::ffi::OsString>,
 }
+
+/// Browser host IO. Browser builds use JavaScript's clock and expose the
+/// non-browser host operations through the same unsupported results as
+/// [`StdioIO`] on other non-Unix targets.
+#[cfg(target_arch = "wasm32")]
+pub struct WasmIO {
+    arguments: Vec<std::ffi::OsString>,
+}
+
+/// Keep host-generic callers independent of the compilation target.
+#[cfg(target_arch = "wasm32")]
+pub type StdioIO = WasmIO;
 
 impl Default for StdioIO {
     fn default() -> Self {
@@ -272,7 +285,16 @@ impl IO for StdioIO {
 
     fn sleep(&mut self, ms: i64) -> i64 {
         if ms > 0 {
+            #[cfg(not(target_arch = "wasm32"))]
             std::thread::sleep(std::time::Duration::from_millis(ms as u64));
+            #[cfg(target_arch = "wasm32")]
+            {
+                // Browser execution is synchronous on the current thread.
+                // There is no event-loop-compatible way to suspend this IO
+                // call, so a blocking sleep waits against the JavaScript clock.
+                let deadline = monotonic_nanos().saturating_add(ms.saturating_mul(1_000_000));
+                while monotonic_nanos() < deadline {}
+            }
         }
         0
     }
@@ -607,9 +629,12 @@ impl IO for StdioIO {
     fn seek(&mut self, fd: i64, offset: i64, whence: i64) -> i64 {
         #[cfg(unix)]
         {
-            let position =
-                unsafe { libc::lseek(fd as i32, offset as libc::off_t, whence as i32) };
-            if position < 0 { errno() } else { position as i64 }
+            let position = unsafe { libc::lseek(fd as i32, offset as libc::off_t, whence as i32) };
+            if position < 0 {
+                errno()
+            } else {
+                position as i64
+            }
         }
         #[cfg(not(unix))]
         {
@@ -645,6 +670,213 @@ impl IO for StdioIO {
     }
 }
 
+/// REPL IO captures standard output and error while retaining host-backed
+/// time and host behavior for every other operation. `exit` returns to the
+/// evaluator rather than terminating the REPL process.
+pub struct ReplIO {
+    pub out: Vec<u8>,
+    pub err: Vec<u8>,
+    host: StdioIO,
+    stdin: Option<VecDeque<u8>>,
+    output_observer: Option<Box<dyn FnMut(i64, &[u8])>>,
+}
+
+impl ReplIO {
+    pub fn with_stdin(mut self, bytes: Vec<u8>) -> Self {
+        self.stdin = Some(bytes.into());
+        self
+    }
+
+    pub fn observing_output(mut self, observer: impl FnMut(i64, &[u8]) + 'static) -> Self {
+        self.output_observer = Some(Box::new(observer));
+        self
+    }
+}
+
+impl Default for ReplIO {
+    fn default() -> Self {
+        Self {
+            out: Vec::new(),
+            err: Vec::new(),
+            host: StdioIO::default(),
+            stdin: None,
+            output_observer: None,
+        }
+    }
+}
+
+impl IO for ReplIO {
+    fn write(&mut self, fd: i64, bytes: &[u8]) -> i64 {
+        match fd {
+            1 => self.out.extend_from_slice(bytes),
+            2 => self.err.extend_from_slice(bytes),
+            _ => return self.host.write(fd, bytes),
+        }
+        if let Some(observer) = &mut self.output_observer {
+            observer(fd, bytes);
+        }
+        bytes.len() as i64
+    }
+
+    fn sleep(&mut self, ms: i64) -> i64 {
+        self.host.sleep(ms)
+    }
+
+    fn read(&mut self, fd: i64, buf: &mut [u8]) -> i64 {
+        if fd == 0
+            && let Some(stdin) = &mut self.stdin
+        {
+            let count = buf.len().min(stdin.len());
+            for slot in buf.iter_mut().take(count) {
+                *slot = stdin.pop_front().unwrap_or(0);
+            }
+            return count as i64;
+        }
+        self.host.read(fd, buf)
+    }
+
+    fn open(&mut self, path: &[u8], flags: i64, mode: i64) -> i64 {
+        self.host.open(path, flags, mode)
+    }
+
+    fn close(&mut self, fd: i64) -> i64 {
+        self.host.close(fd)
+    }
+
+    fn ctl(&mut self, fd: i64, op: i64, arg: i64) -> i64 {
+        self.host.ctl(fd, op, arg)
+    }
+
+    fn poll(&mut self, fds: &mut [(i32, i16, i16)], timeout: i64) -> i64 {
+        self.host.poll(fds, timeout)
+    }
+
+    fn socket(&mut self, domain: i64, socktype: i64, protocol: i64) -> i64 {
+        self.host.socket(domain, socktype, protocol)
+    }
+
+    fn bind(&mut self, fd: i64, addr: i64, port: i64) -> i64 {
+        self.host.bind(fd, addr, port)
+    }
+
+    fn listen(&mut self, fd: i64, backlog: i64) -> i64 {
+        self.host.listen(fd, backlog)
+    }
+
+    fn connect(&mut self, fd: i64, addr: i64, port: i64) -> i64 {
+        self.host.connect(fd, addr, port)
+    }
+
+    fn accept(&mut self, fd: i64) -> i64 {
+        self.host.accept(fd)
+    }
+
+    fn cwd_len(&mut self) -> i64 {
+        self.host.cwd_len()
+    }
+
+    fn cwd_copy(&mut self, buf: &mut [u8]) -> i64 {
+        self.host.cwd_copy(buf)
+    }
+
+    fn getenv_len(&mut self, name: &[u8]) -> i64 {
+        self.host.getenv_len(name)
+    }
+
+    fn getenv_copy(&mut self, name: &[u8], buf: &mut [u8]) -> i64 {
+        self.host.getenv_copy(name, buf)
+    }
+
+    fn argc(&mut self) -> i64 {
+        self.host.argc()
+    }
+
+    fn arg_len(&mut self, index: i64) -> i64 {
+        self.host.arg_len(index)
+    }
+
+    fn arg_copy(&mut self, index: i64, buf: &mut [u8]) -> i64 {
+        self.host.arg_copy(index, buf)
+    }
+
+    fn dir_count(&mut self, path: &[u8]) -> i64 {
+        self.host.dir_count(path)
+    }
+
+    fn dir_entry_kind(&mut self, path: &[u8], index: i64) -> i64 {
+        self.host.dir_entry_kind(path, index)
+    }
+
+    fn dir_entry_len(&mut self, path: &[u8], index: i64) -> i64 {
+        self.host.dir_entry_len(path, index)
+    }
+
+    fn dir_entry_copy(&mut self, path: &[u8], index: i64, buf: &mut [u8]) -> i64 {
+        self.host.dir_entry_copy(path, index, buf)
+    }
+
+    fn realpath_len(&mut self, path: &[u8]) -> i64 {
+        self.host.realpath_len(path)
+    }
+
+    fn realpath_copy(&mut self, path: &[u8], buf: &mut [u8]) -> i64 {
+        self.host.realpath_copy(path, buf)
+    }
+
+    fn seek(&mut self, fd: i64, offset: i64, whence: i64) -> i64 {
+        self.host.seek(fd, offset, whence)
+    }
+
+    fn file_size(&mut self, fd: i64) -> i64 {
+        self.host.file_size(fd)
+    }
+
+    fn monotonic_nanos(&mut self) -> i64 {
+        self.host.monotonic_nanos()
+    }
+
+    fn exit(&mut self, code: i64) -> i64 {
+        code
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IO, ReplIO};
+    use std::{cell::RefCell, rc::Rc};
+
+    #[test]
+    fn repl_io_reads_preloaded_stdin() {
+        let mut io = ReplIO::default().with_stdin(b"hello".to_vec());
+        let mut first = [0; 3];
+        let mut second = [0; 3];
+
+        assert_eq!(io.read(0, &mut first), 3);
+        assert_eq!(io.read(0, &mut second), 2);
+        assert_eq!(io.read(0, &mut second), 0);
+        assert_eq!(&first, b"hel");
+        assert_eq!(&second[..2], b"lo");
+    }
+
+    #[test]
+    fn repl_io_observes_captured_output() {
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let output = Rc::clone(&observed);
+        let mut io = ReplIO::default().observing_output(move |fd, bytes| {
+            output.borrow_mut().push((fd, bytes.to_vec()));
+        });
+
+        assert_eq!(io.write(1, b"out"), 3);
+        assert_eq!(io.write(2, b"err"), 3);
+        assert_eq!(io.out, b"out");
+        assert_eq!(io.err, b"err");
+        assert_eq!(
+            *observed.borrow(),
+            vec![(1, b"out".to_vec()), (2, b"err".to_vec())]
+        );
+    }
+}
+
 #[cfg(unix)]
 fn sockaddr_in(addr: i64, port: i64) -> libc::sockaddr_in {
     let mut sockaddr: libc::sockaddr_in = unsafe { std::mem::zeroed() };
@@ -654,7 +886,7 @@ fn sockaddr_in(addr: i64, port: i64) -> libc::sockaddr_in {
     sockaddr
 }
 
-/// Captures writes for tests and the REPL; everything else is simulated
+/// Captures writes for tests; everything else is simulated
 /// in memory. Descriptors above 2 are byte buffers: writes append, reads
 /// advance a cursor — files and sockets alike (the loopback the scripted
 /// server tests rely on). Sleeping is a no-op.

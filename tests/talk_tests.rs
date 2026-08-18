@@ -198,6 +198,18 @@ fn run_renders_a_scalar_script_result_in_talk_syntax() {
 }
 
 #[test]
+fn run_renders_array_results_with_array_syntax() {
+    assert_runs(
+        b"[1, 2, 3].map { $0 * 10 }.to_array()\n",
+        &[],
+        b"[10, 20, 30]\n",
+    );
+    assert_runs(b"let values: [Int] = []\nvalues\n", &[], b"[]\n");
+    assert_runs(b"[\"a\" + \"b\", \"c\"]\n", &[], b"[\"ab\", \"c\"]\n");
+    assert_runs(b"[[1, 2], [3]]\n", &[], b"[[1, 2], [3]]\n");
+}
+
+#[test]
 fn syntax_stdlib_exposes_the_self_hosted_parser() {
     assert_runs(
         b"use syntax::{ parse_expr_source, Item }\nlet outcome = parse_expr_source(source: \"1 + 2\")\nif let .some(failure) = outcome.failure {\n\tprint(failure.code + \": \" + failure.message)\n} else {\n\tlet first: Item = outcome.items[0]\n\tmatch first {\n\t\t.expr_item(_) -> print(\"parsed\"),\n\t\t_ -> print(\"wrong root\")\n\t}\n}\n",
@@ -485,7 +497,7 @@ fn reflexive_into_identity_transfers_ownership() {
     // heap-built strings at teardown.
     assert_runs(
         b"struct Word {}\n\
-          extend Word: CheapClone {}\n\
+          extend Word: Clone {}\n\
           extend Word: Into<String> {\n\tconsuming func into() -> String { \"w\" + \"!\" }\n}\n\
           extend<Element: Into<String>> Array<Element> {\n\
           \tconsuming func join2(_ separator: String) -> String {\n\
@@ -757,6 +769,15 @@ fn trailing_block_closures_mutate_captured_locals() {
         b"func outer() -> Int {\n\tlet i = 0\n\t5.times { x in i = i + 1 }\n\ti\n}\nprint(outer())\n",
         &[],
         b"5\n",
+    );
+}
+
+#[test]
+fn effect_performs_accept_trailing_blocks() {
+    assert_runs(
+        b"effect 'apply(transform fn: () -> Int) -> Int\n#handle 'apply { fn in 'continue fn() }\nprint('apply { 42 })\n",
+        &[],
+        b"42\n",
     );
 }
 
@@ -2092,11 +2113,11 @@ fn run_concatenates_strings_without_leaking() {
 }
 
 #[test]
-fn run_clones_copy_and_cheap_clone_values() {
+fn run_clones_copy_and_clone_values() {
     let source = b"struct BoxedText {\n\
         \tlet value: String\n\
         }\n\
-        extend BoxedText: CheapClone {}\n\
+        extend BoxedText: Clone {}\n\
         let original = BoxedText(value: \"hello\")\n\
         let duplicate = original.clone()\n\
         let source = \"world\"\n\
@@ -2787,7 +2808,7 @@ fn assert_flow_corpus(
 #[test]
 fn reference_flow_corpus_holds() {
     const KNOWN_STRICTER: &[&str] = &[
-        "borrowed_generic_payload_requires_copy_or_cheap_clone_bound",
+        "borrowed_generic_payload_requires_copy_or_clone_bound",
         "generic_heap_extraction_rejects_non_cheap_owned_instantiation",
     ];
     const PENDING_REJECTION: &[&str] = &[];
@@ -3578,8 +3599,8 @@ fn package_dependency_stdlib_bodies_reach_the_backend() {
 #[test]
 fn run_performs_ambient_io_operations() {
     // `'io(request)` performs route through core's source-level host
-    // fallback to the runtime's host operations (sleep, open/write/
-    // read/close round trip).
+    // fallback to the runtime's host operations (open/write/read/close
+    // round trip).
     let unique = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock after epoch")
@@ -3587,7 +3608,6 @@ fn run_performs_ambient_io_operations() {
     let path = std::env::temp_dir().join(format!("talk-io-{}-{unique}.txt", std::process::id()));
     let source = format!(
         "#unsafe {{\n\
-         let ok = sleep(ms: 0)\n\
          let fd = open_path(path: \"{}\", flags: O_WRONLY + O_CREAT + O_TRUNC, mode: S_IRUSR + S_IWUSR)\n\
          write_string(fd: fd, s: \"hello\")\n\
          _io_close(fd: fd)\n\
@@ -3813,7 +3833,11 @@ fn build_and_run_image_round_trip() {
     std::fs::create_dir_all(&dir).expect("image dir");
     let source = dir.join("prog.tlk");
     let image = dir.join("prog.tbc");
-    std::fs::write(&source, "print(\"built\")\n40 + 2\n").expect("write source");
+    std::fs::write(
+        &source,
+        "print(\"built\");\n[1, 2, 3].map { $0 * 10 }.to_array()\n",
+    )
+    .expect("write source");
 
     let build = Command::new(env!("CARGO_BIN_EXE_talk"))
         .args(["build", "-o"])
@@ -3837,7 +3861,7 @@ fn build_and_run_image_round_trip() {
         "{}",
         String::from_utf8_lossy(&run.stderr)
     );
-    assert_eq!(run.stdout, b"built\n42\n");
+    assert_eq!(run.stdout, b"built\n[10, 20, 30]\n");
 
     std::fs::remove_dir_all(dir).expect("remove image dir");
 }
@@ -3923,6 +3947,16 @@ fn parity_generic_state() {
 #[test]
 fn parity_generic_two_instantiations() {
     assert_parity_program("generic_two_instantiations");
+}
+
+#[test]
+fn parity_generic_static_effect() {
+    assert_parity_program("generic_static_effect");
+}
+
+#[test]
+fn parity_generic_static_suspending_effect() {
+    assert_parity_program("generic_static_suspending_effect");
 }
 
 #[test]
@@ -4907,7 +4941,7 @@ func driver() -> Int {
 }
 print(driver())
 ",
-            "an effect with generics",
+            "an effect with type generics",
         ),
         (
             b"effect 'bump(mut counter: Int) -> ()
@@ -4999,7 +5033,7 @@ fn run_parallel_workers_corpus_matches_pin() {
 #[test]
 fn run_coop_scheduler_interleaves_matches_pin() {
     // ADR 0069: top-level code is the cooperative root task, so spawned
-    // work interleaves over 'pause without an explicit `run` wrapper and
+    // work interleaves over 'yield without an explicit `run` wrapper and
     // is drained before exit. The same program runs through the C sweep.
     assert_parity_program("coop_interleave");
 }
@@ -5007,7 +5041,7 @@ fn run_coop_scheduler_interleaves_matches_pin() {
 #[test]
 fn run_parallel_channel_pipeline_matches_pin() {
     // ADR 0059: producers on parallel workers feed one consumer through
-    // an MPSC channel. The consumer parks between sends instead of
+    // an MPSC channel. The consumer waits between sends instead of
     // reporting deadlock, a single producer's values arrive in send
     // order, and recv resolves `none` once every sender is gone. The
     // same program runs through the C and LLVM corpus sweeps.
@@ -5018,14 +5052,14 @@ fn run_parallel_channel_pipeline_matches_pin() {
 fn run_select_races_resolve_and_cancel_cleanly() {
     // ADR 0061: ready-vs-pending resolves to the ready side, both-ready
     // ties resolve left, an unclaimed losing value stays queued, and a
-    // select parked on two empty channels wakes on a cross-worker send.
+    // select waiting on two empty channels wakes on a cross-worker send.
     // Runs through the C and LLVM corpus sweeps against this pin.
     assert_parity_program("select_channels");
 }
 
 #[test]
 fn run_bounded_channel_backpressure_matches_pin() {
-    // ADR 0062: capacity-1 sends park until the cross-worker consumer
+    // ADR 0062: capacity-1 sends wait until the cross-worker consumer
     // makes room and every value arrives in order; a same-worker
     // fill/drain cycle stays in bounds; a send to a dead receiver
     // resolves false and frees its value (C leak accounting enforces
@@ -5034,12 +5068,15 @@ fn run_bounded_channel_backpressure_matches_pin() {
 }
 
 #[test]
-fn run_timers_sleep_park_and_compose_with_select() {
-    // ADR 0063: block_on(sleep) takes at least its duration of
-    // monotonic time, select against a quiet channel times out, and a
-    // worker's send well inside a generous timeout beats it. Runs
-    // through the C and LLVM corpus sweeps against this pin.
+fn run_timers_sleep_wait_and_compose_with_select() {
+    // ADR 0063: sleep takes at least its duration of monotonic time and
+    // composes with a worker whose delayed send wakes a receiver.
     assert_parity_program("timers");
+}
+
+#[test]
+fn run_submillisecond_sleep_preserves_its_deadline() {
+    assert_parity_program("submillisecond_sleep");
 }
 
 #[test]
@@ -5119,11 +5156,11 @@ fn run_constructs_rigid_params_through_init_requirements() {
 #[test]
 fn run_user_handlers_intercept_io() {
     // A user 'io handler substitutes results without invoking the host:
-    // the intercepted sleeps return immediately, and the handler's count
-    // proves both performs routed to it. (print bypasses 'io — it is a
-    // raw io_write intrinsic — so it still reaches stdout.)
+    // the handler's count proves both clock reads routed to it. (print
+    // bypasses 'io - it is a raw io_write intrinsic - so it still
+    // reaches stdout.)
     assert_runs(
-        b"let count = 0\n#handle 'io { request in\n\tcount = count + 1\n\t'continue 0\n}\nsleep(ms: 1)\nsleep(ms: 1)\nprint(count)\n",
+        b"let count = 0\n#handle 'io { request in\n\tcount = count + 1\n\t'continue 0\n}\n_io_monotonic_nanos()\n_io_monotonic_nanos()\nprint(count)\n",
         &[],
         b"2\n",
     );
@@ -5134,7 +5171,7 @@ fn run_io_handlers_delegate_to_the_host_fallback() {
     // A clause re-performing the same request reaches the io host
     // fallback below its floor; the program still behaves normally.
     assert_runs(
-        b"#handle 'io { request in\n\t'continue 'io(request: request)\n}\nsleep(ms: 1)\nprint(1)\n",
+        b"#handle 'io { request in\n\t'continue 'io(request: request)\n}\n_io_monotonic_nanos()\nprint(1)\n",
         &[],
         b"1\n",
     );
@@ -5210,10 +5247,10 @@ fn run_calls_function_values_stored_in_globals() {
 
 #[test]
 fn run_clones_enum_values_with_payloads() {
-    // Enum retains dispatch on the tag (CheapClone adds one reference
+    // Enum retains dispatch on the tag (Clone adds one reference
     // per owned payload buffer).
     assert_runs(
-        b"enum E {\n\tcase s(String)\n}\nextend E: CheapClone {}\nlet e = E.s(\"a\" + \"b\")\nlet f = e.clone()\nmatch f {\n\t.s(x) -> print(x)\n}\n",
+        b"enum E {\n\tcase s(String)\n}\nextend E: Clone {}\nlet e = E.s(\"a\" + \"b\")\nlet f = e.clone()\nmatch f {\n\t.s(x) -> print(x)\n}\n",
         &[],
         b"ab\n",
     );
@@ -5700,7 +5737,7 @@ fn run_dispatches_constrained_generic_effects() {
     // owns the payload and the shell drops nothing (no double free), and
     // a wildcard arm still releases the payload (no leak).
     assert_runs(
-        b"enum Work {\n\tcase text(String)\n\tcase gap\n}\nextend Work: CheapClone {}\nfunc take(consume item: Work) -> String {\n\tmatch item {\n\t\t.text(piece) -> piece,\n\t\t_ -> \"\".to_string()\n\t}\n}\nprint(take(item: Work.text(\"a\" + \"b\")))\nprint(take(item: Work.gap).byte_count)\n",
+        b"enum Work {\n\tcase text(String)\n\tcase gap\n}\nextend Work: Clone {}\nfunc take(consume item: Work) -> String {\n\tmatch item {\n\t\t.text(piece) -> piece,\n\t\t_ -> \"\".to_string()\n\t}\n}\nprint(take(item: Work.text(\"a\" + \"b\")))\nprint(take(item: Work.gap).byte_count)\n",
         &[],
         b"ab\n0\n",
     );

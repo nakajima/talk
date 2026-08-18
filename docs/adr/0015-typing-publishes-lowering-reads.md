@@ -141,7 +141,7 @@ their closure rows instead of sharing one module-wide row var.
   assert strict balance.
 - **Generic ownership — DONE (day 3)**: generic (`Param`/`Proj`-typed)
   values are owned. The LAST consume moves; every earlier consume is an
-  implicit copy (tier-2 auto-clone: CheapClone retains, Copy is free,
+  implicit copy (tier-2 auto-clone: Clone retains, Copy is free,
   decided per instantiation at lowering). Liveness decides which is
   which (`flow::liveness::dead_after` — conservative in sibling
   branches, so over-approximation only costs a balanced retain+release,

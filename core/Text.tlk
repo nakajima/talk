@@ -8,7 +8,7 @@ use package::Iterable::{ Iterable }
 use package::Memory::{ ByteStorage, _same_allocation }
 use package::Optional::{ Optional }
 use package::Operators::{ Add, Comparable, Divide, Equatable, Multiply, Subtract }
-use package::Ownership::{ Borrowed, CheapClone }
+use package::Ownership::{ Borrowed, Clone }
 use package::Result::{ Result }
 use package::String::{ String, StringMethods, Substring, UTF8View }
 use package::StringBuilder::{ StringBuilder }
@@ -22,7 +22,7 @@ pub struct StringIndex {
 }
 
 extend StringIndex: Borrowed {}
-extend StringIndex: CheapClone {}
+extend StringIndex: Clone {}
 
 extend StringIndex: Equatable<StringIndex> {
 	pub func equals(_ rhs: StringIndex) -> Bool {
@@ -36,7 +36,7 @@ pub struct StringRange {
 }
 
 extend StringRange: Borrowed {}
-extend StringRange: CheapClone {}
+extend StringRange: Clone {}
 
 func _fingerprint(view: Substring) -> Int {
 	let hash = 17
@@ -797,7 +797,7 @@ pub struct CharacterSet {
 	}
 }
 
-extend CharacterSet: CheapClone {}
+extend CharacterSet: Clone {}
 
 func _is_whitespace_character(character: Character) -> Bool {
 	character.is_whitespace()
@@ -2068,4 +2068,4 @@ pub struct TextCursor {
 	}
 }
 
-extend TextCursor: CheapClone {}
+extend TextCursor: Clone {}

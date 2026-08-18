@@ -100,7 +100,7 @@ last-use liveness:
   aggregate.
 
 `NominalRepresentation::Heap` means identity and shared reference semantics.
-Heap types cannot declare `Copy` or `CheapClone`; intrinsic reference aliasing
+Heap types cannot declare `Copy` or `Clone`; intrinsic reference aliasing
 is not a value-copy conformance and adds no `.clone()` witness. Every source
 heap duplication carries a distinct checked Alias edge with structural alias
 evidence; lowering turns it into exactly one external-root acquisition per
@@ -233,7 +233,7 @@ deallocates the control block.
 
 #### Copy-on-write order
 
-An O(1) `CheapClone` of a buffer-backed value retains the buffer once and
+An O(1) `Clone` of a buffer-backed value retains the buffer once and
 constructs a second owner; it does not retain or clone each element. Before
 mutation:
 
@@ -256,8 +256,8 @@ destroy it; initialize the slot with the replacement. Array destruction begins
 release of its buffer; only the final owner destroys initialized elements, in
 reverse index order.
 
-`Array<Element>` may be selected for `CheapClone` only when every possible
-detachment can clone `Element` under already selected Copy or CheapClone
+`Array<Element>` may be selected for `Clone` only when every possible
+detachment can clone `Element` under already selected Copy or Clone
 evidence. Affine host handles and other non-cloneable resources may be stored
 in a unique array, but such an array cannot be cloned.
 
@@ -843,7 +843,7 @@ used as a fallback representation for safe managed operations.
 - Consuming arguments, owned returns, explicit transfers, ordinary owning
   assignments, aggregate fields, and member-field initializations publish the
   required Move, Alias, or Borrow edge exactly once.
-- Heap declarations cannot claim `Copy` or `CheapClone`.
+- Heap declarations cannot claim `Copy` or `Clone`.
 - Selected buffer clones prove every future detachment can clone the element.
 - Capture operations and inherited evidence publish their ownership contracts;
   borrowed captures publish their source lifetime.

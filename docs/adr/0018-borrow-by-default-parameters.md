@@ -870,5 +870,5 @@ it. If a later design wants owned temporary mutation, it should use
 - This ADR does not redesign receiver modes; it aligns explicit parameters with
   them.
 - This ADR does not require implementing a full `Clone` protocol before the
-  syntax can land. Existing copy/cheap-clone grades can support the first
+  syntax can land. Existing copy/clone grades can support the first
   version.

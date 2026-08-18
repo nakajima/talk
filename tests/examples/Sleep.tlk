@@ -1,3 +1,5 @@
+use task::{ sleep }
+
 print("Starting...")
-sleep(ms: 1000)
+sleep(.seconds(1))
 print("Done after 1 second!")

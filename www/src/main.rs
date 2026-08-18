@@ -10,7 +10,7 @@ use std::{
 use dev_server::DevServer;
 
 use comrak::{
-    Arena, ComrakOptions, format_html,
+    Anchorizer, Arena, ComrakOptions, format_html,
     nodes::{AstNode, NodeHtmlBlock, NodeValue},
     parse_document,
 };
@@ -60,6 +60,148 @@ const CONTENT_PAGES: [ContentPage; 3] = [
     ContentPage {
         slug: "philosophy",
         title: "Philosophy",
+    },
+];
+
+#[derive(Clone, Copy)]
+struct ManualPage {
+    source: &'static str,
+    slug: &'static str,
+    title: &'static str,
+}
+
+impl ManualPage {
+    fn url(self) -> String {
+        if self.slug.is_empty() {
+            "/manual/".to_string()
+        } else {
+            format!("/manual/{}", self.slug)
+        }
+    }
+
+    fn outline_title(self) -> &'static str {
+        if self.slug.is_empty() {
+            "Overview"
+        } else {
+            self.title
+        }
+    }
+}
+
+struct ManualSection {
+    id: String,
+    title: String,
+}
+
+impl ManualSection {
+    fn from_markdown(markdown: &str) -> Vec<Self> {
+        let arena = Arena::new();
+        let root = parse_document(&arena, markdown, &ComrakOptions::default());
+        let mut anchorizer = Anchorizer::new();
+        let mut sections = Vec::new();
+        Self::collect(root, &mut anchorizer, &mut sections);
+        sections
+    }
+
+    fn collect<'a>(node: &'a AstNode<'a>, anchorizer: &mut Anchorizer, sections: &mut Vec<Self>) {
+        for child in node.children() {
+            if let NodeValue::Heading(heading) = &child.data.borrow().value {
+                let title = PlaygroundExample::text(child);
+                let id = anchorizer.anchorize(title.clone());
+                if heading.level == 2 {
+                    sections.push(Self { id, title });
+                }
+            }
+            Self::collect(child, anchorizer, sections);
+        }
+    }
+}
+
+const MANUAL_PAGES: [ManualPage; 17] = [
+    ManualPage {
+        source: "README.md",
+        slug: "",
+        title: "The TalkTalk Manual",
+    },
+    ManualPage {
+        source: "getting-started.md",
+        slug: "getting-started",
+        title: "0. Getting Started",
+    },
+    ManualPage {
+        source: "syntax.md",
+        slug: "syntax",
+        title: "1. Syntax",
+    },
+    ManualPage {
+        source: "values-and-types.md",
+        slug: "values-and-types",
+        title: "2. Values and Types",
+    },
+    ManualPage {
+        source: "bindings-and-functions.md",
+        slug: "bindings-and-functions",
+        title: "3. Bindings and Functions",
+    },
+    ManualPage {
+        source: "data-and-patterns.md",
+        slug: "data-and-patterns",
+        title: "4. Data and Patterns",
+    },
+    ManualPage {
+        source: "generics-and-protocols.md",
+        slug: "generics-and-protocols",
+        title: "5. Generics and Protocols",
+    },
+    ManualPage {
+        source: "effects.md",
+        slug: "effects",
+        title: "6. Effects",
+    },
+    ManualPage {
+        source: "ownership-and-memory.md",
+        slug: "ownership-and-memory",
+        title: "7. Ownership and Memory",
+    },
+    ManualPage {
+        source: "collections-and-text.md",
+        slug: "collections-and-text",
+        title: "8. Collections and Text",
+    },
+    ManualPage {
+        source: "modules-and-packages.md",
+        slug: "modules-and-packages",
+        title: "9. Modules and Packages",
+    },
+    ManualPage {
+        source: "macros.md",
+        slug: "macros",
+        title: "10. Macros",
+    },
+    ManualPage {
+        source: "concurrency.md",
+        slug: "concurrency",
+        title: "11. Concurrency",
+    },
+    ManualPage {
+        source: "testing.md",
+        slug: "testing",
+        title: "12. Testing",
+    },
+    ManualPage {
+        source: "standard-library.md",
+        slug: "standard-library",
+        title: "13. The Standard Library",
+    },
+    ManualPage {
+        source: "toolchain.md",
+        slug: "toolchain",
+        title: "14. The Toolchain",
+    },
+    ManualPage {
+        source: "unsafe-and-interop.md",
+        slug: "unsafe-and-interop",
+        title: "15. Unsafe Code and Interop",
     },
 ];
 
@@ -184,26 +326,147 @@ impl SiteBuilder {
             .replace("{CONTENT_GOES_HERE}", &compiled_html)
     }
 
+    fn page_header(self, kicker: &str, title: &str, extra: &str) -> String {
+        std::fs::read_to_string("./content/page-header.html.template")
+            .unwrap()
+            .replace("{KICKER}", kicker)
+            .replace("{TITLE}", title)
+            .replace("{HEADER_EXTRA}", extra)
+    }
+
     fn render_content_page(self, page: ContentPage) -> String {
+        if page.slug == "playground" {
+            let template = std::fs::read_to_string("./content/playground.html.template").unwrap();
+            return self.cache_bust(
+                template
+                    .replace("{GLOBAL_NAV}", &self.global_nav(page.slug))
+                    .replace("{TITLE}", page.title)
+                    .replace(
+                        "{PAGE_HEADER}",
+                        &self.page_header(
+                            page.slug,
+                            page.title,
+                            "<span class=\"runtime-status\">runtime loading</span>",
+                        ),
+                    ),
+            );
+        }
+
         let template = std::fs::read_to_string("./content/page.html.template").unwrap();
         let content = std::fs::read_to_string(format!("./content/{}.md", page.slug)).unwrap();
         let compiled_html = self.render_markdown(&content);
         let template = template
             .replace("{GLOBAL_NAV}", &self.global_nav(page.slug))
             .replace("{TITLE}", page.title)
-            .replace("{SLUG}", page.slug)
+            .replace(
+                "{PAGE_HEADER}",
+                &self.page_header(page.slug, page.title, ""),
+            )
             .replace("{CONTENT_GOES_HERE}", &compiled_html);
         self.cache_bust(template)
     }
 
+    fn render_manual_page(self, index: usize) -> String {
+        let page = MANUAL_PAGES[index];
+        let markdown = std::fs::read_to_string(format!("./manual/{}", page.source)).unwrap();
+        let heading = format!("# {}", page.title);
+        let content = markdown
+            .strip_prefix(&heading)
+            .and_then(|content| {
+                content
+                    .strip_prefix("\n")
+                    .or_else(|| content.strip_prefix("\r\n"))
+            })
+            .unwrap_or_else(|| panic!("manual source {} must begin with {heading:?}", page.source));
+        let compiled_html = self.render_manual_markdown(content);
+        let template = std::fs::read_to_string("./content/manual.html.template").unwrap();
+        let previous = index.checked_sub(1).map(|previous| MANUAL_PAGES[previous]);
+        let next = MANUAL_PAGES.get(index + 1).copied();
+        let previous_link = previous.map_or_else(
+            || "<span></span>".to_string(),
+            |previous| {
+                format!(
+                    "<a class=\"manual-previous\" href=\"{}\">&larr; {}</a>",
+                    previous.url(),
+                    previous.title
+                )
+            },
+        );
+        let next_link = next.map_or_else(
+            || "<span></span>".to_string(),
+            |next| {
+                format!(
+                    "<a class=\"manual-next\" href=\"{}\">{} &rarr;</a>",
+                    next.url(),
+                    next.title
+                )
+            },
+        );
+        let sections = ManualSection::from_markdown(content);
+        let outline = MANUAL_PAGES
+            .iter()
+            .map(|outline_page| {
+                let selected = outline_page.slug == page.slug;
+                let current = if selected {
+                    " aria-current=\"page\""
+                } else {
+                    ""
+                };
+                let section_links = if selected {
+                    let links = sections
+                        .iter()
+                        .map(|section| {
+                            format!(
+                                "<li><a href=\"#{}\">{}</a></li>",
+                                escape_html(&section.id),
+                                escape_html(&section.title)
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    format!("<ol class=\"manual-outline-sections\">{links}</ol>")
+                } else {
+                    String::new()
+                };
+                format!(
+                    "<li><a href=\"{}\"{current}>{}</a>{section_links}</li>",
+                    outline_page.url(),
+                    outline_page.outline_title()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let template = template
+            .replace("{GLOBAL_NAV}", &self.global_nav("docs"))
+            .replace("{TITLE}", page.title)
+            .replace("{PAGE_HEADER}", &self.page_header("docs", page.title, ""))
+            .replace("{MANUAL_OUTLINE}", &outline)
+            .replace("{CONTENT_GOES_HERE}", &compiled_html)
+            .replace("{PREVIOUS_LINK}", &previous_link)
+            .replace("{NEXT_LINK}", &next_link);
+        self.cache_bust(template)
+    }
+
     fn render_markdown(self, content: &str) -> String {
+        self.render_markdown_with_links(content, false)
+    }
+
+    fn render_manual_markdown(self, content: &str) -> String {
+        self.render_markdown_with_links(content, true)
+    }
+
+    fn render_markdown_with_links(self, content: &str, manual_links: bool) -> String {
         let arena = Arena::new();
         let mut options = ComrakOptions::default();
         options.extension.strikethrough = true;
         options.extension.footnotes = true;
+        options.extension.header_ids = manual_links.then(String::new);
         options.render.unsafe_ = true;
 
         let root = parse_document(&arena, content, &options);
+        if manual_links {
+            self.rewrite_manual_links(root);
+        }
         replace_code_blocks(root);
 
         let mut compiled_html = Vec::new();
@@ -211,9 +474,27 @@ impl SiteBuilder {
         String::from_utf8(compiled_html).unwrap()
     }
 
+    fn rewrite_manual_links<'a>(self, node: &'a AstNode<'a>) {
+        for child in node.children() {
+            self.rewrite_manual_links(child);
+        }
+
+        let mut data = node.data.borrow_mut();
+        let NodeValue::Link(link) = &mut data.value else {
+            return;
+        };
+        if link.url == "README.md" {
+            link.url = "/manual/".to_string();
+        } else if !link.url.contains('/') && link.url.ends_with(".md") {
+            link.url = format!("/manual/{}", link.url.trim_end_matches(".md"));
+        } else if let Some(repository_path) = link.url.strip_prefix("../../") {
+            link.url = format!("https://github.com/nakajima/talk/blob/main/{repository_path}");
+        }
+    }
+
     fn global_nav(self, current: &str) -> String {
         let mut nav = std::fs::read_to_string("./content/global-nav.html.template").unwrap();
-        for slug in ["language", "playground", "qa", "philosophy"] {
+        for slug in ["language", "docs", "playground", "qa", "philosophy"] {
             let placeholder = format!("{{{}_CURRENT}}", slug.to_uppercase());
             let value = if slug == current {
                 " aria-current=\"page\""
@@ -232,7 +513,9 @@ impl SiteBuilder {
             .as_secs();
         template
             .replace("/page.js", &format!("/page.js?t={timestamp}"))
+            .replace("/playground.js", &format!("/playground.js?t={timestamp}"))
             .replace("/style.css", &format!("/style.css?t={timestamp}"))
+            .replace("/playground.css", &format!("/playground.css?t={timestamp}"))
     }
 
     pub(crate) fn write_all(self, directory: &Path) -> std::io::Result<()> {
@@ -241,6 +524,20 @@ impl SiteBuilder {
             self.write_asset(
                 &directory.join(format!("{}.html", page.slug)),
                 self.render_content_page(page),
+            )?;
+        }
+
+        let manual_directory = directory.join("manual");
+        std::fs::create_dir_all(&manual_directory)?;
+        for (index, page) in MANUAL_PAGES.iter().enumerate() {
+            let filename = if page.slug.is_empty() {
+                "index.html".to_string()
+            } else {
+                format!("{}.html", page.slug)
+            };
+            self.write_asset(
+                &manual_directory.join(filename),
+                self.render_manual_page(index),
             )?;
         }
 
@@ -285,7 +582,7 @@ fn line_count(value: &str) -> usize {
 }
 
 fn highlight(code: &str) -> String {
-    let mut child = std::process::Command::new("../target/release/talk")
+    let mut child = std::process::Command::new("../target/debug/talk")
         .arg("html")
         .arg("-")
         .stdin(Stdio::piped())
@@ -370,7 +667,7 @@ fn highlight_intro_examples(template: &str) -> String {
 }
 
 fn talk(command: &str, code: &str) -> std::process::Output {
-    let mut child = std::process::Command::new("../target/release/talk")
+    let mut child = std::process::Command::new("../target/debug/talk")
         .arg(command)
         .arg("-")
         .stdin(Stdio::piped())
@@ -487,6 +784,10 @@ fn replace_code_blocks<'a>(node: &'a AstNode<'a>) {
 
     let mut data = node.data.borrow_mut();
     if let NodeValue::CodeBlock(block) = &data.value {
+        let language = block.info.split_whitespace().next().unwrap_or_default();
+        if language != "tlk" && language != "talktalk" {
+            return;
+        }
         data.value = NodeValue::HtmlBlock(NodeHtmlBlock {
             block_type: 1,
             literal: if block.info.contains("norun") {

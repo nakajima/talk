@@ -204,6 +204,7 @@ pub fn type_table(out: &mut String, interners: &Interners, display: &DisplayName
             TypeKind::Record => "TALK_TYPE_RECORD",
             TypeKind::Enum => "TALK_TYPE_ENUM",
             TypeKind::String => "TALK_TYPE_STRING",
+            TypeKind::Array => "TALK_TYPE_ARRAY",
         };
         let members_ref = if entry.members.is_empty() {
             "NULL".to_string()

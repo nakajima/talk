@@ -309,7 +309,7 @@ below.
   reassignment), with views re-rooted to the displaced value; mutable
   writebacks displace-with-retain instead of invalidating, so a view
   holds its snapshot across a `mut` call; `consume` of a borrowed
-  source drains a retained copy; and the Copy/CheapClone gate on
+  source drains a retained copy; and the Copy/Clone gate on
   binding out of a shared borrow is gone (every clone there is a
   retain). Fifteen more pins enforced, with a runtime test pinning
   snapshot values and balance. **Remaining for E:** returning views of
@@ -317,7 +317,7 @@ below.
   views* — a representation change (Borrowed-marker types retaining
   their referents) with bench-pin consequences that gets its own
   design pass; the leftover parked cases besides those are frontend
-  work (checker-level Copy/CheapClone bounds, borrowed-element
+  work (checker-level Copy/Clone bounds, borrowed-element
   pattern typing, capture support) and the dictionary boundaries.
 - **F. `talk check` integration.** The analysis runs from the check
   path and the LSP diagnostics surface; `talk check` on a rejected
@@ -457,14 +457,14 @@ rejects_returning_tuple_containing_local_borrow,
 returning_borrow_result_of_local_array_is_rejected,
 returning_borrow_through_expression_match_2.
 
-**Retired — cheap-clone bounds at use sites (4):** → clean except
+**Retired — clone bounds at use sites (4):** → clean except
 generic_heap_extraction_rejects_non_cheap_owned_instantiation → 0:
-borrowed_generic_payload_requires_copy_or_cheap_clone_bound,
-rejects_binding_non_cheap_clone_field_from_shared_borrow,
-rejects_returning_non_cheap_clone_field_from_shared_borrow.
+borrowed_generic_payload_requires_copy_or_clone_bound,
+rejects_binding_non_clone_field_from_shared_borrow,
+rejects_returning_non_clone_field_from_shared_borrow.
 Under retain-sharing every clone at these sites is a retain, so the
 "is the clone cheap?" question these pins policed no longer arises;
-`CheapClone` bounds become vestigial at binding/return-from-borrow
+`Clone` bounds become vestigial at binding/return-from-borrow
 sites (the marker itself remains meaningful elsewhere).
 
 ## References

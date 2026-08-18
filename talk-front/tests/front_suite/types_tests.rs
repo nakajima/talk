@@ -1829,11 +1829,11 @@ pub mod tests {
         assert_eq!(ty_of(&t, "pack"), "(Socket) -> any Fd");
     }
 
-    /// B4: packing from a borrowed CheapClone payload compiles by retaining
+    /// B4: packing from a borrowed Clone payload compiles by retaining
     /// (the same tier-2 coercion an owned argument slot gets), recorded for
-    /// lowering at the pack node. Core `String` is CheapClone.
+    /// lowering at the pack node. Core `String` is Clone.
     #[test]
-    fn implicit_pack_of_borrowed_cheap_clone_payload_records_a_clone() {
+    fn implicit_pack_of_borrowed_clone_payload_records_a_clone() {
         let t = Driver::new(
             vec![Source::from(
                 "protocol Sized {\n  func size() -> Int\n}\nextend String: Sized {\n  func size() -> Int { self.byte_count }\n}\nfunc pack(s: String) -> any Sized {\n\ts\n}",
@@ -1850,7 +1850,7 @@ pub mod tests {
         // `auto_clone` can only be the recorded donation retain.
         assert!(
             typed_exprs(&t).iter().any(|e| e.ownership.auto_clone),
-            "expected the borrowed CheapClone payload to record a retain for lowering"
+            "expected the borrowed Clone payload to record a retain for lowering"
         );
     }
 
@@ -2703,11 +2703,9 @@ pub mod tests {
             .member_resolutions
             .values()
             .filter_map(|resolution| match resolution {
-                talk_front::types::output::MemberResolution::ViaConformance {
-                    row,
-                    witness,
-                    ..
-                } => Some((*row, *witness)),
+                talk_front::types::output::MemberResolution::ViaConformance { row, witness, .. } => {
+                    Some((*row, *witness))
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -3168,8 +3166,8 @@ pub mod tests {
         );
     }
 
-    /// S4, with the core prelude: `String` is CheapClone, but a borrow
-    /// annotation still demands a genuine borrow — CheapClone coercion is an
+    /// S4, with the core prelude: `String` is Clone, but a borrow
+    /// annotation still demands a genuine borrow — Clone coercion is an
     /// application-site (`Apply`) rule only.
     #[test]
     fn borrow_annotation_rejects_owned_call_rvalue_with_core_string() {
@@ -4286,10 +4284,7 @@ pub mod tests {
                 DeclKind::Struct { body, .. } => {
                     for member in &body.decls {
                         if let DeclKind::Method { func, .. } = &member.kind {
-                            assert_eq!(
-                                func.receiver,
-                                talk_front::node_kinds::decl::ReceiverMode::Ref
-                            );
+                            assert_eq!(func.receiver, talk_front::node_kinds::decl::ReceiverMode::Ref);
                             saw_method = true;
                         }
                     }
@@ -4349,9 +4344,9 @@ pub mod tests {
     }
 
     #[test]
-    fn copy_marker_requires_copy_or_cheap_clone_evidence() {
+    fn copy_marker_requires_copy_or_clone_evidence() {
         // The `copy` marker is a checked clone: it demands Copy or
-        // CheapClone evidence, not merely a value that happens to need no
+        // Clone evidence, not merely a value that happens to need no
         // runtime cleanup.
         let t = check(
             "// no-core\nstruct Sock {\n\tlet fd: Int\n}\nfunc eat(consume s: Sock) -> Int { 0 }\nlet s = Sock(fd: 1)\neat(s: copy s)\n()",
@@ -4359,7 +4354,7 @@ pub mod tests {
         assert!(
             type_errors(&t)
                 .iter()
-                .any(|error| error.contains("Copy or CheapClone")),
+                .any(|error| error.contains("Copy or Clone")),
             "expected missing copy evidence to be rejected: {:?}",
             type_errors(&t)
         );
@@ -4502,8 +4497,7 @@ pub mod tests {
             .iter()
             .find_map(|(symbol, name)| (name == "impossible").then_some(*symbol))
             .expect("impossible symbol");
-        let _names =
-            talk_front::name_resolution::symbol::set_symbol_names(types.display_names.clone());
+        let _names = talk_front::name_resolution::symbol::set_symbol_names(types.display_names.clone());
         assert_eq!(types.schemes[&impossible].render(), "() 'panic -> Int");
     }
 
@@ -5522,7 +5516,9 @@ pub mod tests {
         );
         let errors = type_errors(&typed);
         assert!(
-            errors.iter().any(|error| error.contains("infinite type")),
+            errors
+                .iter()
+                .any(|error| error.contains("infinite type")),
             "{errors:?}"
         );
         assert!(
@@ -5997,8 +5993,8 @@ mod with_core {
         // module constructs and reads with per-construction rows, and the
         // stored effect still demands a handler — nothing is laundered by
         // the module boundary.
-        use std::rc::Rc;
         use talk_front::front::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
 
         let id_a = ModuleId::External(0);
         let module_a = compile_library(
@@ -6051,8 +6047,8 @@ mod with_core {
         // without importing each other; a consumer importing both must get
         // an ambiguity diagnostic at the use site, never import-order
         // dispatch.
-        use std::rc::Rc;
         use talk_front::front::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
 
         let (id_s, id_a, id_b) = (
             ModuleId::External(0),
@@ -6125,8 +6121,8 @@ mod with_core {
         // Compile module A, import it into module B as an external module:
         // A's schemes and catalog must arrive with symbols remapped to B's
         // view of A (milestone 6).
-        use std::rc::Rc;
         use talk_front::front::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
 
         let id_a = ModuleId::External(0);
         let module_a = compile_library(
@@ -6187,8 +6183,8 @@ mod with_core {
 
     #[test]
     fn associated_type_equalities_complete_conformance_rows_across_modules() {
-        use std::rc::Rc;
         use talk_front::front::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
 
         let id_a = ModuleId::External(0);
         let module_a = compile_library(
@@ -6234,8 +6230,8 @@ mod with_core {
 
     #[test]
     fn public_type_aliases_cross_module_boundary() {
-        use std::rc::Rc;
         use talk_front::front::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
 
         let id_a = ModuleId::External(0);
         let module_a = compile_library(
@@ -6429,10 +6425,7 @@ mod with_core {
                     .get(node)
                     .is_some_and(|pairs| {
                         pairs.iter().any(|(symbol, _)| {
-                            matches!(
-                                symbol,
-                                talk_front::name_resolution::symbol::Symbol::Protocol(_)
-                            )
+                            matches!(symbol, talk_front::name_resolution::symbol::Symbol::Protocol(_))
                         })
                     })
             });
@@ -6559,7 +6552,7 @@ mod with_core {
     }
 
     // === Grades: Copy / Affine / Linear (substructural core) ===
-    // These check against the real core prelude, where the Copy / CheapClone /
+    // These check against the real core prelude, where the Copy / Clone /
     // Deinit marker protocols live.
 
     fn assert_no_errors(driver: &Driver<Typed>) {
@@ -6586,7 +6579,7 @@ mod with_core {
     #[test]
     fn rigid_slot_without_donation_evidence_reports_the_adaptation() {
         // A borrow crossing into a consuming rigid slot with no
-        // Copy/CheapClone bound is an adaptation failure, and the
+        // Copy/Clone bound is an adaptation failure, and the
         // diagnostic says so — naming the owned slot and the missing
         // evidence rather than rendering a bare `T` vs `&T` mismatch
         // (ADR 0054 stage 5).
@@ -6598,7 +6591,7 @@ mod with_core {
             errors
                 .iter()
                 .any(|error| error.contains("consumes an owned T")
-                    && error.contains("Copy or CheapClone")),
+                    && error.contains("Copy or Clone")),
             "expected the donation refusal to explain itself: {errors:?}"
         );
     }
@@ -6639,12 +6632,12 @@ mod with_core {
 
     #[test]
     fn marker_field_check_sees_generic_conformance_row() {
-        // A declared generic marker conformance (`extend Ref<T>: CheapClone`)
+        // A declared generic marker conformance (`extend Ref<T>: Clone`)
         // is the authority for `Ref<ExprTag>` fields — the field check must
         // consult the row, not re-derive its own per-argument rule (which
         // rejected the phantom empty-enum tag).
         let t = check_with_core(Source::from(
-            "enum ExprTag {}\nenum Ref<T> {\n\tcase expr(Int) -> Ref<ExprTag>\n}\nextend Ref<T>: CheapClone {}\nenum Work {\n\tcase dump(Ref<ExprTag>)\n\tcase text(String)\n}\nextend Work: CheapClone {}",
+            "enum ExprTag {}\nenum Ref<T> {\n\tcase expr(Int) -> Ref<ExprTag>\n}\nextend Ref<T>: Clone {}\nenum Work {\n\tcase dump(Ref<ExprTag>)\n\tcase text(String)\n}\nextend Work: Clone {}",
         ));
         assert_no_errors(&t);
     }
@@ -6660,9 +6653,9 @@ mod with_core {
     #[test]
     fn conditional_marker_conformance_validates_against_its_context() {
         // The where-clause is the authority for a conditional row's own
-        // field check: `T` satisfies CheapClone because the context says so.
+        // field check: `T` satisfies Clone because the context says so.
         let t = check_with_core(Source::from(
-            "struct Box<T> {\n\tlet value: T\n}\nextend<T> Box<T>: CheapClone where T: CheapClone {}\nstruct Holder {\n\tlet inner: Box<String>\n}\nextend Holder: CheapClone {}",
+            "struct Box<T> {\n\tlet value: T\n}\nextend<T> Box<T>: Clone where T: Clone {}\nstruct Holder {\n\tlet inner: Box<String>\n}\nextend Holder: Clone {}",
         ));
         assert_no_errors(&t);
     }
@@ -6692,10 +6685,10 @@ mod with_core {
     }
 
     #[test]
-    fn conditional_cheap_clone_satisfied_context_extracts_from_borrow() {
+    fn conditional_clone_satisfied_context_extracts_from_borrow() {
         // The satisfied twin still extracts by silent clone.
         let t = check_with_core(Source::from(
-            "struct Box<T> {\n\tlet value: T\n}\nextend<T> Box<T>: CheapClone where T: CheapClone {}\nfunc peek(b: &Box<String>?) -> Box<String>? {\n\tmatch b {\n\t\t.some(found) -> Optional.some(found),\n\t\t.none -> Optional.none\n\t}\n}",
+            "struct Box<T> {\n\tlet value: T\n}\nextend<T> Box<T>: Clone where T: Clone {}\nfunc peek(b: &Box<String>?) -> Box<String>? {\n\tmatch b {\n\t\t.some(found) -> Optional.some(found),\n\t\t.none -> Optional.none\n\t}\n}",
         ));
         assert!(
             !t.has_errors(),
@@ -6706,14 +6699,14 @@ mod with_core {
     #[test]
     fn conditional_marker_conformance_rejects_unsatisfied_context() {
         // The same row must NOT satisfy a field whose argument fails the
-        // where-clause: Box<NotCheap> is not CheapClone.
+        // where-clause: Box<NotCheap> is not Clone.
         let t = check_with_core(Source::from(
-            "struct Box<T> {\n\tlet value: T\n}\nextend<T> Box<T>: CheapClone where T: CheapClone {}\nstruct NotCheap {\n\tlet value: String\n}\nstruct Holder {\n\tlet inner: Box<NotCheap>\n}\nextend Holder: CheapClone {}",
+            "struct Box<T> {\n\tlet value: T\n}\nextend<T> Box<T>: Clone where T: Clone {}\nstruct NotCheap {\n\tlet value: String\n}\nstruct Holder {\n\tlet inner: Box<NotCheap>\n}\nextend Holder: Clone {}",
         ));
         let errors = type_errors(&t);
         assert!(
-            errors.iter().any(|e| e.contains("CheapClone")),
-            "expected a non-CheapClone-field error, got {errors:?}"
+            errors.iter().any(|e| e.contains("Clone")),
+            "expected a non-Clone-field error, got {errors:?}"
         );
     }
 
@@ -6901,9 +6894,7 @@ mod with_core {
         ));
         let errors = type_errors(&t);
         assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("heap") || e.contains("Send")),
+            errors.iter().any(|e| e.contains("heap") || e.contains("Send")),
             "expected a 'heap/Send conflict error, got {errors:?}"
         );
     }
@@ -7171,9 +7162,9 @@ mod with_core {
     }
 
     #[test]
-    fn clone_method_exists_for_copy_and_cheapclone_values() {
+    fn clone_method_exists_for_copy_and_clone_values() {
         let t = check_with_core(Source::from(
-            "struct BoxedText {\n\tlet value: String\n}\nextend BoxedText: CheapClone {}\nlet original = BoxedText(value: \"hi\")\nlet duplicate = original.clone()\nlet number = 1\nlet copied = number.clone()\nprint(original.value)\nprint(duplicate.value)\nprint(number + copied)",
+            "struct BoxedText {\n\tlet value: String\n}\nextend BoxedText: Clone {}\nlet original = BoxedText(value: \"hi\")\nlet duplicate = original.clone()\nlet number = 1\nlet copied = number.clone()\nprint(original.value)\nprint(duplicate.value)\nprint(number + copied)",
         ));
         assert_no_errors(&t);
     }
@@ -7618,10 +7609,7 @@ struct B { let a: A }",
                 .iter()
                 .find_map(|(symbol, name)| (name == wanted).then_some(*symbol))
                 .unwrap_or_else(|| panic!("{wanted} symbol"));
-            assert_eq!(
-                catalog.heap_origin(symbol),
-                Some(HeapOrigin::RecursiveLayout)
-            );
+            assert_eq!(catalog.heap_origin(symbol), Some(HeapOrigin::RecursiveLayout));
         }
     }
 
@@ -7906,8 +7894,8 @@ func width<static N: Int>() -> Int { N }",
 
     #[test]
     fn static_generics_cross_module_boundary() {
-        use std::rc::Rc;
         use talk_front::front::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
 
         let id_a = ModuleId::External(0);
         let module_a = super::tests::compile_library(
@@ -9205,6 +9193,19 @@ mod nested_types {
     }
 
     #[test]
+    fn effect_trailing_blocks_satisfy_labeled_final_params() {
+        let t = check(
+            "effect 'map(value: Int, transform fn: (Int) -> Int) -> Int\nfunc run() 'map -> Int {\n\t'map(value: 1) { $0 }\n}",
+        );
+        assert_clean(&t);
+
+        let t = check(
+            "effect 'apply(transform fn: () -> Int) -> Int\nfunc run() 'apply -> Int {\n\t'apply { 42 }\n}",
+        );
+        assert_clean(&t);
+    }
+
+    #[test]
     fn label_overloads_select_by_full_name() {
         // ADR 0041: fizz(a:) and fizz(b:) coexist; calls select by labels
         // before ordinary type checking.
@@ -9438,9 +9439,9 @@ mod nested_types {
         // full callable names coexist in the export table; the importer
         // gets the whole overload set.
         use super::tests::compile_library;
-        use std::rc::Rc;
         use talk::compiling::driver::{Driver, Source};
         use talk_front::front::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
 
         let id_a = ModuleId::External(0);
         let module_a = compile_library(
@@ -9486,9 +9487,9 @@ mod nested_types {
     #[test]
     fn imported_bare_overload_references_are_ambiguous() {
         use super::tests::compile_library;
-        use std::rc::Rc;
         use talk::compiling::driver::{Driver, Source};
         use talk_front::front::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
 
         let id_a = ModuleId::External(0);
         let module_a = compile_library(
@@ -9549,9 +9550,9 @@ mod nested_types {
         // ADR 0041: imported contracts merge alongside imported schemes,
         // surviving module serialization.
         use super::tests::compile_library;
-        use std::rc::Rc;
         use talk::compiling::driver::{Driver, Source};
         use talk_front::front::module::{ModuleEnvironment, ModuleId};
+        use std::rc::Rc;
 
         let id_a = ModuleId::External(0);
         let module_a = compile_library(
@@ -9748,9 +9749,9 @@ mod rank_n_field_tests {
 #[cfg(test)]
 mod declared_struct_field_tests {
     use super::tests::{check, compile_library, type_errors};
-    use std::rc::Rc;
     use talk::compiling::driver::{Driver, DriverConfig, Source};
     use talk_front::front::module::{ModuleEnvironment, ModuleId};
+    use std::rc::Rc;
 
     /// Declared polymorphic struct fields: the field's quantified type
     /// is a first-class scheme in the catalog; construction checks the

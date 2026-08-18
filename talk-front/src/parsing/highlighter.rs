@@ -581,11 +581,19 @@ impl<'a> Higlighter<'a> {
                 }
                 ExprKind::CallEffect {
                     effect_name_span,
+                    type_args,
                     args,
+                    trailing_block,
                     ..
                 } => {
                     result.push(self.make_span(Kind::EFFECT, *effect_name_span));
+                    for type_arg in type_args {
+                        self.tokens_from_generic_arg(type_arg, ast, &mut result);
+                    }
                     result.extend(self.tokens_from_exprs(args, ast));
+                    if let Some(block) = trailing_block {
+                        result.extend(self.tokens_from_exprs(&block.body, ast));
+                    }
                 }
                 ExprKind::LiteralArray(exprs) => {
                     result.extend(self.tokens_from_exprs(exprs, ast));

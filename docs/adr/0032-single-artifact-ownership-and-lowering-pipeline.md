@@ -116,7 +116,7 @@ A future explicit cancellation or abort-safe resource protocol may define a
 canonical consuming action. Until then, an abort path may not abandon a live
 strict linear value.
 
-Cheap cloning is type-specific. An implicit CheapClone remains an explicit
+Cloning is type-specific. An implicit Clone remains an explicit
 coercion in `TypedProgram` and an explicit operation in `CheckedMir`; it is not
 selected later by liveness.
 
@@ -784,7 +784,7 @@ StorageLive / StorageDead
 Initialize place from rvalue
 Begin shared or mutable borrow
 End borrow
-Explicit CheapClone or other selected clone
+Explicit Clone or other selected clone
 Aggregate and enum construction
 Checked projection or payload extraction
 Destroy affine value
@@ -1725,7 +1725,7 @@ workaround.
   the source-level dynamic, deep, one-shot and discontinue semantics described
   here without adopting capability-passing CPS, lambda-G, or the old VM
   mechanism.
-- ADR 0029 remains rejected. Type-specific CheapClone and explicit generated
+- ADR 0029 remains rejected. Type-specific Clone and explicit generated
   cleanup do not imply uniform reference counting.
 - ADR 0008 remains the source direction for managed storage and FFI where it
   does not conflict with the stricter artifact and ownership contracts here.

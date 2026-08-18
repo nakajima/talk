@@ -1,0 +1,9 @@
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / {KICKER}</code>
+          <div class="page-header-title-row">
+            <h1>{TITLE}</h1>
+            {HEADER_EXTRA}
+          </div>
+        </div>
+      </header>

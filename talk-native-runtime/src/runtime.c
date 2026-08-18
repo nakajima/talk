@@ -161,7 +161,8 @@ enum {
     /* A protocol existential: the payload at slot 0, witnesses after.
      * The runtime renders the payload alone, so the witness table must
      * not show up in the output. */
-    TALK_TYPE_EXISTENTIAL = 4
+    TALK_TYPE_EXISTENTIAL = 4,
+    TALK_TYPE_ARRAY = 5
 };
 
 /* Type names and member names, emitted from the program's catalogs. */
@@ -518,10 +519,20 @@ static TalkValue talk_native_set_field(TalkValue record, uint32_t index, TalkVal
 
 #define TALK_ALLOC_MAGIC 0x7401C0DEu
 
+enum {
+    TALK_MEM_BYTE = 0,
+    TALK_MEM_I64 = 1,
+    TALK_MEM_F64 = 2,
+    TALK_MEM_BOOL = 3,
+    TALK_MEM_PTR = 4,
+    TALK_MEM_BOXED = 5
+};
+
 typedef struct TalkHeader {
     uint32_t magic;
     _Atomic uint32_t rc;
     uint64_t len;
+    uint8_t kind;
 #if defined(TALK_LIBRARY)
     struct TalkHeader *lib_prev;
     struct TalkHeader *lib_next;
@@ -571,7 +582,7 @@ static inline TalkHeader *talk_header(unsigned char *pointer) {
     return header;
 }
 
-static TalkValue talk_alloc(TalkValue bytes) {
+static TalkValue talk_alloc(TalkValue bytes, uint8_t kind) {
     if (bytes.v.i < 0) {
         talk_trap("negative allocation size");
     }
@@ -587,6 +598,7 @@ static TalkValue talk_alloc(TalkValue bytes) {
      * needs no ordering. */
     atomic_init(&header->rc, 1u);
     header->len = count;
+    header->kind = kind;
 #if defined(TALK_LIBRARY)
     header->lib_next = talk_lib_allocations;
     if (talk_lib_allocations != NULL) {
@@ -3099,6 +3111,8 @@ static size_t talk_utf8_step(const unsigned char *bytes, size_t available, size_
     return width;
 }
 
+static void talk_render(TalkOut *out, TalkValue value);
+
 /* The core String layout: `String { Storage { base }, byte_count, .. }`.
  *
  * Rendered the way the runtime renders it, which converts through
@@ -3138,6 +3152,52 @@ static void talk_render_string(TalkOut *out, TalkAgg *string) {
         }
     }
     talk_out_text(out, "\"");
+}
+
+/* The core Array layout is `[Storage { base }, count, capacity]` after
+ * flattening. Allocation carries the uniform element representation, so
+ * rendering can load each element exactly as the generated program does. */
+static void talk_render_array(TalkOut *out, TalkAgg *array) {
+    if (array->len < 3 || array->fields[0].tag != TALK_PTR
+        || array->fields[1].tag != TALK_INT || array->fields[2].tag != TALK_INT) {
+        talk_trap("Array value does not have Array's shape");
+    }
+    int64_t signed_count = array->fields[1].v.i;
+    int64_t signed_capacity = array->fields[2].v.i;
+    if (signed_count < 0 || signed_capacity < 0 || signed_count > signed_capacity) {
+        talk_trap("malformed Array bounds");
+    }
+    size_t count = (size_t)signed_count;
+    talk_out_text(out, "[");
+    if (count != 0) {
+        unsigned char *base = array->fields[0].v.ptr;
+        if (talk_is_static(base)) {
+            talk_trap("Array storage cannot be static");
+        }
+        TalkHeader *header = talk_header(base);
+        size_t stride = header->kind == TALK_MEM_BYTE ? 1 : 8;
+        if (count > SIZE_MAX / stride || count * stride > header->len) {
+            talk_trap("Array count exceeds its storage");
+        }
+        for (size_t index = 0; index < count; index++) {
+            if (index != 0) {
+                talk_out_text(out, ", ");
+            }
+            TalkValue pointer = talk_pointer(base + index * stride);
+            TalkValue element;
+            switch (header->kind) {
+            case TALK_MEM_BYTE: element = talk_load_byte(pointer); break;
+            case TALK_MEM_I64: element = talk_load_i64(pointer); break;
+            case TALK_MEM_F64: element = talk_load_f64(pointer); break;
+            case TALK_MEM_BOOL: element = talk_load_bool(pointer); break;
+            case TALK_MEM_PTR: element = talk_load_ptr(pointer); break;
+            case TALK_MEM_BOXED: element = talk_load_boxed(pointer); break;
+            default: talk_trap("Array storage has an unknown element kind");
+            }
+            talk_render(out, element);
+        }
+    }
+    talk_out_text(out, "]");
 }
 
 static void talk_render(TalkOut *out, TalkValue value) {
@@ -3192,6 +3252,10 @@ static void talk_render(TalkOut *out, TalkValue value) {
     const TalkTypeInfo *info = talk_type_of(agg->symbol);
     if (info != NULL && info->kind == TALK_TYPE_STRING) {
         talk_render_string(out, agg);
+        return;
+    }
+    if (info != NULL && info->kind == TALK_TYPE_ARRAY) {
+        talk_render_array(out, agg);
         return;
     }
     if (info != NULL && info->kind == TALK_TYPE_EXISTENTIAL) {

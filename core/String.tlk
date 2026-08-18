@@ -7,7 +7,7 @@
 use package::Array::{ Array }
 use package::Operators::{ Add, Comparable, Equatable, Subtract }
 use package::Memory::{ ByteStorage, _alloc, _copy, _ptr_add, _store }
-use package::Ownership::{ Borrowed, CheapClone }
+use package::Ownership::{ Borrowed, Clone }
 use package::Convert::{ Into }
 use package::Result::{ Result }
 use package::Iterable::{ IndexIterable }
@@ -234,10 +234,10 @@ pub struct Substring {
 }
 
 extend Substring: Borrowed {}
-extend Substring: CheapClone {}
+extend Substring: Clone {}
 
-extend String: CheapClone {}
-extend<Value: CheapClone> Static<Value>: CheapClone {}
+extend String: Clone {}
+extend<Value: Clone> Static<Value>: Clone {}
 
 // A borrowed view of a string's raw UTF-8 bytes. Offsets are byte
 // offsets: `slice` can split a multi-byte character, so anything

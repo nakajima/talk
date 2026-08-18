@@ -427,7 +427,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         row: crate::types::catalog::ConformanceId,
         node: NodeID,
     ) {
-        if matches!(protocol, Symbol::Copy | Symbol::CheapClone | Symbol::Deinit)
+        if matches!(protocol, Symbol::Copy | Symbol::Clone | Symbol::Deinit)
             || protocol == Symbol::Send
             || protocol == Symbol::Sync
         {
@@ -437,8 +437,8 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
 
     /// Validate the substructural marker protocols once the whole catalog is
     /// collected: a `linear` declaration may not claim any of them (Copy
-    /// duplicates the value, CheapClone shares it, Deinit silently discards
-    /// it), and `Copy`/`CheapClone` require every field to satisfy the
+    /// duplicates the value, Clone shares it, Deinit silently discards
+    /// it), and `Copy`/`Clone` require every field to satisfy the
     /// marker. The ADR 0050 capabilities validate on the same pass: every
     /// stored component of a `Send`/`Sync` claim must satisfy the claimed
     /// capability, so safe source cannot lie about thread transfer or
@@ -539,7 +539,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
         }
     }
 
-    /// The stored payload types a Copy/CheapClone claim must cover: struct
+    /// The stored payload types a Copy/Clone claim must cover: struct
     /// fields, or every enum variant's constructor parameters.
     fn marker_checked_fields(&self, head: Symbol) -> Vec<(String, Ty)> {
         if let Some(info) = self.catalog.structs.get(&head) {
@@ -2293,7 +2293,7 @@ impl<'s, 'a> CatalogBuilder<'s, 'a> {
                             let separately_claims_owner = owner != protocol
                                 && self.explicit_conformances.contains(&(head, owner.clone()));
                             let intrinsic_marker_clone = label == "clone"
-                                && matches!(owner.protocol, Symbol::Copy | Symbol::CheapClone);
+                                && matches!(owner.protocol, Symbol::Copy | Symbol::Clone);
                             if !requirement.has_default
                                 && !intrinsic_marker_clone
                                 && !already_conforms_to_owner

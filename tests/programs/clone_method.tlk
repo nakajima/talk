@@ -1,9 +1,9 @@
-// Explicit cloning is a method on Copy and CheapClone values.
+// Explicit cloning is a method on Copy and Clone values.
 
 struct BoxedText {
 	let value: String
 }
-extend BoxedText: CheapClone {}
+extend BoxedText: Clone {}
 
 let original = BoxedText(value: "hello")
 let duplicate = original.clone()

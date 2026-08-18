@@ -1,0 +1,458 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - 1. Syntax</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037475" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>1. Syntax</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax" aria-current="page">1. Syntax</a><ol class="manual-outline-sections"><li><a href="#statements-and-blocks">Statements and blocks</a></li>
+<li><a href="#comments">Comments</a></li>
+<li><a href="#control-flow">Control flow</a></li>
+<li><a href="#calls-and-member-access">Calls and member access</a></li>
+<li><a href="#operators">Operators</a></li>
+<li><a href="#names-and-visibility">Names and visibility</a></li></ol></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/getting-started">&larr; 0. Getting Started</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/values-and-types">2. Values and Types &rarr;</a>
+          </nav>
+          <article class="page-content">
+            <p>TalkTalk uses braces around blocks of code, starts a new statement on each line, and uses <code>//</code> for comments. If the last line of a block produces a value, that value becomes the result of the block.</p>
+<h2><a href="#statements-and-blocks" aria-hidden="true" class="anchor" id="statements-and-blocks"></a>Statements and blocks</h2>
+<p>A newline normally ends a statement. Semicolons are accepted but frowned upon (and the formatter will probably get rid of them anyway):</p>
+<div class='runnable' data-accumulates='true' data-accumulate-group='syntax'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> width <span class="operator">=</span> <span class="number">6</span>
+<span class="keyword">let</span> height <span class="operator">=</span> <span class="number">7</span>
+<span class="variable">print</span>(<span class="variable">width</span> <span class="operator">*</span> <span class="variable">height</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let width = 6
+let height = 7
+print(width * height)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Declarations, conditionals, loops, closures, and matches use braces:</p>
+<div class='runnable' data-accumulates='true' data-accumulate-group='syntax'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">if</span> <span class="variable">width</span> <span class="operator">==</span> <span class="variable">height</span> {
+	<span class="variable">print</span>(<span class="string">"square"</span>)
+} <span class="keyword">else</span> {
+	<span class="variable">print</span>(<span class="string">"rectangle"</span>)
+}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>if width == height {
+	print(&quot;square&quot;)
+} else {
+	print(&quot;rectangle&quot;)
+}</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>A function or closure returns its final expression implicitly:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">absolute</span>(<span class="parameter">_</span> <span class="parameter">n</span>: <span class="type">Int</span>) <span class="operator">-&gt;</span> <span class="type">Int</span> {
+	<span class="keyword">if</span> <span class="variable">n</span> <span class="operator">&lt;</span> <span class="number">0</span> {
+		<span class="operator">-</span><span class="variable">n</span>
+	} <span class="keyword">else</span> {
+		<span class="variable">n</span>
+	}
+}
+
+<span class="variable">absolute</span>(<span class="operator">-</span><span class="number">5</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='9' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func absolute(_ n: Int) -&gt; Int {
+	if n &lt; 0 {
+		-n
+	} else {
+		n
+	}
+}
+
+absolute(-5)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Use <code>return</code> for an early return.</p>
+<h2><a href="#comments" aria-hidden="true" class="anchor" id="comments"></a>Comments</h2>
+<p><code>//</code> comments run to the end of the line:</p>
+<div class='runnable' data-accumulates='true' data-accumulate-group='syntax'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="comment">// Area in square units.</span>
+<span class="keyword">let</span> area <span class="operator">=</span> <span class="variable">width</span> <span class="operator">*</span> <span class="variable">height</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='2' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>// Area in square units.
+let area = width * height</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<h2><a href="#control-flow" aria-hidden="true" class="anchor" id="control-flow"></a>Control flow</h2>
+<p><code>if</code> is an expression when both branches produce compatible values:</p>
+<div class='runnable' data-accumulates='true' data-accumulate-group='syntax'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> label <span class="operator">=</span> <span class="keyword">if</span> <span class="variable">area</span> <span class="operator">&gt;</span> <span class="number">100</span> {
+	<span class="string">"large"</span>
+} <span class="keyword">else</span> {
+	<span class="string">"small"</span>
+}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let label = if area &gt; 100 {
+	&quot;large&quot;
+} else {
+	&quot;small&quot;
+}</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p><code>else if</code> chains are supported. A statement-position <code>if</code> may omit <code>else</code>.</p>
+<p><code>loop</code> is either infinite or while-like:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> n <span class="operator">=</span> <span class="number">3</span>
+<span class="keyword">loop</span> <span class="variable">n</span> <span class="operator">&gt;</span> <span class="number">0</span> {
+	<span class="variable">print</span>(<span class="variable">n</span>)
+	<span class="variable">n</span> <span class="operator">=</span> <span class="variable">n</span> <span class="operator">-</span> <span class="number">1</span>
+}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let n = 3
+loop n &gt; 0 {
+	print(n)
+	n = n - 1
+}</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Use <code>break</code> and <code>continue</code> inside loops. <code>for</code> works through the <code>Iterable</code> and <code>Iterator</code> protocols:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">for</span> n <span class="keyword">in</span> <span class="number">0</span><span class="operator">..&lt;</span><span class="number">3</span> {
+	<span class="variable">print</span>(<span class="variable">n</span>)
+}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>for n in 0..&lt;3 {
+	print(n)
+}</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p><code>0..&lt;3</code> is half-open; <code>0..3</code> is closed.</p>
+<h2><a href="#calls-and-member-access" aria-hidden="true" class="anchor" id="calls-and-member-access"></a>Calls and member access</h2>
+<p>Calls use parentheses. Parameters without type annotations are positional, so this function is called as <code>repeat(&quot;ha&quot;, 3)</code>:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">repeat</span>(<span class="parameter">text</span>, <span class="parameter">count</span>) <span class="operator">-&gt;</span> <span class="type">String</span> {
+	<span class="variable">text</span>.<span class="property">repeated</span>(<span class="variable">count</span>)
+}
+
+<span class="variable">repeat</span>(<span class="string">"ha"</span>, <span class="number">3</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func repeat(text, count) -&gt; String {
+	text.repeated(count)
+}
+
+repeat(&quot;ha&quot;, 3)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>The compiler learns from the body that <code>text</code> is a <code>String</code> and <code>count</code> is an <code>Int</code>. You can add those types yourself; typed parameters use their names as call-site labels by default:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">repeat</span>(<span class="parameter">text</span>: <span class="type">String</span>, <span class="parameter">count</span>: <span class="type">Int</span>) <span class="operator">-&gt;</span> <span class="type">String</span> {
+	<span class="variable">text</span>.<span class="property">repeated</span>(<span class="variable">count</span>)
+}
+
+<span class="variable">repeat</span>(<span class="parameter">text</span>: <span class="string">"ha"</span>, <span class="parameter">count</span>: <span class="number">3</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func repeat(text: String, count: Int) -&gt; String {
+	text.repeated(count)
+}
+
+repeat(text: &quot;ha&quot;, count: 3)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Use <code>_</code> to leave a parameter positional, or write a different label before its local name:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">repeat</span>(<span class="parameter">_</span> <span class="parameter">text</span>: <span class="type">String</span>, <span class="parameter">times</span> <span class="parameter">count</span>: <span class="type">Int</span>) <span class="operator">-&gt;</span> <span class="type">String</span> {
+	<span class="variable">text</span>.<span class="property">repeated</span>(<span class="variable">count</span>)
+}
+
+<span class="variable">repeat</span>(<span class="string">"ha"</span>, <span class="parameter">times</span>: <span class="number">3</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func repeat(_ text: String, times count: Int) -&gt; String {
+	text.repeated(count)
+}
+
+repeat(&quot;ha&quot;, times: 3)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p><a href="/manual/bindings-and-functions">Bindings and Functions</a> covers labels and type inference in more detail.</p>
+<p>Member access uses <code>.</code>, tuple fields use numeric members, and subscripts use brackets:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> pair <span class="operator">=</span> (<span class="number">10</span>, <span class="number">20</span>)
+<span class="keyword">let</span> numbers <span class="operator">=</span> [<span class="number">3</span>, <span class="number">5</span>, <span class="number">8</span>]
+<span class="variable">print</span>(<span class="variable">pair</span>.<span class="number">0</span> <span class="operator">+</span> <span class="variable">numbers</span>[<span class="number">1</span>])</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let pair = (10, 20)
+let numbers = [3, 5, 8]
+print(pair.0 + numbers[1])</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>A final function argument can be written as a block after the call. Inside a short block, <code>$0</code> means the first argument, <code>$1</code> the second, and so on:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'>[<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>].<span class="property">map</span> { <span class="variable">$0</span> <span class="operator">*</span> <span class="number">10</span> }.<span class="property">to_array</span>()</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='1' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>[1, 2, 3].map { $0 * 10 }.to_array()</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Here <code>map</code> calls the block once for each number. The compiler knows each <code>$0</code> is an <code>Int</code> because the array contains integers. You can name the argument when that reads better: <code>.map { number in number * 10 }</code>.</p>
+<h2><a href="#operators" aria-hidden="true" class="anchor" id="operators"></a>Operators</h2>
+<p>The common operators are:</p>
+<ul>
+<li>arithmetic: <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code></li>
+<li>comparison: <code>==</code>, <code>!=</code>, <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code></li>
+<li>Boolean: <code>!</code>, <code>&amp;&amp;</code>, <code>||</code></li>
+<li>bitwise: <code>&amp;</code>, <code>|</code>, <code>^</code>, <code>~</code>, <code>&lt;&lt;</code>, <code>&gt;&gt;</code></li>
+<li>propagation and force unwrap: postfix <code>?</code> and <code>!</code></li>
+<li>conversion or existential packing: <code>as</code></li>
+</ul>
+<p>The usual precedence rules apply, so multiplication happens before addition. Strings use <code>+</code> for concatenation:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> total <span class="operator">=</span> <span class="number">2</span> <span class="operator">+</span> <span class="number">3</span> <span class="operator">*</span> <span class="number">4</span>
+<span class="keyword">let</span> in_range <span class="operator">=</span> <span class="variable">total</span> <span class="operator">&gt;=</span> <span class="number">10</span> <span class="operator">&amp;&amp;</span> <span class="variable">total</span> <span class="operator">&lt;</span> <span class="number">20</span>
+<span class="keyword">let</span> greeting <span class="operator">=</span> <span class="string">"hello, "</span> <span class="operator">+</span> <span class="string">"world"</span>
+
+<span class="variable">print</span>(<span class="variable">greeting</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let total = 2 + 3 * 4
+let in_range = total &gt;= 10 &amp;&amp; total &lt; 20
+let greeting = &quot;hello, &quot; + &quot;world&quot;
+
+print(greeting)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Operators can also work with user-defined types. The matching protocol, such as <code>Add</code> or <code>Comparable</code>, defines what the operator does; <a href="/manual/generics-and-protocols">Generics and Protocols</a> explains how.</p>
+<h2><a href="#names-and-visibility" aria-hidden="true" class="anchor" id="names-and-visibility"></a>Names and visibility</h2>
+<p>Each source file is a module. Declarations stay inside that file unless you prefix them with <code>pub</code>:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="modifier">pub</span> <span class="keyword">func</span> <span class="function">answer</span>() <span class="operator">-&gt;</span> <span class="type">Int</span> { <span class="number">42</span> }</pre>
+        </div>
+        
+<p>Another file can then import <code>answer</code>. TalkTalk does not currently require type annotations on public declarations, though annotations often make a public API easier to understand. See <a href="/manual/modules-and-packages">Modules and Packages</a> for imports and file layout.</p>
+<p>A local name is available after its declaration and may reuse an earlier name. Function declarations are available throughout their enclosing block, including above the line where they are written.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/getting-started">&larr; 0. Getting Started</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/values-and-types">2. Values and Types &rarr;</a>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037475"></script>
+    </main>
+  </body>
+</html>

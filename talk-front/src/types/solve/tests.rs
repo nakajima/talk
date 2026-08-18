@@ -131,12 +131,12 @@ fn level_adjustment_propagates_outward() {
 }
 
 #[test]
-fn adaptation_clones_borrowed_cheap_clone_argument() {
+fn adaptation_clones_borrowed_clone_argument() {
     let mut h = Harness::new();
     let cheap = Symbol::Struct(StructId::new(ModuleId::Current, 7));
     h.catalog.insert_conformance(
         ModuleId::Current,
-        Conformance::new(cheap, ProtocolRef::bare(Symbol::CheapClone)),
+        Conformance::new(cheap, ProtocolRef::bare(Symbol::Clone)),
     );
     let owned = Ty::Nominal(cheap, vec![]);
     let borrowed = Ty::Borrow(Perm::Shared, Box::new(owned.clone()));

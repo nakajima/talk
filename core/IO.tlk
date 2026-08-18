@@ -91,10 +91,6 @@ pub let STDIN_FD: Int = 0
 pub let STDOUT_FD: Int = 1
 pub let STDERR_FD: Int = 2
 
-pub func sleep(ms: Int) 'io -> Int {
-	'io(request: .sleep(ms))
-}
-
 // Low-level open for raw pointers. `path` is expected to point to a
 // NUL-terminated C string.
 pub func _io_open(path: RawPtr, flags: Int, mode: Int) 'io -> Int {

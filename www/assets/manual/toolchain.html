@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - 14. The Toolchain</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037486" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>14. The Toolchain</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain" aria-current="page">14. The Toolchain</a><ol class="manual-outline-sections"><li><a href="#the-everyday-loop">The everyday loop</a></li>
+<li><a href="#the-repl-and-queries">The REPL and queries</a></li>
+<li><a href="#bytecode">Bytecode</a></li>
+<li><a href="#mir-and-c">MIR and C</a></li>
+<li><a href="#packages">Packages</a></li>
+<li><a href="#editor-integration">Editor integration</a></li>
+<li><a href="#extending-the-command">Extending the command</a></li>
+<li><a href="#compiler-development-commands">Compiler-development commands</a></li></ol></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/standard-library">&larr; 13. The Standard Library</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/unsafe-and-interop">15. Unsafe Code and Interop &rarr;</a>
+          </nav>
+          <article class="page-content">
+            <p>The <code>talk</code> command checks and runs programs, manages packages, runs tests, talks to editors, and builds files you can inspect or ship.</p>
+<h2><a href="#the-everyday-loop" aria-hidden="true" class="anchor" id="the-everyday-loop"></a>The everyday loop</h2>
+<pre><code class="language-sh">talk check
+talk run
+talk test
+</code></pre>
+<p>Inside a package these commands discover the enclosing manifest. With explicit files, they compile those sources as a program. <code>talk check --json</code> and <code>talk test --json</code> provide structured output.</p>
+<p>Format a file to standard output:</p>
+<pre><code class="language-sh">talk format source.tlk
+talk format --width 100 source.tlk
+</code></pre>
+<h2><a href="#the-repl-and-queries" aria-hidden="true" class="anchor" id="the-repl-and-queries"></a>The REPL and queries</h2>
+<p>Start the interactive frontend:</p>
+<pre><code class="language-sh">talk repl
+talk repl --package
+</code></pre>
+<p>The package mode imports the current package library's public surface. The REPL supports declarations, type queries, completion, and indentation.</p>
+<p>Query source directly with:</p>
+<pre><code class="language-sh">talk hover source.tlk --line 10 --column 5
+talk parse source.tlk
+talk html source.tlk
+</code></pre>
+<p><code>hover</code> also accepts a byte offset or compiler node ID. <code>parse</code> and <code>html</code> are primarily compiler-development views.</p>
+<h2><a href="#bytecode" aria-hidden="true" class="anchor" id="bytecode"></a>Bytecode</h2>
+<p>The default compiler target is a validated register-bytecode image:</p>
+<pre><code class="language-sh">talk build source.tlk -o program.tbc
+talk run-image program.tbc
+talk bytecode source.tlk
+</code></pre>
+<p>Use <code>--entry NAME</code> to choose a public zero-parameter function instead of the script's top-level statements.</p>
+<h2><a href="#mir-and-c" aria-hidden="true" class="anchor" id="mir-and-c"></a>MIR and C</h2>
+<p>Inspect the optimized middle representation:</p>
+<pre><code class="language-sh">talk mir source.tlk
+talk mir --no-opt --debug source.tlk
+</code></pre>
+<p>Emit C or build a native executable:</p>
+<pre><code class="language-sh">talk c source.tlk &gt; program.c
+talk build --native source.tlk -o program
+talk build --native --keep-c source.tlk -o program
+</code></pre>
+<p>The native path uses <code>$CC</code>, then <code>cc</code>, unless <code>--cc</code> selects another compiler. <code>--target TRIPLE</code> cross-compiles through <code>zig cc</code>; <code>--cflag</code> passes an extra compiler argument.</p>
+<h2><a href="#packages" aria-hidden="true" class="anchor" id="packages"></a>Packages</h2>
+<pre><code class="language-sh">talk new NAME
+talk install
+talk dependencies
+talk update [PACKAGE...]
+</code></pre>
+<p>See <a href="/manual/modules-and-packages">Modules and Packages</a> for manifest and lockfile semantics.</p>
+<h2><a href="#editor-integration" aria-hidden="true" class="anchor" id="editor-integration"></a>Editor integration</h2>
+<pre><code class="language-sh">talk lsp --stdio
+talk setup nvim
+talk completions zsh
+</code></pre>
+<p>The language server provides diagnostics, hover, completion, go-to-definition, rename, semantic tokens, and conservative code actions. <code>talk fix-labels</code> rewrites call sites when argument labels have changed:</p>
+<pre><code class="language-sh">talk fix-labels src/main.tlk
+</code></pre>
+<h2><a href="#extending-the-command" aria-hidden="true" class="anchor" id="extending-the-command"></a>Extending the command</h2>
+<p>Unknown commands use Git-style external subcommands. If <code>talk-report</code> is an executable on <code>PATH</code>, this invokes it with inherited standard streams:</p>
+<pre><code class="language-sh">talk report --format json
+</code></pre>
+<p>Built-in commands always take precedence.</p>
+<h2><a href="#compiler-development-commands" aria-hidden="true" class="anchor" id="compiler-development-commands"></a>Compiler-development commands</h2>
+<p><code>talk core-artifact</code> and <code>talk bootstrap</code> regenerate checked-in compiler artifacts. They are maintenance commands, not part of the application build loop. <code>talk llm</code> prints a compact, current language reference suitable for tools and agents.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/standard-library">&larr; 13. The Standard Library</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/unsafe-and-interop">15. Unsafe Code and Interop &rarr;</a>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037486"></script>
+    </main>
+  </body>
+</html>

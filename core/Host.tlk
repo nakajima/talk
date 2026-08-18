@@ -1,10 +1,12 @@
 // no-core
 use package::Array::{ Array }
 use package::IO::{ IORequest, io, STDERR_FD, write_string }
+use package::InlineArray::{ InlineArray }
 use package::Memory::{ alloc }
 use package::Operators::{ Add, Comparable, Equatable, Not }
-use package::Async::{ yield, park_recv, park_send, park_sleep, park_recv2, _chan_ctl, Resumption, resume }
+use package::Async::{ yield, recv, send, wait_until, _chan_ctl, Resumption, resume }
 use package::String::{ String }
+use package::Time::{ Instant }
 
 pub effect 'panic(message: String) -> Never
 
@@ -49,30 +51,36 @@ pub func _io_host(request: IORequest) -> Int {
 // Cooperative task operations belong to the executable entry surface.
 // Every program runs as one root task; a nearer `coop::run` may install
 // another scheduler for an explicit nested scope.
-pub effect 'pause() -> ()
+pub typealias Task = () '[spawn, recv, send, wait_until, io, alloc, yield, panic] -> ()
 
-pub typealias Task = () '[pause, spawn, park_recv, park_send, park_sleep, park_recv2, io, alloc, yield, panic] -> ()
-
-typealias BlockingTask = () '[park_recv, park_send, park_sleep, park_recv2, io, alloc, yield, panic] -> ()
+typealias BlockingTask = () '[recv, send, wait_until, io, alloc, yield, panic] -> ()
 
 pub effect 'spawn(task: Task) -> ()
 
 enum TaskStep {
 	case finished
-	case wants_recv(Int, Resumption<(), TaskStep>)
+	case wants_recv([Int], Resumption<(), TaskStep>)
 	case wants_send(Int, Resumption<(), TaskStep>)
-	case wants_either(Int, Int, Resumption<(), TaskStep>)
-	case sleeping(Int, Resumption<(), TaskStep>)
+	case sleeping(Instant, Resumption<(), TaskStep>)
 	case paused(Resumption<(), TaskStep>)
 	case spawned(Task, Resumption<(), TaskStep>)
 }
 
 func _drive_task(consume task: Task) -> TaskStep {
-	#handle 'park_recv { handle, k in TaskStep.wants_recv(handle, k) }
-	#handle 'park_send { handle, k in TaskStep.wants_send(handle, k) }
-	#handle 'park_recv2 { a, b, k in TaskStep.wants_either(a, b, k) }
-	#handle 'park_sleep { deadline_ms, k in TaskStep.sleeping(deadline_ms, k) }
-	#handle 'pause { k in TaskStep.paused(k) }
+	#handle 'recv { channels, k in
+		let handles: [Int] = []
+		let i = 0
+		loop i < channels.count() {
+			if let .some(handle) = channels.get(i) {
+				handles.push(handle)
+			}
+			i = i + 1
+		}
+		TaskStep.wants_recv(handles, k)
+	}
+	#handle 'send { handle, k in TaskStep.wants_send(handle, k) }
+	#handle 'wait_until { deadline, k in TaskStep.sleeping(deadline, k) }
+	#handle 'yield { k in TaskStep.paused(k) }
 	#handle 'spawn { task, k in TaskStep.spawned(task, k) }
 	task()
 	TaskStep.finished
@@ -102,14 +110,27 @@ func _drain_cooperative(consume first: TaskStep) -> () {
 						next.push(_drive_task(task: task))
 						next.push(resume(k: k, value: ()))
 					},
-					.wants_recv(handle, k) -> {
-						if _chan_ctl(handle: handle, op: 0) != 1 {
+					.wants_recv(handles, k) -> {
+						let ready = false
+						let i = 0
+						loop i < handles.count {
+							if _chan_ctl(handle: handles.get(i), op: 0) != 1 {
+								ready = true
+								break
+							}
+							i = i + 1
+						}
+						if ready {
 							progressed = true
 							next.push(resume(k: k, value: ()))
 						} else {
-							reg_kind.push(0)
-							reg_handle.push(handle)
-							next.push(TaskStep.wants_recv(handle, k))
+							let j = 0
+							loop j < handles.count {
+								reg_kind.push(0)
+								reg_handle.push(handles.get(j))
+								j = j + 1
+							}
+							next.push(TaskStep.wants_recv(handles, k))
 						}
 					},
 					.wants_send(handle, k) -> {
@@ -122,25 +143,13 @@ func _drain_cooperative(consume first: TaskStep) -> () {
 							next.push(TaskStep.wants_send(handle, k))
 						}
 					},
-					.wants_either(a, b, k) -> {
-						if _chan_ctl(handle: a, op: 0) != 1 || _chan_ctl(handle: b, op: 0) != 1 {
-							progressed = true
-							next.push(resume(k: k, value: ()))
-						} else {
-							reg_kind.push(0)
-							reg_handle.push(a)
-							reg_kind.push(0)
-							reg_handle.push(b)
-							next.push(TaskStep.wants_either(a, b, k))
-						}
-					},
 					.sleeping(deadline, k) -> {
-						if _chan_ctl(handle: 0, op: 13) >= deadline {
+						if Instant.now() >= deadline {
 							progressed = true
 							next.push(resume(k: k, value: ()))
 						} else {
 							reg_kind.push(2)
-							reg_handle.push(deadline)
+							reg_handle.push(deadline._nanoseconds())
 							next.push(TaskStep.sleeping(deadline, k))
 						}
 					}
@@ -158,15 +167,7 @@ func _drain_cooperative(consume first: TaskStep) -> () {
 			loop i < reg_kind.count {
 				let kind = reg_kind.get(i)
 				let handle = reg_handle.get(i)
-				let op = if kind == 0 {
-					4
-				} else {
-					if kind == 1 {
-						11
-					} else {
-						14
-					}
-				}
+				let op = if kind == 0 { 4 } else { if kind == 1 { 11 } else { 14 } }
 				let registered = _chan_ctl(handle: handle, op: op)
 				i = i + 1
 			}
@@ -175,15 +176,7 @@ func _drain_cooperative(consume first: TaskStep) -> () {
 			loop j < reg_kind.count {
 				let kind = reg_kind.get(j)
 				let handle = reg_handle.get(j)
-				let op = if kind == 0 {
-					5
-				} else {
-					if kind == 1 {
-						12
-					} else {
-						15
-					}
-				}
+				let op = if kind == 0 { 5 } else { if kind == 1 { 12 } else { 15 } }
 				let released = _chan_ctl(handle: handle, op: op)
 				j = j + 1
 			}
@@ -199,6 +192,37 @@ pub func _run_cooperative(consume main_task: Task) -> () {
 		.finished -> (),
 		first -> _drain_cooperative(first: first)
 	}
+}
+
+func _block_recv<static N: Int>(consume channels: [Int; N]) -> () {
+	let i = 0
+	loop i < channels.count() {
+		if let .some(handle) = channels.get(i) {
+			let registered = _chan_ctl(handle: handle, op: 4)
+		}
+		i = i + 1
+	}
+	let parked = _chan_ctl(handle: 0, op: 6)
+	let j = 0
+	loop j < channels.count() {
+		if let .some(handle) = channels.get(j) {
+			let released = _chan_ctl(handle: handle, op: 5)
+		}
+		j = j + 1
+	}
+}
+
+func _block_send(handle: Int) -> () {
+	let registered = _chan_ctl(handle: handle, op: 11)
+	let parked = _chan_ctl(handle: 0, op: 6)
+	let released = _chan_ctl(handle: handle, op: 12)
+}
+
+func _block_until(deadline: Instant) -> () {
+	let nanos = deadline._nanoseconds()
+	let registered = _chan_ctl(handle: nanos, op: 14)
+	let parked = _chan_ctl(handle: 0, op: 6)
+	let released = _chan_ctl(handle: nanos, op: 15)
 }
 
 // The executable's host fallbacks (ADR 0039): ordinary handlers below
@@ -227,36 +251,19 @@ pub func _with_host(consume body: Task) -> () {
 		_io_host(request: .exit(1))
 		loop {}
 	}
-	// The blocking park fallbacks (ADR 0067/0068): tail-resumptive
-	// clauses — register the interest, block the worker, unregister,
-	// continue at the perform site. No resumption is reified and no
-	// frame moves, so a long-lived producer parks in constant stack.
-	// The resumed operation re-checks its source itself, so a spurious
-	// wake just parks again.
-	#handle 'park_recv { handle in
-		let registered = _chan_ctl(handle: handle, op: 4)
-		let parked = _chan_ctl(handle: 0, op: 6)
-		let released = _chan_ctl(handle: handle, op: 5)
+	// The blocking wait fallbacks (ADR 0067/0068): register the
+	// interest, block the worker, unregister, and continue. A resumed
+	// operation re-checks its source, so a spurious wake just waits again.
+	#handle 'recv { channels in
+		_block_recv(channels: channels)
 		'continue
 	}
-	#handle 'park_send { handle in
-		let registered = _chan_ctl(handle: handle, op: 11)
-		let parked = _chan_ctl(handle: 0, op: 6)
-		let released = _chan_ctl(handle: handle, op: 12)
+	#handle 'send { handle in
+		_block_send(handle: handle)
 		'continue
 	}
-	#handle 'park_sleep { deadline_ms in
-		let registered = _chan_ctl(handle: deadline_ms, op: 14)
-		let parked = _chan_ctl(handle: 0, op: 6)
-		let released = _chan_ctl(handle: deadline_ms, op: 15)
-		'continue
-	}
-	#handle 'park_recv2 { a, b in
-		let first = _chan_ctl(handle: a, op: 4)
-		let second = _chan_ctl(handle: b, op: 4)
-		let parked = _chan_ctl(handle: 0, op: 6)
-		let drop_second = _chan_ctl(handle: b, op: 5)
-		let drop_first = _chan_ctl(handle: a, op: 5)
+	#handle 'wait_until { deadline in
+		_block_until(deadline: deadline)
 		'continue
 	}
 	_run_cooperative(main_task: body)
@@ -283,30 +290,16 @@ pub func _with_blocking_host(consume body: BlockingTask) -> () {
 		_io_host(request: .exit(1))
 		loop {}
 	}
-	#handle 'park_recv { handle in
-		let registered = _chan_ctl(handle: handle, op: 4)
-		let parked = _chan_ctl(handle: 0, op: 6)
-		let released = _chan_ctl(handle: handle, op: 5)
+	#handle 'recv { channels in
+		_block_recv(channels: channels)
 		'continue
 	}
-	#handle 'park_send { handle in
-		let registered = _chan_ctl(handle: handle, op: 11)
-		let parked = _chan_ctl(handle: 0, op: 6)
-		let released = _chan_ctl(handle: handle, op: 12)
+	#handle 'send { handle in
+		_block_send(handle: handle)
 		'continue
 	}
-	#handle 'park_sleep { deadline_ms in
-		let registered = _chan_ctl(handle: deadline_ms, op: 14)
-		let parked = _chan_ctl(handle: 0, op: 6)
-		let released = _chan_ctl(handle: deadline_ms, op: 15)
-		'continue
-	}
-	#handle 'park_recv2 { a, b in
-		let first = _chan_ctl(handle: a, op: 4)
-		let second = _chan_ctl(handle: b, op: 4)
-		let parked = _chan_ctl(handle: 0, op: 6)
-		let drop_second = _chan_ctl(handle: b, op: 5)
-		let drop_first = _chan_ctl(handle: a, op: 5)
+	#handle 'wait_until { deadline in
+		_block_until(deadline: deadline)
 		'continue
 	}
 	body()

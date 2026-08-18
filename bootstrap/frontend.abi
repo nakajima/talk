@@ -121,7 +121,7 @@ enum ExprKind @ enum:65535.30
 	propagate([Expr])
 	force_unwrap([Expr])
 	unreachable_expr
-	call_effect(String, Int, Int, [GenericArg], [CallArg])
+	call_effect(String, Int, Int, [GenericArg], [CallArg], [Block])
 	record_literal([RecordField], [Expr])
 	inline_ir([Expr], IRInstruction)
 	macro_call(String, Int, Int, Int, Int, [MacroToken], [Expr])

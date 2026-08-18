@@ -57,13 +57,19 @@ impl std::fmt::Debug for MirSymbol {
 
 impl MirSymbol {
     /// The well-known runtime aggregate identities (ADR 0047): String,
-    /// its Storage field, and the InlineArray construction identity. The
+    /// Array, its Storage field, and the InlineArray construction identity. The
     /// compiler's own mapping is pinned against these constants by its
     /// tests, so the two cannot drift.
     pub const STRING: MirSymbol = MirSymbol {
         kind: MirSymbolKind::Struct,
         module: 1,
         local: u32::MAX - 32,
+    };
+
+    pub const ARRAY: MirSymbol = MirSymbol {
+        kind: MirSymbolKind::Struct,
+        module: 1,
+        local: u32::MAX - 31,
     };
 
     pub const STORAGE: MirSymbol = MirSymbol {
@@ -239,10 +245,13 @@ pub enum Inst {
         dest: LocalId,
         bytes: Vec<u8>,
     },
-    /// Allocate `bytes` bytes of managed memory.
+    /// Allocate `bytes` bytes of managed memory. `kind` records the
+    /// uniform element representation for target-side rendering and
+    /// transfer; it does not change the byte count.
     Alloc {
         dest: LocalId,
         bytes: Operand,
+        kind: SlotKind,
     },
     /// Release one reference to an allocation (frees at zero; statics are
     /// unmanaged no-ops).
@@ -776,6 +785,7 @@ pub enum TypeKind {
     Record,
     Enum,
     String,
+    Array,
 }
 
 /// One aggregate's display facts: its source name and its member names

@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - 9. Modules and Packages</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037484" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>9. Modules and Packages</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages" aria-current="page">9. Modules and Packages</a><ol class="manual-outline-sections"><li><a href="#visibility">Visibility</a></li>
+<li><a href="#imports">Imports</a></li>
+<li><a href="#the-core-and-standard-libraries">The core and standard libraries</a></li>
+<li><a href="#package-manifests">Package manifests</a></li>
+<li><a href="#dependencies-and-the-lockfile">Dependencies and the lockfile</a></li>
+<li><a href="#package-aware-commands">Package-aware commands</a></li></ol></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/collections-and-text">&larr; 8. Collections and Text</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/macros">10. Macros &rarr;</a>
+          </nav>
+          <article class="page-content">
+            <p>As a program grows, you can split it across files and bring names in with <code>use</code>. A package groups those files into a library or executable and records any outside code the project needs.</p>
+<h2><a href="#visibility" aria-hidden="true" class="anchor" id="visibility"></a>Visibility</h2>
+<p>Top-level declarations and members are private to their file unless marked <code>pub</code>:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="modifier">pub</span> <span class="keyword">struct</span> <span class="type">User</span> {
+	<span class="modifier">pub</span> <span class="keyword">let</span> <span class="property">name</span>: <span class="type">String</span>
+}
+
+<span class="modifier">pub</span> <span class="keyword">func</span> <span class="function">load_user</span>() <span class="operator">-&gt;</span> <span class="type">User</span> {
+	<span class="type">User</span>(<span class="parameter">name</span>: <span class="string">"Ada"</span>)
+}</pre>
+        </div>
+        
+<p>Only a module's public surface can be imported elsewhere.</p>
+<h2><a href="#imports" aria-hidden="true" class="anchor" id="imports"></a>Imports</h2>
+<p><code>use</code> can select names, alias them, import a module surface, or recursively import source submodules:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">use</span> package<span class="operator">::</span>models<span class="operator">::</span>{ User, load <span class="modifier">as</span> load_user }
+<span class="keyword">use</span> package<span class="operator">::</span>models
+<span class="keyword">use</span> package<span class="operator">::</span>models<span class="operator">::</span><span class="operator">*</span>
+<span class="keyword">use</span> self<span class="operator">::</span>child<span class="operator">::</span>{ value }
+<span class="keyword">use</span> super<span class="operator">::</span>shared<span class="operator">::</span>{ Thing }
+<span class="keyword">use</span> dependency<span class="operator">::</span>{ API }</pre>
+        </div>
+        
+<p>Paths have distinct roots:</p>
+<ul>
+<li><code>package::</code> begins at the current package's source root</li>
+<li><code>self::</code> begins beside the importing module</li>
+<li><code>super::</code> begins at its parent module</li>
+<li>a dependency name begins at an external package's exported surface</li>
+</ul>
+<p><code>use path</code> imports that module's public surface. <code>use path::*</code> additionally walks source submodules recursively.</p>
+<h2><a href="#the-core-and-standard-libraries" aria-hidden="true" class="anchor" id="the-core-and-standard-libraries"></a>The core and standard libraries</h2>
+<p>Normal files implicitly receive the core library: primitives, arrays, strings, optional and result types, operators, iteration, <code>Showable</code>, memory roles, and host effects. A first line of <code>// no-core</code> disables it.</p>
+<p>Modules under <code>stdlib/</code> are explicit imports, such as:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">use</span> fs<span class="operator">::</span>{ File, Path }
+<span class="keyword">use</span> os<span class="operator">::</span>{ OS }
+<span class="keyword">use</span> task<span class="operator">::</span>{ channel, sleep }</pre>
+        </div>
+        
+<h2><a href="#package-manifests" aria-hidden="true" class="anchor" id="package-manifests"></a>Package manifests</h2>
+<p><code>talk new hello</code> creates a <code>package.tlk</code> like this:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="type">Package</span>(
+	<span class="parameter">name</span>: <span class="string">"hello"</span>,
+	<span class="parameter">version</span>: <span class="string">"0.1.0"</span>,
+	<span class="parameter">builds</span>: [.<span class="property">bin</span>(<span class="parameter">named</span>: <span class="string">"main"</span>, <span class="parameter">from</span>: <span class="string">"src/main.tlk"</span>)],
+	<span class="parameter">dependencies</span>: []
+)</pre>
+        </div>
+        
+<p>A package may build libraries and named binaries:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">let</span> builds: [<span class="type">PackageArtifact</span>] <span class="operator">=</span> [
+	.<span class="property">lib</span>(<span class="parameter">from</span>: <span class="string">"src/lib.tlk"</span>),
+	.<span class="property">bin</span>(<span class="parameter">named</span>: <span class="string">"server"</span>, <span class="parameter">from</span>: <span class="string">"src/server.tlk"</span>)
+]</pre>
+        </div>
+        
+<p>Run a named binary with:</p>
+<pre><code class="language-sh">talk run --bin server
+</code></pre>
+<h2><a href="#dependencies-and-the-lockfile" aria-hidden="true" class="anchor" id="dependencies-and-the-lockfile"></a>Dependencies and the lockfile</h2>
+<p>Dependencies may come from Git, a verified tar archive, or a local path:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">let</span> dependencies: [<span class="type">PackageDependency</span>] <span class="operator">=</span> [
+	.<span class="property">git</span>(<span class="parameter">package</span>: <span class="string">"widgets"</span>, <span class="parameter">url</span>: <span class="string">"https://example.test/widgets.git"</span>, <span class="parameter">rev</span>: <span class="string">"abc123"</span>),
+	.<span class="property">tar</span>(<span class="parameter">package</span>: <span class="string">"codec"</span>, <span class="parameter">url</span>: <span class="string">"https://example.test/codec.tar.gz"</span>, <span class="parameter">sha256</span>: <span class="string">"..."</span>),
+	.<span class="property">path</span>(<span class="parameter">package</span>: <span class="string">"shared"</span>, <span class="parameter">path</span>: <span class="string">"../shared"</span>)
+]</pre>
+        </div>
+        
+<p>Use the package commands to manage resolution:</p>
+<pre><code class="language-sh">talk install
+talk dependencies
+talk update
+talk update widgets
+</code></pre>
+<p><code>talk install</code> resolves the graph into <code>package.lock</code>. <code>talk update</code> refreshes all or selected dependencies. <code>--offline</code> requires all needed sources to be available locally.</p>
+<h2><a href="#package-aware-commands" aria-hidden="true" class="anchor" id="package-aware-commands"></a>Package-aware commands</h2>
+<p>From anywhere inside a package, <code>talk run</code>, <code>talk check</code>, <code>talk test</code>, and the LSP locate the enclosing manifest. <code>talk check</code> with no filenames checks the package's declared targets and tests rather than every stray <code>.tlk</code> file under the directory.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/collections-and-text">&larr; 8. Collections and Text</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/macros">10. Macros &rarr;</a>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037484"></script>
+    </main>
+  </body>
+</html>

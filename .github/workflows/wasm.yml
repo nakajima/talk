@@ -40,6 +40,8 @@ jobs:
           restore-keys: |
             cargo-${{ runner.os }}-
       - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
       - uses: Swatinem/rust-cache@v2
       - uses: jetli/wasm-pack-action@v0.4.0
         with:

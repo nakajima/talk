@@ -1,16 +1,139 @@
-use js_sys::{Array, Object, Reflect};
+use js_sys::{Array, Function, Object, Reflect, Uint8Array};
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+use std::{
+    cell::RefCell,
+    sync::{Arc, Mutex},
+};
 use talk::{
     analysis::{Diagnostic, DocumentInput, Workspace},
     common::text::{clamp_to_char_boundary, line_info_for_offset_utf16},
     compiling::driver::{Driver, DriverConfig, Source},
-    formatter,
     compiling::frontend::highlight_html as highlight_source_html,
-    repl::{ReplEvalResult, ReplSession},
+    repl::{ReplEvalResult, ReplOutput, ReplSession},
 };
 use wasm_bindgen::prelude::*;
 
 fn init() {
     install_panic_hook();
+}
+
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+struct RunningProgram {
+    handle: Option<wasm_thread::JoinHandle<ReplEvalResult>>,
+    output: Arc<Mutex<Vec<(i32, Vec<u8>)>>>,
+}
+
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+thread_local! {
+    static RUNNING_PROGRAMS: RefCell<Vec<Option<RunningProgram>>> = const { RefCell::new(Vec::new()) };
+}
+
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+#[wasm_bindgen]
+pub fn start_program_threaded(source: String, stdin: Vec<u8>) -> Result<u32, JsValue> {
+    init();
+    let output = Arc::new(Mutex::new(Vec::new()));
+    let worker_output = Arc::clone(&output);
+    let handle = wasm_thread::Builder::new()
+        .name("talk-program".to_string())
+        .spawn(move || {
+            let session = ReplSession::with_source_path(std::path::PathBuf::from("playground.tlk"));
+            session.eval_program_streaming(source.as_str(), stdin, move |stream, bytes| {
+                let fd = match stream {
+                    ReplOutput::Stdout => 1,
+                    ReplOutput::Stderr => 2,
+                };
+                worker_output
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push((fd, bytes.to_vec()));
+            })
+        })
+        .map_err(|error| JsValue::from_str(&format!("failed to start Talk worker: {error}")))?;
+
+    RUNNING_PROGRAMS.with(|programs| {
+        let mut programs = programs.borrow_mut();
+        let task = RunningProgram {
+            handle: Some(handle),
+            output,
+        };
+        if let Some((index, slot)) = programs
+            .iter_mut()
+            .enumerate()
+            .find(|(_, slot)| slot.is_none())
+        {
+            *slot = Some(task);
+            Ok(u32::try_from(index).unwrap_or(u32::MAX))
+        } else {
+            let index = programs.len();
+            programs.push(Some(task));
+            u32::try_from(index).map_err(|_| JsValue::from_str("too many running Talk programs"))
+        }
+    })
+}
+
+#[cfg(all(target_arch = "wasm32", target_feature = "atomics"))]
+#[wasm_bindgen]
+pub fn poll_program_threaded(handle: u32) -> Result<Object, JsValue> {
+    init();
+    let (chunks, result) = RUNNING_PROGRAMS.with(|programs| {
+        let mut programs = programs.borrow_mut();
+        let index = usize::try_from(handle)
+            .map_err(|_| JsValue::from_str("invalid Talk program handle"))?;
+        let task = programs
+            .get_mut(index)
+            .and_then(Option::as_mut)
+            .ok_or_else(|| JsValue::from_str("invalid Talk program handle"))?;
+        let chunks = std::mem::take(
+            &mut *task
+                .output
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        );
+        let result = if task
+            .handle
+            .as_ref()
+            .is_some_and(wasm_thread::JoinHandle::is_finished)
+        {
+            let joined = task
+                .handle
+                .take()
+                .expect("a finished Talk program has a join handle")
+                .join()
+                .map_err(|_| JsValue::from_str("Talk program worker panicked"))?;
+            programs[index] = None;
+            Some(joined)
+        } else {
+            None
+        };
+        Ok::<_, JsValue>((chunks, result))
+    })?;
+
+    let response = Object::new();
+    let output = Array::new();
+    for (fd, bytes) in chunks {
+        let chunk = Object::new();
+        Reflect::set(
+            &chunk,
+            &JsValue::from_str("fd"),
+            &JsValue::from_f64(fd as f64),
+        )?;
+        Reflect::set(
+            &chunk,
+            &JsValue::from_str("bytes"),
+            &Uint8Array::from(bytes.as_slice()),
+        )?;
+        output.push(&chunk);
+    }
+    Reflect::set(&response, &JsValue::from_str("output"), &output)?;
+    set_bool(&response, "done", result.is_some())?;
+    if let Some(result) = result {
+        let result = program_result_to_js(result)?;
+        Reflect::set(&response, &JsValue::from_str("result"), result.as_ref())?;
+    } else {
+        Reflect::set(&response, &JsValue::from_str("result"), &JsValue::NULL)?;
+    }
+    Ok(response)
 }
 
 #[wasm_bindgen]
@@ -23,13 +146,46 @@ pub fn format(source: &str) -> String {
 pub fn run_program(source: &str) -> Result<Object, JsValue> {
     init();
     let session = ReplSession::with_source_path(std::path::PathBuf::from("playground.tlk"));
-    match session.eval_program(source) {
-        ReplEvalResult::Output { stdout, value, .. } => {
+    program_result_to_js(session.eval_program(source))
+}
+
+#[wasm_bindgen]
+pub fn run_program_streaming(
+    source: &str,
+    stdin: &[u8],
+    output: &Function,
+) -> Result<Object, JsValue> {
+    init();
+    let session = ReplSession::with_source_path(std::path::PathBuf::from("playground.tlk"));
+    let output = output.clone();
+    let result = session.eval_program_streaming(source, stdin.to_vec(), move |stream, bytes| {
+        let stream = match stream {
+            ReplOutput::Stdout => 1,
+            ReplOutput::Stderr => 2,
+        };
+        let chunk = Uint8Array::from(bytes);
+        let _ = output.call2(
+            &JsValue::UNDEFINED,
+            &JsValue::from_f64(stream as f64),
+            &chunk,
+        );
+    });
+    program_result_to_js(result)
+}
+
+fn program_result_to_js(result: ReplEvalResult) -> Result<Object, JsValue> {
+    match result {
+        ReplEvalResult::Output {
+            stdout,
+            stderr,
+            value,
+        } => {
             let obj = Object::new();
             let value = value.unwrap_or_default();
             set_str(&obj, "value", &value)?;
             set_str(&obj, "highlightedValue", &highlight_source_html(&value))?;
             set_str(&obj, "output", &stdout)?;
+            set_str(&obj, "stderr", &stderr)?;
             Ok(obj)
         }
         failure => Err(repl_result_to_js(failure)?.into()),

@@ -108,6 +108,7 @@ pub enum ExprKind {
         effect_name_span: Span,
         type_args: Vec<crate::node_kinds::generic_arg::GenericArg>,
         args: Vec<CallArg>,
+        trailing_block: Option<Block>,
     },
 
     // Start of the real expressions

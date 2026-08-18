@@ -1825,21 +1825,21 @@ static _Thread_local int64_t *talk_external_handles;
 static _Thread_local unsigned char *talk_external_sends;
 static _Thread_local size_t talk_external_waits;
 static _Thread_local size_t talk_external_capacity;
-/* Absolute monotonic-ms deadlines this thread's sleeping futures
+/* Absolute monotonic-ns deadlines this thread's sleeping futures
  * registered (ADR 0063): each is a reason to park, and the park waits
  * only until the earliest of them. */
 static _Thread_local int64_t *talk_deadlines;
 static _Thread_local size_t talk_deadline_count;
 static _Thread_local size_t talk_deadline_capacity;
 
-/* Monotonic milliseconds from an arbitrary per-process anchor
+/* Monotonic nanoseconds from an arbitrary per-process anchor
  * (ADR 0063). Wall-clock time is host-effect territory; deadlines only
  * care about deltas. */
-static int64_t talk_now_ms(void) {
+static int64_t talk_now_ns(void) {
 #if defined(TALK_HAS_POSIX_IO)
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
-    return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+    return (int64_t)now.tv_sec * 1000000000 + (int64_t)now.tv_nsec;
 #else
     talk_trap("monotonic clock unavailable on this host");
     return 0;
@@ -1972,7 +1972,7 @@ static int64_t talk_chan_ctl(TalkValue handle, TalkValue op) {
     case 8:
         return (int64_t)(talk_external_waits + talk_deadline_count);
     case 13:
-        return talk_now_ms();
+        return talk_now_ns();
     case 14:
         if (talk_deadline_count == talk_deadline_capacity) {
             size_t grown = talk_deadline_capacity == 0 ? 4 : talk_deadline_capacity * 2;
@@ -2068,7 +2068,7 @@ static int64_t talk_chan_ctl(TalkValue handle, TalkValue op) {
                 deadline_set = 1;
             }
         }
-        if (deadline_set && talk_now_ms() >= earliest) {
+        if (deadline_set && talk_now_ns() >= earliest) {
             /* The earliest deadline already passed: the timed wake. */
             ready = 1;
         }
@@ -2081,12 +2081,12 @@ static int64_t talk_chan_ctl(TalkValue handle, TalkValue op) {
             if (deadline_set) {
                 /* A registered deadline bounds the sleep: wake at the
                  * earliest of it and any broadcast. */
-                int64_t wait = earliest - talk_now_ms();
+                int64_t wait = earliest - talk_now_ns();
                 if (wait > 0) {
                     struct timespec until;
                     clock_gettime(CLOCK_REALTIME, &until);
-                    until.tv_sec += wait / 1000;
-                    until.tv_nsec += (long)(wait % 1000) * 1000000;
+                    until.tv_sec += wait / 1000000000;
+                    until.tv_nsec += (long)(wait % 1000000000);
                     if (until.tv_nsec >= 1000000000L) {
                         until.tv_sec += 1;
                         until.tv_nsec -= 1000000000L;
@@ -2563,7 +2563,8 @@ enum {
     TALK_IO_REALPATH_LEN = 24,
     TALK_IO_REALPATH_COPY = 25,
     TALK_IO_SEEK = 26,
-    TALK_IO_FILE_SIZE = 27
+    TALK_IO_FILE_SIZE = 27,
+    TALK_IO_MONOTONIC_NANOS = 28
 };
 
 /* Negated errno, as every operation returns (core/IO.tlk's constants). */
@@ -2922,6 +2923,10 @@ static int64_t talk_io(uint8_t op, TalkValue a, TalkValue b, TalkValue c) {
             return talk_errno();
         }
         return (int64_t)info.st_size;
+    }
+    case TALK_IO_MONOTONIC_NANOS: {
+        /* The clock behind core `Instant.now` and runtime deadlines. */
+        return talk_now_ns();
     }
 #endif
     default:
@@ -4810,9 +4815,9 @@ static const char *const talk_members_79[] = { "tokens", "span" };
 static const char *const talk_members_80[] = { "leaf", "group" };
 static const char *const talk_members_81[] = { "delimiter", "open", "close", "children" };
 static const char *const talk_members_82[] = { "opener", "expected", "parent" };
-static const char *const talk_members_83[] = { "read", "write", "open", "close", "sleep", "poll", "ctl", "socket", "bind", "listen", "connect", "accept", "cwd_len", "cwd_copy", "getenv_len", "getenv_copy", "argc", "arg_len", "arg_copy", "dir_count", "dir_entry_kind", "dir_entry_len", "dir_entry_copy", "exit", "realpath_len", "realpath_copy", "seek", "file_size" };
-static const char *const talk_members_84[] = { "slot" };
-static const char *const talk_members_85[] = { "finished", "wants_recv", "wants_send", "wants_either", "sleeping", "paused", "spawned" };
+static const char *const talk_members_83[] = { "read", "write", "open", "close", "sleep", "poll", "ctl", "socket", "bind", "listen", "connect", "accept", "cwd_len", "cwd_copy", "getenv_len", "getenv_copy", "argc", "arg_len", "arg_copy", "dir_count", "dir_entry_kind", "dir_entry_len", "dir_entry_copy", "exit", "realpath_len", "realpath_copy", "seek", "file_size", "monotonic_nanos" };
+static const char *const talk_members_84[] = { "nanos" };
+static const char *const talk_members_85[] = { "slot" };
 static const TalkTypeInfo talk_type_table[] = {
     { "", TALK_TYPE_TUPLE, 0, NULL },
     { "String", TALK_TYPE_STRING, 3, talk_members_1 },
@@ -4897,9 +4902,9 @@ static const TalkTypeInfo talk_type_table[] = {
     { "TokenTree", TALK_TYPE_ENUM, 2, talk_members_80 },
     { "Group", TALK_TYPE_RECORD, 4, talk_members_81 },
     { "Frame", TALK_TYPE_RECORD, 3, talk_members_82 },
-    { "IORequest", TALK_TYPE_ENUM, 28, talk_members_83 },
-    { "Resumption", TALK_TYPE_RECORD, 1, talk_members_84 },
-    { "TaskStep", TALK_TYPE_ENUM, 7, talk_members_85 },
+    { "IORequest", TALK_TYPE_ENUM, 29, talk_members_83 },
+    { "Instant", TALK_TYPE_RECORD, 1, talk_members_84 },
+    { "Resumption", TALK_TYPE_RECORD, 1, talk_members_85 },
 };
 
 typedef struct {
@@ -4934,7 +4939,7 @@ static const TalkLibSymbolRow talk_lib_symbols[] = {
     { 0, 65535, 36 },
     { 1, 65535, 68 },
     { 0, 65535, 15 },
-    { 0, 1, 21 },
+    { 0, 1, 23 },
     { 0, 1, 4294967272 },
     { 1, 65535, 27 },
     { 1, 65535, 32 },
@@ -4950,7 +4955,7 @@ static const TalkLibSymbolRow talk_lib_symbols[] = {
     { 0, 1, 6 },
     { 0, 1, 4294967265 },
     { 0, 1, 4294967264 },
-    { 0, 1, 17 },
+    { 0, 1, 19 },
     { 0, 65535, 51 },
     { 1, 65535, 65 },
     { 0, 65535, 12 },
@@ -4992,8 +4997,8 @@ static const TalkLibSymbolRow talk_lib_symbols[] = {
     { 0, 65535, 58 },
     { 0, 65535, 63 },
     { 1, 1, 16 },
+    { 0, 1, 18 },
     { 0, 1, 4294967280 },
-    { 1, 1, 20 },
 };
 static const TalkField talk_lfields_0[] = { { 0, 1, UINT32_MAX, 0 } };
 static const TalkField talk_lfields_1[] = { { 0, 1, 0u, 39 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 } };
@@ -5039,8 +5044,8 @@ static const TalkField talk_lfields_31[] = { { 1, 4, 23u, 50 }, { 1, 3, 26u, 51 
 static const uint32_t talk_lvars_31[] = { 0, 1, 2, 3, 4, 5 };
 static const TalkField talk_lfields_32[] = { { 1, 1, UINT32_MAX, 0 }, { 2, 4, 14u, 2 }, { 6, 4, 17u, 2 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 3, 3u, 41 }, { 9, 2, 9u, 2 }, { 11, 1, UINT32_MAX, 0 }, { 12, 1, UINT32_MAX, 0 }, { 13, 1, UINT32_MAX, 0 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 3, 3u, 41 }, { 9, 2, 9u, 2 }, { 11, 1, UINT32_MAX, 0 }, { 12, 1, UINT32_MAX, 0 }, { 13, 1, UINT32_MAX, 0 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 3, 3u, 41 }, { 9, 2, 9u, 2 }, { 11, 1, UINT32_MAX, 0 }, { 12, 3, 3u, 41 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 3, 3u, 41 }, { 9, 3, 3u, 41 }, { 12, 3, 3u, 41 }, { 15, 4, 14u, 2 }, { 1, 3, 3u, 41 }, { 4, 1, UINT32_MAX, 0 }, { 5, 3, 3u, 41 }, { 8, 2, 9u, 2 }, { 10, 1, UINT32_MAX, 0 }, { 1, 3, 3u, 41 }, { 4, 1, UINT32_MAX, 0 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 1, UINT32_MAX, 0 }, { 7, 4, 14u, 2 }, { 11, 4, 17u, 2 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, 19u, 47 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, 19u, 47 }, { 1, 1, UINT32_MAX, 0 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 3, 13u, 45 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 3, 3u, 41 }, { 9, 2, 9u, 2 }, { 11, 3, 3u, 41 }, { 14, 3, 13u, 45 }, { 1, 1, UINT32_MAX, 0 }, { 2, 2, 9u, 2 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 3, 3u, 41 }, { 9, 1, UINT32_MAX, 0 }, { 10, 1, UINT32_MAX, 0 }, { 11, 3, 3u, 41 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 1, UINT32_MAX, 0 }, { 7, 1, UINT32_MAX, 0 }, { 8, 3, 3u, 41 }, { 11, 3, 3u, 41 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 1, UINT32_MAX, 0 }, { 7, 1, UINT32_MAX, 0 }, { 8, 3, 3u, 41 }, { 11, 3, 3u, 41 }, { 14, 3, 3u, 41 } };
 static const uint32_t talk_lvars_32[] = { 0, 3, 4, 5, 6, 14, 22, 29, 36, 41, 43, 49, 52, 54, 55, 59, 66, 68, 75, 82, 90 };
-static const TalkField talk_lfields_33[] = { { 1, 3, 1u, 1 }, { 1, 3, 1u, 1 }, { 1, 3, 1u, 1 }, { 1, 3, 1u, 1 }, { 1, 3, 1u, 1 }, { 1, 1, 7u, 14 }, { 2, 3, 3u, 41 }, { 1, 1, 7u, 14 }, { 2, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 4, 3, 3u, 41 }, { 7, 3, 3u, 41 }, { 10, 3, 3u, 41 }, { 1, 3, 1u, 1 }, { 4, 3, 3u, 41 }, { 1, 4, 15u, 7 }, { 5, 1, UINT32_MAX, 0 }, { 6, 1, UINT32_MAX, 0 }, { 7, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 1, 1, UINT32_MAX, 0 }, { 1, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 3, 3u, 41 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 1, 3, 3u, 41 }, { 4, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 4, 3, 13u, 45 }, { 1, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 3, 3u, 41 }, { 9, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 4, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 4, 1, UINT32_MAX, 0 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 1, UINT32_MAX, 0 }, { 7, 1, UINT32_MAX, 0 }, { 8, 3, 3u, 41 }, { 11, 3, 3u, 41 }, { 1, 3, 1u, 1 }, { 4, 3, 3u, 41 }, { 7, 3, 3u, 41 }, { 10, 1, UINT32_MAX, 0 } };
-static const uint32_t talk_lvars_33[] = { 0, 1, 2, 2, 2, 3, 4, 5, 7, 9, 13, 15, 19, 20, 21, 22, 23, 24, 25, 26, 29, 31, 33, 34, 35, 35, 40, 42, 44, 51, 55 };
+static const TalkField talk_lfields_33[] = { { 1, 3, 1u, 1 }, { 1, 3, 1u, 1 }, { 1, 3, 1u, 1 }, { 1, 3, 1u, 1 }, { 1, 3, 1u, 1 }, { 1, 1, 7u, 14 }, { 2, 3, 3u, 41 }, { 1, 1, 7u, 14 }, { 2, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 4, 3, 3u, 41 }, { 7, 3, 3u, 41 }, { 10, 3, 3u, 41 }, { 1, 3, 1u, 1 }, { 4, 3, 3u, 41 }, { 1, 4, 15u, 7 }, { 5, 1, UINT32_MAX, 0 }, { 6, 1, UINT32_MAX, 0 }, { 7, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 1, 1, UINT32_MAX, 0 }, { 1, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 3, 3u, 41 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 1, 3, 3u, 41 }, { 4, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 4, 3, 13u, 45 }, { 1, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 3, 3u, 41 }, { 9, 3, 3u, 41 }, { 12, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 4, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 4, 1, UINT32_MAX, 0 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 1, UINT32_MAX, 0 }, { 7, 1, UINT32_MAX, 0 }, { 8, 3, 3u, 41 }, { 11, 3, 3u, 41 }, { 1, 3, 1u, 1 }, { 4, 3, 3u, 41 }, { 7, 3, 3u, 41 }, { 10, 1, UINT32_MAX, 0 } };
+static const uint32_t talk_lvars_33[] = { 0, 1, 2, 2, 2, 3, 4, 5, 7, 9, 13, 15, 19, 20, 21, 22, 23, 24, 25, 26, 29, 31, 33, 34, 35, 35, 41, 43, 45, 52, 56 };
 static const TalkField talk_lfields_34[] = { { 0, 3, 3u, 41 }, { 3, 3, 3u, 41 }, { 6, 1, UINT32_MAX, 0 }, { 7, 1, UINT32_MAX, 0 }, { 8, 1, UINT32_MAX, 0 } };
 static const TalkField talk_lfields_35[] = { { 0, 3, 1u, 1 }, { 3, 1, UINT32_MAX, 0 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 3, 3u, 41 }, { 9, 3, 3u, 41 }, { 12, 2, 9u, 2 }, { 14, 3, 3u, 41 }, { 17, 1, UINT32_MAX, 0 }, { 18, 4, 14u, 2 }, { 22, 1, UINT32_MAX, 0 }, { 23, 1, UINT32_MAX, 0 }, { 24, 1, UINT32_MAX, 0 }, { 25, 1, UINT32_MAX, 0 } };
 static const TalkField talk_lfields_36[] = { { 1, 1, UINT32_MAX, 0 }, { 2, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 4, 1, UINT32_MAX, 0 }, { 5, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 4, 2, 9u, 2 }, { 6, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 4, 3, 1u, 1 }, { 7, 1, UINT32_MAX, 0 }, { 8, 1, UINT32_MAX, 0 }, { 9, 3, 3u, 41 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 1, 3, 3u, 41 }, { 4, 3, 3u, 41 }, { 1, 3, 1u, 1 }, { 4, 1, UINT32_MAX, 0 }, { 5, 1, UINT32_MAX, 0 }, { 6, 1, UINT32_MAX, 0 }, { 7, 1, UINT32_MAX, 0 }, { 8, 3, 3u, 41 } };
@@ -5167,12 +5172,11 @@ static const TalkField talk_lfields_135[] = { { 1, 1, 132u, 37 } };
 static const uint32_t talk_lvars_135[] = { 0, 1, 1 };
 static const TalkField talk_lfields_136[] = { { 0, 1, UINT32_MAX, 0 }, { 1, 1, 132u, 37 }, { 2, 3, 3u, 41 } };
 static const TalkField talk_lfields_137[] = { { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, UINT32_MAX, 0 }, { 1, 1, UINT32_MAX, 0 } };
-static const uint32_t talk_lvars_137[] = { 0, 3, 6, 9, 10, 11, 14, 17, 20, 23, 25, 28, 29, 29, 30, 32, 35, 35, 36, 38, 39, 41, 43, 46, 47, 48, 50, 53, 54 };
+static const uint32_t talk_lvars_137[] = { 0, 3, 6, 9, 10, 11, 14, 17, 20, 23, 25, 28, 29, 29, 30, 32, 35, 35, 36, 38, 39, 41, 43, 46, 47, 48, 50, 53, 54, 54 };
 static const TalkField talk_lfields_138[] = { { 0, 1, UINT32_MAX, 0 } };
-static const TalkField talk_lfields_139[] = { { 1, 1, UINT32_MAX, 0 }, { 2, 1, 138u, 84 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, 138u, 84 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, UINT32_MAX, 0 }, { 3, 1, 138u, 84 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, 138u, 84 }, { 1, 1, 138u, 84 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, 138u, 84 } };
-static const uint32_t talk_lvars_139[] = { 0, 0, 2, 4, 7, 9, 10, 12 };
-static const TalkField talk_lfields_140[] = { { 1, 4, 139u, 85 } };
-static const uint32_t talk_lvars_140[] = { 0, 1, 1 };
+static const TalkField talk_lfields_139[] = { { 0, 1, UINT32_MAX, 0 } };
+static const TalkField talk_lfields_140[] = { { 1, 3, 3u, 41 }, { 4, 1, 139u, 85 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, 139u, 85 }, { 1, 1, 138u, 84 }, { 2, 1, 139u, 85 }, { 1, 1, 139u, 85 }, { 1, 1, UINT32_MAX, 0 }, { 2, 1, 139u, 85 } };
+static const uint32_t talk_lvars_140[] = { 0, 0, 2, 4, 6, 7, 9 };
 static const TalkLayoutInfo talk_layout_table[] = {
     { 1, 0, talk_lfields_0, 1, NULL, 0 },
     { 3, 0, talk_lfields_1, 3, NULL, 0 },
@@ -5207,7 +5211,7 @@ static const TalkLayoutInfo talk_layout_table[] = {
     { 10, 0, talk_lfields_30, 5, NULL, 0 },
     { 5, 1, talk_lfields_31, 5, talk_lvars_31, 5 },
     { 19, 1, talk_lfields_32, 90, talk_lvars_32, 20 },
-    { 14, 1, talk_lfields_33, 55, talk_lvars_33, 30 },
+    { 15, 1, talk_lfields_33, 56, talk_lvars_33, 30 },
     { 9, 0, talk_lfields_34, 5, NULL, 0 },
     { 26, 0, talk_lfields_35, 14, NULL, 0 },
     { 12, 1, talk_lfields_36, 28, talk_lvars_36, 10 },
@@ -5311,10 +5315,10 @@ static const TalkLayoutInfo talk_layout_table[] = {
     { 6, 0, talk_lfields_134, 4, NULL, 0 },
     { 2, 1, talk_lfields_135, 1, talk_lvars_135, 2 },
     { 5, 0, talk_lfields_136, 3, NULL, 0 },
-    { 4, 1, talk_lfields_137, 54, talk_lvars_137, 28 },
+    { 4, 1, talk_lfields_137, 54, talk_lvars_137, 29 },
     { 1, 0, talk_lfields_138, 1, NULL, 0 },
-    { 4, 1, talk_lfields_139, 12, talk_lvars_139, 7 },
-    { 5, 1, talk_lfields_140, 1, talk_lvars_140, 2 },
+    { 1, 0, talk_lfields_139, 1, NULL, 0 },
+    { 5, 1, talk_lfields_140, 9, talk_lvars_140, 6 },
 };
 
 typedef struct {
@@ -8483,6 +8487,34 @@ static TalkValue talk_retag_l138(TalkL138 v) {
     return built;
 }
 
+typedef struct {
+    int64_t m0;
+} TalkL139;
+static inline TalkValue talk_box_l139(TalkL139 v) {
+    TalkValue built = talk_native_box(139u, 85, sizeof(TalkL139));
+    *(TalkL139 *)TALK_NATIVE_PAYLOAD(built) = v;
+    return built;
+}
+static inline TalkValue talk_box_l139_in(void *storage, TalkL139 v) {
+    TalkValue built = talk_native_box_in(storage, 139u, 85);
+    *(TalkL139 *)TALK_NATIVE_PAYLOAD(built) = v;
+    return built;
+}
+static inline TalkL139 talk_unbox_l139(TalkValue b) {
+    if (b.tag == TALK_NATIVE) {
+        return *(const TalkL139 *)TALK_NATIVE_PAYLOAD(b);
+    }
+    TalkL139 v;
+    v.m0 = b.v.agg->fields[0].v.i;
+    return v;
+}
+static TalkValue talk_retag_l139(TalkL139 v) {
+    (void)v;
+    TalkValue built = talk_agg(139u, 85, 0, 1);
+    built.v.agg->fields[0] = talk_int(v.m0);
+    return built;
+}
+
 static TalkValue talk_native_retag(TalkValue value) {
     switch (value.v.native->layout) {
     case 0: return talk_retag_l0(*(const TalkL0 *)TALK_NATIVE_PAYLOAD(value));
@@ -8553,6 +8585,7 @@ static TalkValue talk_native_retag(TalkValue value) {
     case 134: return talk_retag_l134(*(const TalkL134 *)TALK_NATIVE_PAYLOAD(value));
     case 136: return talk_retag_l136(*(const TalkL136 *)TALK_NATIVE_PAYLOAD(value));
     case 138: return talk_retag_l138(*(const TalkL138 *)TALK_NATIVE_PAYLOAD(value));
+    case 139: return talk_retag_l139(*(const TalkL139 *)TALK_NATIVE_PAYLOAD(value));
     }
     return talk_unit();
 }
@@ -8627,6 +8660,7 @@ static TalkValue talk_rebox(uint32_t layout, TalkValue flat) {
     case 134: return talk_box_l134(talk_unbox_l134(flat));
     case 136: return talk_box_l136(talk_unbox_l136(flat));
     case 138: return talk_box_l138(talk_unbox_l138(flat));
+    case 139: return talk_box_l139(talk_unbox_l139(flat));
     }
     return flat;
 }
@@ -20442,6 +20476,17 @@ b22:
 b23:
     {
         TalkL3 tmp;
+        tmp.m0 = l[0].v.agg->fields[12].v.ptr;
+        tmp.m1 = l[0].v.agg->fields[13].v.i;
+        tmp.m2 = l[0].v.agg->fields[14].v.i;
+        l[2] = talk_box_l3(tmp);
+    }
+    l[1] = talk_fn81(NULL, talk_unbox_l3(l[2]));
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    {
+        TalkL3 tmp;
         tmp.m0 = l[0].v.agg->fields[9].v.ptr;
         tmp.m1 = l[0].v.agg->fields[10].v.i;
         tmp.m2 = l[0].v.agg->fields[11].v.i;
@@ -27798,7 +27843,7 @@ b70:
 
 /* meta_expr */
 static TalkValue talk_fn184(const TalkValue *env, TalkValue p0, TalkL3 p1, TalkL3 p2, TalkValue p3, TalkL16 p4) {
-    TalkValue l[45];
+    TalkValue l[46];
     memset(l, 0, sizeof l);
     (void)env;
     TalkL16 x4;
@@ -27817,8 +27862,8 @@ static TalkValue talk_fn184(const TalkValue *env, TalkValue p0, TalkL3 p1, TalkL
     memset(&x22, 0, sizeof x22);
     TalkL78 x25;
     memset(&x25, 0, sizeof x25);
-    TalkL28 x44;
-    memset(&x44, 0, sizeof x44);
+    TalkL28 x45;
+    memset(&x45, 0, sizeof x45);
     talk_frame_enter();
     l[0] = p0;
     l[1] = talk_box_l3(p1);
@@ -27831,7 +27876,7 @@ b0:
     l[6] = talk_int(x4.m2);
     x7 = talk_fn191(NULL, l[0], talk_unbox_l3(l[1]), l[3], l[5], l[6]);
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     l[6] = talk_int(x7.m0);
     {
@@ -27845,13 +27890,13 @@ b0:
     l[8] = x4.m0;
     l[9] = l[8].v.agg->fields[0];
     switch (l[9].v.i) {
-    case 0: goto b419;
-    case 1: goto b419;
-    case 2: goto b419;
-    case 3: goto b419;
-    case 4: goto b419;
-    case 5: goto b419;
-    case 6: goto b419;
+    case 0: goto b433;
+    case 1: goto b433;
+    case 2: goto b433;
+    case 3: goto b433;
+    case 4: goto b433;
+    case 5: goto b433;
+    case 6: goto b433;
     case 7: goto b1;
     case 8: goto b18;
     case 9: goto b35;
@@ -27869,12 +27914,12 @@ b0:
     case 21: goto b260;
     case 22: goto b277;
     case 23: goto b293;
-    case 24: goto b419;
+    case 24: goto b433;
     case 25: goto b312;
-    case 26: goto b345;
-    case 27: goto b375;
-    case 28: goto b397;
-    default: goto b419;
+    case 26: goto b359;
+    case 27: goto b389;
+    case 28: goto b411;
+    default: goto b433;
     }
 b1:
     {
@@ -27890,7 +27935,7 @@ b2:
 b3:
     x10 = talk_fn350(NULL, talk_unbox_l3(l[9]));
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     goto b4;
 b4:
@@ -27946,7 +27991,7 @@ b9:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b423;
+    goto b437;
 b10:
     goto b11;
 b11:
@@ -27970,7 +28015,7 @@ b16:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
+    goto b435;
 b17:
     talk_trap("unmatched value");
 b18:
@@ -27987,7 +28032,7 @@ b19:
 b20:
     x10 = talk_fn350(NULL, talk_unbox_l3(l[15]));
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     goto b21;
 b21:
@@ -28043,7 +28088,7 @@ b26:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b423;
+    goto b437;
 b27:
     goto b28;
 b28:
@@ -28067,7 +28112,7 @@ b33:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
+    goto b435;
 b34:
     talk_trap("unmatched value");
 b35:
@@ -28109,7 +28154,7 @@ b38:
 b39:
     x10 = talk_fn350(NULL, talk_unbox_l3(l[16]));
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     goto b40;
 b40:
@@ -28426,7 +28471,7 @@ b81:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b423;
+    goto b437;
 b82:
     goto b83;
 b83:
@@ -28464,7 +28509,7 @@ b88:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
+    goto b435;
 b89:
     talk_trap("unmatched value");
 b90:
@@ -28487,7 +28532,7 @@ b94:
 b95:
     x10 = talk_fn321(NULL, talk_unbox_l3(l[23]));
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     goto b96;
 b96:
@@ -28641,14 +28686,14 @@ b120:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b423;
+    goto b437;
 b121:
     l[26] = x10.m0;
     l[24] = talk_fn87(NULL, talk_unbox_l3(l[26]));
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
+    goto b435;
 b122:
     talk_trap("unmatched value");
 b123:
@@ -28669,7 +28714,7 @@ b126:
 b127:
     x10 = talk_fn350(NULL, talk_unbox_l3(l[26]));
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     goto b128;
 b128:
@@ -28725,7 +28770,7 @@ b133:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b423;
+    goto b437;
 b134:
     goto b135;
 b135:
@@ -28749,7 +28794,7 @@ b140:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
+    goto b435;
 b141:
     talk_trap("unmatched value");
 b142:
@@ -28764,7 +28809,7 @@ b142:
 b143:
     x10 = talk_fn350(NULL, talk_unbox_l3(l[24]));
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     goto b144;
 b144:
@@ -28820,7 +28865,7 @@ b149:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b423;
+    goto b437;
 b150:
     goto b151;
 b151:
@@ -28844,7 +28889,7 @@ b156:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
+    goto b435;
 b157:
     talk_trap("unmatched value");
 b158:
@@ -28859,7 +28904,7 @@ b158:
 b159:
     x10 = talk_fn350(NULL, talk_unbox_l3(l[24]));
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     goto b160;
 b160:
@@ -28915,7 +28960,7 @@ b165:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b423;
+    goto b437;
 b166:
     goto b167;
 b167:
@@ -28939,7 +28984,7 @@ b172:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
+    goto b435;
 b173:
     talk_trap("unmatched value");
 b174:
@@ -28948,7 +28993,7 @@ b174:
 b175:
     l[19] = talk_fn356(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], l[24]);
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     {
         TalkL3 tmp;
@@ -28964,7 +29009,7 @@ b175:
         tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[19]))->m6;
         l[2] = talk_box_l3(tmp);
     }
-    goto b421;
+    goto b435;
 b176:
     {
         TalkL3 tmp;
@@ -28977,7 +29022,7 @@ b176:
 b177:
     x10 = talk_fn350(NULL, talk_unbox_l3(l[19]));
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     goto b178;
 b178:
@@ -29033,7 +29078,7 @@ b183:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b423;
+    goto b437;
 b184:
     goto b185;
 b185:
@@ -29057,7 +29102,7 @@ b190:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
+    goto b435;
 b191:
     talk_trap("unmatched value");
 b192:
@@ -29072,7 +29117,7 @@ b192:
 b193:
     x10 = talk_fn350(NULL, talk_unbox_l3(l[24]));
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     goto b194;
 b194:
@@ -29128,7 +29173,7 @@ b199:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b423;
+    goto b437;
 b200:
     goto b201;
 b201:
@@ -29152,7 +29197,7 @@ b206:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
+    goto b435;
 b207:
     talk_trap("unmatched value");
 b208:
@@ -29161,7 +29206,7 @@ b208:
 b209:
     l[19] = talk_fn357(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], l[24]);
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     {
         TalkL3 tmp;
@@ -29177,14 +29222,14 @@ b209:
         tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[19]))->m6;
         l[2] = talk_box_l3(tmp);
     }
-    goto b421;
+    goto b435;
 b210:
     l[19] = l[8].v.agg->fields[1];
     goto b211;
 b211:
     l[24] = talk_fn356(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], l[19]);
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     {
         TalkL3 tmp;
@@ -29200,7 +29245,7 @@ b211:
         tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[24]))->m6;
         l[2] = talk_box_l3(tmp);
     }
-    goto b421;
+    goto b435;
 b212:
     {
         TalkL3 tmp;
@@ -29219,7 +29264,7 @@ b214:
 b215:
     x10 = talk_fn350(NULL, talk_unbox_l3(l[24]));
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     goto b216;
 b216:
@@ -29328,14 +29373,14 @@ b227:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b423;
+    goto b437;
 b228:
     l[29] = x10.m0;
     l[27] = talk_fn79(NULL, talk_unbox_l3(l[29]));
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
+    goto b435;
 b229:
     talk_trap("unmatched value");
 b230:
@@ -29359,7 +29404,7 @@ b231:
 b232:
     x10 = talk_fn350(NULL, talk_unbox_l3(l[29]));
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     goto b233;
 b233:
@@ -29543,7 +29588,7 @@ b250:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b423;
+    goto b437;
 b251:
     goto b252;
 b252:
@@ -29571,7 +29616,7 @@ b257:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
+    goto b435;
 b258:
     talk_trap("unmatched value");
 b259:
@@ -29597,7 +29642,7 @@ b261:
 b262:
     x10 = talk_fn350(NULL, talk_unbox_l3(l[33]));
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     goto b263;
 b263:
@@ -29688,14 +29733,14 @@ b274:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b423;
+    goto b437;
 b275:
     l[34] = x10.m0;
     l[32] = talk_fn79(NULL, talk_unbox_l3(l[34]));
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
+    goto b435;
 b276:
     talk_trap("unmatched value");
 b277:
@@ -29710,7 +29755,7 @@ b277:
 b278:
     x10 = talk_fn350(NULL, talk_unbox_l3(l[34]));
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     goto b279;
 b279:
@@ -29766,7 +29811,7 @@ b284:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b423;
+    goto b437;
 b285:
     goto b286;
 b286:
@@ -29790,7 +29835,7 @@ b291:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
+    goto b435;
 b292:
     talk_trap("unmatched value");
 b293:
@@ -29806,7 +29851,7 @@ b294:
     l[28] = talk_int(INT64_C(0));
     x10 = talk_fn350(NULL, talk_unbox_l3(l[34]));
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
     goto b295;
 b295:
@@ -29885,7 +29930,7 @@ b302:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b423;
+    goto b437;
 b303:
     l[28] = talk_add(l[28], talk_int(INT64_C(1)));
     goto b304;
@@ -29912,7 +29957,7 @@ b310:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
+    goto b435;
 b311:
     talk_trap("unmatched value");
 b312:
@@ -29930,6 +29975,13 @@ b312:
         tmp.m2 = l[8].v.agg->fields[11].v.i;
         l[28] = talk_box_l3(tmp);
     }
+    {
+        TalkL3 tmp;
+        tmp.m0 = l[8].v.agg->fields[12].v.ptr;
+        tmp.m1 = l[8].v.agg->fields[13].v.i;
+        tmp.m2 = l[8].v.agg->fields[14].v.i;
+        l[34] = talk_box_l3(tmp);
+    }
     goto b313;
 b313:
     goto b314;
@@ -29940,17 +29992,19 @@ b315:
 b316:
     goto b317;
 b317:
-    x10 = talk_fn196(NULL, talk_unbox_l3(l[35]));
-    if (talk_unwinding) {
-        goto b423;
-    }
     goto b318;
 b318:
+    x10 = talk_fn196(NULL, talk_unbox_l3(l[35]));
+    if (talk_unwinding) {
+        goto b437;
+    }
     goto b319;
 b319:
+    goto b320;
+b320:
     x11 = talk_fn197(NULL, x10);
     if (talk_unwinding) {
-        goto b335;
+        goto b348;
     }
     x12.m0 = x11.m0;
     x12.m1 = x11.m1;
@@ -29958,65 +30012,65 @@ b319:
     x10.m1 = x11.m3;
     l[32] = talk_int(x12.m0);
     switch (l[32].v.i) {
-    case 0: goto b320;
-    case 1: goto b325;
-    default: goto b344;
+    case 0: goto b321;
+    case 1: goto b326;
+    default: goto b358;
     }
-b320:
-    l[32] = x12.m1;
-    goto b321;
 b321:
-    l[34] = talk_fn198(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], l[32]);
+    l[32] = x12.m1;
+    goto b322;
+b322:
+    l[36] = talk_fn198(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], l[32]);
     if (talk_unwinding) {
-        goto b322;
+        goto b323;
     }
     {
         TalkL3 tmp;
-        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[34]))->m1;
-        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[34]))->m2;
-        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[34]))->m3;
+        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[36]))->m1;
+        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[36]))->m2;
+        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[36]))->m3;
         l[1] = talk_box_l3(tmp);
     }
     {
         TalkL3 tmp;
-        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[34]))->m4;
-        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[34]))->m5;
-        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[34]))->m6;
+        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[36]))->m4;
+        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[36]))->m5;
+        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[36]))->m6;
         l[2] = talk_box_l3(tmp);
     }
-    goto b323;
-b322:
-    l[34] = talk_fn140(NULL, l[32]);
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    goto b335;
-b323:
     goto b324;
-b324:
-    l[34] = talk_fn140(NULL, l[32]);
+b323:
+    l[36] = talk_fn140(NULL, l[32]);
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b318;
+    goto b348;
+b324:
+    goto b325;
 b325:
-    goto b326;
+    l[36] = talk_fn140(NULL, l[32]);
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b319;
 b326:
     goto b327;
 b327:
     goto b328;
 b328:
-    x25 = talk_fn352(NULL, talk_unbox_l3(l[28]));
-    if (talk_unwinding) {
-        goto b335;
-    }
     goto b329;
 b329:
+    x25 = talk_fn352(NULL, talk_unbox_l3(l[28]));
+    if (talk_unwinding) {
+        goto b348;
+    }
     goto b330;
 b330:
+    goto b331;
+b331:
     x11 = talk_fn353(NULL, x25);
     if (talk_unwinding) {
-        goto b334;
+        goto b347;
     }
     x12.m0 = x11.m0;
     x12.m1 = x11.m1;
@@ -30024,21 +30078,21 @@ b330:
     x25.m1 = x11.m3;
     l[32] = talk_int(x12.m0);
     switch (l[32].v.i) {
-    case 0: goto b331;
-    case 1: goto b338;
-    default: goto b343;
+    case 0: goto b332;
+    case 1: goto b337;
+    default: goto b357;
     }
-b331:
-    l[32] = x12.m1;
-    goto b332;
 b332:
-    l[34] = l[32].v.agg->fields[14];
-    l[36] = l[32].v.agg->fields[15];
-    x7 = talk_fn191(NULL, l[0], talk_unbox_l3(l[1]), l[3], l[34], l[36]);
+    l[32] = x12.m1;
+    goto b333;
+b333:
+    l[36] = l[32].v.agg->fields[14];
+    l[37] = l[32].v.agg->fields[15];
+    x7 = talk_fn191(NULL, l[0], talk_unbox_l3(l[1]), l[3], l[36], l[37]);
     if (talk_unwinding) {
-        goto b333;
+        goto b334;
     }
-    l[36] = talk_int(x7.m0);
+    l[37] = talk_int(x7.m0);
     {
         TalkL3 tmp;
         tmp.m0 = x7.m1;
@@ -30051,31 +30105,11 @@ b332:
         tmp.m0 = l[32].v.agg->fields[11];
         tmp.m1 = l[32].v.agg->fields[12].v.i;
         tmp.m2 = l[32].v.agg->fields[13].v.i;
-        l[34] = talk_box_l16(tmp);
+        l[36] = talk_box_l16(tmp);
     }
-    l[37] = talk_fn184(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], talk_unbox_l16(l[34]));
+    l[38] = talk_fn184(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], talk_unbox_l16(l[36]));
     if (talk_unwinding) {
-        goto b333;
-    }
-    {
-        TalkL3 tmp;
-        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[37]))->m1;
-        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[37]))->m2;
-        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[37]))->m3;
-        l[1] = talk_box_l3(tmp);
-    }
-    {
-        TalkL3 tmp;
-        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[37]))->m4;
-        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[37]))->m5;
-        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[37]))->m6;
-        l[2] = talk_box_l3(tmp);
-    }
-    l[37] = l[32].v.agg->fields[14];
-    l[34] = l[32].v.agg->fields[15];
-    l[38] = talk_fn201(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[36], l[37], l[34]);
-    if (talk_unwinding) {
-        goto b333;
+        goto b334;
     }
     {
         TalkL3 tmp;
@@ -30091,60 +30125,160 @@ b332:
         tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[38]))->m6;
         l[2] = talk_box_l3(tmp);
     }
-    goto b336;
-b333:
-    l[38] = talk_fn159(NULL, l[32]);
+    l[38] = l[32].v.agg->fields[14];
+    l[36] = l[32].v.agg->fields[15];
+    l[39] = talk_fn201(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[37], l[38], l[36]);
     if (talk_unwinding) {
-        return talk_unit();
+        goto b334;
     }
-    goto b334;
-b334:
-    l[38] = x25.m0;
-    l[37] = talk_fn83(NULL, talk_unbox_l3(l[38]));
-    if (talk_unwinding) {
-        return talk_unit();
+    {
+        TalkL3 tmp;
+        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[39]))->m1;
+        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[39]))->m2;
+        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[39]))->m3;
+        l[1] = talk_box_l3(tmp);
+    }
+    {
+        TalkL3 tmp;
+        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[39]))->m4;
+        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[39]))->m5;
+        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[39]))->m6;
+        l[2] = talk_box_l3(tmp);
     }
     goto b335;
+b334:
+    l[39] = talk_fn159(NULL, l[32]);
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b347;
 b335:
-    l[38] = x10.m0;
-    l[37] = talk_fn85(NULL, talk_unbox_l3(l[38]));
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    goto b423;
+    goto b336;
 b336:
-    goto b337;
-b337:
-    l[38] = talk_fn159(NULL, l[32]);
+    l[39] = talk_fn159(NULL, l[32]);
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b329;
+    goto b330;
+b337:
+    goto b338;
 b338:
     goto b339;
 b339:
     goto b340;
 b340:
+    x22 = talk_fn354(NULL, talk_unbox_l3(l[34]));
+    if (talk_unwinding) {
+        goto b347;
+    }
     goto b341;
 b341:
     goto b342;
 b342:
+    x11 = talk_fn355(NULL, x22);
+    if (talk_unwinding) {
+        goto b346;
+    }
+    x12.m0 = x11.m0;
+    x12.m1 = x11.m1;
+    x22.m0 = x11.m2;
+    x22.m1 = x11.m3;
+    l[38] = talk_int(x12.m0);
+    switch (l[38].v.i) {
+    case 0: goto b343;
+    case 1: goto b351;
+    default: goto b356;
+    }
+b343:
+    l[38] = x12.m1;
+    goto b344;
+b344:
+    l[36] = talk_fn356(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], l[38]);
+    if (talk_unwinding) {
+        goto b345;
+    }
+    {
+        TalkL3 tmp;
+        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[36]))->m1;
+        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[36]))->m2;
+        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[36]))->m3;
+        l[1] = talk_box_l3(tmp);
+    }
+    {
+        TalkL3 tmp;
+        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[36]))->m4;
+        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[36]))->m5;
+        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[36]))->m6;
+        l[2] = talk_box_l3(tmp);
+    }
+    goto b349;
+b345:
+    l[36] = talk_fn90(NULL, l[38]);
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b346;
+b346:
+    l[36] = x22.m0;
+    l[32] = talk_fn81(NULL, talk_unbox_l3(l[36]));
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b347;
+b347:
+    l[36] = x25.m0;
+    l[32] = talk_fn83(NULL, talk_unbox_l3(l[36]));
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b348;
+b348:
+    l[36] = x10.m0;
+    l[32] = talk_fn85(NULL, talk_unbox_l3(l[36]));
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b437;
+b349:
+    goto b350;
+b350:
+    l[36] = talk_fn90(NULL, l[38]);
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b341;
+b351:
+    goto b352;
+b352:
+    goto b353;
+b353:
+    goto b354;
+b354:
+    goto b355;
+b355:
+    l[38] = x22.m0;
+    l[36] = talk_fn81(NULL, talk_unbox_l3(l[38]));
+    if (talk_unwinding) {
+        return talk_unit();
+    }
     l[38] = x25.m0;
-    l[32] = talk_fn83(NULL, talk_unbox_l3(l[38]));
+    l[36] = talk_fn83(NULL, talk_unbox_l3(l[38]));
     if (talk_unwinding) {
         return talk_unit();
     }
     l[38] = x10.m0;
-    l[32] = talk_fn85(NULL, talk_unbox_l3(l[38]));
+    l[36] = talk_fn85(NULL, talk_unbox_l3(l[38]));
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
-b343:
+    goto b435;
+b356:
     talk_trap("unmatched value");
-b344:
+b357:
     talk_trap("unmatched value");
-b345:
+b358:
+    talk_trap("unmatched value");
+b359:
     {
         TalkL3 tmp;
         tmp.m0 = l[8].v.agg->fields[1].v.ptr;
@@ -30157,45 +30291,45 @@ b345:
         tmp.m0 = l[8].v.agg->fields[4].v.ptr;
         tmp.m1 = l[8].v.agg->fields[5].v.i;
         tmp.m2 = l[8].v.agg->fields[6].v.i;
-        l[32] = talk_box_l3(tmp);
+        l[36] = talk_box_l3(tmp);
     }
-    goto b346;
-b346:
-    goto b347;
-b347:
+    goto b360;
+b360:
+    goto b361;
+b361:
     x10 = talk_fn360(NULL, talk_unbox_l3(l[38]));
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
-    goto b348;
-b348:
-    goto b349;
-b349:
+    goto b362;
+b362:
+    goto b363;
+b363:
     x11 = talk_fn361(NULL, x10);
     if (talk_unwinding) {
-        goto b365;
+        goto b379;
     }
     x12.m0 = x11.m0;
     x12.m1 = x11.m1;
     x10.m0 = x11.m2;
     x10.m1 = x11.m3;
-    l[37] = talk_int(x12.m0);
-    switch (l[37].v.i) {
-    case 0: goto b350;
-    case 1: goto b355;
-    default: goto b374;
+    l[32] = talk_int(x12.m0);
+    switch (l[32].v.i) {
+    case 0: goto b364;
+    case 1: goto b369;
+    default: goto b388;
     }
-b350:
-    l[37] = x12.m1;
-    goto b351;
-b351:
-    l[34] = talk_int(((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[37]))->m8);
-    l[39] = talk_int(((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[37]))->m9);
-    x7 = talk_fn191(NULL, l[0], talk_unbox_l3(l[1]), l[3], l[34], l[39]);
+b364:
+    l[32] = x12.m1;
+    goto b365;
+b365:
+    l[39] = talk_int(((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[32]))->m8);
+    l[40] = talk_int(((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[32]))->m9);
+    x7 = talk_fn191(NULL, l[0], talk_unbox_l3(l[1]), l[3], l[39], l[40]);
     if (talk_unwinding) {
-        goto b352;
+        goto b366;
     }
-    l[39] = talk_int(x7.m0);
+    l[40] = talk_int(x7.m0);
     {
         TalkL3 tmp;
         tmp.m0 = x7.m1;
@@ -30205,34 +30339,14 @@ b351:
     }
     {
         TalkL16 tmp;
-        tmp.m0 = ((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[37]))->m5;
-        tmp.m1 = ((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[37]))->m6;
-        tmp.m2 = ((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[37]))->m7;
-        l[34] = talk_box_l16(tmp);
+        tmp.m0 = ((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[32]))->m5;
+        tmp.m1 = ((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[32]))->m6;
+        tmp.m2 = ((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[32]))->m7;
+        l[39] = talk_box_l16(tmp);
     }
-    l[40] = talk_fn184(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], talk_unbox_l16(l[34]));
+    l[41] = talk_fn184(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], talk_unbox_l16(l[39]));
     if (talk_unwinding) {
-        goto b352;
-    }
-    {
-        TalkL3 tmp;
-        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[40]))->m1;
-        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[40]))->m2;
-        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[40]))->m3;
-        l[1] = talk_box_l3(tmp);
-    }
-    {
-        TalkL3 tmp;
-        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[40]))->m4;
-        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[40]))->m5;
-        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[40]))->m6;
-        l[2] = talk_box_l3(tmp);
-    }
-    l[40] = talk_int(((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[37]))->m8);
-    l[34] = talk_int(((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[37]))->m9);
-    l[41] = talk_fn201(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[39], l[40], l[34]);
-    if (talk_unwinding) {
-        goto b352;
+        goto b366;
     }
     {
         TalkL3 tmp;
@@ -30248,242 +30362,11 @@ b351:
         tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[41]))->m6;
         l[2] = talk_box_l3(tmp);
     }
-    goto b353;
-b352:
-    l[41] = talk_fn151(NULL, l[37]);
+    l[41] = talk_int(((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[32]))->m8);
+    l[39] = talk_int(((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[32]))->m9);
+    l[42] = talk_fn201(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[40], l[41], l[39]);
     if (talk_unwinding) {
-        return talk_unit();
-    }
-    goto b365;
-b353:
-    goto b354;
-b354:
-    l[41] = talk_fn151(NULL, l[37]);
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    goto b348;
-b355:
-    goto b356;
-b356:
-    goto b357;
-b357:
-    goto b358;
-b358:
-    x25 = talk_fn350(NULL, talk_unbox_l3(l[32]));
-    if (talk_unwinding) {
-        goto b365;
-    }
-    goto b359;
-b359:
-    goto b360;
-b360:
-    x11 = talk_fn351(NULL, x25);
-    if (talk_unwinding) {
-        goto b364;
-    }
-    x12.m0 = x11.m0;
-    x12.m1 = x11.m1;
-    x25.m0 = x11.m2;
-    x25.m1 = x11.m3;
-    l[40] = talk_int(x12.m0);
-    switch (l[40].v.i) {
-    case 0: goto b361;
-    case 1: goto b368;
-    default: goto b373;
-    }
-b361:
-    l[40] = x12.m1;
-    goto b362;
-b362:
-    l[34] = talk_fn184(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], talk_unbox_l16(l[40]));
-    if (talk_unwinding) {
-        goto b363;
-    }
-    {
-        TalkL3 tmp;
-        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[34]))->m1;
-        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[34]))->m2;
-        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[34]))->m3;
-        l[1] = talk_box_l3(tmp);
-    }
-    {
-        TalkL3 tmp;
-        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[34]))->m4;
-        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[34]))->m5;
-        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[34]))->m6;
-        l[2] = talk_box_l3(tmp);
-    }
-    goto b366;
-b363:
-    l[34] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[40]))->m0;
-    l[37] = talk_fn78(NULL, l[34]);
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    goto b364;
-b364:
-    l[37] = x25.m0;
-    l[34] = talk_fn79(NULL, talk_unbox_l3(l[37]));
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    goto b365;
-b365:
-    l[37] = x10.m0;
-    l[34] = talk_fn118(NULL, talk_unbox_l3(l[37]));
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    goto b423;
-b366:
-    goto b367;
-b367:
-    l[37] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[40]))->m0;
-    l[40] = talk_fn78(NULL, l[37]);
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    goto b359;
-b368:
-    goto b369;
-b369:
-    goto b370;
-b370:
-    goto b371;
-b371:
-    goto b372;
-b372:
-    l[40] = x25.m0;
-    l[37] = talk_fn79(NULL, talk_unbox_l3(l[40]));
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    l[40] = x10.m0;
-    l[37] = talk_fn118(NULL, talk_unbox_l3(l[40]));
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    goto b421;
-b373:
-    talk_trap("unmatched value");
-b374:
-    talk_trap("unmatched value");
-b375:
-    {
-        TalkL3 tmp;
-        tmp.m0 = l[8].v.agg->fields[1].v.ptr;
-        tmp.m1 = l[8].v.agg->fields[2].v.i;
-        tmp.m2 = l[8].v.agg->fields[3].v.i;
-        l[40] = talk_box_l3(tmp);
-    }
-    l[37] = l[8].v.agg->fields[4];
-    goto b376;
-b376:
-    goto b377;
-b377:
-    x10 = talk_fn350(NULL, talk_unbox_l3(l[40]));
-    if (talk_unwinding) {
-        goto b423;
-    }
-    goto b378;
-b378:
-    goto b379;
-b379:
-    x11 = talk_fn351(NULL, x10);
-    if (talk_unwinding) {
-        goto b394;
-    }
-    x12.m0 = x11.m0;
-    x12.m1 = x11.m1;
-    x10.m0 = x11.m2;
-    x10.m1 = x11.m3;
-    l[34] = talk_int(x12.m0);
-    switch (l[34].v.i) {
-    case 0: goto b380;
-    case 1: goto b385;
-    default: goto b396;
-    }
-b380:
-    l[34] = x12.m1;
-    goto b381;
-b381:
-    l[41] = talk_fn184(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], talk_unbox_l16(l[34]));
-    if (talk_unwinding) {
-        goto b382;
-    }
-    {
-        TalkL3 tmp;
-        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[41]))->m1;
-        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[41]))->m2;
-        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[41]))->m3;
-        l[1] = talk_box_l3(tmp);
-    }
-    {
-        TalkL3 tmp;
-        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[41]))->m4;
-        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[41]))->m5;
-        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[41]))->m6;
-        l[2] = talk_box_l3(tmp);
-    }
-    goto b383;
-b382:
-    l[41] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[34]))->m0;
-    l[42] = talk_fn78(NULL, l[41]);
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    goto b394;
-b383:
-    goto b384;
-b384:
-    l[42] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[34]))->m0;
-    l[34] = talk_fn78(NULL, l[42]);
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    goto b378;
-b385:
-    goto b386;
-b386:
-    goto b387;
-b387:
-    goto b388;
-b388:
-    l[42] = talk_int(x4.m1);
-    l[34] = talk_int(x4.m2);
-    x7 = talk_fn191(NULL, l[0], talk_unbox_l3(l[1]), l[3], l[42], l[34]);
-    if (talk_unwinding) {
-        goto b394;
-    }
-    l[42] = talk_int(x7.m0);
-    {
-        TalkL3 tmp;
-        tmp.m0 = x7.m1;
-        tmp.m1 = x7.m2;
-        tmp.m2 = x7.m3;
-        l[1] = talk_box_l3(tmp);
-    }
-    l[34] = l[42];
-    l[42] = talk_slice(l[37], 9, 4, 14u, 2);
-    l[41] = l[42].v.agg->fields[0];
-    switch (l[41].v.i) {
-    case 0: goto b389;
-    default: goto b391;
-    }
-b389:
-    {
-        TalkL13 tmp;
-        tmp.m0 = l[42].v.agg->fields[1];
-        tmp.m1 = l[42].v.agg->fields[2].v.i;
-        tmp.m2 = l[42].v.agg->fields[3].v.i;
-        l[41] = talk_box_l13(tmp);
-    }
-    goto b390;
-b390:
-    l[42] = talk_fn186(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], talk_unbox_l13(l[41]));
-    if (talk_unwinding) {
-        goto b394;
+        goto b366;
     }
     {
         TalkL3 tmp;
@@ -30499,17 +30382,242 @@ b390:
         tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[42]))->m6;
         l[2] = talk_box_l3(tmp);
     }
-    goto b393;
+    goto b367;
+b366:
+    l[42] = talk_fn151(NULL, l[32]);
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b379;
+b367:
+    goto b368;
+b368:
+    l[42] = talk_fn151(NULL, l[32]);
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b362;
+b369:
+    goto b370;
+b370:
+    goto b371;
+b371:
+    goto b372;
+b372:
+    x25 = talk_fn350(NULL, talk_unbox_l3(l[36]));
+    if (talk_unwinding) {
+        goto b379;
+    }
+    goto b373;
+b373:
+    goto b374;
+b374:
+    x11 = talk_fn351(NULL, x25);
+    if (talk_unwinding) {
+        goto b378;
+    }
+    x12.m0 = x11.m0;
+    x12.m1 = x11.m1;
+    x25.m0 = x11.m2;
+    x25.m1 = x11.m3;
+    l[41] = talk_int(x12.m0);
+    switch (l[41].v.i) {
+    case 0: goto b375;
+    case 1: goto b382;
+    default: goto b387;
+    }
+b375:
+    l[41] = x12.m1;
+    goto b376;
+b376:
+    l[39] = talk_fn184(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], talk_unbox_l16(l[41]));
+    if (talk_unwinding) {
+        goto b377;
+    }
+    {
+        TalkL3 tmp;
+        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[39]))->m1;
+        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[39]))->m2;
+        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[39]))->m3;
+        l[1] = talk_box_l3(tmp);
+    }
+    {
+        TalkL3 tmp;
+        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[39]))->m4;
+        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[39]))->m5;
+        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[39]))->m6;
+        l[2] = talk_box_l3(tmp);
+    }
+    goto b380;
+b377:
+    l[39] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[41]))->m0;
+    l[42] = talk_fn78(NULL, l[39]);
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b378;
+b378:
+    l[42] = x25.m0;
+    l[39] = talk_fn79(NULL, talk_unbox_l3(l[42]));
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b379;
+b379:
+    l[42] = x10.m0;
+    l[39] = talk_fn118(NULL, talk_unbox_l3(l[42]));
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b437;
+b380:
+    goto b381;
+b381:
+    l[42] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[41]))->m0;
+    l[41] = talk_fn78(NULL, l[42]);
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b373;
+b382:
+    goto b383;
+b383:
+    goto b384;
+b384:
+    goto b385;
+b385:
+    goto b386;
+b386:
+    l[42] = x25.m0;
+    l[41] = talk_fn79(NULL, talk_unbox_l3(l[42]));
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    l[42] = x10.m0;
+    l[41] = talk_fn118(NULL, talk_unbox_l3(l[42]));
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b435;
+b387:
+    talk_trap("unmatched value");
+b388:
+    talk_trap("unmatched value");
+b389:
+    {
+        TalkL3 tmp;
+        tmp.m0 = l[8].v.agg->fields[1].v.ptr;
+        tmp.m1 = l[8].v.agg->fields[2].v.i;
+        tmp.m2 = l[8].v.agg->fields[3].v.i;
+        l[42] = talk_box_l3(tmp);
+    }
+    l[41] = l[8].v.agg->fields[4];
+    goto b390;
+b390:
+    goto b391;
 b391:
+    x10 = talk_fn350(NULL, talk_unbox_l3(l[42]));
+    if (talk_unwinding) {
+        goto b437;
+    }
     goto b392;
 b392:
     goto b393;
 b393:
-    l[42] = talk_int(x4.m1);
-    l[41] = talk_int(x4.m2);
-    l[43] = talk_fn201(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[34], l[42], l[41]);
+    x11 = talk_fn351(NULL, x10);
     if (talk_unwinding) {
-        goto b394;
+        goto b408;
+    }
+    x12.m0 = x11.m0;
+    x12.m1 = x11.m1;
+    x10.m0 = x11.m2;
+    x10.m1 = x11.m3;
+    l[39] = talk_int(x12.m0);
+    switch (l[39].v.i) {
+    case 0: goto b394;
+    case 1: goto b399;
+    default: goto b410;
+    }
+b394:
+    l[39] = x12.m1;
+    goto b395;
+b395:
+    l[32] = talk_fn184(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], talk_unbox_l16(l[39]));
+    if (talk_unwinding) {
+        goto b396;
+    }
+    {
+        TalkL3 tmp;
+        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[32]))->m1;
+        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[32]))->m2;
+        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[32]))->m3;
+        l[1] = talk_box_l3(tmp);
+    }
+    {
+        TalkL3 tmp;
+        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[32]))->m4;
+        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[32]))->m5;
+        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[32]))->m6;
+        l[2] = talk_box_l3(tmp);
+    }
+    goto b397;
+b396:
+    l[32] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[39]))->m0;
+    l[43] = talk_fn78(NULL, l[32]);
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b408;
+b397:
+    goto b398;
+b398:
+    l[43] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[39]))->m0;
+    l[39] = talk_fn78(NULL, l[43]);
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b392;
+b399:
+    goto b400;
+b400:
+    goto b401;
+b401:
+    goto b402;
+b402:
+    l[43] = talk_int(x4.m1);
+    l[39] = talk_int(x4.m2);
+    x7 = talk_fn191(NULL, l[0], talk_unbox_l3(l[1]), l[3], l[43], l[39]);
+    if (talk_unwinding) {
+        goto b408;
+    }
+    l[43] = talk_int(x7.m0);
+    {
+        TalkL3 tmp;
+        tmp.m0 = x7.m1;
+        tmp.m1 = x7.m2;
+        tmp.m2 = x7.m3;
+        l[1] = talk_box_l3(tmp);
+    }
+    l[39] = l[43];
+    l[43] = talk_slice(l[41], 9, 4, 14u, 2);
+    l[32] = l[43].v.agg->fields[0];
+    switch (l[32].v.i) {
+    case 0: goto b403;
+    default: goto b405;
+    }
+b403:
+    {
+        TalkL13 tmp;
+        tmp.m0 = l[43].v.agg->fields[1];
+        tmp.m1 = l[43].v.agg->fields[2].v.i;
+        tmp.m2 = l[43].v.agg->fields[3].v.i;
+        l[32] = talk_box_l13(tmp);
+    }
+    goto b404;
+b404:
+    l[43] = talk_fn186(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], talk_unbox_l13(l[32]));
+    if (talk_unwinding) {
+        goto b408;
     }
     {
         TalkL3 tmp;
@@ -30525,114 +30633,61 @@ b393:
         tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[43]))->m6;
         l[2] = talk_box_l3(tmp);
     }
-    l[5] = l[34];
-    goto b395;
-b394:
-    l[34] = x10.m0;
-    l[43] = talk_fn79(NULL, talk_unbox_l3(l[34]));
+    goto b407;
+b405:
+    goto b406;
+b406:
+    goto b407;
+b407:
+    l[43] = talk_int(x4.m1);
+    l[32] = talk_int(x4.m2);
+    l[44] = talk_fn201(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[39], l[43], l[32]);
+    if (talk_unwinding) {
+        goto b408;
+    }
+    {
+        TalkL3 tmp;
+        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[44]))->m1;
+        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[44]))->m2;
+        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[44]))->m3;
+        l[1] = talk_box_l3(tmp);
+    }
+    {
+        TalkL3 tmp;
+        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[44]))->m4;
+        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[44]))->m5;
+        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[44]))->m6;
+        l[2] = talk_box_l3(tmp);
+    }
+    l[5] = l[39];
+    goto b409;
+b408:
+    l[39] = x10.m0;
+    l[44] = talk_fn79(NULL, talk_unbox_l3(l[39]));
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b423;
-b395:
-    l[43] = x10.m0;
-    l[34] = talk_fn79(NULL, talk_unbox_l3(l[43]));
+    goto b437;
+b409:
+    l[44] = x10.m0;
+    l[39] = talk_fn79(NULL, talk_unbox_l3(l[44]));
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b421;
-b396:
+    goto b435;
+b410:
     talk_trap("unmatched value");
-b397:
+b411:
     {
         TalkL3 tmp;
         tmp.m0 = l[8].v.agg->fields[11].v.ptr;
         tmp.m1 = l[8].v.agg->fields[12].v.i;
         tmp.m2 = l[8].v.agg->fields[13].v.i;
-        l[43] = talk_box_l3(tmp);
+        l[44] = talk_box_l3(tmp);
     }
-    goto b398;
-b398:
-    goto b399;
-b399:
-    goto b400;
-b400:
-    goto b401;
-b401:
-    goto b402;
-b402:
-    goto b403;
-b403:
-    goto b404;
-b404:
-    x10 = talk_fn350(NULL, talk_unbox_l3(l[43]));
-    if (talk_unwinding) {
-        goto b423;
-    }
-    goto b405;
-b405:
-    goto b406;
-b406:
-    x11 = talk_fn351(NULL, x10);
-    if (talk_unwinding) {
-        goto b410;
-    }
-    x12.m0 = x11.m0;
-    x12.m1 = x11.m1;
-    x10.m0 = x11.m2;
-    x10.m1 = x11.m3;
-    l[8] = talk_int(x12.m0);
-    switch (l[8].v.i) {
-    case 0: goto b407;
-    case 1: goto b413;
-    default: goto b418;
-    }
-b407:
-    l[8] = x12.m1;
-    goto b408;
-b408:
-    l[42] = talk_fn184(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], talk_unbox_l16(l[8]));
-    if (talk_unwinding) {
-        goto b409;
-    }
-    {
-        TalkL3 tmp;
-        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[42]))->m1;
-        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[42]))->m2;
-        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[42]))->m3;
-        l[1] = talk_box_l3(tmp);
-    }
-    {
-        TalkL3 tmp;
-        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[42]))->m4;
-        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[42]))->m5;
-        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[42]))->m6;
-        l[2] = talk_box_l3(tmp);
-    }
-    goto b411;
-b409:
-    l[42] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[8]))->m0;
-    l[41] = talk_fn78(NULL, l[42]);
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    goto b410;
-b410:
-    l[42] = x10.m0;
-    l[41] = talk_fn79(NULL, talk_unbox_l3(l[42]));
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    goto b423;
-b411:
     goto b412;
 b412:
-    l[42] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[8]))->m0;
-    l[8] = talk_fn78(NULL, l[42]);
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    goto b405;
+    goto b413;
 b413:
     goto b414;
 b414:
@@ -30642,24 +30697,103 @@ b415:
 b416:
     goto b417;
 b417:
-    l[3] = x10.m0;
-    l[42] = talk_fn79(NULL, talk_unbox_l3(l[3]));
-    if (talk_unwinding) {
-        return talk_unit();
-    }
-    goto b421;
+    goto b418;
 b418:
-    talk_trap("unmatched value");
+    x10 = talk_fn350(NULL, talk_unbox_l3(l[44]));
+    if (talk_unwinding) {
+        goto b437;
+    }
+    goto b419;
 b419:
     goto b420;
 b420:
-    goto b421;
+    x11 = talk_fn351(NULL, x10);
+    if (talk_unwinding) {
+        goto b424;
+    }
+    x12.m0 = x11.m0;
+    x12.m1 = x11.m1;
+    x10.m0 = x11.m2;
+    x10.m1 = x11.m3;
+    l[8] = talk_int(x12.m0);
+    switch (l[8].v.i) {
+    case 0: goto b421;
+    case 1: goto b427;
+    default: goto b432;
+    }
 b421:
-    l[42] = talk_int(x4.m1);
-    l[3] = talk_int(x4.m2);
-    l[8] = talk_fn201(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[6], l[42], l[3]);
+    l[8] = x12.m1;
+    goto b422;
+b422:
+    l[43] = talk_fn184(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[3], talk_unbox_l16(l[8]));
     if (talk_unwinding) {
         goto b423;
+    }
+    {
+        TalkL3 tmp;
+        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[43]))->m1;
+        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[43]))->m2;
+        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[43]))->m3;
+        l[1] = talk_box_l3(tmp);
+    }
+    {
+        TalkL3 tmp;
+        tmp.m0 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[43]))->m4;
+        tmp.m1 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[43]))->m5;
+        tmp.m2 = ((const TalkL75 *)TALK_NATIVE_PAYLOAD(l[43]))->m6;
+        l[2] = talk_box_l3(tmp);
+    }
+    goto b425;
+b423:
+    l[43] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[8]))->m0;
+    l[32] = talk_fn78(NULL, l[43]);
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b424;
+b424:
+    l[43] = x10.m0;
+    l[32] = talk_fn79(NULL, talk_unbox_l3(l[43]));
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b437;
+b425:
+    goto b426;
+b426:
+    l[43] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[8]))->m0;
+    l[8] = talk_fn78(NULL, l[43]);
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b419;
+b427:
+    goto b428;
+b428:
+    goto b429;
+b429:
+    goto b430;
+b430:
+    goto b431;
+b431:
+    l[3] = x10.m0;
+    l[43] = talk_fn79(NULL, talk_unbox_l3(l[3]));
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    goto b435;
+b432:
+    talk_trap("unmatched value");
+b433:
+    goto b434;
+b434:
+    goto b435;
+b435:
+    l[43] = talk_int(x4.m1);
+    l[3] = talk_int(x4.m2);
+    l[8] = talk_fn201(NULL, l[0], talk_unbox_l3(l[1]), talk_unbox_l3(l[2]), l[6], l[43], l[3]);
+    if (talk_unwinding) {
+        goto b437;
     }
     {
         TalkL3 tmp;
@@ -30676,44 +30810,44 @@ b421:
         l[2] = talk_box_l3(tmp);
     }
     l[8] = talk_cmp_ge(l[5], talk_int(INT64_C(0)));
-    if (l[8].v.i) goto b422; else goto b425;
-b422:
-    x44 = talk_fn362(NULL, talk_unbox_l3(l[1]), l[6], l[5]);
+    if (l[8].v.i) goto b436; else goto b439;
+b436:
+    x45 = talk_fn362(NULL, talk_unbox_l3(l[1]), l[6], l[5]);
     if (talk_unwinding) {
-        goto b423;
+        goto b437;
     }
-    l[8] = x44.m0;
+    l[8] = x45.m0;
     {
         TalkL3 tmp;
-        tmp.m0 = x44.m1;
-        tmp.m1 = x44.m2;
-        tmp.m2 = x44.m3;
+        tmp.m0 = x45.m1;
+        tmp.m1 = x45.m2;
+        tmp.m2 = x45.m3;
         l[1] = talk_box_l3(tmp);
     }
     {
         TalkValue e0 = l[8];
         l[8] = e0;
-        goto b426;
+        goto b440;
     }
-b423:
-    l[42] = talk_fn63(NULL, talk_unbox_l3(l[2]));
+b437:
+    l[43] = talk_fn63(NULL, talk_unbox_l3(l[2]));
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b424;
-b424:
-    l[42] = talk_fn176(NULL, talk_unbox_l3(l[1]));
+    goto b438;
+b438:
+    l[43] = talk_fn176(NULL, talk_unbox_l3(l[1]));
     if (talk_unwinding) {
         return talk_unit();
     }
     return talk_unit();
-b425:
+b439:
     {
         TalkValue e0 = talk_unit();
         l[8] = e0;
-        goto b426;
+        goto b440;
     }
-b426:
+b440:
     {
         TalkL75 tmp;
         tmp.m0 = l[8];
@@ -30729,9 +30863,9 @@ b426:
             tmp.m5 = sub.m1;
             tmp.m6 = sub.m2;
         }
-        l[42] = talk_box_l75(tmp);
+        l[43] = talk_box_l75(tmp);
     }
-    return l[42];
+    return l[43];
 }
 
 /* meta_pattern */
@@ -43299,6 +43433,17 @@ b23:
         l[2] = talk_box_l3(tmp);
     }
     l[1] = talk_fn371(NULL, talk_unbox_l3(l[2]));
+    if (talk_unwinding) {
+        return talk_unit();
+    }
+    {
+        TalkL3 tmp;
+        tmp.m0 = l[0].v.agg->fields[12].v.ptr;
+        tmp.m1 = l[0].v.agg->fields[13].v.i;
+        tmp.m2 = l[0].v.agg->fields[14].v.i;
+        l[2] = talk_box_l3(tmp);
+    }
+    l[1] = talk_fn373(NULL, talk_unbox_l3(l[2]));
     if (talk_unwinding) {
         return talk_unit();
     }
@@ -57978,7 +58123,7 @@ static TalkL16 talk_fn510(const TalkValue *env) {
     goto b0;
 b0:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(2);
         l[0] = built;
     }
@@ -62032,7 +62177,7 @@ b7:
     x13.m1 = talk_int(INT64_C(1)).v.i;
     x13.m2 = talk_int(INT64_C(1)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(21);
         built.v.agg->fields[1] = talk_pointer(x13.m0);
         built.v.agg->fields[2] = talk_int(x13.m1);
@@ -76471,7 +76616,7 @@ b6:
     x16.m1 = talk_int(INT64_C(1)).v.i;
     x16.m2 = talk_int(INT64_C(1)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(11);
         memcpy(built.v.agg->fields + 1, l[11].v.agg->fields, 4 * sizeof(TalkValue));
         built.v.agg->fields[5] = l[7];
@@ -76732,7 +76877,7 @@ b39:
     x16.m1 = talk_int(INT64_C(1)).v.i;
     x16.m2 = talk_int(INT64_C(1)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(11);
         memcpy(built.v.agg->fields + 1, l[11].v.agg->fields, 4 * sizeof(TalkValue));
         built.v.agg->fields[5] = l[22];
@@ -76767,7 +76912,7 @@ b39:
     x16.m1 = talk_int(INT64_C(1)).v.i;
     x16.m2 = talk_int(INT64_C(1)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(11);
         memcpy(built.v.agg->fields + 1, l[29].v.agg->fields, 4 * sizeof(TalkValue));
         built.v.agg->fields[5] = l[21];
@@ -76922,7 +77067,7 @@ b59:
     x16.m1 = talk_int(INT64_C(1)).v.i;
     x16.m2 = talk_int(INT64_C(1)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(12);
         built.v.agg->fields[1] = talk_pointer(x16.m0);
         built.v.agg->fields[2] = talk_int(x16.m1);
@@ -76982,7 +77127,7 @@ b0:
     }
     l[0] = x4.m1;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(24);
         l[5] = built;
     }
@@ -77005,7 +77150,7 @@ b0:
     x10.m1 = talk_int(INT64_C(2)).v.i;
     x10.m2 = talk_int(INT64_C(2)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(23);
         built.v.agg->fields[1] = talk_pointer(x10.m0);
         built.v.agg->fields[2] = talk_int(x10.m1);
@@ -77077,7 +77222,7 @@ b0:
     x7.m1 = talk_int(INT64_C(1)).v.i;
     x7.m2 = talk_int(INT64_C(1)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(22);
         built.v.agg->fields[1] = talk_pointer(x7.m0);
         built.v.agg->fields[2] = talk_int(x7.m1);
@@ -77227,7 +77372,7 @@ b6:
     x12.m1 = talk_int(INT64_C(2)).v.i;
     x12.m2 = talk_int(INT64_C(2)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(16);
         built.v.agg->fields[1] = talk_pointer(x12.m0);
         built.v.agg->fields[2] = talk_int(x12.m1);
@@ -77484,7 +77629,7 @@ b0:
     x10.m1 = talk_int(INT64_C(2)).v.i;
     x10.m2 = talk_int(INT64_C(2)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(8);
         memcpy(built.v.agg->fields + 1, l[6].v.agg->fields, 1 * sizeof(TalkValue));
         built.v.agg->fields[2] = talk_pointer(x10.m0);
@@ -78640,7 +78785,7 @@ b2:
     l[6] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[7]))->m1);
     l[9] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[7]))->m2);
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(11);
         memcpy(built.v.agg->fields + 1, l[8].v.agg->fields, 4 * sizeof(TalkValue));
         built.v.agg->fields[5] = l[6];
@@ -79998,7 +80143,7 @@ b48:
     goto b49;
 b49:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(10);
         {
             TalkL1 sub = talk_unbox_l1(l[6]);
@@ -80660,7 +80805,7 @@ b41:
         goto b42;
     }
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(9);
         built.v.agg->fields[1] = talk_pointer(x36.m0);
         built.v.agg->fields[2] = talk_int(x36.m1);
@@ -81705,7 +81850,7 @@ b16:
     x26.m1 = talk_int(INT64_C(1)).v.i;
     x26.m2 = talk_int(INT64_C(1)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(9);
         built.v.agg->fields[1] = talk_pointer(x26.m0);
         built.v.agg->fields[2] = talk_int(x26.m1);
@@ -81923,7 +82068,7 @@ b0:
     x11.m1 = talk_int(INT64_C(1)).v.i;
     x11.m2 = talk_int(INT64_C(1)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(9);
         built.v.agg->fields[1] = talk_pointer(x10.m0);
         built.v.agg->fields[2] = talk_int(x10.m1);
@@ -84206,36 +84351,36 @@ b0:
     l[1] = x0.m0;
     l[2] = l[1].v.agg->fields[0];
     switch (l[2].v.i) {
-    case 0: goto b146;
-    case 1: goto b146;
-    case 2: goto b146;
-    case 3: goto b146;
-    case 4: goto b146;
-    case 5: goto b146;
+    case 0: goto b147;
+    case 1: goto b147;
+    case 2: goto b147;
+    case 3: goto b147;
+    case 4: goto b147;
+    case 5: goto b147;
     case 6: goto b1;
     case 7: goto b3;
     case 8: goto b6;
     case 9: goto b9;
-    case 10: goto b146;
+    case 10: goto b147;
     case 11: goto b33;
-    case 12: goto b146;
+    case 12: goto b147;
     case 13: goto b38;
     case 14: goto b40;
     case 15: goto b42;
     case 16: goto b44;
-    case 17: goto b146;
+    case 17: goto b147;
     case 18: goto b46;
     case 19: goto b48;
     case 20: goto b62;
     case 21: goto b84;
     case 22: goto b87;
     case 23: goto b89;
-    case 24: goto b146;
+    case 24: goto b147;
     case 25: goto b91;
-    case 26: goto b116;
-    case 27: goto b146;
-    case 28: goto b138;
-    default: goto b146;
+    case 26: goto b117;
+    case 27: goto b147;
+    case 28: goto b139;
+    default: goto b147;
     }
 b1:
     {
@@ -84254,7 +84399,7 @@ b2:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
 b3:
     {
@@ -84275,7 +84420,7 @@ b5:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
 b6:
     {
@@ -84296,7 +84441,7 @@ b8:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
 b9:
     {
@@ -84415,7 +84560,7 @@ b31:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
 b32:
     talk_trap("unmatched value");
@@ -84442,7 +84587,7 @@ b37:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
 b38:
     {
@@ -84461,7 +84606,7 @@ b39:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
 b40:
     l[10] = l[1].v.agg->fields[1];
@@ -84474,7 +84619,7 @@ b41:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
 b42:
     {
@@ -84493,7 +84638,7 @@ b43:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
 b44:
     {
@@ -84512,7 +84657,7 @@ b45:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
 b46:
     l[10] = l[1].v.agg->fields[1];
@@ -84525,7 +84670,7 @@ b47:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
 b48:
     {
@@ -84583,7 +84728,7 @@ b61:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
 b62:
     {
@@ -84692,7 +84837,7 @@ b82:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
 b83:
     talk_trap("unmatched value");
@@ -84715,7 +84860,7 @@ b86:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
 b87:
     {
@@ -84734,7 +84879,7 @@ b88:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
 b89:
     {
@@ -84753,7 +84898,7 @@ b90:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
 b91:
     {
@@ -84773,18 +84918,20 @@ b94:
 b95:
     goto b96;
 b96:
+    goto b97;
+b97:
     l[3] = talk_int(INT64_C(-1));
     x7 = talk_fn352(NULL, talk_unbox_l3(l[19]));
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b97;
-b97:
     goto b98;
 b98:
+    goto b99;
+b99:
     x8 = talk_fn353(NULL, x7);
     if (talk_unwinding) {
-        goto b102;
+        goto b103;
     }
     x9.m0 = x8.m0;
     x9.m1 = x8.m1;
@@ -84792,14 +84939,14 @@ b98:
     x7.m1 = x8.m3;
     l[18] = talk_int(x9.m0);
     switch (l[18].v.i) {
-    case 0: goto b99;
-    case 1: goto b110;
-    default: goto b115;
+    case 0: goto b100;
+    case 1: goto b111;
+    default: goto b116;
     }
-b99:
-    l[18] = x9.m1;
-    goto b100;
 b100:
+    l[18] = x9.m1;
+    goto b101;
+b101:
     {
         TalkL16 tmp;
         tmp.m0 = l[18].v.agg->fields[11];
@@ -84809,46 +84956,44 @@ b100:
     }
     l[14] = talk_fn735(NULL, talk_unbox_l16(l[17]));
     if (talk_unwinding) {
-        goto b101;
+        goto b102;
     }
-    goto b103;
-b101:
+    goto b104;
+b102:
     l[17] = talk_fn159(NULL, l[18]);
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b102;
-b102:
+    goto b103;
+b103:
     l[17] = x7.m0;
     l[20] = talk_fn83(NULL, talk_unbox_l3(l[17]));
     if (talk_unwinding) {
         return talk_unit();
     }
     return talk_unit();
-b103:
-    l[20] = talk_cmp_gt(l[3], l[14]);
-    if (l[20].v.i) goto b104; else goto b105;
 b104:
-    l[20] = l[3];
-    goto b107;
+    l[20] = talk_cmp_gt(l[3], l[14]);
+    if (l[20].v.i) goto b105; else goto b106;
 b105:
-    goto b106;
+    l[20] = l[3];
+    goto b108;
 b106:
-    l[20] = l[14];
     goto b107;
 b107:
-    l[3] = l[20];
+    l[20] = l[14];
     goto b108;
 b108:
+    l[3] = l[20];
     goto b109;
 b109:
+    goto b110;
+b110:
     l[20] = talk_fn159(NULL, l[18]);
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b97;
-b110:
-    goto b111;
+    goto b98;
 b111:
     goto b112;
 b112:
@@ -84856,6 +85001,8 @@ b112:
 b113:
     goto b114;
 b114:
+    goto b115;
+b115:
     l[20] = x7.m0;
     l[18] = talk_fn83(NULL, talk_unbox_l3(l[20]));
     if (talk_unwinding) {
@@ -84864,11 +85011,11 @@ b114:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
-b115:
-    talk_trap("unmatched value");
 b116:
+    talk_trap("unmatched value");
+b117:
     {
         TalkL3 tmp;
         tmp.m0 = l[1].v.agg->fields[1].v.ptr;
@@ -84883,10 +85030,10 @@ b116:
         tmp.m2 = l[1].v.agg->fields[6].v.i;
         l[18] = talk_box_l3(tmp);
     }
-    goto b117;
-b117:
     goto b118;
 b118:
+    goto b119;
+b119:
     l[3] = talk_fn737(NULL, talk_unbox_l3(l[18]));
     if (talk_unwinding) {
         return talk_unit();
@@ -84895,13 +85042,13 @@ b118:
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b119;
-b119:
     goto b120;
 b120:
+    goto b121;
+b121:
     x8 = talk_fn361(NULL, x7);
     if (talk_unwinding) {
-        goto b124;
+        goto b125;
     }
     x9.m0 = x8.m0;
     x9.m1 = x8.m1;
@@ -84909,14 +85056,14 @@ b120:
     x7.m1 = x8.m3;
     l[14] = talk_int(x9.m0);
     switch (l[14].v.i) {
-    case 0: goto b121;
-    case 1: goto b132;
-    default: goto b137;
+    case 0: goto b122;
+    case 1: goto b133;
+    default: goto b138;
     }
-b121:
-    l[14] = x9.m1;
-    goto b122;
 b122:
+    l[14] = x9.m1;
+    goto b123;
+b123:
     {
         TalkL16 tmp;
         tmp.m0 = ((const TalkL56 *)TALK_NATIVE_PAYLOAD(l[14]))->m5;
@@ -84926,46 +85073,44 @@ b122:
     }
     l[21] = talk_fn735(NULL, talk_unbox_l16(l[17]));
     if (talk_unwinding) {
-        goto b123;
+        goto b124;
     }
-    goto b125;
-b123:
+    goto b126;
+b124:
     l[17] = talk_fn151(NULL, l[14]);
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b124;
-b124:
+    goto b125;
+b125:
     l[17] = x7.m0;
     l[22] = talk_fn118(NULL, talk_unbox_l3(l[17]));
     if (talk_unwinding) {
         return talk_unit();
     }
     return talk_unit();
-b125:
-    l[22] = talk_cmp_gt(l[3], l[21]);
-    if (l[22].v.i) goto b126; else goto b127;
 b126:
-    l[22] = l[3];
-    goto b129;
+    l[22] = talk_cmp_gt(l[3], l[21]);
+    if (l[22].v.i) goto b127; else goto b128;
 b127:
-    goto b128;
+    l[22] = l[3];
+    goto b130;
 b128:
-    l[22] = l[21];
     goto b129;
 b129:
-    l[3] = l[22];
+    l[22] = l[21];
     goto b130;
 b130:
+    l[3] = l[22];
     goto b131;
 b131:
+    goto b132;
+b132:
     l[22] = talk_fn151(NULL, l[14]);
     if (talk_unwinding) {
         return talk_unit();
     }
-    goto b119;
-b132:
-    goto b133;
+    goto b120;
 b133:
     goto b134;
 b134:
@@ -84973,6 +85118,8 @@ b134:
 b135:
     goto b136;
 b136:
+    goto b137;
+b137:
     l[22] = x7.m0;
     l[14] = talk_fn118(NULL, talk_unbox_l3(l[22]));
     if (talk_unwinding) {
@@ -84981,11 +85128,11 @@ b136:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
-b137:
-    talk_trap("unmatched value");
 b138:
+    talk_trap("unmatched value");
+b139:
     {
         TalkL3 tmp;
         tmp.m0 = l[1].v.agg->fields[11].v.ptr;
@@ -84993,8 +85140,6 @@ b138:
         tmp.m2 = l[1].v.agg->fields[13].v.i;
         l[22] = talk_box_l3(tmp);
     }
-    goto b139;
-b139:
     goto b140;
 b140:
     goto b141;
@@ -85007,6 +85152,8 @@ b143:
 b144:
     goto b145;
 b145:
+    goto b146;
+b146:
     l[3] = talk_fn737(NULL, talk_unbox_l3(l[22]));
     if (talk_unwinding) {
         return talk_unit();
@@ -85014,17 +85161,17 @@ b145:
     {
         TalkValue e0 = l[3];
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
-b146:
-    goto b147;
 b147:
+    goto b148;
+b148:
     {
         TalkValue e0 = talk_int(INT64_C(-1));
         l[3] = e0;
-        goto b148;
+        goto b149;
     }
-b148:
+b149:
     return l[3];
 }
 
@@ -88226,7 +88373,7 @@ b6:
         return (TalkL86){0};
     }
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(0);
         built.v.agg->fields[1] = talk_pointer(x8.m0);
         built.v.agg->fields[2] = talk_int(x8.m1);
@@ -88278,7 +88425,7 @@ b15:
         return (TalkL86){0};
     }
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(1);
         built.v.agg->fields[1] = talk_pointer(x8.m0);
         built.v.agg->fields[2] = talk_int(x8.m1);
@@ -88326,7 +88473,7 @@ b23:
     if (l[6].v.i) goto b24; else goto b26;
 b24:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(2);
         l[12] = built;
     }
@@ -88371,7 +88518,7 @@ b32:
     if (l[12].v.i) goto b33; else goto b35;
 b33:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(3);
         l[13] = built;
     }
@@ -88424,7 +88571,7 @@ b41:
     if (l[13].v.i) goto b42; else goto b44;
 b42:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(4);
         built.v.agg->fields[1] = talk_pointer(x8.m0);
         built.v.agg->fields[2] = talk_int(x8.m1);
@@ -88454,7 +88601,7 @@ b44:
     goto b45;
 b45:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(5);
         built.v.agg->fields[1] = talk_pointer(x8.m0);
         built.v.agg->fields[2] = talk_int(x8.m1);
@@ -89319,7 +89466,7 @@ b116:
         goto b117;
     }
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(29);
         {
             TalkL1 sub = talk_unbox_l1(l[12]);
@@ -89532,7 +89679,7 @@ b7:
     goto b8;
 b8:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(6);
         built.v.agg->fields[1] = talk_pointer(x4.m0);
         built.v.agg->fields[2] = talk_int(x4.m1);
@@ -89858,7 +90005,7 @@ b8:
     x12.m1 = talk_int(INT64_C(1)).v.i;
     x12.m2 = talk_int(INT64_C(1)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(7);
         memcpy(built.v.agg->fields + 1, l[3].v.agg->fields, 1 * sizeof(TalkValue));
         built.v.agg->fields[2] = talk_pointer(x12.m0);
@@ -89976,7 +90123,7 @@ b6:
     l[8] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[9]))->m3);
     l[13] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[9]))->m4);
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(11);
         memcpy(built.v.agg->fields + 1, l[12].v.agg->fields, 4 * sizeof(TalkValue));
         built.v.agg->fields[5] = l[8];
@@ -90099,7 +90246,7 @@ b19:
     }
     l[0] = x4.m1;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(12);
         built.v.agg->fields[1] = talk_pointer(x7.m0);
         built.v.agg->fields[2] = talk_int(x7.m1);
@@ -90183,7 +90330,7 @@ b0:
     if (l[4].v.i) goto b1; else goto b3;
 b1:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(13);
         built.v.agg->fields[1] = talk_pointer(x6.m0);
         built.v.agg->fields[2] = talk_int(x6.m1);
@@ -90268,7 +90415,7 @@ b7:
     if (l[4].v.i) goto b8; else goto b10;
 b8:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(13);
         built.v.agg->fields[1] = talk_pointer(x6.m0);
         built.v.agg->fields[2] = talk_int(x6.m1);
@@ -90310,7 +90457,7 @@ b12:
     }
     l[0] = x3.m1;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(13);
         built.v.agg->fields[1] = talk_pointer(x6.m0);
         built.v.agg->fields[2] = talk_int(x6.m1);
@@ -90387,7 +90534,7 @@ b20:
     if (l[8].v.i) goto b21; else goto b23;
 b21:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(13);
         built.v.agg->fields[1] = talk_pointer(x6.m0);
         built.v.agg->fields[2] = talk_int(x6.m1);
@@ -90515,7 +90662,7 @@ b37:
     goto b38;
 b38:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(13);
         built.v.agg->fields[1] = talk_pointer(x6.m0);
         built.v.agg->fields[2] = talk_int(x6.m1);
@@ -90612,7 +90759,7 @@ b3:
     l[5] = x3.m0;
     l[0] = x3.m1;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(14);
         built.v.agg->fields[1] = l[5];
         l[9] = built;
@@ -90719,7 +90866,7 @@ b8:
     goto b9;
 b9:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(15);
         built.v.agg->fields[1] = talk_pointer(x6.m0);
         built.v.agg->fields[2] = talk_int(x6.m1);
@@ -91222,7 +91369,7 @@ b14:
     x14.m1 = talk_int(INT64_C(1)).v.i;
     x14.m2 = talk_int(INT64_C(1)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(20);
         built.v.agg->fields[1] = talk_pointer(x14.m0);
         built.v.agg->fields[2] = talk_int(x14.m1);
@@ -91444,7 +91591,7 @@ b30:
     x14.m1 = talk_int(INT64_C(1)).v.i;
     x14.m2 = talk_int(INT64_C(1)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(20);
         built.v.agg->fields[1] = talk_pointer(x14.m0);
         built.v.agg->fields[2] = talk_int(x14.m1);
@@ -91552,7 +91699,7 @@ b5:
     goto b6;
 b6:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(17);
         built.v.agg->fields[1] = l[5];
         l[8] = built;
@@ -91830,7 +91977,7 @@ b25:
     l[14] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[1]))->m3);
     l[11] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[1]))->m4);
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(28);
         built.v.agg->fields[1] = talk_pointer(x2.m0);
         built.v.agg->fields[2] = talk_int(x2.m1);
@@ -91909,7 +92056,7 @@ b0:
         goto b2;
     }
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(6);
         built.v.agg->fields[1] = talk_pointer(x5.m0);
         built.v.agg->fields[2] = talk_int(x5.m1);
@@ -91945,7 +92092,7 @@ b2:
 
 /* effect_callee */
 static TalkL86 talk_fn789(const TalkValue *env, TalkValue p0) {
-    TalkValue l[16];
+    TalkValue l[19];
     memset(l, 0, sizeof l);
     (void)env;
     TalkL10 x2;
@@ -91970,6 +92117,8 @@ static TalkL86 talk_fn789(const TalkValue *env, TalkValue p0) {
     memset(&x12, 0, sizeof x12);
     TalkL3 x13;
     memset(&x13, 0, sizeof x13);
+    TalkL28 x16;
+    memset(&x16, 0, sizeof x16);
     talk_frame_enter();
     l[0] = p0;
     goto b0;
@@ -91995,18 +92144,18 @@ b0:
     x7.m0 = 67;
     l[4] = talk_fn527(NULL, l[0], x7);
     if (talk_unwinding) {
-        goto b15;
+        goto b28;
     }
     if (l[4].v.i) goto b1; else goto b5;
 b1:
     x2 = talk_fn469(NULL, l[0]);
     if (talk_unwinding) {
-        goto b15;
+        goto b28;
     }
     l[0] = x2.m1;
     x8 = talk_fn539(NULL, l[0]);
     if (talk_unwinding) {
-        goto b15;
+        goto b28;
     }
     x9.m0 = x8.m0;
     x9.m1 = x8.m1;
@@ -92014,18 +92163,18 @@ b1:
     l[0] = x8.m3;
     l[4] = talk_fn85(NULL, x6);
     if (talk_unwinding) {
-        goto b15;
+        goto b28;
     }
     x6 = x9;
     l[4] = talk_fn52(NULL, l[0]);
     if (talk_unwinding) {
-        goto b15;
+        goto b28;
     }
     if (l[4].v.i) goto b2; else goto b3;
 b2:
     x10 = talk_fn510(NULL);
     if (talk_unwinding) {
-        goto b15;
+        goto b28;
     }
     x11.m0 = x10.m0;
     x11.m1 = x10.m1;
@@ -92045,69 +92194,48 @@ b4:
 b5:
     goto b6;
 b6:
-    x7.m0 = 14;
-    x2 = talk_fn491(NULL, l[0], x7);
-    if (talk_unwinding) {
-        goto b15;
-    }
-    l[0] = x2.m1;
-    l[4] = talk_fn52(NULL, l[0]);
-    if (talk_unwinding) {
-        goto b15;
-    }
-    if (l[4].v.i) goto b7; else goto b8;
-b7:
-    x10 = talk_fn510(NULL);
-    if (talk_unwinding) {
-        goto b15;
-    }
-    x11.m0 = x10.m0;
-    x11.m1 = x10.m1;
-    x11.m2 = x10.m2;
-    x11.m3 = l[0];
-    l[4] = talk_fn85(NULL, x6);
-    if (talk_unwinding) {
-        return (TalkL86){0};
-    }
-    l[4] = talk_pointer(x3.m0);
-    talk_free(l[4]);
-    return x11;
-b8:
-    goto b9;
-b9:
     l[4] = talk_alloc(talk_int(INT64_C(0)));
     x5.m0 = l[4].v.ptr;
     x9.m0 = x5.m0;
     x9.m1 = talk_int(INT64_C(0)).v.i;
     x9.m2 = talk_int(INT64_C(0)).v.i;
-    x7.m0 = 15;
+    x7.m0 = 14;
     x12 = talk_fn518(NULL, l[0], x7);
     if (talk_unwinding) {
-        goto b14;
+        goto b27;
     }
     l[4] = talk_bool(x12.m0);
     l[0] = x12.m1;
-    if (l[4].v.i) goto b10; else goto b11;
-b10:
-    goto b18;
-b11:
+    if (l[4].v.i) goto b7; else goto b14;
+b7:
+    x7.m0 = 15;
+    x12 = talk_fn518(NULL, l[0], x7);
+    if (talk_unwinding) {
+        goto b27;
+    }
+    l[4] = talk_bool(x12.m0);
+    l[0] = x12.m1;
+    if (l[4].v.i) goto b8; else goto b9;
+b8:
+    goto b13;
+b9:
     l[4] = talk_fn667(NULL, l[0]);
     if (talk_unwinding) {
-        goto b14;
+        goto b27;
     }
-    if (l[4].v.i) goto b12; else goto b13;
-b12:
+    if (l[4].v.i) goto b10; else goto b11;
+b10:
     x7.m0 = 15;
     x2 = talk_fn668(NULL, l[0], x7);
     if (talk_unwinding) {
-        goto b14;
+        goto b27;
     }
     l[0] = x2.m1;
-    goto b17;
-b13:
+    goto b12;
+b11:
     x8 = talk_fn771(NULL, l[0]);
     if (talk_unwinding) {
-        goto b14;
+        goto b27;
     }
     x13.m0 = x8.m0;
     x13.m1 = x8.m1;
@@ -92115,68 +92243,183 @@ b13:
     l[0] = x8.m3;
     l[4] = talk_fn83(NULL, x9);
     if (talk_unwinding) {
-        goto b14;
+        goto b27;
     }
     x9 = x13;
     x7.m0 = 15;
     x2 = talk_fn772(NULL, l[0], x7);
     if (talk_unwinding) {
-        goto b14;
+        goto b27;
     }
     l[0] = x2.m1;
-    goto b17;
+    goto b12;
+b12:
+    goto b13;
+b13:
+    goto b21;
 b14:
+    l[4] = talk_fn706(NULL, l[0]);
+    if (talk_unwinding) {
+        goto b27;
+    }
+    l[14] = talk_cmp_eq(l[4], talk_bool(0));
+    if (l[14].v.i) goto b15; else goto b16;
+b15:
+    {
+        TalkValue e0 = talk_bool(1);
+        l[14] = e0;
+        goto b17;
+    }
+b16:
+    x7.m0 = 18;
+    l[4] = talk_fn527(NULL, l[0], x7);
+    if (talk_unwinding) {
+        goto b27;
+    }
+    l[14] = talk_cmp_eq(l[4], talk_bool(0));
+    {
+        TalkValue e0 = l[14];
+        l[14] = e0;
+        goto b17;
+    }
+b17:
+    if (l[14].v.i) goto b18; else goto b19;
+b18:
+    x7.m0 = 14;
+    x2 = talk_fn491(NULL, l[0], x7);
+    if (talk_unwinding) {
+        goto b27;
+    }
+    l[0] = x2.m1;
+    x10 = talk_fn510(NULL);
+    if (talk_unwinding) {
+        goto b27;
+    }
+    x11.m0 = x10.m0;
+    x11.m1 = x10.m1;
+    x11.m2 = x10.m2;
+    x11.m3 = l[0];
     l[4] = talk_fn83(NULL, x9);
     if (talk_unwinding) {
         return (TalkL86){0};
     }
-    goto b15;
-b15:
     l[4] = talk_fn85(NULL, x6);
     if (talk_unwinding) {
         return (TalkL86){0};
     }
-    goto b16;
-b16:
     l[4] = talk_pointer(x3.m0);
     talk_free(l[4]);
-    return (TalkL86){0};
-b17:
-    goto b18;
-b18:
-    l[4] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[1]))->m3);
-    l[14] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[1]))->m4);
+    return x11;
+b19:
+    goto b20;
+b20:
+    goto b21;
+b21:
+    l[4] = talk_alloc(talk_int(INT64_C(0)));
+    x5.m0 = l[4].v.ptr;
+    x13.m0 = x5.m0;
+    x13.m1 = talk_int(INT64_C(0)).v.i;
+    x13.m2 = talk_int(INT64_C(0)).v.i;
+    l[4] = talk_fn706(NULL, l[0]);
+    if (talk_unwinding) {
+        goto b26;
+    }
+    if (l[4].v.i) goto b22; else goto b23;
+b22:
+    x7.m0 = 18;
+    l[4] = talk_fn527(NULL, l[0], x7);
+    if (talk_unwinding) {
+        goto b26;
+    }
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue e0 = l[4];
+        l[4] = e0;
+        goto b24;
+    }
+b23:
+    {
+        TalkValue e0 = talk_bool(0);
+        l[4] = e0;
+        goto b24;
+    }
+b24:
+    if (l[4].v.i) goto b25; else goto b30;
+b25:
+    x2 = talk_fn710(NULL, l[0]);
+    if (talk_unwinding) {
+        goto b26;
+    }
+    l[15] = x2.m0;
+    l[0] = x2.m1;
+    x16 = talk_fn750(NULL, x13, l[15]);
+    if (talk_unwinding) {
+        goto b26;
+    }
+    x13.m0 = x16.m1;
+    x13.m1 = x16.m2;
+    x13.m2 = x16.m3;
+    goto b31;
+b26:
+    l[15] = talk_fn81(NULL, x13);
+    if (talk_unwinding) {
+        return (TalkL86){0};
+    }
+    goto b27;
+b27:
+    l[15] = talk_fn83(NULL, x9);
+    if (talk_unwinding) {
+        return (TalkL86){0};
+    }
+    goto b28;
+b28:
+    l[15] = talk_fn85(NULL, x6);
+    if (talk_unwinding) {
+        return (TalkL86){0};
+    }
+    goto b29;
+b29:
+    l[15] = talk_pointer(x3.m0);
+    talk_free(l[15]);
+    return (TalkL86){0};
+b30:
+    goto b31;
+b31:
+    l[15] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[1]))->m3);
+    l[17] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[1]))->m4);
+    {
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(25);
         built.v.agg->fields[1] = talk_pointer(x3.m0);
         built.v.agg->fields[2] = talk_int(x3.m1);
         built.v.agg->fields[3] = talk_int(x3.m2);
-        built.v.agg->fields[4] = l[4];
-        built.v.agg->fields[5] = l[14];
+        built.v.agg->fields[4] = l[15];
+        built.v.agg->fields[5] = l[17];
         built.v.agg->fields[6] = talk_pointer(x6.m0);
         built.v.agg->fields[7] = talk_int(x6.m1);
         built.v.agg->fields[8] = talk_int(x6.m2);
         built.v.agg->fields[9] = talk_pointer(x9.m0);
         built.v.agg->fields[10] = talk_int(x9.m1);
         built.v.agg->fields[11] = talk_int(x9.m2);
-        l[15] = built;
+        built.v.agg->fields[12] = talk_pointer(x13.m0);
+        built.v.agg->fields[13] = talk_int(x13.m1);
+        built.v.agg->fields[14] = talk_int(x13.m2);
+        l[18] = built;
     }
-    l[14] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[1]))->m1);
+    l[17] = talk_int(((const TalkL11 *)TALK_NATIVE_PAYLOAD(l[1]))->m1);
     l[1] = talk_fn492(NULL, l[0]);
     if (talk_unwinding) {
-        goto b19;
+        goto b32;
     }
-    x10.m0 = l[15];
-    x10.m1 = l[14].v.i;
+    x10.m0 = l[18];
+    x10.m1 = l[17].v.i;
     x10.m2 = l[1].v.i;
     x11.m0 = x10.m0;
     x11.m1 = x10.m1;
     x11.m2 = x10.m2;
     x11.m3 = l[0];
     return x11;
-b19:
-    l[0] = talk_fn78(NULL, l[15]);
+b32:
+    l[0] = talk_fn78(NULL, l[18]);
     if (talk_unwinding) {
         return (TalkL86){0};
     }
@@ -92208,7 +92451,7 @@ b0:
     }
     l[0] = x2.m1;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(24);
         l[3] = built;
     }
@@ -92408,7 +92651,7 @@ b12:
     goto b13;
 b13:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(18);
         built.v.agg->fields[1] = l[4];
         l[6] = built;
@@ -94037,7 +94280,7 @@ b234:
         l[35] = built;
     }
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(27);
         built.v.agg->fields[1] = talk_pointer(x4.m0);
         built.v.agg->fields[2] = talk_int(x4.m1);
@@ -105025,7 +105268,7 @@ b2:
     x9.m1 = talk_int(INT64_C(1)).v.i;
     x9.m2 = talk_int(INT64_C(1)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(19);
         built.v.agg->fields[1] = talk_pointer(x9.m0);
         built.v.agg->fields[2] = talk_int(x9.m1);
@@ -105098,7 +105341,7 @@ b5:
     x16.m1 = talk_int(INT64_C(1)).v.i;
     x16.m2 = talk_int(INT64_C(1)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(20);
         built.v.agg->fields[1] = talk_pointer(x16.m0);
         built.v.agg->fields[2] = talk_int(x16.m1);
@@ -106195,7 +106438,7 @@ b35:
     goto b36;
 b36:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(26);
         built.v.agg->fields[1] = talk_pointer(x4.m0);
         built.v.agg->fields[2] = talk_int(x4.m1);
@@ -107860,7 +108103,7 @@ b0:
     x8.m1 = talk_int(INT64_C(0)).v.i;
     x8.m2 = talk_int(INT64_C(0)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(13);
         built.v.agg->fields[1] = talk_pointer(x8.m0);
         built.v.agg->fields[2] = talk_int(x8.m1);
@@ -107944,7 +108187,7 @@ b10:
     x8.m1 = talk_int(INT64_C(1)).v.i;
     x8.m2 = talk_int(INT64_C(1)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(21);
         built.v.agg->fields[1] = talk_pointer(x8.m0);
         built.v.agg->fields[2] = talk_int(x8.m1);
@@ -107987,7 +108230,7 @@ b13:
     x15.m1 = talk_int(INT64_C(0)).v.i;
     x15.m2 = talk_int(INT64_C(0)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(13);
         built.v.agg->fields[1] = talk_pointer(x15.m0);
         built.v.agg->fields[2] = talk_int(x15.m1);
@@ -108012,7 +108255,7 @@ b14:
         goto b32;
     }
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(6);
         {
             TalkL1 sub = talk_unbox_l1(l[9]);
@@ -108077,7 +108320,7 @@ b21:
         goto b22;
     }
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(6);
         {
             TalkL1 sub = talk_unbox_l1(l[9]);
@@ -108131,7 +108374,7 @@ b29:
     goto b30;
 b30:
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(13);
         built.v.agg->fields[1] = talk_pointer(x15.m0);
         built.v.agg->fields[2] = talk_int(x15.m1);
@@ -108310,7 +108553,7 @@ b48:
     x25.m1 = talk_int(INT64_C(1)).v.i;
     x25.m2 = talk_int(INT64_C(1)).v.i;
     {
-        TalkValue built = talk_agg(33u, 18, 0, 14);
+        TalkValue built = talk_agg(33u, 18, 0, 15);
         built.v.agg->fields[0] = talk_int(20);
         built.v.agg->fields[1] = talk_pointer(x25.m0);
         built.v.agg->fields[2] = talk_int(x25.m1);
@@ -119741,7 +119984,7 @@ b67:
 
 /* render_expr */
 static TalkL28 talk_fn1035(const TalkValue *env, TalkL3 p0, TalkL83 p1, TalkL16 p2, TalkValue p3) {
-    TalkValue l[35];
+    TalkValue l[36];
     memset(l, 0, sizeof l);
     (void)env;
     TalkL3 x0;
@@ -119776,13 +120019,13 @@ b0:
     l[4] = x2.m0;
     x5 = talk_fn1052(NULL, l[4]);
     if (talk_unwinding) {
-        goto b464;
+        goto b478;
     }
     l[4] = talk_int(x2.m1);
     l[6] = talk_int(x2.m2);
     x7 = talk_fn1039(NULL, x0, x1, x5, l[4], l[6], l[3]);
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     x0.m0 = x7.m1;
     x0.m1 = x7.m2;
@@ -119814,7 +120057,7 @@ b2:
 b3:
     x8 = talk_fn350(NULL, talk_unbox_l3(l[4]));
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     goto b4;
 b4:
@@ -119860,7 +120103,7 @@ b9:
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b463;
+    goto b477;
 b10:
     goto b11;
 b11:
@@ -119920,7 +120163,7 @@ b22:
 b23:
     x8 = talk_fn350(NULL, talk_unbox_l3(l[6]));
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     goto b24;
 b24:
@@ -119966,7 +120209,7 @@ b29:
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b463;
+    goto b477;
 b30:
     goto b31;
 b31:
@@ -120052,7 +120295,7 @@ b44:
 b45:
     x8 = talk_fn350(NULL, talk_unbox_l3(l[11]));
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     goto b46;
 b46:
@@ -120288,7 +120531,7 @@ b87:
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b463;
+    goto b477;
 b88:
     goto b89;
 b89:
@@ -120370,7 +120613,7 @@ b103:
 b104:
     x8 = talk_fn321(NULL, talk_unbox_l3(l[13]));
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     goto b105;
 b105:
@@ -120454,7 +120697,7 @@ b116:
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b463;
+    goto b477;
 b117:
     goto b118;
 b118:
@@ -120543,7 +120786,7 @@ b138:
 b139:
     x8 = talk_fn350(NULL, talk_unbox_l3(l[16]));
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     goto b140;
 b140:
@@ -120589,7 +120832,7 @@ b145:
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b463;
+    goto b477;
 b146:
     goto b147;
 b147:
@@ -120651,7 +120894,7 @@ b157:
 b158:
     x8 = talk_fn350(NULL, talk_unbox_l3(l[17]));
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     goto b159;
 b159:
@@ -120697,7 +120940,7 @@ b164:
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b463;
+    goto b477;
 b165:
     goto b166;
 b166:
@@ -120760,7 +121003,7 @@ b176:
 b177:
     x8 = talk_fn350(NULL, talk_unbox_l3(l[21]));
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     goto b178;
 b178:
@@ -120806,7 +121049,7 @@ b183:
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b463;
+    goto b477;
 b184:
     goto b185;
 b185:
@@ -120865,7 +121108,7 @@ b196:
     l[22] = talk_add(l[3], talk_int(INT64_C(1)));
     x7 = talk_fn1054(NULL, x0, x1, l[17], l[22]);
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     x0.m0 = x7.m1;
     x0.m1 = x7.m2;
@@ -120909,7 +121152,7 @@ b200:
 b201:
     x18 = talk_fn350(NULL, talk_unbox_l3(l[17]));
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     goto b202;
 b202:
@@ -120955,7 +121198,7 @@ b207:
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b463;
+    goto b477;
 b208:
     goto b209;
 b209:
@@ -121021,7 +121264,7 @@ b219:
 b220:
     x18 = talk_fn350(NULL, talk_unbox_l3(l[21]));
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     goto b221;
 b221:
@@ -121067,7 +121310,7 @@ b226:
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b463;
+    goto b477;
 b227:
     goto b228;
 b228:
@@ -121142,7 +121385,7 @@ b240:
 b241:
     x18 = talk_fn350(NULL, talk_unbox_l3(l[17]));
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     goto b242;
 b242:
@@ -121221,7 +121464,7 @@ b253:
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b463;
+    goto b477;
 b254:
     l[25] = x18.m0;
     l[24] = talk_fn79(NULL, talk_unbox_l3(l[25]));
@@ -121283,7 +121526,7 @@ b260:
 b261:
     x18 = talk_fn350(NULL, talk_unbox_l3(l[24]));
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     goto b262;
 b262:
@@ -121393,7 +121636,7 @@ b279:
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b463;
+    goto b477;
 b280:
     goto b281;
 b281:
@@ -121461,7 +121704,7 @@ b293:
     l[27] = talk_add(l[3], talk_int(INT64_C(1)));
     x7 = talk_fn1056(NULL, x0, x1, l[26], l[27]);
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     x0.m0 = x7.m1;
     x0.m1 = x7.m2;
@@ -121503,7 +121746,7 @@ b298:
     l[27] = talk_add(l[3], talk_int(INT64_C(1)));
     x7 = talk_fn1054(NULL, x0, x1, l[26], l[27]);
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     x0.m0 = x7.m1;
     x0.m1 = x7.m2;
@@ -121562,7 +121805,7 @@ b303:
 b304:
     x20 = talk_fn350(NULL, talk_unbox_l3(l[26]));
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     goto b305;
 b305:
@@ -121633,7 +121876,7 @@ b316:
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b463;
+    goto b477;
 b317:
     l[29] = x20.m0;
     l[28] = talk_fn79(NULL, talk_unbox_l3(l[29]));
@@ -121688,7 +121931,7 @@ b322:
 b323:
     x20 = talk_fn350(NULL, talk_unbox_l3(l[28]));
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     goto b324;
 b324:
@@ -121734,7 +121977,7 @@ b329:
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b463;
+    goto b477;
 b330:
     goto b331;
 b331:
@@ -121807,7 +122050,7 @@ b341:
 b342:
     x20 = talk_fn350(NULL, talk_unbox_l3(l[27]));
     if (talk_unwinding) {
-        goto b463;
+        goto b477;
     }
     goto b343;
 b343:
@@ -121853,7 +122096,7 @@ b348:
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b463;
+    goto b477;
 b349:
     goto b350;
 b350:
@@ -121888,33 +122131,33 @@ b359:
     l[29] = x2.m0;
     l[28] = l[29].v.agg->fields[0];
     switch (l[28].v.i) {
-    case 0: goto b393;
-    case 1: goto b393;
-    case 2: goto b393;
-    case 3: goto b393;
-    case 4: goto b393;
-    case 5: goto b393;
-    case 6: goto b393;
-    case 7: goto b393;
-    case 8: goto b393;
-    case 9: goto b393;
-    case 10: goto b393;
-    case 11: goto b393;
-    case 12: goto b393;
-    case 13: goto b393;
-    case 14: goto b393;
-    case 15: goto b393;
-    case 16: goto b393;
-    case 17: goto b393;
-    case 18: goto b393;
-    case 19: goto b393;
-    case 20: goto b393;
-    case 21: goto b393;
-    case 22: goto b393;
-    case 23: goto b393;
-    case 24: goto b393;
+    case 0: goto b407;
+    case 1: goto b407;
+    case 2: goto b407;
+    case 3: goto b407;
+    case 4: goto b407;
+    case 5: goto b407;
+    case 6: goto b407;
+    case 7: goto b407;
+    case 8: goto b407;
+    case 9: goto b407;
+    case 10: goto b407;
+    case 11: goto b407;
+    case 12: goto b407;
+    case 13: goto b407;
+    case 14: goto b407;
+    case 15: goto b407;
+    case 16: goto b407;
+    case 17: goto b407;
+    case 18: goto b407;
+    case 19: goto b407;
+    case 20: goto b407;
+    case 21: goto b407;
+    case 22: goto b407;
+    case 23: goto b407;
+    case 24: goto b407;
     case 25: goto b360;
-    default: goto b393;
+    default: goto b407;
     }
 b360:
     {
@@ -121931,6 +122174,13 @@ b360:
         tmp.m2 = l[29].v.agg->fields[11].v.i;
         l[27] = talk_box_l3(tmp);
     }
+    {
+        TalkL3 tmp;
+        tmp.m0 = l[29].v.agg->fields[12].v.ptr;
+        tmp.m1 = l[29].v.agg->fields[13].v.i;
+        tmp.m2 = l[29].v.agg->fields[14].v.i;
+        l[30] = talk_box_l3(tmp);
+    }
     goto b361;
 b361:
     goto b362;
@@ -121941,17 +122191,19 @@ b363:
 b364:
     goto b365;
 b365:
-    x20 = talk_fn196(NULL, talk_unbox_l3(l[28]));
-    if (talk_unwinding) {
-        goto b463;
-    }
     goto b366;
 b366:
+    x20 = talk_fn196(NULL, talk_unbox_l3(l[28]));
+    if (talk_unwinding) {
+        goto b477;
+    }
     goto b367;
 b367:
+    goto b368;
+b368:
     x9 = talk_fn197(NULL, x20);
     if (talk_unwinding) {
-        goto b383;
+        goto b396;
     }
     x10.m0 = x9.m0;
     x10.m1 = x9.m1;
@@ -121959,55 +122211,55 @@ b367:
     x20.m1 = x9.m3;
     l[29] = talk_int(x10.m0);
     switch (l[29].v.i) {
-    case 0: goto b368;
-    case 1: goto b373;
-    default: goto b392;
+    case 0: goto b369;
+    case 1: goto b374;
+    default: goto b406;
     }
-b368:
-    l[29] = x10.m1;
-    goto b369;
 b369:
-    l[30] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1044(NULL, x0, x1, l[29], l[30]);
+    l[29] = x10.m1;
+    goto b370;
+b370:
+    l[31] = talk_add(l[3], talk_int(INT64_C(1)));
+    x7 = talk_fn1044(NULL, x0, x1, l[29], l[31]);
     if (talk_unwinding) {
-        goto b370;
+        goto b371;
     }
     x0.m0 = x7.m1;
     x0.m1 = x7.m2;
     x0.m2 = x7.m3;
-    goto b371;
-b370:
-    l[30] = talk_fn140(NULL, l[29]);
-    if (talk_unwinding) {
-        return (TalkL28){0};
-    }
-    goto b383;
-b371:
     goto b372;
-b372:
-    l[30] = talk_fn140(NULL, l[29]);
+b371:
+    l[31] = talk_fn140(NULL, l[29]);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b366;
+    goto b396;
+b372:
+    goto b373;
 b373:
-    goto b374;
+    l[31] = talk_fn140(NULL, l[29]);
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b367;
 b374:
     goto b375;
 b375:
     goto b376;
 b376:
-    x18 = talk_fn352(NULL, talk_unbox_l3(l[27]));
-    if (talk_unwinding) {
-        goto b383;
-    }
     goto b377;
 b377:
+    x18 = talk_fn352(NULL, talk_unbox_l3(l[27]));
+    if (talk_unwinding) {
+        goto b396;
+    }
     goto b378;
 b378:
+    goto b379;
+b379:
     x9 = talk_fn353(NULL, x18);
     if (talk_unwinding) {
-        goto b382;
+        goto b395;
     }
     x10.m0 = x9.m0;
     x10.m1 = x9.m1;
@@ -122015,254 +122267,250 @@ b378:
     x18.m1 = x9.m3;
     l[29] = talk_int(x10.m0);
     switch (l[29].v.i) {
-    case 0: goto b379;
-    case 1: goto b386;
-    default: goto b391;
+    case 0: goto b380;
+    case 1: goto b385;
+    default: goto b405;
     }
-b379:
-    l[29] = x10.m1;
-    goto b380;
 b380:
-    l[30] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1053(NULL, x0, x1, l[29], l[30]);
+    l[29] = x10.m1;
+    goto b381;
+b381:
+    l[31] = talk_add(l[3], talk_int(INT64_C(1)));
+    x7 = talk_fn1053(NULL, x0, x1, l[29], l[31]);
     if (talk_unwinding) {
-        goto b381;
+        goto b382;
     }
     x0.m0 = x7.m1;
     x0.m1 = x7.m2;
     x0.m2 = x7.m3;
-    goto b384;
-b381:
-    l[30] = talk_fn159(NULL, l[29]);
-    if (talk_unwinding) {
-        return (TalkL28){0};
-    }
-    goto b382;
-b382:
-    l[30] = x18.m0;
-    l[31] = talk_fn83(NULL, talk_unbox_l3(l[30]));
-    if (talk_unwinding) {
-        return (TalkL28){0};
-    }
     goto b383;
-b383:
-    l[31] = x20.m0;
-    l[30] = talk_fn85(NULL, talk_unbox_l3(l[31]));
-    if (talk_unwinding) {
-        return (TalkL28){0};
-    }
-    goto b463;
-b384:
-    goto b385;
-b385:
+b382:
     l[31] = talk_fn159(NULL, l[29]);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b377;
+    goto b395;
+b383:
+    goto b384;
+b384:
+    l[31] = talk_fn159(NULL, l[29]);
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b378;
+b385:
+    goto b386;
 b386:
     goto b387;
 b387:
     goto b388;
 b388:
+    x19 = talk_fn354(NULL, talk_unbox_l3(l[30]));
+    if (talk_unwinding) {
+        goto b395;
+    }
     goto b389;
 b389:
     goto b390;
 b390:
-    l[31] = x18.m0;
-    l[29] = talk_fn83(NULL, talk_unbox_l3(l[31]));
+    x9 = talk_fn355(NULL, x19);
     if (talk_unwinding) {
-        return (TalkL28){0};
-    }
-    l[31] = x20.m0;
-    l[29] = talk_fn85(NULL, talk_unbox_l3(l[31]));
-    if (talk_unwinding) {
-        return (TalkL28){0};
-    }
-    goto b395;
-b391:
-    talk_trap("unmatched value");
-b392:
-    talk_trap("unmatched value");
-b393:
-    goto b394;
-b394:
-    goto b395;
-b395:
-    l[31] = x2.m0;
-    l[29] = l[31].v.agg->fields[0];
-    switch (l[29].v.i) {
-    case 0: goto b426;
-    case 1: goto b426;
-    case 2: goto b426;
-    case 3: goto b426;
-    case 4: goto b426;
-    case 5: goto b426;
-    case 6: goto b426;
-    case 7: goto b426;
-    case 8: goto b426;
-    case 9: goto b426;
-    case 10: goto b426;
-    case 11: goto b426;
-    case 12: goto b426;
-    case 13: goto b426;
-    case 14: goto b426;
-    case 15: goto b426;
-    case 16: goto b426;
-    case 17: goto b426;
-    case 18: goto b426;
-    case 19: goto b426;
-    case 20: goto b426;
-    case 21: goto b426;
-    case 22: goto b426;
-    case 23: goto b426;
-    case 24: goto b426;
-    case 25: goto b426;
-    case 26: goto b396;
-    default: goto b426;
-    }
-b396:
-    {
-        TalkL3 tmp;
-        tmp.m0 = l[31].v.agg->fields[1].v.ptr;
-        tmp.m1 = l[31].v.agg->fields[2].v.i;
-        tmp.m2 = l[31].v.agg->fields[3].v.i;
-        l[29] = talk_box_l3(tmp);
-    }
-    {
-        TalkL3 tmp;
-        tmp.m0 = l[31].v.agg->fields[4].v.ptr;
-        tmp.m1 = l[31].v.agg->fields[5].v.i;
-        tmp.m2 = l[31].v.agg->fields[6].v.i;
-        l[30] = talk_box_l3(tmp);
-    }
-    goto b397;
-b397:
-    goto b398;
-b398:
-    x18 = talk_fn360(NULL, talk_unbox_l3(l[29]));
-    if (talk_unwinding) {
-        goto b463;
-    }
-    goto b399;
-b399:
-    goto b400;
-b400:
-    x9 = talk_fn361(NULL, x18);
-    if (talk_unwinding) {
-        goto b416;
+        goto b394;
     }
     x10.m0 = x9.m0;
     x10.m1 = x9.m1;
-    x18.m0 = x9.m2;
-    x18.m1 = x9.m3;
-    l[31] = talk_int(x10.m0);
-    switch (l[31].v.i) {
-    case 0: goto b401;
-    case 1: goto b406;
-    default: goto b425;
+    x19.m0 = x9.m2;
+    x19.m1 = x9.m3;
+    l[29] = talk_int(x10.m0);
+    switch (l[29].v.i) {
+    case 0: goto b391;
+    case 1: goto b399;
+    default: goto b404;
     }
-b401:
-    l[31] = x10.m1;
-    goto b402;
-b402:
-    l[32] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1057(NULL, x0, x1, l[31], l[32]);
+b391:
+    l[29] = x10.m1;
+    goto b392;
+b392:
+    l[31] = talk_add(l[3], talk_int(INT64_C(1)));
+    x7 = talk_fn1054(NULL, x0, x1, l[29], l[31]);
     if (talk_unwinding) {
-        goto b403;
+        goto b393;
     }
     x0.m0 = x7.m1;
     x0.m1 = x7.m2;
     x0.m2 = x7.m3;
-    goto b404;
+    goto b397;
+b393:
+    l[31] = talk_fn90(NULL, l[29]);
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b394;
+b394:
+    l[31] = x19.m0;
+    l[32] = talk_fn81(NULL, talk_unbox_l3(l[31]));
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b395;
+b395:
+    l[32] = x18.m0;
+    l[31] = talk_fn83(NULL, talk_unbox_l3(l[32]));
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b396;
+b396:
+    l[32] = x20.m0;
+    l[31] = talk_fn85(NULL, talk_unbox_l3(l[32]));
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b477;
+b397:
+    goto b398;
+b398:
+    l[32] = talk_fn90(NULL, l[29]);
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b389;
+b399:
+    goto b400;
+b400:
+    goto b401;
+b401:
+    goto b402;
+b402:
+    goto b403;
 b403:
-    l[32] = talk_fn151(NULL, l[31]);
+    l[32] = x19.m0;
+    l[29] = talk_fn81(NULL, talk_unbox_l3(l[32]));
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b416;
+    l[32] = x18.m0;
+    l[29] = talk_fn83(NULL, talk_unbox_l3(l[32]));
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    l[32] = x20.m0;
+    l[29] = talk_fn85(NULL, talk_unbox_l3(l[32]));
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b409;
 b404:
-    goto b405;
+    talk_trap("unmatched value");
 b405:
-    l[32] = talk_fn151(NULL, l[31]);
-    if (talk_unwinding) {
-        return (TalkL28){0};
-    }
-    goto b399;
+    talk_trap("unmatched value");
 b406:
-    goto b407;
+    talk_trap("unmatched value");
 b407:
     goto b408;
 b408:
     goto b409;
 b409:
-    x20 = talk_fn350(NULL, talk_unbox_l3(l[30]));
-    if (talk_unwinding) {
-        goto b416;
+    l[32] = x2.m0;
+    l[29] = l[32].v.agg->fields[0];
+    switch (l[29].v.i) {
+    case 0: goto b440;
+    case 1: goto b440;
+    case 2: goto b440;
+    case 3: goto b440;
+    case 4: goto b440;
+    case 5: goto b440;
+    case 6: goto b440;
+    case 7: goto b440;
+    case 8: goto b440;
+    case 9: goto b440;
+    case 10: goto b440;
+    case 11: goto b440;
+    case 12: goto b440;
+    case 13: goto b440;
+    case 14: goto b440;
+    case 15: goto b440;
+    case 16: goto b440;
+    case 17: goto b440;
+    case 18: goto b440;
+    case 19: goto b440;
+    case 20: goto b440;
+    case 21: goto b440;
+    case 22: goto b440;
+    case 23: goto b440;
+    case 24: goto b440;
+    case 25: goto b440;
+    case 26: goto b410;
+    default: goto b440;
     }
-    goto b410;
 b410:
+    {
+        TalkL3 tmp;
+        tmp.m0 = l[32].v.agg->fields[1].v.ptr;
+        tmp.m1 = l[32].v.agg->fields[2].v.i;
+        tmp.m2 = l[32].v.agg->fields[3].v.i;
+        l[29] = talk_box_l3(tmp);
+    }
+    {
+        TalkL3 tmp;
+        tmp.m0 = l[32].v.agg->fields[4].v.ptr;
+        tmp.m1 = l[32].v.agg->fields[5].v.i;
+        tmp.m2 = l[32].v.agg->fields[6].v.i;
+        l[31] = talk_box_l3(tmp);
+    }
     goto b411;
 b411:
-    x9 = talk_fn351(NULL, x20);
+    goto b412;
+b412:
+    x18 = talk_fn360(NULL, talk_unbox_l3(l[29]));
     if (talk_unwinding) {
-        goto b415;
+        goto b477;
+    }
+    goto b413;
+b413:
+    goto b414;
+b414:
+    x9 = talk_fn361(NULL, x18);
+    if (talk_unwinding) {
+        goto b430;
     }
     x10.m0 = x9.m0;
     x10.m1 = x9.m1;
-    x20.m0 = x9.m2;
-    x20.m1 = x9.m3;
+    x18.m0 = x9.m2;
+    x18.m1 = x9.m3;
     l[32] = talk_int(x10.m0);
     switch (l[32].v.i) {
-    case 0: goto b412;
-    case 1: goto b419;
-    default: goto b424;
+    case 0: goto b415;
+    case 1: goto b420;
+    default: goto b439;
     }
-b412:
+b415:
     l[32] = x10.m1;
-    goto b413;
-b413:
-    l[31] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[32]), l[31]);
+    goto b416;
+b416:
+    l[33] = talk_add(l[3], talk_int(INT64_C(1)));
+    x7 = talk_fn1057(NULL, x0, x1, l[32], l[33]);
     if (talk_unwinding) {
-        goto b414;
+        goto b417;
     }
     x0.m0 = x7.m1;
     x0.m1 = x7.m2;
     x0.m2 = x7.m3;
-    goto b417;
-b414:
-    l[31] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[32]))->m0;
-    l[33] = talk_fn78(NULL, l[31]);
-    if (talk_unwinding) {
-        return (TalkL28){0};
-    }
-    goto b415;
-b415:
-    l[33] = x20.m0;
-    l[31] = talk_fn79(NULL, talk_unbox_l3(l[33]));
-    if (talk_unwinding) {
-        return (TalkL28){0};
-    }
-    goto b416;
-b416:
-    l[33] = x18.m0;
-    l[31] = talk_fn118(NULL, talk_unbox_l3(l[33]));
-    if (talk_unwinding) {
-        return (TalkL28){0};
-    }
-    goto b463;
-b417:
     goto b418;
-b418:
-    l[33] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[32]))->m0;
-    l[32] = talk_fn78(NULL, l[33]);
+b417:
+    l[33] = talk_fn151(NULL, l[32]);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b410;
+    goto b430;
+b418:
+    goto b419;
 b419:
-    goto b420;
+    l[33] = talk_fn151(NULL, l[32]);
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b413;
 b420:
     goto b421;
 b421:
@@ -122270,275 +122518,274 @@ b421:
 b422:
     goto b423;
 b423:
-    l[33] = x20.m0;
-    l[32] = talk_fn79(NULL, talk_unbox_l3(l[33]));
+    x19 = talk_fn350(NULL, talk_unbox_l3(l[31]));
     if (talk_unwinding) {
-        return (TalkL28){0};
+        goto b430;
     }
-    l[33] = x18.m0;
-    l[32] = talk_fn118(NULL, talk_unbox_l3(l[33]));
-    if (talk_unwinding) {
-        return (TalkL28){0};
-    }
-    goto b428;
+    goto b424;
 b424:
-    talk_trap("unmatched value");
+    goto b425;
 b425:
-    talk_trap("unmatched value");
-b426:
-    goto b427;
-b427:
-    goto b428;
-b428:
-    l[33] = x2.m0;
-    l[32] = l[33].v.agg->fields[0];
-    switch (l[32].v.i) {
-    case 0: goto b446;
-    case 1: goto b446;
-    case 2: goto b446;
-    case 3: goto b446;
-    case 4: goto b446;
-    case 5: goto b446;
-    case 6: goto b446;
-    case 7: goto b446;
-    case 8: goto b446;
-    case 9: goto b446;
-    case 10: goto b446;
-    case 11: goto b446;
-    case 12: goto b446;
-    case 13: goto b446;
-    case 14: goto b446;
-    case 15: goto b446;
-    case 16: goto b446;
-    case 17: goto b446;
-    case 18: goto b446;
-    case 19: goto b446;
-    case 20: goto b446;
-    case 21: goto b446;
-    case 22: goto b446;
-    case 23: goto b446;
-    case 24: goto b446;
-    case 25: goto b446;
-    case 26: goto b446;
-    case 27: goto b429;
-    default: goto b446;
-    }
-b429:
-    {
-        TalkL3 tmp;
-        tmp.m0 = l[33].v.agg->fields[1].v.ptr;
-        tmp.m1 = l[33].v.agg->fields[2].v.i;
-        tmp.m2 = l[33].v.agg->fields[3].v.i;
-        l[32] = talk_box_l3(tmp);
-    }
-    goto b430;
-b430:
-    goto b431;
-b431:
-    x18 = talk_fn350(NULL, talk_unbox_l3(l[32]));
+    x9 = talk_fn351(NULL, x19);
     if (talk_unwinding) {
-        goto b463;
-    }
-    goto b432;
-b432:
-    goto b433;
-b433:
-    x9 = talk_fn351(NULL, x18);
-    if (talk_unwinding) {
-        goto b437;
+        goto b429;
     }
     x10.m0 = x9.m0;
     x10.m1 = x9.m1;
-    x18.m0 = x9.m2;
-    x18.m1 = x9.m3;
-    l[31] = talk_int(x10.m0);
-    switch (l[31].v.i) {
-    case 0: goto b434;
-    case 1: goto b440;
-    default: goto b445;
-    }
-b434:
-    l[31] = x10.m1;
-    goto b435;
-b435:
-    l[32] = talk_add(l[3], talk_int(INT64_C(1)));
-    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[31]), l[32]);
-    if (talk_unwinding) {
-        goto b436;
-    }
-    x0.m0 = x7.m1;
-    x0.m1 = x7.m2;
-    x0.m2 = x7.m3;
-    goto b438;
-b436:
-    l[32] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[31]))->m0;
-    l[33] = talk_fn78(NULL, l[32]);
-    if (talk_unwinding) {
-        return (TalkL28){0};
-    }
-    goto b437;
-b437:
-    l[33] = x18.m0;
-    l[32] = talk_fn79(NULL, talk_unbox_l3(l[33]));
-    if (talk_unwinding) {
-        return (TalkL28){0};
-    }
-    goto b463;
-b438:
-    goto b439;
-b439:
-    l[33] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[31]))->m0;
-    l[31] = talk_fn78(NULL, l[33]);
-    if (talk_unwinding) {
-        return (TalkL28){0};
-    }
-    goto b432;
-b440:
-    goto b441;
-b441:
-    goto b442;
-b442:
-    goto b443;
-b443:
-    goto b444;
-b444:
-    l[33] = x18.m0;
-    l[31] = talk_fn79(NULL, talk_unbox_l3(l[33]));
-    if (talk_unwinding) {
-        return (TalkL28){0};
-    }
-    goto b448;
-b445:
-    talk_trap("unmatched value");
-b446:
-    goto b447;
-b447:
-    goto b448;
-b448:
-    l[33] = x2.m0;
-    l[31] = l[33].v.agg->fields[0];
-    switch (l[31].v.i) {
-    case 0: goto b473;
-    case 1: goto b473;
-    case 2: goto b473;
-    case 3: goto b473;
-    case 4: goto b473;
-    case 5: goto b473;
-    case 6: goto b473;
-    case 7: goto b473;
-    case 8: goto b473;
-    case 9: goto b473;
-    case 10: goto b473;
-    case 11: goto b473;
-    case 12: goto b473;
-    case 13: goto b473;
-    case 14: goto b473;
-    case 15: goto b473;
-    case 16: goto b473;
-    case 17: goto b473;
-    case 18: goto b473;
-    case 19: goto b473;
-    case 20: goto b473;
-    case 21: goto b473;
-    case 22: goto b473;
-    case 23: goto b473;
-    case 24: goto b473;
-    case 25: goto b473;
-    case 26: goto b473;
-    case 27: goto b473;
-    case 28: goto b449;
-    default: goto b473;
-    }
-b449:
-    {
-        TalkL3 tmp;
-        tmp.m0 = l[33].v.agg->fields[11].v.ptr;
-        tmp.m1 = l[33].v.agg->fields[12].v.i;
-        tmp.m2 = l[33].v.agg->fields[13].v.i;
-        l[31] = talk_box_l3(tmp);
-    }
-    goto b450;
-b450:
-    goto b451;
-b451:
-    goto b452;
-b452:
-    goto b453;
-b453:
-    goto b454;
-b454:
-    goto b455;
-b455:
-    goto b456;
-b456:
-    x18 = talk_fn350(NULL, talk_unbox_l3(l[31]));
-    if (talk_unwinding) {
-        goto b463;
-    }
-    goto b457;
-b457:
-    goto b458;
-b458:
-    x9 = talk_fn351(NULL, x18);
-    if (talk_unwinding) {
-        goto b462;
-    }
-    x10.m0 = x9.m0;
-    x10.m1 = x9.m1;
-    x18.m0 = x9.m2;
-    x18.m1 = x9.m3;
+    x19.m0 = x9.m2;
+    x19.m1 = x9.m3;
     l[33] = talk_int(x10.m0);
     switch (l[33].v.i) {
-    case 0: goto b459;
-    case 1: goto b467;
-    default: goto b472;
+    case 0: goto b426;
+    case 1: goto b433;
+    default: goto b438;
     }
-b459:
+b426:
     l[33] = x10.m1;
-    goto b460;
-b460:
+    goto b427;
+b427:
     l[32] = talk_add(l[3], talk_int(INT64_C(1)));
     x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[33]), l[32]);
     if (talk_unwinding) {
-        goto b461;
+        goto b428;
     }
     x0.m0 = x7.m1;
     x0.m1 = x7.m2;
     x0.m2 = x7.m3;
-    goto b465;
-b461:
+    goto b431;
+b428:
     l[32] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[33]))->m0;
     l[34] = talk_fn78(NULL, l[32]);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b462;
-b462:
-    l[34] = x18.m0;
+    goto b429;
+b429:
+    l[34] = x19.m0;
     l[32] = talk_fn79(NULL, talk_unbox_l3(l[34]));
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    goto b463;
-b463:
-    l[34] = talk_pointer(x5.m0);
-    talk_free(l[34]);
-    goto b464;
-b464:
-    l[34] = talk_fn685(NULL, x0);
+    goto b430;
+b430:
+    l[34] = x18.m0;
+    l[32] = talk_fn118(NULL, talk_unbox_l3(l[34]));
     if (talk_unwinding) {
         return (TalkL28){0};
     }
-    return (TalkL28){0};
-b465:
-    goto b466;
-b466:
+    goto b477;
+b431:
+    goto b432;
+b432:
     l[34] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[33]))->m0;
     l[33] = talk_fn78(NULL, l[34]);
     if (talk_unwinding) {
         return (TalkL28){0};
     }
+    goto b424;
+b433:
+    goto b434;
+b434:
+    goto b435;
+b435:
+    goto b436;
+b436:
+    goto b437;
+b437:
+    l[34] = x19.m0;
+    l[33] = talk_fn79(NULL, talk_unbox_l3(l[34]));
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    l[34] = x18.m0;
+    l[33] = talk_fn118(NULL, talk_unbox_l3(l[34]));
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b442;
+b438:
+    talk_trap("unmatched value");
+b439:
+    talk_trap("unmatched value");
+b440:
+    goto b441;
+b441:
+    goto b442;
+b442:
+    l[34] = x2.m0;
+    l[33] = l[34].v.agg->fields[0];
+    switch (l[33].v.i) {
+    case 0: goto b460;
+    case 1: goto b460;
+    case 2: goto b460;
+    case 3: goto b460;
+    case 4: goto b460;
+    case 5: goto b460;
+    case 6: goto b460;
+    case 7: goto b460;
+    case 8: goto b460;
+    case 9: goto b460;
+    case 10: goto b460;
+    case 11: goto b460;
+    case 12: goto b460;
+    case 13: goto b460;
+    case 14: goto b460;
+    case 15: goto b460;
+    case 16: goto b460;
+    case 17: goto b460;
+    case 18: goto b460;
+    case 19: goto b460;
+    case 20: goto b460;
+    case 21: goto b460;
+    case 22: goto b460;
+    case 23: goto b460;
+    case 24: goto b460;
+    case 25: goto b460;
+    case 26: goto b460;
+    case 27: goto b443;
+    default: goto b460;
+    }
+b443:
+    {
+        TalkL3 tmp;
+        tmp.m0 = l[34].v.agg->fields[1].v.ptr;
+        tmp.m1 = l[34].v.agg->fields[2].v.i;
+        tmp.m2 = l[34].v.agg->fields[3].v.i;
+        l[33] = talk_box_l3(tmp);
+    }
+    goto b444;
+b444:
+    goto b445;
+b445:
+    x18 = talk_fn350(NULL, talk_unbox_l3(l[33]));
+    if (talk_unwinding) {
+        goto b477;
+    }
+    goto b446;
+b446:
+    goto b447;
+b447:
+    x9 = talk_fn351(NULL, x18);
+    if (talk_unwinding) {
+        goto b451;
+    }
+    x10.m0 = x9.m0;
+    x10.m1 = x9.m1;
+    x18.m0 = x9.m2;
+    x18.m1 = x9.m3;
+    l[32] = talk_int(x10.m0);
+    switch (l[32].v.i) {
+    case 0: goto b448;
+    case 1: goto b454;
+    default: goto b459;
+    }
+b448:
+    l[32] = x10.m1;
+    goto b449;
+b449:
+    l[33] = talk_add(l[3], talk_int(INT64_C(1)));
+    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[32]), l[33]);
+    if (talk_unwinding) {
+        goto b450;
+    }
+    x0.m0 = x7.m1;
+    x0.m1 = x7.m2;
+    x0.m2 = x7.m3;
+    goto b452;
+b450:
+    l[33] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[32]))->m0;
+    l[34] = talk_fn78(NULL, l[33]);
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b451;
+b451:
+    l[34] = x18.m0;
+    l[33] = talk_fn79(NULL, talk_unbox_l3(l[34]));
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b477;
+b452:
+    goto b453;
+b453:
+    l[34] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[32]))->m0;
+    l[32] = talk_fn78(NULL, l[34]);
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b446;
+b454:
+    goto b455;
+b455:
+    goto b456;
+b456:
     goto b457;
+b457:
+    goto b458;
+b458:
+    l[34] = x18.m0;
+    l[32] = talk_fn79(NULL, talk_unbox_l3(l[34]));
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b462;
+b459:
+    talk_trap("unmatched value");
+b460:
+    goto b461;
+b461:
+    goto b462;
+b462:
+    l[34] = x2.m0;
+    l[32] = l[34].v.agg->fields[0];
+    switch (l[32].v.i) {
+    case 0: goto b487;
+    case 1: goto b487;
+    case 2: goto b487;
+    case 3: goto b487;
+    case 4: goto b487;
+    case 5: goto b487;
+    case 6: goto b487;
+    case 7: goto b487;
+    case 8: goto b487;
+    case 9: goto b487;
+    case 10: goto b487;
+    case 11: goto b487;
+    case 12: goto b487;
+    case 13: goto b487;
+    case 14: goto b487;
+    case 15: goto b487;
+    case 16: goto b487;
+    case 17: goto b487;
+    case 18: goto b487;
+    case 19: goto b487;
+    case 20: goto b487;
+    case 21: goto b487;
+    case 22: goto b487;
+    case 23: goto b487;
+    case 24: goto b487;
+    case 25: goto b487;
+    case 26: goto b487;
+    case 27: goto b487;
+    case 28: goto b463;
+    default: goto b487;
+    }
+b463:
+    {
+        TalkL3 tmp;
+        tmp.m0 = l[34].v.agg->fields[11].v.ptr;
+        tmp.m1 = l[34].v.agg->fields[12].v.i;
+        tmp.m2 = l[34].v.agg->fields[13].v.i;
+        l[32] = talk_box_l3(tmp);
+    }
+    goto b464;
+b464:
+    goto b465;
+b465:
+    goto b466;
+b466:
+    goto b467;
 b467:
     goto b468;
 b468:
@@ -122546,35 +122793,110 @@ b468:
 b469:
     goto b470;
 b470:
+    x18 = talk_fn350(NULL, talk_unbox_l3(l[32]));
+    if (talk_unwinding) {
+        goto b477;
+    }
     goto b471;
 b471:
+    goto b472;
+b472:
+    x9 = talk_fn351(NULL, x18);
+    if (talk_unwinding) {
+        goto b476;
+    }
+    x10.m0 = x9.m0;
+    x10.m1 = x9.m1;
+    x18.m0 = x9.m2;
+    x18.m1 = x9.m3;
+    l[34] = talk_int(x10.m0);
+    switch (l[34].v.i) {
+    case 0: goto b473;
+    case 1: goto b481;
+    default: goto b486;
+    }
+b473:
+    l[34] = x10.m1;
+    goto b474;
+b474:
+    l[33] = talk_add(l[3], talk_int(INT64_C(1)));
+    x7 = talk_fn1035(NULL, x0, x1, talk_unbox_l16(l[34]), l[33]);
+    if (talk_unwinding) {
+        goto b475;
+    }
+    x0.m0 = x7.m1;
+    x0.m1 = x7.m2;
+    x0.m2 = x7.m3;
+    goto b479;
+b475:
+    l[33] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[34]))->m0;
+    l[35] = talk_fn78(NULL, l[33]);
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b476;
+b476:
+    l[35] = x18.m0;
+    l[33] = talk_fn79(NULL, talk_unbox_l3(l[35]));
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b477;
+b477:
+    l[35] = talk_pointer(x5.m0);
+    talk_free(l[35]);
+    goto b478;
+b478:
+    l[35] = talk_fn685(NULL, x0);
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    return (TalkL28){0};
+b479:
+    goto b480;
+b480:
+    l[35] = ((const TalkL16 *)TALK_NATIVE_PAYLOAD(l[34]))->m0;
+    l[34] = talk_fn78(NULL, l[35]);
+    if (talk_unwinding) {
+        return (TalkL28){0};
+    }
+    goto b471;
+b481:
+    goto b482;
+b482:
+    goto b483;
+b483:
+    goto b484;
+b484:
+    goto b485;
+b485:
     l[3] = x18.m0;
-    l[34] = talk_fn79(NULL, talk_unbox_l3(l[3]));
+    l[35] = talk_fn79(NULL, talk_unbox_l3(l[3]));
     if (talk_unwinding) {
         return (TalkL28){0};
     }
     {
         TalkValue e0 = talk_unit();
-        l[34] = e0;
-        goto b475;
+        l[35] = e0;
+        goto b489;
     }
-b472:
+b486:
     talk_trap("unmatched value");
-b473:
-    goto b474;
-b474:
+b487:
+    goto b488;
+b488:
     {
         TalkValue e0 = talk_unit();
-        l[34] = e0;
-        goto b475;
+        l[35] = e0;
+        goto b489;
     }
-b475:
-    x7.m0 = l[34];
+b489:
+    x7.m0 = l[35];
     x7.m1 = x0.m0;
     x7.m2 = x0.m1;
     x7.m3 = x0.m2;
-    l[34] = talk_pointer(x5.m0);
-    talk_free(l[34]);
+    l[35] = talk_pointer(x5.m0);
+    talk_free(l[35]);
     return x7;
 }
 
@@ -126796,11 +127118,11 @@ b0:
     case 23: goto b60;
     case 24: goto b62;
     case 25: goto b64;
-    case 26: goto b70;
-    case 27: goto b73;
-    case 28: goto b76;
-    case 29: goto b84;
-    default: goto b90;
+    case 26: goto b71;
+    case 27: goto b74;
+    case 28: goto b77;
+    case 29: goto b85;
+    default: goto b91;
     }
 b1:
     goto b2;
@@ -126809,7 +127131,7 @@ b2:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b3:
     goto b4;
@@ -126818,7 +127140,7 @@ b4:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b5:
     goto b6;
@@ -126827,7 +127149,7 @@ b6:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b7:
     goto b8;
@@ -126836,7 +127158,7 @@ b8:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b9:
     goto b10;
@@ -126845,7 +127167,7 @@ b10:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b11:
     goto b12;
@@ -126854,7 +127176,7 @@ b12:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b13:
     goto b14;
@@ -126863,7 +127185,7 @@ b14:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b15:
     goto b16;
@@ -126874,7 +127196,7 @@ b17:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b18:
     goto b19;
@@ -126885,7 +127207,7 @@ b20:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b21:
     goto b22;
@@ -126900,7 +127222,7 @@ b25:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b26:
     goto b27;
@@ -126911,7 +127233,7 @@ b28:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b29:
     goto b30;
@@ -126926,7 +127248,7 @@ b33:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b34:
     goto b35;
@@ -126935,7 +127257,7 @@ b35:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b36:
     goto b37;
@@ -126944,7 +127266,7 @@ b37:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b38:
     goto b39;
@@ -126953,7 +127275,7 @@ b39:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b40:
     goto b41;
@@ -126962,7 +127284,7 @@ b41:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b42:
     goto b43;
@@ -126971,7 +127293,7 @@ b43:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b44:
     goto b45;
@@ -126980,7 +127302,7 @@ b45:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b46:
     goto b47;
@@ -126989,7 +127311,7 @@ b47:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b48:
     goto b49;
@@ -127002,7 +127324,7 @@ b51:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b52:
     goto b53;
@@ -127013,7 +127335,7 @@ b54:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b55:
     goto b56;
@@ -127024,7 +127346,7 @@ b57:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b58:
     goto b59;
@@ -127033,7 +127355,7 @@ b59:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b60:
     goto b61;
@@ -127042,7 +127364,7 @@ b61:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b62:
     goto b63;
@@ -127051,7 +127373,7 @@ b63:
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
 b64:
     goto b65;
@@ -127064,36 +127386,36 @@ b67:
 b68:
     goto b69;
 b69:
+    goto b70;
+b70:
     l[1] = talk_static_string(351);
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
-b70:
-    goto b71;
 b71:
     goto b72;
 b72:
+    goto b73;
+b73:
     l[1] = talk_static_string(352);
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
-b73:
-    goto b74;
 b74:
     goto b75;
 b75:
+    goto b76;
+b76:
     l[1] = talk_static_string(353);
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
-b76:
-    goto b77;
 b77:
     goto b78;
 b78:
@@ -127107,14 +127429,14 @@ b81:
 b82:
     goto b83;
 b83:
+    goto b84;
+b84:
     l[1] = talk_static_string(354);
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
-b84:
-    goto b85;
 b85:
     goto b86;
 b86:
@@ -127122,15 +127444,17 @@ b86:
 b87:
     goto b88;
 b88:
+    goto b89;
+b89:
     l[1] = talk_static_string(355);
     {
         TalkValue e0 = l[1];
         l[1] = e0;
-        goto b89;
+        goto b90;
     }
-b89:
-    return talk_unbox_l1(l[1]);
 b90:
+    return talk_unbox_l1(l[1]);
+b91:
     talk_trap("unmatched value");
 }
 
@@ -133011,7 +133335,8 @@ b0:
     case 25: goto b76;
     case 26: goto b79;
     case 27: goto b83;
-    default: goto b86;
+    case 28: goto b85;
+    default: goto b88;
     }
 b1:
     l[1] = x0.m1;
@@ -133027,7 +133352,7 @@ b4:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b5:
     l[5] = x0.m1;
@@ -133043,7 +133368,7 @@ b8:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b9:
     l[8] = x0.m1;
@@ -133059,7 +133384,7 @@ b12:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b13:
     l[11] = x0.m1;
@@ -133069,7 +133394,7 @@ b14:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b15:
     l[11] = x0.m1;
@@ -133079,7 +133404,7 @@ b16:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b17:
     l[11] = x0.m1;
@@ -133095,7 +133420,7 @@ b20:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b21:
     l[14] = x0.m1;
@@ -133111,7 +133436,7 @@ b24:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b25:
     l[17] = x0.m1;
@@ -133127,7 +133452,7 @@ b28:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b29:
     l[20] = x0.m1;
@@ -133143,7 +133468,7 @@ b32:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b33:
     l[23] = x0.m1;
@@ -133156,7 +133481,7 @@ b35:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b36:
     l[25] = x0.m1;
@@ -133172,7 +133497,7 @@ b39:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b40:
     l[28] = x0.m1;
@@ -133182,7 +133507,7 @@ b41:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b42:
     goto b43;
@@ -133191,7 +133516,7 @@ b43:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b44:
     l[28] = x0.m1;
@@ -133201,7 +133526,7 @@ b45:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b46:
     l[28] = x0.m1;
@@ -133214,7 +133539,7 @@ b48:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b49:
     l[30] = x0.m1;
@@ -133230,7 +133555,7 @@ b52:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b53:
     goto b54;
@@ -133239,7 +133564,7 @@ b54:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b55:
     l[33] = x0.m1;
@@ -133249,7 +133574,7 @@ b56:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b57:
     l[33] = x0.m1;
@@ -133262,7 +133587,7 @@ b59:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b60:
     l[35] = x0.m1;
@@ -133272,7 +133597,7 @@ b61:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b62:
     l[35] = x0.m1;
@@ -133285,7 +133610,7 @@ b64:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b65:
     l[37] = x0.m1;
@@ -133298,7 +133623,7 @@ b67:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b68:
     l[39] = x0.m1;
@@ -133314,7 +133639,7 @@ b71:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b72:
     l[42] = x0.m1;
@@ -133324,7 +133649,7 @@ b73:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b74:
     l[42] = x0.m1;
@@ -133334,7 +133659,7 @@ b75:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b76:
     l[42] = x0.m1;
@@ -133347,7 +133672,7 @@ b78:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b79:
     l[44] = x0.m1;
@@ -133363,7 +133688,7 @@ b82:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b83:
     l[47] = x0.m1;
@@ -133373,11 +133698,20 @@ b84:
     {
         TalkValue e0 = l[4];
         l[4] = e0;
-        goto b85;
+        goto b87;
     }
 b85:
-    return l[4];
+    goto b86;
 b86:
+    l[4] = talk_int(talk_io(28, talk_int(INT64_C(0)), talk_int(INT64_C(0)), talk_int(INT64_C(0))));
+    {
+        TalkValue e0 = l[4];
+        l[4] = e0;
+        goto b87;
+    }
+b87:
+    return l[4];
+b88:
     talk_trap("unmatched value");
 }
 

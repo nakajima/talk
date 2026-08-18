@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - 11. Concurrency</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037485" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>11. Concurrency</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency" aria-current="page">11. Concurrency</a><ol class="manual-outline-sections"><li><a href="#sleeping-without-function-coloring">Sleeping without function coloring</a></li>
+<li><a href="#structured-parallel-work">Structured parallel work</a></li>
+<li><a href="#channels">Channels</a></li>
+<li><a href="#selecting-receivers">Selecting receivers</a></li>
+<li><a href="#cooperative-tasks-and-the-implicit-root-scheduler">Cooperative tasks and the implicit root scheduler</a></li>
+<li><a href="#resumptions-are-the-foundation">Resumptions are the foundation</a></li></ol></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/macros">&larr; 10. Macros</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/testing">12. Testing &rarr;</a>
+          </nav>
+          <article class="page-content">
+            <p>TalkTalk can run several jobs without making you mark every calling function as <code>async</code>. Code can sleep, wait for a message, or run work in parallel while still reading from top to bottom.</p>
+<p>Most APIs in this chapter come from the <code>task</code> module. Every executable runs its top-level statements as the root task of Core's cooperative scheduler, so ordinary task code does not need to import <code>coop</code> or call a scheduler explicitly. The <code>coop</code> module remains available when an explicit nested scheduler scope is useful.</p>
+<h2><a href="#sleeping-without-function-coloring" aria-hidden="true" class="anchor" id="sleeping-without-function-coloring"></a>Sleeping without function coloring</h2>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">use</span> task<span class="operator">::</span>{ sleep }
+
+<span class="variable">print</span>(<span class="string">"before"</span>)
+<span class="variable">sleep</span>(.<span class="property">milliseconds</span>(<span class="number">100</span>))
+<span class="variable">print</span>(<span class="string">"after"</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>use task::{ sleep }
+
+print(&quot;before&quot;)
+sleep(.milliseconds(100))
+print(&quot;after&quot;)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p><code>sleep</code> performs the internal wait effect until a monotonic deadline. The same source can run under the blocking host fallback or a cooperative scheduler.</p>
+<h2><a href="#structured-parallel-work" aria-hidden="true" class="anchor" id="structured-parallel-work"></a>Structured parallel work</h2>
+<p><code>parallel_run</code> starts one worker per input, waits for every worker, and returns results in input order:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">use</span> task<span class="operator">::</span>{ parallel_run }
+
+<span class="keyword">let</span> doubled <span class="operator">=</span> <span class="variable">parallel_run</span>(
+	<span class="parameter">jobs</span>: [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>],
+	<span class="parameter">worker</span>: <span class="keyword">func</span>(consume <span class="parameter">value</span>: <span class="type">Int</span>) <span class="operator">-&gt;</span> Int {
+		<span class="variable">value</span> <span class="operator">*</span> <span class="number">2</span>
+	}
+)
+
+<span class="variable">print</span>(<span class="variable">doubled</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='10' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>use task::{ parallel_run }
+
+let doubled = parallel_run(
+	jobs: [1, 2, 3],
+	worker: func(consume value: Int) -&gt; Int {
+		value * 2
+	}
+)
+
+print(doubled)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Jobs and results must conform to <code>Send</code>. Each worker runs under its own standard handlers for I/O, allocation, yielding, panic, channels, and timers, so operations such as <code>sleep</code> can be used directly. User-defined effects must still be handled inside the worker; handlers from the spawning task do not cross the isolation boundary. Worker handles do not escape, so returning from <code>parallel_run</code> means the whole group has finished.</p>
+<h2><a href="#channels" aria-hidden="true" class="anchor" id="channels"></a>Channels</h2>
+<p>Channels are multi-producer, single-consumer transfer queues:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">use</span> task<span class="operator">::</span>{ channel }
+
+<span class="keyword">let</span> (sender, receiver) <span class="operator">=</span> <span class="variable">channel</span><span class="operator">&lt;</span><span class="type">Int</span><span class="operator">&gt;</span>()
+<span class="variable">sender</span>.<span class="property">send</span>(<span class="parameter">value</span>: <span class="number">42</span>)
+<span class="variable">print</span>(<span class="variable">receiver</span>.<span class="property">recv</span>())</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>use task::{ channel }
+
+let (sender, receiver) = channel&lt;Int&gt;()
+sender.send(value: 42)
+print(receiver.recv())</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p><code>Sender.clone()</code> creates another logical sender. <code>Receiver.recv()</code> returns the next <code>T</code>, or <code>.none</code> after every sender has gone away and the queue is empty. Endpoint destruction updates channel lifecycle state automatically.</p>
+<p>A bounded channel adds backpressure:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">use</span> task<span class="operator">::</span>{ channel_bounded }
+
+<span class="keyword">let</span> (sender, receiver) <span class="operator">=</span> <span class="variable">channel_bounded</span><span class="operator">&lt;</span><span class="type">Int</span><span class="operator">&gt;</span>(<span class="parameter">capacity</span>: <span class="number">8</span>)
+<span class="keyword">let</span> delivered <span class="operator">=</span> <span class="variable">sender</span>.<span class="property">send</span>(<span class="parameter">value</span>: <span class="number">42</span>)
+
+<span class="variable">delivered</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='6' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>use task::{ channel_bounded }
+
+let (sender, receiver) = channel_bounded&lt;Int&gt;(capacity: 8)
+let delivered = sender.send(value: 42)
+
+delivered</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Bounded <code>send</code> waits for capacity and returns <code>false</code> if the receiver has closed before delivery.</p>
+<h2><a href="#selecting-receivers" aria-hidden="true" class="anchor" id="selecting-receivers"></a>Selecting receivers</h2>
+<p><code>select_recv</code> races two receivers, chooses the first ready side, and leaves the losing value queued:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">use</span> task<span class="operator">::</span>{ Either, channel, select_recv }
+
+<span class="keyword">let</span> (left_sender, left) <span class="operator">=</span> <span class="variable">channel</span><span class="operator">&lt;</span><span class="type">Int</span><span class="operator">&gt;</span>()
+<span class="keyword">let</span> (right_sender, right) <span class="operator">=</span> <span class="variable">channel</span><span class="operator">&lt;</span><span class="type">String</span><span class="operator">&gt;</span>()
+<span class="variable">left_sender</span>.<span class="property">send</span>(<span class="parameter">value</span>: <span class="number">7</span>)
+
+<span class="keyword">match</span> <span class="variable">select_recv</span>(<span class="parameter">a</span>: <span class="variable">left</span>, <span class="parameter">b</span>: <span class="variable">right</span>) {
+	.<span class="enum_member">left</span>(value) <span class="operator">-&gt;</span> <span class="variable">print</span>(<span class="variable">value</span>),
+	.<span class="enum_member">right</span>(value) <span class="operator">-&gt;</span> <span class="variable">print</span>(<span class="variable">value</span>)
+}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='10' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>use task::{ Either, channel, select_recv }
+
+let (left_sender, left) = channel&lt;Int&gt;()
+let (right_sender, right) = channel&lt;String&gt;()
+left_sender.send(value: 7)
+
+match select_recv(a: left, b: right) {
+	.left(value) -&gt; print(value),
+	.right(value) -&gt; print(value)
+}</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>If both sides are ready, the left side wins. A closed channel counts as ready and returns <code>.none</code>.</p>
+<h2><a href="#cooperative-tasks-and-the-implicit-root-scheduler" aria-hidden="true" class="anchor" id="cooperative-tasks-and-the-implicit-root-scheduler"></a>Cooperative tasks and the implicit root scheduler</h2>
+<p>Core exposes the <code>'spawn</code> task effect. Every executable runs inside an implicit cooperative root scheduler that handles spawned tasks, yields, channel waits, and deadlines while code remains in direct style:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="effect">'spawn</span>(
+	<span class="parameter">task</span>: <span class="keyword">func</span>() <span class="operator">-&gt;</span> () {
+		<span class="variable">print</span>(<span class="string">"child"</span>)
+		<span class="effect">'yield</span>()
+		<span class="variable">print</span>(<span class="string">"child resumed"</span>)
+	}
+)
+
+<span class="variable">print</span>(<span class="string">"root"</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='9' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>&#39;spawn(
+	task: func() -&gt; () {
+		print(&quot;child&quot;)
+		&#39;yield()
+		print(&quot;child resumed&quot;)
+	}
+)
+
+print(&quot;root&quot;)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>No <code>coop</code> import or <code>run</code> wrapper is required. The scheduler drains spawned tasks even if the root task finishes first. <code>coop::run</code> installs the same scheduler for an explicit nested scope; a nearer user-defined handler may instead intercept the task effects to provide different scheduling behavior within its own scope.</p>
+<p>A spawned closure should receive owned state as an argument at worker boundaries rather than capture non-transferable values.</p>
+<h2><a href="#resumptions-are-the-foundation" aria-hidden="true" class="anchor" id="resumptions-are-the-foundation"></a>Resumptions are the foundation</h2>
+<p>Effects provide the suspension mechanism. A scheduler may continue a resumption later; cancellation consumes it and runs cleanup. Linear resumptions prevent two workers from resuming the same continuation twice.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/macros">&larr; 10. Macros</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/testing">12. Testing &rarr;</a>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037485"></script>
+    </main>
+  </body>
+</html>

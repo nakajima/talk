@@ -14,6 +14,7 @@ use crate::SiteBuilder;
 const DEFAULT_PORT: u16 = 8000;
 const POLL_INTERVAL: Duration = Duration::from_millis(350);
 const MAX_REQUEST_BYTES: usize = 16 * 1024;
+const CROSS_ORIGIN_ISOLATION_HEADERS: &str = "Cross-Origin-Opener-Policy: same-origin\r\nCross-Origin-Embedder-Policy: require-corp\r\nCross-Origin-Resource-Policy: same-origin\r\n";
 
 pub(crate) struct DevServer {
     assets: PathBuf,
@@ -136,6 +137,7 @@ impl SourceState {
 
         let mut site = BTreeMap::new();
         FileStamp::collect(Path::new("./content"), &mut site);
+        FileStamp::collect(Path::new("./manual"), &mut site);
 
         Self { executable, site }
     }
@@ -239,7 +241,7 @@ impl Connection {
     ) -> io::Result<()> {
         write!(
             self.stream,
-            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{CROSS_ORIGIN_ISOLATION_HEADERS}Connection: close\r\n\r\n",
             body.len()
         )?;
         if !head_only {

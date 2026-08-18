@@ -9,6 +9,12 @@ use crate::{
 
 pub const REPL_DOCUMENT_ID: &str = "<repl>";
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ReplOutput {
+    Stdout,
+    Stderr,
+}
+
 #[derive(Clone)]
 pub struct ReplSession {
     prelude_source: String,
@@ -142,6 +148,34 @@ impl ReplSession {
         self.eval_program_at(None, source)
     }
 
+    /// Evaluate a complete program with fixed stdin, reporting each stdout
+    /// and stderr write while retaining the complete output in the result.
+    pub fn eval_program_streaming(
+        &self,
+        source: &str,
+        stdin: Vec<u8>,
+        mut output: impl FnMut(ReplOutput, &[u8]) + 'static,
+    ) -> ReplEvalResult {
+        if let Some(diagnostics) = self.diagnostics_at(None, source) {
+            return ReplEvalResult::Diagnostics {
+                source: source.to_string(),
+                diagnostics,
+                message: None,
+            };
+        }
+        let io = talk_vm::io::ReplIO::default()
+            .with_stdin(stdin)
+            .observing_output(move |fd, bytes| {
+                let stream = if fd == 1 {
+                    ReplOutput::Stdout
+                } else {
+                    ReplOutput::Stderr
+                };
+                output(stream, bytes);
+            });
+        self.run_with_io(None, source, io)
+    }
+
     /// [`Self::eval_program`] with the document's real path, so relative
     /// imports resolve from it and diagnostics name it (the embedding
     /// APIs' entry point).
@@ -159,6 +193,15 @@ impl ReplSession {
     /// Compile and execute a source unit through the backend (ADR 0034),
     /// capturing IO for the session.
     fn run(&self, path: Option<&std::path::Path>, source: &str) -> ReplEvalResult {
+        self.run_with_io(path, source, talk_vm::io::ReplIO::default())
+    }
+
+    fn run_with_io(
+        &self,
+        path: Option<&std::path::Path>,
+        source: &str,
+        mut io: talk_vm::io::ReplIO,
+    ) -> ReplEvalResult {
         use crate::compiling::driver::{Driver, Source};
 
         let path = path.or_else(|| self.package.as_ref().map(|_| self.source_path.as_path()));
@@ -194,7 +237,6 @@ impl ReplSession {
             Ok(executable) => executable,
             Err(message) => return ReplEvalResult::Error(message),
         };
-        let mut io = talk_vm::io::CaptureIO::default();
         match executable.run(&mut io) {
             Ok(value) => ReplEvalResult::Output {
                 stdout: String::from_utf8_lossy(&io.out).into_owned(),
@@ -597,6 +639,47 @@ mod tests {
                 stdout: "hey\n".to_string(),
                 stderr: String::new(),
                 value: None,
+            }
+        );
+    }
+
+    #[test]
+    fn streaming_program_reports_output_as_it_is_written() {
+        use std::{cell::RefCell, rc::Rc};
+
+        let session = session();
+        let observed = Rc::new(RefCell::new(Vec::new()));
+        let output = Rc::clone(&observed);
+        let result =
+            session.eval_program_streaming("print(\"hey\")", Vec::new(), move |stream, bytes| {
+                output.borrow_mut().push((stream, bytes.to_vec()));
+            });
+
+        assert!(matches!(result, ReplEvalResult::Output { .. }));
+        assert_eq!(
+            *observed.borrow(),
+            vec![
+                (ReplOutput::Stdout, b"hey".to_vec()),
+                (ReplOutput::Stdout, b"\n".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn sleep_and_instant_use_host_time() {
+        let session = session();
+        let result = session.eval_program(
+            "use task::{ sleep }\n\
+             let start = Instant.now()\n\
+             sleep(.milliseconds(5))\n\
+             Instant.now().since(start).as_milliseconds() >= 5",
+        );
+        assert_eq!(
+            result,
+            ReplEvalResult::Output {
+                stdout: String::new(),
+                stderr: String::new(),
+                value: Some("true".to_string()),
             }
         );
     }

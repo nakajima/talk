@@ -362,7 +362,7 @@ written with the stage that fixes them, never landed failing.
    `ArrayIntoIterator` owns the array. V1 residual: it still yields
    *borrowed* elements. Owned yields are blocked on a design decision —
    generic `&T → T` has no duplication witness (the tier-2 clone coercion
-   fires only for concrete Copy/CheapClone nominals), and moving out via a
+   fires only for concrete Copy/Clone nominals), and moving out via a
    raw load double-frees now that `Array: Deinit` deep-drops elements.
    Chosen direction (2026-07-08): per-θ generic clone coercion at argument
    positions. Attempting it surfaced a deeper pre-existing gap that blocks
@@ -370,7 +370,7 @@ written with the stage that fixes them, never landed failing.
    value at all** — even `let e: &String = xs.get(0)` is a type error on
    main today. Borrow-typed results only work as receivers of further
    calls, through `Optional<&T>` payloads (match binders), or where the
-   Copy/CheapClone coercions erase them. Making borrow-typed results
+   Copy/Clone coercions erase them. Making borrow-typed results
    first-class values is prerequisite work for both the coercion and for
    stage 7's `&mut` element yields, and needs its own design pass.
 7. **Exclusive iteration.** (Implemented 2026-07-08, take-and-restore v1.)
@@ -398,7 +398,7 @@ scheme's borrow-typed return. Fixed by deferral throughout —
 `emit_immediate_borrow_check` defers unresolved founds under every reason
 (via `ApplyBorrow`), and a new `CoerceOwned` constraint defers owned
 slots fed borrow-or-unsolved arguments, resolving to the per-instantiation
-clone coercion (`Param` or Copy/CheapClone expected) or the plain
+clone coercion (`Param` or Copy/Clone expected) or the plain
 equality. En route, a latent runtime bug: `retain_then` walked the
 un-erased borrow type, so tier-2 clones of borrow-typed *arguments* never
 emitted their retain (double free); it now erases the borrow before the

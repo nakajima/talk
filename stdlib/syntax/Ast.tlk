@@ -354,9 +354,10 @@ pub enum ExprKind {
 	// `unreachable` spanning the bang until desugaring sends it to 'panic.
 	case force_unwrap([Expr])
 	case unreachable_expr
-	// `'effect(args)`: the effect name (sigil excluded) and its lexeme
-	// span, explicit generic arguments, then the arguments.
-	case call_effect(String, Int, Int, [GenericArg], [CallArg])
+	// `'effect(args) { ... }`: the effect name (sigil excluded) and its
+	// lexeme span, explicit generic arguments, arguments, then a trailing
+	// block closure as a zero- or one-element array.
+	case call_effect(String, Int, Int, [GenericArg], [CallArg], [Block])
 	// `{ label: value, ...spread }`: the fields, then the spread
 	// expression as a zero- or one-element array.
 	case record_literal([RecordField], [Expr])

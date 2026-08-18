@@ -1,5 +1,5 @@
 // no-core
-use package::Ownership::{ CheapClone, Owner, Send }
+use package::Ownership::{ Clone, Owner, Send }
 
 pub enum Allocation {
 	case allocate(Int)
@@ -84,7 +84,7 @@ pub struct Storage<Element> {
 
 extend<Element> Storage<Element>: Owner {}
 
-extend<Element> Storage<Element>: CheapClone {}
+extend<Element> Storage<Element>: Clone {}
 
 // Trusted transfer contract (ADR 0050/0058): moving a buffer between
 // workers is sound because owner transitions are thread-safe — atomic
@@ -113,7 +113,7 @@ pub struct ByteStorage {
 
 extend ByteStorage: Owner {}
 
-extend ByteStorage: CheapClone {}
+extend ByteStorage: Clone {}
 
 // Trusted transfer contract (ADR 0050/0058): see Storage above; bytes
 // carry no further conditions.

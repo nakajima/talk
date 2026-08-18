@@ -1311,8 +1311,13 @@ static TalkValue {}_impl(TalkResumeFrame *fr);",
                     frame.value(*op)?
                 );
             }
-            Inst::Alloc { dest, bytes } => {
-                let _ = writeln!(out, "    l[{dest}] = talk_alloc({});", frame.value(*bytes)?);
+            Inst::Alloc { dest, bytes, kind } => {
+                let _ = writeln!(
+                    out,
+                    "    l[{dest}] = talk_alloc({}, {});",
+                    frame.value(*bytes)?,
+                    allocation_kind(*kind)
+                );
             }
             Inst::Free { src } => {
                 let _ = writeln!(out, "    talk_free({});", frame.value(*src)?);
@@ -2813,6 +2818,17 @@ fn slot_typedef(out: &mut String, id: LayoutId, shape: &Shape) {
         let _ = writeln!(out, "    {} m{slot};", kind_type(*kind));
     }
     let _ = writeln!(out, "}} TalkL{id};");
+}
+
+fn allocation_kind(kind: SlotKind) -> &'static str {
+    match kind {
+        SlotKind::Byte => "TALK_MEM_BYTE",
+        SlotKind::Int => "TALK_MEM_I64",
+        SlotKind::F64 => "TALK_MEM_F64",
+        SlotKind::Bool => "TALK_MEM_BOOL",
+        SlotKind::Ptr => "TALK_MEM_PTR",
+        SlotKind::Value => "TALK_MEM_BOXED",
+    }
 }
 
 /// The element class is fixed at emit time, so a load is a direct access

@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - 3. Bindings and Functions</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037478" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>3. Bindings and Functions</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions" aria-current="page">3. Bindings and Functions</a><ol class="manual-outline-sections"><li><a href="#bindings-and-assignment">Bindings and assignment</a></li>
+<li><a href="#defining-functions">Defining functions</a></li>
+<li><a href="#argument-labels">Argument labels</a></li>
+<li><a href="#parameter-modes">Parameter modes</a></li>
+<li><a href="#closures">Closures</a></li>
+<li><a href="#methods">Methods</a></li></ol></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/values-and-types">&larr; 2. Values and Types</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/data-and-patterns">4. Data and Patterns &rarr;</a>
+          </nav>
+          <article class="page-content">
+            <p>Variables use <code>let</code>, functions use <code>func</code>, and both usually work without many type annotations. This chapter covers changing values, naming function arguments, passing functions around, and writing methods.</p>
+<h2><a href="#bindings-and-assignment" aria-hidden="true" class="anchor" id="bindings-and-assignment"></a>Bindings and assignment</h2>
+<p>Declare a local with <code>let</code> and optionally ascribe its type:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> score <span class="operator">=</span> <span class="number">10</span>
+<span class="variable">score</span> <span class="operator">=</span> <span class="variable">score</span> <span class="operator">+</span> <span class="number">5</span>
+
+<span class="keyword">let</span> title: <span class="type">String</span> <span class="operator">=</span> <span class="string">"TalkTalk"</span>
+
+<span class="variable">score</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='6' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let score = 10
+score = score + 5
+
+let title: String = &quot;TalkTalk&quot;
+
+score</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Every <code>let</code> binding can be assigned again; TalkTalk has no separate <code>var</code> keyword. Assignment also works with writable fields, tuple positions, and supported subscripts. Function signatures still control whether a function may change a value passed in from its caller: that is what <code>mut</code> means in the parameter and method examples below.</p>
+<p>Destructuring uses patterns. A refutable pattern needs <code>else</code>:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> (x, y) <span class="operator">=</span> (<span class="number">3</span>, <span class="number">4</span>)
+<span class="keyword">let</span> .some(value) <span class="operator">=</span> Optional.some(<span class="number">42</span>) <span class="keyword">else</span> { <span class="keyword">return</span> }
+
+(<span class="variable">x</span>, <span class="variable">y</span>, <span class="variable">value</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='4' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let (x, y) = (3, 4)
+let .some(value) = Optional.some(42) else { return }
+
+(x, y, value)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<h2><a href="#defining-functions" aria-hidden="true" class="anchor" id="defining-functions"></a>Defining functions</h2>
+<p>A function may infer parameter and return types locally:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">add</span>(<span class="parameter">x</span>, <span class="parameter">y</span>) { <span class="variable">x</span> <span class="operator">+</span> <span class="variable">y</span> }
+
+<span class="variable">add</span>(<span class="number">1</span>, <span class="number">2</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func add(x, y) { x + y }
+
+add(1, 2)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Annotations are recommended on public boundaries:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="modifier">pub</span> <span class="keyword">func</span> <span class="function">clamp</span>(<span class="parameter">_</span> <span class="parameter">value</span>: <span class="type">Int</span>, <span class="parameter">min</span> <span class="parameter">lower</span>: <span class="type">Int</span>, <span class="parameter">max</span> <span class="parameter">upper</span>: <span class="type">Int</span>) <span class="operator">-&gt;</span> <span class="type">Int</span> {
+	<span class="keyword">if</span> <span class="variable">value</span> <span class="operator">&lt;</span> <span class="variable">lower</span> { <span class="keyword">return</span> <span class="variable">lower</span> }
+	<span class="keyword">if</span> <span class="variable">value</span> <span class="operator">&gt;</span> <span class="variable">upper</span> { <span class="keyword">return</span> <span class="variable">upper</span> }
+	<span class="variable">value</span>
+}
+
+<span class="variable">clamp</span>(<span class="number">12</span>, <span class="parameter">min</span>: <span class="number">0</span>, <span class="parameter">max</span>: <span class="number">10</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='7' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>pub func clamp(_ value: Int, min lower: Int, max upper: Int) -&gt; Int {
+	if value &lt; lower { return lower }
+	if value &gt; upper { return upper }
+	value
+}
+
+clamp(12, min: 0, max: 10)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>The final expression is returned implicitly. <code>return</code> without a value returns <code>Void</code>.</p>
+<h2><a href="#argument-labels" aria-hidden="true" class="anchor" id="argument-labels"></a>Argument labels</h2>
+<p>The declaration determines each call-site label:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">positional</span>(<span class="parameter">x</span>) { <span class="variable">x</span> } <span class="comment">// positional(1)</span>
+<span class="keyword">func</span> <span class="function">labeled</span>(<span class="parameter">x</span>:) { <span class="variable">x</span> } <span class="comment">// labeled(x: 1)</span>
+<span class="keyword">func</span> <span class="function">typed</span>(<span class="parameter">x</span>: <span class="type">Int</span>) { <span class="variable">x</span> } <span class="comment">// typed(x: 1)</span>
+<span class="keyword">func</span> <span class="function">renamed</span>(<span class="parameter">with</span> <span class="parameter">value</span>: <span class="type">Int</span>) { <span class="variable">value</span> } <span class="comment">// renamed(with: 1)</span>
+<span class="keyword">func</span> <span class="function">bare</span>(<span class="parameter">_</span> <span class="parameter">value</span>: <span class="type">Int</span>) { <span class="variable">value</span> } <span class="comment">// bare(1)</span>
+
+(<span class="variable">positional</span>(<span class="number">1</span>), <span class="variable">labeled</span>(<span class="parameter">x</span>: <span class="number">2</span>), <span class="variable">typed</span>(<span class="parameter">x</span>: <span class="number">3</span>), <span class="variable">renamed</span>(<span class="parameter">with</span>: <span class="number">4</span>), <span class="variable">bare</span>(<span class="number">5</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='7' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func positional(x) { x } // positional(1)
+func labeled(x:) { x } // labeled(x: 1)
+func typed(x: Int) { x } // typed(x: 1)
+func renamed(with value: Int) { value } // renamed(with: 1)
+func bare(_ value: Int) { value } // bare(1)
+
+(positional(1), labeled(x: 2), typed(x: 3), renamed(with: 4), bare(5))</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>A bare inferred parameter is positional. Adding a colon chooses a same-name label. A typed parameter is labeled unless <code>_</code> suppresses it.</p>
+<h2><a href="#parameter-modes" aria-hidden="true" class="anchor" id="parameter-modes"></a>Parameter modes</h2>
+<p>Plain parameters are shared borrows by default. The complete set is:</p>
+<ul>
+<li><code>borrow value: T</code> - explicit shared borrow</li>
+<li><code>mut value: T</code> - exclusive, writable access</li>
+<li><code>consume value: T</code> - ownership supplied to the callee</li>
+<li><code>consume mut value: T</code> - owned and locally writable</li>
+</ul>
+<p>A <code>mut</code> argument must name a writable place and is marked at the call:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">bump</span>(<span class="modifier">mut</span> <span class="parameter">value</span>: <span class="type">Int</span>) {
+	<span class="variable">value</span> <span class="operator">=</span> <span class="variable">value</span> <span class="operator">+</span> <span class="number">1</span>
+}
+
+<span class="keyword">let</span> n <span class="operator">=</span> <span class="number">1</span>
+<span class="variable">bump</span>(<span class="parameter">value</span>: <span class="modifier">mut</span> <span class="variable">n</span>)
+<span class="variable">n</span> <span class="comment">// 2</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='7' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func bump(mut value: Int) {
+	value = value + 1
+}
+
+let n = 1
+bump(value: mut n)
+n // 2</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Ordinary and consuming arguments have no call-site marker. For shareable values, <code>consume</code> does not necessarily make the caller's name unusable: the compiler retains a snapshot when the caller has a later use.</p>
+<h2><a href="#closures" aria-hidden="true" class="anchor" id="closures"></a>Closures</h2>
+<p>Closures can use an explicit <code>func</code> form or a block form:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> increment <span class="operator">=</span> <span class="keyword">func</span>(<span class="parameter">x</span>: <span class="type">Int</span>) <span class="operator">-&gt;</span> Int { <span class="variable">x</span> <span class="operator">+</span> <span class="number">1</span> }
+
+<span class="variable">increment</span>(<span class="number">41</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let increment = func(x: Int) -&gt; Int { x + 1 }
+
+increment(41)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Block closures are especially convenient as call arguments. The <code>$0</code>, <code>$1</code>, and so on shorthand is available when the surrounding call supplies the closure's parameter types:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> doubled <span class="operator">=</span> [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>].<span class="property">map</span> { <span class="variable">$0</span> <span class="operator">*</span> <span class="number">2</span> }.<span class="property">to_array</span>()
+
+<span class="variable">print</span>(<span class="variable">doubled</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let doubled = [1, 2, 3].map { $0 * 2 }.to_array()
+
+print(doubled)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Functions can capture surrounding values. A final closure argument can move outside the parentheses:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">twice</span>(<span class="parameter">_</span> <span class="parameter">body</span>: () <span class="operator">-&gt;</span> <span class="type">Void</span>) {
+	<span class="variable">body</span>()
+	<span class="variable">body</span>()
+}
+
+<span class="variable">twice</span> { <span class="variable">print</span>(<span class="string">"hello"</span>) }</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='6' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func twice(_ body: () -&gt; Void) {
+	body()
+	body()
+}
+
+twice { print(&quot;hello&quot;) }</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Functions are values, so they can be stored in records and structs, passed as arguments, and returned. If a stored function uses an effect, such as asking for input, it uses the handler that is active when you call it. It does not permanently remember the handler from where it was created. See <a href="/manual/effects">Effects</a> for the full model.</p>
+<h2><a href="#methods" aria-hidden="true" class="anchor" id="methods"></a>Methods</h2>
+<p>Method signatures have an implicit <code>self</code>; do not declare it as a parameter. A plain method shares <code>self</code>, <code>mut func</code> may update it, <code>consuming func</code> takes it, and <code>static func</code> is called through the type:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">struct</span> <span class="type">Counter</span> {
+	<span class="keyword">let</span> <span class="property">value</span>: <span class="type">Int</span>
+
+	<span class="modifier">mut</span> <span class="keyword">func</span> <span class="function">increment</span>() {
+		<span class="type">self</span>.<span class="property">value</span> <span class="operator">=</span> <span class="type">self</span>.<span class="property">value</span> <span class="operator">+</span> <span class="number">1</span>
+	}
+
+	<span class="modifier">static</span> <span class="keyword">func</span> <span class="function">zero</span>() <span class="operator">-&gt;</span> <span class="type">Counter</span> {
+		<span class="type">Counter</span>(<span class="parameter">value</span>: <span class="number">0</span>)
+	}
+}
+
+<span class="type">Counter</span>.<span class="property">zero</span>().<span class="property">value</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='13' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>struct Counter {
+	let value: Int
+
+	mut func increment() {
+		self.value = self.value + 1
+	}
+
+	static func zero() -&gt; Counter {
+		Counter(value: 0)
+	}
+}
+
+Counter.zero().value</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/values-and-types">&larr; 2. Values and Types</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/data-and-patterns">4. Data and Patterns &rarr;</a>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037478"></script>
+    </main>
+  </body>
+</html>

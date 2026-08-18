@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - 5. Generics and Protocols</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037480" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>5. Generics and Protocols</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols" aria-current="page">5. Generics and Protocols</a><ol class="manual-outline-sections"><li><a href="#generic-functions-and-types">Generic functions and types</a></li>
+<li><a href="#protocols">Protocols</a></li>
+<li><a href="#extensions-and-conformances">Extensions and conformances</a></li>
+<li><a href="#protocol-arguments-and-associated-types">Protocol arguments and associated types</a></li>
+<li><a href="#existentials">Existentials</a></li>
+<li><a href="#static-value-generics">Static value generics</a></li>
+<li><a href="#further-reading">Further reading</a></li></ol></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/data-and-patterns">&larr; 4. Data and Patterns</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/effects">6. Effects &rarr;</a>
+          </nav>
+          <article class="page-content">
+            <p>Generics let one function or data type work with many kinds of value. Protocols say what those values must be able to do. Together, they let you reuse code without giving up type checking.</p>
+<h2><a href="#generic-functions-and-types" aria-hidden="true" class="anchor" id="generic-functions-and-types"></a>Generic functions and types</h2>
+<p>Type parameters use angle brackets:</p>
+<div class='runnable' data-accumulates='true' data-accumulate-group='generics'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">identity</span><span class="operator">&lt;</span>T<span class="operator">&gt;</span>(<span class="parameter">_</span> <span class="parameter">value</span>: <span class="type">T</span>) <span class="operator">-&gt;</span> <span class="type">T</span> {
+	<span class="variable">value</span>
+}
+
+<span class="keyword">struct</span> <span class="type">Box</span><span class="operator">&lt;</span><span class="type_parameter">Value</span><span class="operator">&gt;</span> {
+	<span class="keyword">let</span> <span class="property">value</span>: <span class="type">Value</span>
+}
+
+<span class="variable">identity</span>(<span class="number">42</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='9' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func identity&lt;T&gt;(_ value: T) -&gt; T {
+	value
+}
+
+struct Box&lt;Value&gt; {
+	let value: Value
+}
+
+identity(42)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>A bound may appear inline or in a <code>where</code> clause:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">smaller</span><span class="operator">&lt;</span>T: Comparable<span class="operator">&lt;</span>T<span class="operator">&gt;&gt;</span>(<span class="parameter">_</span> <span class="parameter">a</span>: <span class="type">T</span>, <span class="parameter">_</span> <span class="parameter">b</span>: <span class="type">T</span>) <span class="operator">-&gt;</span> <span class="type">T</span> {
+	<span class="keyword">if</span> <span class="variable">a</span> <span class="operator">&lt;</span> <span class="variable">b</span> {
+		<span class="variable">a</span>
+	} <span class="keyword">else</span> {
+		<span class="variable">b</span>
+	}
+}
+
+<span class="keyword">func</span> <span class="function">same</span><span class="operator">&lt;</span>T<span class="operator">&gt;</span>(<span class="parameter">_</span> <span class="parameter">a</span>: <span class="type">T</span>, <span class="parameter">_</span> <span class="parameter">b</span>: <span class="type">T</span>) <span class="operator">-&gt;</span> <span class="type">Bool</span> where T: Equatable<span class="operator">&lt;</span>T<span class="operator">&gt;</span> <span class="operator">&amp;</span> Copy {
+	<span class="variable">a</span> <span class="operator">==</span> <span class="variable">b</span>
+}
+
+(<span class="variable">smaller</span>(<span class="number">3</span>, <span class="number">7</span>), <span class="variable">same</span>(<span class="number">4</span>, <span class="number">4</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='13' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func smaller&lt;T: Comparable&lt;T&gt;&gt;(_ a: T, _ b: T) -&gt; T {
+	if a &lt; b {
+		a
+	} else {
+		b
+	}
+}
+
+func same&lt;T&gt;(_ a: T, _ b: T) -&gt; Bool where T: Equatable&lt;T&gt; &amp; Copy {
+	a == b
+}
+
+(smaller(3, 7), same(4, 4))</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Use <code>&amp;&amp;</code> between separate predicates and <code>&amp;</code> to compose protocols in one conformance bound.</p>
+<h2><a href="#protocols" aria-hidden="true" class="anchor" id="protocols"></a>Protocols</h2>
+<p>A protocol may require methods, initializers, static methods, and associated types. It may also provide default implementations:</p>
+<div class='code-block no-run' data-accumulates='true' data-accumulate-group='protocols' data-source='protocol Named {
+	func name() -&gt; String
+}
+
+protocol Pet {
+	associated Food: Named
+	func favorite_food() -&gt; Food
+
+	func description() -&gt; String {
+		&quot;a pet who likes &quot; + self.favorite_food().name()
+	}
+}'>
+            <pre class='code-highlight'><span class="keyword">protocol</span> <span class="interface">Named</span> {
+	<span class="keyword">func</span> name() <span class="operator">-&gt;</span> <span class="type">String</span>
+}
+
+<span class="keyword">protocol</span> <span class="interface">Pet</span> {
+	<span class="keyword">associated</span> <span class="type_parameter">Food</span>: <span class="type">Named</span>
+	<span class="keyword">func</span> favorite_food() <span class="operator">-&gt;</span> <span class="type">Food</span>
+
+	<span class="keyword">func</span> <span class="function">description</span>() <span class="operator">-&gt;</span> <span class="type">String</span> {
+		<span class="string">"a pet who likes "</span> <span class="operator">+</span> <span class="type">self</span>.<span class="property">favorite_food</span>().<span class="property">name</span>()
+	}
+}</pre>
+        </div>
+        
+<p><code>Self</code> names the conforming type.</p>
+<h2><a href="#extensions-and-conformances" aria-hidden="true" class="anchor" id="extensions-and-conformances"></a>Extensions and conformances</h2>
+<p>An extension adds methods or declares conformance:</p>
+<div class='runnable' data-accumulates='true' data-accumulate-group='protocols'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">struct</span> <span class="type">Kibble</span> {}
+
+<span class="keyword">extend</span> <span class="type">Kibble</span>: <span class="type">Named</span> {
+	<span class="keyword">func</span> <span class="function">name</span>() <span class="operator">-&gt;</span> <span class="type">String</span> { <span class="string">"kibble"</span> }
+}
+
+<span class="keyword">struct</span> <span class="type">Cat</span> {}
+
+<span class="keyword">extend</span> <span class="type">Cat</span>: <span class="type">Pet</span> {
+	<span class="keyword">typealias</span> <span class="type">Food</span> <span class="operator">=</span> <span class="type">Kibble</span>
+	<span class="keyword">func</span> <span class="function">favorite_food</span>() <span class="operator">-&gt;</span> <span class="type">Kibble</span> {
+		<span class="type">Kibble</span>()
+	}
+}
+
+<span class="variable">print</span>(<span class="type">Cat</span>().<span class="property">description</span>())</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='16' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>struct Kibble {}
+
+extend Kibble: Named {
+	func name() -&gt; String { &quot;kibble&quot; }
+}
+
+struct Cat {}
+
+extend Cat: Pet {
+	typealias Food = Kibble
+	func favorite_food() -&gt; Kibble {
+		Kibble()
+	}
+}
+
+print(Cat().description())</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Generic extensions bind their parameters explicitly:</p>
+<div class='runnable' data-accumulates='true' data-accumulate-group='generics'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">extend</span><span class="operator">&lt;</span><span class="type_parameter">T</span><span class="operator">&gt;</span> <span class="type">Box</span><span class="operator">&lt;</span><span class="type">T</span><span class="operator">&gt;</span> {
+	<span class="keyword">func</span> <span class="function">get</span>() <span class="operator">-&gt;</span> <span class="type">T</span> { <span class="type">self</span>.<span class="property">value</span> }
+}
+
+<span class="type">Box</span>(<span class="parameter">value</span>: <span class="number">42</span>).<span class="property">get</span>()</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>extend&lt;T&gt; Box&lt;T&gt; {
+	func get() -&gt; T { self.value }
+}
+
+Box(value: 42).get()</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>A protocol can also be extended, adding a method to every conformer that meets the extension's constraints.</p>
+<h2><a href="#protocol-arguments-and-associated-types" aria-hidden="true" class="anchor" id="protocol-arguments-and-associated-types"></a>Protocol arguments and associated types</h2>
+<p>Protocol arguments distinguish different conformances, as in <code>Equatable&lt;RHS&gt;</code> or <code>Add&lt;RHS&gt;</code>. Associated types describe a type selected by a conformance, as <code>Iterator.Element</code> does. Associated equality constraints use <code>==</code> in a <code>where</code> clause.</p>
+<p>Protocols and generic parameters may define defaults, for example:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">protocol</span> <span class="interface">EqualTo</span><span class="operator">&lt;</span><span class="type_parameter">RHS</span> <span class="operator">=</span> <span class="type">Self</span><span class="operator">&gt;</span> {
+	<span class="keyword">func</span> equals(<span class="parameter">_</span> <span class="parameter">other</span>: <span class="type">RHS</span>) <span class="operator">-&gt;</span> <span class="type">Bool</span>
+}</pre>
+        </div>
+        
+<h2><a href="#existentials" aria-hidden="true" class="anchor" id="existentials"></a>Existentials</h2>
+<p><code>any P</code> stores a value behind an object-safe protocol interface:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> item: <span class="modifier">any</span> <span class="type">Showable</span> <span class="operator">=</span> (<span class="number">42</span> <span class="modifier">as</span> <span class="modifier">any</span> <span class="type">Showable</span>)
+<span class="variable">print</span>(<span class="variable">item</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='2' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let item: any Showable = (42 as any Showable)
+print(item)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Associated bindings can be written in the existential type:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">typealias</span> <span class="type">IntIterator</span> <span class="operator">=</span> <span class="modifier">any</span> <span class="type">Iterator</span><span class="operator">&lt;</span><span class="type">Element</span> <span class="operator">=</span> <span class="type">Int</span><span class="operator">&gt;</span></pre>
+        </div>
+        
+<p>A protocol is object-safe when its requirements keep <code>Self</code> in receiver position in the ways supported by the compiler. Use a generic parameter when the concrete type should remain known; use <code>any P</code> when different conforming types must share one runtime representation.</p>
+<h2><a href="#static-value-generics" aria-hidden="true" class="anchor" id="static-value-generics"></a>Static value generics</h2>
+<p>A <code>static</code> generic parameter is a compile-time value and participates in type identity:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">length</span><span class="operator">&lt;</span><span class="modifier">static</span> N: Int<span class="operator">&gt;</span>(<span class="parameter">_</span> <span class="parameter">values</span>: [<span class="type">Int</span>; <span class="type">N</span>]) <span class="operator">-&gt;</span> <span class="type">Int</span> {
+	<span class="type">N</span>
+}
+
+<span class="keyword">let</span> pair: [<span class="type">Int</span>; <span class="number">2</span>] <span class="operator">=</span> [<span class="number">10</span>, <span class="number">20</span>]
+<span class="variable">print</span>(<span class="variable">length</span>(<span class="variable">pair</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='6' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func length&lt;static N: Int&gt;(_ values: [Int; N]) -&gt; Int {
+	N
+}
+
+let pair: [Int; 2] = [10, 20]
+print(length(pair))</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Static constraints use <code>==</code>, <code>&lt;</code>, and <code>&lt;=</code>. Type arguments accept a limited set of compile-time expressions, so types such as <code>Matrix&lt;N + 1, (M) * 2&gt;</code> are possible while type checking remains predictable.</p>
+<h2><a href="#further-reading" aria-hidden="true" class="anchor" id="further-reading"></a>Further reading</h2>
+<p>TalkTalk's protocols draw from type classes and qualified types:</p>
+<ul>
+<li><a href="https://github.com/nakajima/talk/blob/main/papers/wadler-blott-1989-ad-hoc-polymorphism.pdf">How to make ad-hoc polymorphism less ad hoc</a> introduces type classes.</li>
+<li><a href="https://github.com/nakajima/talk/blob/main/papers/jones-1992-theory-of-qualified-types.pdf">A theory of qualified types</a> develops the constraint system behind them.</li>
+<li><a href="https://github.com/nakajima/talk/blob/main/papers/oliveira-moors-odersky-2010-type-classes-as-objects-and-implicits.pdf">Type classes as objects and implicits</a> compares closely related implementation strategies.</li>
+</ul>
+<p>TalkTalk uses both protocol arguments and associated types. <a href="https://github.com/nakajima/talk/blob/main/docs/protocol-arguments-vs-associated-types.md">Protocol arguments versus associated types</a> explains why they are separate features in this language.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/data-and-patterns">&larr; 4. Data and Patterns</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/effects">6. Effects &rarr;</a>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037480"></script>
+    </main>
+  </body>
+</html>

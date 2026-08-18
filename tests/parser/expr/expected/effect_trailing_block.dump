@@ -1,0 +1,25 @@
+tokens:
+  EffectName @0..4 "'map"
+  Less @4..5 "<"
+  Identifier @5..8 "Int"
+  Greater @8..9 ">"
+  LeftParen @9..10 "("
+  Identifier @10..15 "value"
+  Colon @15..16 ":"
+  Int @17..18 "1"
+  RightParen @18..19 ")"
+  LeftBrace @20..21 "{"
+  Identifier @22..26 "item"
+  In @27..29 "in"
+  Identifier @30..34 "item"
+  RightBrace @35..36 "}"
+  Newline @36..37
+tree:
+  Expr::CallEffect @0..36 "'map<Int>(value: 1) { item in item }"
+    TypeAnnotation::Nominal @5..8 "Int"
+    CallArg @10..18 "value: 1"
+      Expr::LiteralInt @17..18 "1"
+    Block @20..36 "{ item in item }"
+      Parameter @27..26
+      Stmt::Expr @30..34 "item"
+        Expr::Variable @30..34 "item"

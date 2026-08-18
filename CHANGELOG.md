@@ -81,10 +81,10 @@ while fixing several type-checker and lexer correctness bugs.
 - **Tuple element access.** Tuple values support positional members such as
   `.0` and `.1`, including chained access such as `nested.0.1` and borrowed
   tuple receivers. Existing tuple destructuring continues to work.
-- **Ownership-aware `clone()` methods.** `Copy` and `CheapClone` now declare a
+- **Ownership-aware `clone()` methods.** `Copy` and `Clone` now declare a
   real `clone() -> Self` protocol method. The compiler supplies the operation
   for marker conformances: `Copy` values duplicate without runtime work, while
-  `CheapClone` values retain their shared storage. Declared methods still take
+  `Clone` values retain their shared storage. Declared methods still take
   precedence over the marker implementation.
 - **`Result<Success, Failure>`.** Core now provides `.ok` and `.error` cases
   with `is_ok()` and `is_error()` helpers. Results conditionally conform to
@@ -146,9 +146,9 @@ while fixing several type-checker and lexer correctness bugs.
 - **Package-local imports work in tests.** Test files under either `tests/` or
   `src/` can resolve `package::module` imports against the package source root,
   while `self::` and `super::` remain relative to the importing test file.
-- **Cheap cloning arrays does not require cloneable elements.** Array cloning
+- **Cloning arrays does not require cloneable elements.** Array cloning
   retains the shared buffer and does not visit its elements, allowing aggregate
-  types containing arrays to conform to `CheapClone` when otherwise valid.
+  types containing arrays to conform to `Clone` when otherwise valid.
 
 ### Fixed
 
@@ -409,7 +409,7 @@ forces a move (disabling automatic cloning), `f(copy x)` forces an O(1)
 clone, `f(borrow x)`/`f(mut x)` assert the parameter's mode.
 
 Shared borrows of Copy-grade types erase at elaboration (`&Int` never
-surfaces), extending ADR 0014. Value-semantic (CheapClone) arguments
+surfaces), extending ADR 0014. Value-semantic (Clone) arguments
 still coerce borrowed→owned with an inserted retain; generic `T` does
 not implicitly clone, so identity-style functions now spell
 `consume x: T`. Rvalue aggregates passed as call operands get structural
@@ -941,13 +941,13 @@ compiled capability-passing with zero-cost tail resumes.
   `Copy` types erase**: `&Int` and `Int` are interchangeable everywhere —
   `sum = sum + arr.get(j)` just works, and a protocol method on `Int` can
   return owned `self`.
-- **`CheapClone` marker protocol and silent clones** — types whose clone
+- **`Clone` marker protocol and silent clones** — types whose clone
   is an O(1) refcounted-buffer retain (`String`, `Array`, `Storage`,
-  `ByteStorage`). Where an owned `CheapClone` value is needed but only a
+  `ByteStorage`). Where an owned `Clone` value is needed but only a
   borrowed one is available, the compiler clones silently instead of
   erroring: extracting an owned field from a borrowed value
   (`person.name` from `person: &Person`), or passing a `&String` to a
-  `String` parameter. Non-`CheapClone` types still report "cannot move
+  `String` parameter. Non-`Clone` types still report "cannot move
   out of borrowed value".
 - **Unique types `*T`** — a value that is statically the sole reference
   to its contents. Unique values always move (never copy, never silently
@@ -1011,10 +1011,10 @@ classification is otherwise derived from a type's structure and grade.
   leak.** Regions behave like arenas: unlinking never frees early.
   Storing a heap reference anywhere during teardown is a runtime error.
 - **Reading an owned value out of a heap struct clones it** (the same
-  silent CheapClone rule as borrowed-field extraction): `node.name` hands
+  silent Clone rule as borrowed-field extraction): `node.name` hands
   you an independently-owned `String` backed by the same buffer. Generic
-  fields extract per instantiation: CheapClone types clone, copy types
-  copy, and owned non-CheapClone instantiations are compile errors.
+  fields extract per instantiation: Clone types clone, copy types
+  copy, and owned non-Clone instantiations are compile errors.
 - **`Dict<Value>` in core** — a growable string-keyed dictionary built on
   a heap node chain (`insert`/`get`/`count`); a placeholder for a hash
   table.
@@ -1074,7 +1074,7 @@ it unwinds (the same teardown fence tracked under Testing).
 - A heap reference captured by an escaping closure.
 - A heap struct packed as `any P`.
 - Heap types inside raw-storage containers (`Array<Node>`).
-- `'heap` combined with `'linear`, `Copy`, or `CheapClone`.
+- `'heap` combined with `'linear`, `Copy`, or `Clone`.
 - Auto-derived `Showable` for `'heap` structs (a structural walk would
   cycle on graphs) — write an explicit conformance.
 

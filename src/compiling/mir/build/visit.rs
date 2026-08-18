@@ -141,7 +141,7 @@ pub(crate) fn visit_inst(inst: &mut Inst, visit: &mut impl FnMut(Slot, &mut Loca
         | Inst::MakeCont { dest }
         | Inst::GetFloor { dest }
         | Inst::GlobalLoad { dest, .. } => visit(Slot::Def, dest),
-        Inst::Alloc { dest, bytes } => {
+        Inst::Alloc { dest, bytes, .. } => {
             sink(bytes, visit);
             visit(Slot::Def, dest);
         }

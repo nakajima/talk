@@ -146,7 +146,7 @@ impl<'a> TypecheckSession<'a> {
     /// The borrowed-to-owned judgment for an implicit existential pack's
     /// payload: the pack accepts only the value-copy tiers of the one
     /// donation judgment — a borrow of a Copy payload is a value copy, a
-    /// CheapClone payload retains (recorded in `coerce_clones` for
+    /// Clone payload retains (recorded in `coerce_clones` for
     /// lowering), and anything else — retainable, linear, or uniquely
     /// owned — is an error. Returns the owned payload type the pack
     /// carries forward.
@@ -157,7 +157,7 @@ impl<'a> TypecheckSession<'a> {
         };
         match donation_tier(&self.catalog, &inner) {
             Some(Donation::Copy) => *inner,
-            Some(Donation::CheapClone) => {
+            Some(Donation::Clone) => {
                 self.artifacts.coerce_clones.insert(node);
                 *inner
             }
@@ -195,7 +195,7 @@ impl<'a> TypecheckSession<'a> {
         }
         // Call-site marker checks (ADR 0038): typing owns marker
         // legality; lowering only realizes the already-checked use.
-        // `copy` needs Copy/CheapClone evidence; `mut` and `borrow`
+        // `copy` needs Copy/Clone evidence; `mut` and `borrow`
         // must agree with the callee's parameter mode.
         for (node, slot, mode) in std::mem::take(&mut self.artifacts.marked_args) {
             use crate::parsing::node_kinds::call_arg::ArgMode;
@@ -239,7 +239,7 @@ impl<'a> TypecheckSession<'a> {
                         self.diagnostics.errors.push((
                             TypeError::NotConforming {
                                 ty: rendered,
-                                protocol: "Copy or CheapClone".to_string(),
+                                protocol: "Copy or Clone".to_string(),
                             },
                             node,
                         ));
@@ -560,7 +560,7 @@ impl<'a> TypecheckSession<'a> {
             let payload = self.final_ty(&pack.payload);
             // An implicit pack OWNS its payload, so a borrowed source gets
             // the same judgment as every other borrowed-to-owned coercion:
-            // a free copy (Copy), an O(1) retain (CheapClone, recorded for
+            // a free copy (Copy), an O(1) retain (Clone, recorded for
             // lowering at the pack node), or a type error. Without this a
             // borrowed payload launders into an owned `any P` — and a
             // borrowed `'linear` value stays consumable at the call site

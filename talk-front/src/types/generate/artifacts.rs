@@ -40,7 +40,7 @@ pub(super) struct TypeArtifacts {
     /// conversion (the typed-tree build wraps each in a `.into()` call).
     pub(super) into_coercions: FxHashMap<NodeID, crate::types::output::IntoCoercion>,
     /// Mode-marked call arguments awaiting the post-solve marker checks
-    /// (ADR 0038): `copy` demands Copy or CheapClone evidence; `mut` and
+    /// (ADR 0038): `copy` demands Copy or Clone evidence; `mut` and
     /// `borrow` must agree with the callee's parameter mode.
     pub(super) marked_args: Vec<(
         NodeID,

@@ -285,7 +285,7 @@ func max_bound_var_in_expr(expr: &Expr) -> Int {
 		.as_cast(operands, _) -> max_bound_var_in_exprs(exprs: operands),
 		.propagate(operands) -> max_bound_var_in_exprs(exprs: operands),
 		.force_unwrap(operands) -> max_bound_var_in_exprs(exprs: operands),
-		.call_effect(_, _, _, _, args) -> {
+		.call_effect(_, _, _, _, args, _) -> {
 			let best = -1
 			for arg in args {
 				best = max_int(a: best, b: max_bound_var_in_expr(expr: arg.value))
@@ -1489,8 +1489,10 @@ struct Parser {
 		Expr(kind: .syntax_quote(self.source.clone(), canonical, splices, category), start: start.span.lower, end: self.span_end())
 	}
 
-	// `'effect(args)`: an effect call. The node's span includes the sigil;
-	// the recorded effect-name span uses the token's lexeme.
+	// `'effect(args) { ... }`: an effect call with an optional trailing
+	// closure. The node's span includes the sigil; the recorded effect-name
+	// span uses the token's lexeme. Like ordinary calls, an effect with no
+	// other arguments may omit its parentheses before the trailing block.
 	mut func effect_callee() -> Expr {
 		let tok = self.current()
 		self.advance()
@@ -1501,20 +1503,29 @@ struct Parser {
 			type_args = self.generic_args_list()
 			if self.is_failed() { return dummy_expr() }
 		}
-		self.consume(kind: .left_paren)
-		if self.is_failed() { return dummy_expr() }
 		let args: [CallArg] = []
-		if self.did_match(kind: .right_paren) {
-			// Empty argument list.
-		} else {
-			if self.at_delimiter_recovery_boundary() {
-				self.record_expected(kind: .right_paren)
+		if self.did_match(kind: .left_paren) {
+			if self.did_match(kind: .right_paren) {
+				// Empty argument list.
 			} else {
-				args = self.arguments()
-				self.consume_or_recover_closer_after_newline(kind: .right_paren)
+				if self.at_delimiter_recovery_boundary() {
+					self.record_expected(kind: .right_paren)
+				} else {
+					args = self.arguments()
+					self.consume_or_recover_closer_after_newline(kind: .right_paren)
+				}
+			}
+		} else {
+			if self.allows_trailing_blocks() == false || self.peek_is(kind: .left_brace) == false {
+				self.consume(kind: .left_paren)
+				return dummy_expr()
 			}
 		}
-		Expr(kind: .call_effect(name, tok.lexeme.lower, tok.lexeme.upper, type_args, args), start: tok.span.lower, end: self.span_end())
+		let trailing: [Block] = []
+		if self.allows_trailing_blocks() && self.peek_is(kind: .left_brace) {
+			trailing.push(self.closure_block())
+		}
+		Expr(kind: .call_effect(name, tok.lexeme.lower, tok.lexeme.upper, type_args, args, trailing), start: tok.span.lower, end: self.span_end())
 	}
 
 	// A macro-template binder (`$x`): a variable whose name and node span
@@ -5575,7 +5586,7 @@ func meta_expr(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: 
 				index = index + 1
 			}
 		},
-		.call_effect(_, _, _, type_args, args) -> {
+		.call_effect(_, _, _, type_args, args, trailing) -> {
 			for arg in type_args {
 				meta_generic_arg(ctx: ctx, metas: metas, claimed: claimed, live: live, arg: arg)
 			}
@@ -5583,6 +5594,9 @@ func meta_expr(ctx: &MetaCtx, mut metas: [NodeMeta], mut claimed: [Bool], live: 
 				let arg_slot = emit_meta(ctx: ctx, metas: metas, live: live, start: arg.start, end: arg.end)
 				meta_expr(ctx: ctx, metas: metas, claimed: claimed, live: live, expr: arg.value)
 				claim_slot(ctx: ctx, metas: metas, claimed: claimed, slot: arg_slot, start: arg.start, end: arg.end)
+			}
+			for block in trailing {
+				meta_block(ctx: ctx, metas: metas, claimed: claimed, live: live, block: block)
 			}
 		},
 		.record_literal(fields, spread) -> {

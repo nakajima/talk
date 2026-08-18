@@ -1,11 +1,15 @@
 // ADR 0058/0067: structured parallelism over plain closures — one
 // Send-checked worker per job, outputs in argument order, no futures.
-use task::{ parallel_run }
+use task::{ parallel_run, sleep }
 
 func square(consume n: Int) -> Int {
+	// parallel_run supplies this worker's standard wait handler. The
+	// duration also catches workers accidentally using a synthetic clock.
+	sleep(.milliseconds(200))
 	n * n
 }
 
+let started = Instant.now()
 let jobs: [Int] = []
 let i = 1
 loop i <= 8 {
@@ -18,3 +22,11 @@ loop j < outputs.count {
 	print(outputs.get(j))
 	j = j + 1
 }
+let elapsed = Instant.now().since(started)
+print(
+	if elapsed < Duration.seconds(5) {
+		1
+	} else {
+		0
+	}
+)

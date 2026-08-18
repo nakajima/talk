@@ -427,7 +427,7 @@ impl TypedTreeBuilder<'_> {
     }
 
     fn is_marker_clone_requirement(&self, symbol: Symbol) -> bool {
-        [Symbol::Copy, Symbol::CheapClone]
+        [Symbol::Copy, Symbol::Clone]
             .into_iter()
             .filter_map(|protocol| self.types.catalog.requirement_in(protocol, "clone"))
             .any(|(_, requirement)| requirement.symbol == symbol)

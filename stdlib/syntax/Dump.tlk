@@ -70,7 +70,7 @@ func expr_label(kind: &ExprKind) -> String {
 		.propagate(_) -> "Expr::Propagate",
 		.force_unwrap(_) -> "Expr::ForceUnwrap",
 		.unreachable_expr -> "Expr::Unreachable",
-		.call_effect(_, _, _, _, _) -> "Expr::CallEffect",
+		.call_effect(_, _, _, _, _, _) -> "Expr::CallEffect",
 		.record_literal(_, _) -> "Expr::RecordLiteral",
 		.inline_ir(_, _) -> "Expr::InlineIR",
 		.macro_call(_, _, _, _, _, _, _) -> "Expr::MacroCall",
@@ -195,12 +195,15 @@ func render_expr(mut buf: [Byte], view: UTF8View, expr: &Expr, depth: Int) -> Vo
 			render_expr(buf: buf, view: view, expr: operand, depth: depth + 1)
 		}
 	}
-	if let .call_effect(_, _, _, type_args, args) = expr.kind {
+	if let .call_effect(_, _, _, type_args, args, trailing) = expr.kind {
 		for type_arg in type_args {
 			render_generic_arg(buf: buf, view: view, arg: type_arg, depth: depth + 1)
 		}
 		for arg in args {
 			render_call_arg(buf: buf, view: view, arg: arg, depth: depth + 1)
+		}
+		for block in trailing {
+			render_block(buf: buf, view: view, block: block, depth: depth + 1)
 		}
 	}
 	if let .record_literal(fields, spread) = expr.kind {

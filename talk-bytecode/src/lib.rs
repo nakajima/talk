@@ -70,13 +70,16 @@ pub fn compile(program: &talk_mir::Module) -> Result<Executable, Error> {
 
 impl Executable {
     /// Wrap an already-decoded VM module (the procedural macro host's
-    /// artifact path). Display names default to structural rendering;
-    /// the String symbol for host string arguments comes from the
+    /// artifact path). User-defined values default to structural
+    /// rendering; core Array keeps its well-known rendering identity.
+    /// The String symbol for host string arguments comes from the
     /// caller's well-known identity mapping.
     pub fn from_vm_module(module: talk_vm::Module, string_symbol: talk_vm::symbol::Symbol) -> Self {
+        let mut names = ValueNames::default();
+        names.array_struct = Some(vm_symbol(talk_mir::MirSymbol::ARRAY));
         Self {
             module,
-            names: ValueNames::default(),
+            names,
             adapter: AdapterStats::default(),
             string_symbol,
         }
@@ -197,6 +200,7 @@ fn value_names(program: &talk_mir::Module) -> ValueNames {
         }
     }
     names.string_struct = Some(vm_symbol(program.string_symbol));
+    names.array_struct = Some(vm_symbol(talk_mir::MirSymbol::ARRAY));
     names
 }
 

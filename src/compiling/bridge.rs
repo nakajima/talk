@@ -1199,6 +1199,13 @@ impl ResultAdapter<'_, '_> {
                 effect_name_span: self.span(int(&p[1])?, int(&p[2])?)?,
                 type_args: self.generic_args(&p[3])?,
                 args: self.call_args(&p[4])?,
+                // Stage 1 of the bootstrap is parsed by the checked-in
+                // frontend, whose pre-change variant has no block payload.
+                trailing_block: p
+                    .get(5)
+                    .map(|value| self.block_slot(value))
+                    .transpose()?
+                    .flatten(),
             },
             "record_literal" => {
                 let mut record_fields = Vec::new();

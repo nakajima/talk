@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - 12. Testing</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037485" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>12. Testing</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing" aria-current="page">12. Testing</a><ol class="manual-outline-sections"><li><a href="#a-first-test">A first test</a></li>
+<li><a href="#assertions">Assertions</a></li>
+<li><a href="#selecting-and-automating-tests">Selecting and automating tests</a></li>
+<li><a href="#testing-effects-and-failures">Testing effects and failures</a></li>
+<li><a href="#core-and-standard-library-tests">Core and standard-library tests</a></li></ol></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/concurrency">&larr; 11. Concurrency</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/standard-library">13. The Standard Library &rarr;</a>
+          </nav>
+          <article class="page-content">
+            <p>Put tests in files ending with <code>.test.tlk</code>, then run <code>talk test</code>. TalkTalk finds the tests in your package, runs them, and reports which assertions passed or failed.</p>
+<h2><a href="#a-first-test" aria-hidden="true" class="anchor" id="a-first-test"></a>A first test</h2>
+<p>A generated package contains:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="variable">test</span>(<span class="string">"example"</span>) {
+	<span class="operator">@</span><span class="macro">assert</span>(<span class="number">1</span> <span class="operator">+</span> <span class="number">1</span> <span class="operator">==</span> <span class="number">2</span>)
+}</pre>
+        </div>
+        
+<p>Run it with:</p>
+<pre><code class="language-sh">talk test
+</code></pre>
+<p>The runner discovers <code>.test.tlk</code> files under the package's <code>tests/</code> and source trees. You can also name files or directories explicitly:</p>
+<pre><code class="language-sh">talk test tests/math.test.tlk
+talk test tests/
+</code></pre>
+<h2><a href="#assertions" aria-hidden="true" class="anchor" id="assertions"></a>Assertions</h2>
+<p><code>@assert</code> is the normal assertion form. Because it is a macro, a failure can include the original condition text.</p>
+<p>The test prelude also exposes functions for dynamically built checks:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="variable">test</span>(<span class="string">"positive"</span>) {
+	<span class="variable">assert</span>(<span class="number">4</span> <span class="operator">&gt;</span> <span class="number">0</span>)
+	<span class="variable">assertMessage</span>(<span class="number">2</span> <span class="operator">+</span> <span class="number">2</span> <span class="operator">==</span> <span class="number">4</span>, <span class="string">"addition should work"</span>)
+}</pre>
+        </div>
+        
+<p>A failed assertion records a test failure rather than panicking the entire test runner.</p>
+<h2><a href="#selecting-and-automating-tests" aria-hidden="true" class="anchor" id="selecting-and-automating-tests"></a>Selecting and automating tests</h2>
+<p>Run one exact test name:</p>
+<pre><code class="language-sh">talk test --filter positive
+</code></pre>
+<p>Emit machine-readable output for editor or CI integration:</p>
+<pre><code class="language-sh">talk test --json
+</code></pre>
+<p>Compilation diagnostics fail the test command before test execution. A finished run exits nonzero when any assertion failed.</p>
+<h2><a href="#testing-effects-and-failures" aria-hidden="true" class="anchor" id="testing-effects-and-failures"></a>Testing effects and failures</h2>
+<p>Tests can define and handle effects like any other source. Prefer exposing side effects behind a small effect and installing a deterministic handler in a test; this keeps the function under test in direct style while avoiding a real host dependency.</p>
+<p>Cleanup remains deterministic in tests. <code>Deinit</code> hooks run on normal scope exit, abortive effect paths, and cancellation, so resource-lifecycle behavior can be tested directly.</p>
+<h2><a href="#core-and-standard-library-tests" aria-hidden="true" class="anchor" id="core-and-standard-library-tests"></a>Core and standard-library tests</h2>
+<p>The repository keeps core tests beside their modules as <code>core/*.test.tlk</code> and standard-library tests as <code>stdlib/*.test.tlk</code>. Reference programs and expected diagnostics under <code>tests/reference/</code> pin language behavior in more detail than application tests normally need.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/concurrency">&larr; 11. Concurrency</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/standard-library">13. The Standard Library &rarr;</a>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037485"></script>
+    </main>
+  </body>
+</html>

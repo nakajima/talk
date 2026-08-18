@@ -389,6 +389,29 @@ let value = Foo()";
             format_code("macro choose($yes,$no) {$yes}\n@choose(1,2)", 80),
             "macro choose($yes, $no) { $yes }\n@choose(1, 2)"
         );
+        let multiline = "macro unless($condition, $body) {\n\tif $condition {\n\t\t()\n\t} else {\n\t\t$body\n\t}\n}";
+        assert_eq!(
+            format_code(
+                "macro unless($condition, $body) { if $condition {\n        ()\n    } else {\n        $body\n    } }",
+                80
+            ),
+            multiline
+        );
+        assert_eq!(format_code(multiline, 80), multiline);
+        assert_eq!(
+            format_code("macro documented($value) {\n    // Keep this.\n    $value\n}", 80),
+            "macro documented($value) {\n\t// Keep this.\n\t$value\n}"
+        );
+        let multiline_string = "macro text() {\n\t\"hello\n  world\"\n}";
+        assert_eq!(
+            format_code("macro text() {\n    \"hello\n  world\"\n}", 80),
+            multiline_string
+        );
+        assert_eq!(
+            format_code(multiline_string, 80),
+            multiline_string,
+            "indentation inside a multiline string is token content"
+        );
         assert_eq!(
             format_code("@html { div class=@card { <not talk> } }", 80),
             "@html { div class=@card { <not talk> } }"
@@ -886,6 +909,14 @@ let value = Foo()";
 
         // Effect calls with labels
         assert_eq!(format_code("'emit(value: 123)", 80), "'emit(value: 123)");
+
+        // Effect calls use the same trailing-block formatting as functions.
+        assert_eq!(format_code("'emit(){ 1 }", 80), "'emit { 1 }");
+        assert_eq!(format_code("'emit(123){ $0 }", 80), "'emit(123) { $0 }");
+        assert_eq!(
+            format_code("'emit<Int>() { value in value }", 80),
+            "'emit<Int> { value in value }"
+        );
     }
 
     #[test]

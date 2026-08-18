@@ -19,7 +19,7 @@ problems fall out:
 - **Borrowed operands need an escape hatch.** Iterators yield
   `&Element`, so `xs.iter().index(needle)` compares borrows. Feeding a
   borrow to a by-value parameter leans on the copy-out-of-borrow
-  coercions (Copy erasure, CheapClone retain) — which cover scalars and
+  coercions (Copy erasure, Clone retain) — which cover scalars and
   buffers but not plain structs, where the call is only accepted via the
   caller's `Equatable<Element>` given plus runtime borrow erasure.
 - **The by-value witness is an ownership leak.** A conforming

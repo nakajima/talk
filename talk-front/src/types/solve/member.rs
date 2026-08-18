@@ -678,8 +678,8 @@ impl<'s> Solver<'s> {
                 // `clone` is a real marker-protocol requirement, but its
                 // implementation is compiler-provided because retaining an
                 // arbitrary Self is not expressible in user code.
-                let clone_protocol = if self.catalog.cheap_clone_rows(symbol, &args) {
-                    Some(Symbol::CheapClone)
+                let clone_protocol = if self.catalog.clone_rows(symbol, &args) {
+                    Some(Symbol::Clone)
                 } else if self.catalog.grade_of_application(symbol, &args)
                     == crate::types::catalog::Grade::Copy
                 {
@@ -991,7 +991,7 @@ impl<'s> Solver<'s> {
                     }
                     return None;
                 }
-                // Copy/CheapClone both declare `clone`, but neither should
+                // Copy/Clone both declare `clone`, but neither should
                 // make the method visible on a type that conforms to neither.
                 if label_str == "clone" && clone_protocol.is_none() {
                     let rendered = self.store.render(&diagnostic_receiver);

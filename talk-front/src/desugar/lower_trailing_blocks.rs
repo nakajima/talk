@@ -16,7 +16,8 @@ use crate::{
 };
 
 /// Lowers a call's trailing block to an ordinary anonymous-function
-/// argument: `foo { x in body }` becomes `foo(func(x) { body })`.
+/// argument: `foo { x in body }` becomes `foo(func(x) { body })`. Effect
+/// performs use the same syntax and lower to the same argument shape.
 ///
 /// A trailing block is nothing but closure syntax, so it desugars to the one
 /// closure form (`ExprKind::Func`) and every later phase — name resolution,
@@ -50,13 +51,18 @@ impl LowerTrailingBlocks {
     }
 
     fn enter_expr(&mut self, expr: &mut Expr) {
-        let ExprKind::Call {
-            args,
-            trailing_block,
-            ..
-        } = &mut expr.kind
-        else {
-            return;
+        let (args, trailing_block) = match &mut expr.kind {
+            ExprKind::Call {
+                args,
+                trailing_block,
+                ..
+            }
+            | ExprKind::CallEffect {
+                args,
+                trailing_block,
+                ..
+            } => (args, trailing_block),
+            _ => return,
         };
         let Some(mut block) = trailing_block.take() else {
             return;

@@ -21,8 +21,8 @@ use crate::{
 use indexmap::IndexMap;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::VecDeque;
-use std::hash::Hash;
 use std::sync::Arc;
+use std::hash::Hash;
 use std::{
     path::{Path, PathBuf},
     rc::Rc,
@@ -757,15 +757,13 @@ impl Driver<Parsed> {
         let procedural_macros = self.phase.procedural_macros.local_artifact();
         let file_dependencies = self.phase.file_dependencies;
         let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
-        self.phase
-            .diagnostics
-            .extend(crate::macro_expansion::expand_macros_with_sources(
-                &mut asts,
-                &self.phase.source_texts,
-                &crate::procedural_macros::ToolchainMacroHost {
-                    procedural: Some(&self.phase.procedural_macros),
-                },
-            ));
+        self.phase.diagnostics.extend(crate::macro_expansion::expand_macros_with_sources(
+            &mut asts,
+            &self.phase.source_texts,
+            &crate::procedural_macros::ToolchainMacroHost {
+                procedural: Some(&self.phase.procedural_macros),
+            },
+        ));
         crate::desugar::desugar(&mut asts);
         let (asts, resolved) = resolver.resolve(asts);
         let asts = paths.into_iter().zip(asts).collect();
@@ -1559,9 +1557,9 @@ pub mod tests {
         // Two full pipelines over the same source must encode identical
         // images — the in-process half of the ADR 0043 fixed-point
         // requirement (the cross-process half lives in talk_tests.rs).
-        let source = "pub func shout(text: String) -> String { text + \"!\" }\n\npub func nap() -> Int { sleep(ms: 0) }\n";
+        let source = "pub func shout(text: String) -> String { text + \"!\" }\n\npub func now() -> Int { _io_monotonic_nanos() }\n";
         let compile = || {
-            service_with_effects(source, &["shout", "nap"], &["io", "alloc"])
+            service_with_effects(source, &["shout", "now"], &["io", "alloc"])
                 .expect("service compiles")
                 .encode_bytecode()
                 .expect("encode")
@@ -1575,10 +1573,10 @@ pub mod tests {
 
     #[test]
     fn service_effect_gate_is_a_subset_check() {
-        // `sleep` performs 'io through the effect wrapper; `print` would
-        // not do — it writes through the raw io instruction and carries
-        // no effect (the "print is not interceptable" decision).
-        let effectful = "pub func nap() -> Int { sleep(ms: 0) }\n";
+        // The monotonic clock performs 'io through its effect wrapper;
+        // `print` would not do - it writes through the raw io instruction
+        // and carries no effect (the "print is not interceptable" decision).
+        let effectful = "pub func now() -> Int { _io_monotonic_nanos() }\n";
 
         // A pure export compiles under an empty capability list.
         service_with_effects(
@@ -1590,16 +1588,16 @@ pub mod tests {
 
         // 'io within the allowed list compiles and runs.
         let exe =
-            service_with_effects(effectful, &["nap"], &["io"]).expect("allowed effect compiles");
+            service_with_effects(effectful, &["now"], &["io"]).expect("allowed effect compiles");
         let mut io = CaptureIO::default();
         let outcome = exe
-            .run_export("nap", &[], Budgets::default(), &mut io)
-            .expect("nap runs");
-        assert_eq!(outcome.value, Value::I64(0));
+            .run_export("now", &[], Budgets::default(), &mut io)
+            .expect("now runs");
+        assert_eq!(outcome.value, Value::I64(1_000_000));
 
         // 'io outside the allowed list is a compile error naming the
         // effect — the denial is the row check, not a runtime trap.
-        let denied = service_with_effects(effectful, &["nap"], &["alloc"]);
+        let denied = service_with_effects(effectful, &["now"], &["alloc"]);
         let message = denied.err().expect("denied effect");
         assert!(message.contains("'io"), "{message}");
         assert!(message.contains("does not allow"), "{message}");

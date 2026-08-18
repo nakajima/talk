@@ -274,6 +274,14 @@ fn assert_agrees(name: &str, source: &str) {
 }
 
 #[test]
+fn array_result_rendering_agrees_with_the_interpreter() {
+    assert_agrees(
+        "array_result_rendering",
+        "pub func bench() {\n\t([1, 2, 3].map { $0 * 10 }.to_array(), [true, false], [1.5, 2.0], [\"a\" + \"b\", \"c\"], [[1, 2], [3]])\n}\n",
+    );
+}
+
+#[test]
 fn suspension_crossing_a_resumption_boundary_traps_on_c() {
     // ADR 0065's documented divergence: a resumed extent performing a
     // suspending effect whose handler sits below the resume call works
@@ -1089,7 +1097,7 @@ static void *talk_stress_shared_churn(void *arg) {
 static void *talk_stress_private_churn(void *arg) {
     (void)arg;
     for (int i = 0; i < TALK_STRESS_ITERS / 10; i++) {
-        TalkValue buffer = talk_alloc(talk_int(32));
+        TalkValue buffer = talk_alloc(talk_int(32), TALK_MEM_BYTE);
         talk_retain(buffer);
         talk_free(buffer);
         talk_free(buffer);
@@ -1113,7 +1121,7 @@ static int talk_stress_run(void *(*worker)(void *)) {
 }
 
 int main(void) {
-    TalkValue shared = talk_alloc(talk_int(64));
+    TalkValue shared = talk_alloc(talk_int(64), TALK_MEM_BYTE);
     talk_stress_shared = shared.v.ptr;
     if (talk_stress_run(talk_stress_shared_churn) != 0) {
         return 1;

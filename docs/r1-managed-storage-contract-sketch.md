@@ -14,7 +14,7 @@ accepted distinctions may not collapse.
 
 The current `UseMode` cannot represent baseline `'heap` reference aliasing
 without pretending it is a user `Copy` conformance or a selected
-`CheapClone`. Add a distinct checked edge:
+`Clone`. Add a distinct checked edge:
 
 ```rust
 pub enum UseMode {
@@ -165,7 +165,7 @@ The existing item contract already distinguishes
 `NominalRepresentation::{Value, Heap}`. R1 additionally requires validation
 that:
 
-- a heap declaration cannot publish a `Copy` or `CheapClone` conformance;
+- a heap declaration cannot publish a `Copy` or `Clone` conformance;
 - a heap source use that duplicates a reference publishes `UseMode::Alias`;
 - structural Alias of a nominal publishes lifecycle-trivial evidence and
   rejects any user Deinit hook, custom lifecycle, hidden storage, or incomplete
@@ -175,15 +175,15 @@ that:
   returns, without consulting last-use liveness;
 - `String`, `Storage`, `Array`, borrowed views, and trusted managed intrinsic
   items resolve to canonical item identities rather than display names;
-- an admitted `Array<Element>: CheapClone` selection carries sufficient
-  element Copy/CheapClone evidence for detachment;
+- an admitted `Array<Element>: Clone` selection carries sufficient
+  element Copy/Clone evidence for detachment;
 - `Substring`, `UTF8View`, and `Character` cannot validate in owned fields,
   globals, or escaping captures;
 - the deferred heap-containing storage, existential, and closure forms reject
   with source-backed diagnostics.
 
 The source-core migration should replace the current unconditional
-`Array<Element>: CheapClone` with a conditional contract. The exact source
+`Array<Element>: Clone` with a conditional contract. The exact source
 predicate spelling is frontend work, but no lowerer may discover the condition
 by searching conformances.
 

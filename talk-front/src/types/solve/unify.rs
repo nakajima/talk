@@ -100,7 +100,7 @@ impl<'s> Solver<'s> {
             }
 
             // A borrowed argument satisfying an owned nominal always goes
-            // through adaptation, which selects Copy, CheapClone, retain, or
+            // through adaptation, which selects Copy, Clone, retain, or
             // a linearity error in one place.
             (Ty::Nominal(..), Ty::Borrow(..)) if origin.reason == CtReason::Apply => {
                 worklist.push(Constraint::Adapt {

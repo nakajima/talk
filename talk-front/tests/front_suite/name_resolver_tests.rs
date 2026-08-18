@@ -2320,7 +2320,8 @@ pub mod tests {
                     label: Label::Positional(0),
                     label_span: Span::ANY,
                     value: any_expr!(ExprKind::LiteralInt("123".into()))
-                })]
+                })],
+                trailing_block: None
             })
         );
     }

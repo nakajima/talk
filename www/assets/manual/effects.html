@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - 6. Effects</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037481" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>6. Effects</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects" aria-current="page">6. Effects</a><ol class="manual-outline-sections"><li><a href="#declaring-and-performing-an-effect">Declaring and performing an effect</a></li>
+<li><a href="#effect-rows">Effect rows</a></li>
+<li><a href="#handling-and-continuing">Handling and continuing</a></li>
+<li><a href="#capturing-resumptions">Capturing resumptions</a></li>
+<li><a href="#generic-effects">Generic effects</a></li>
+<li><a href="#built-in-host-effects">Built-in host effects</a></li>
+<li><a href="#further-reading">Further reading</a></li></ol></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/generics-and-protocols">&larr; 5. Generics and Protocols</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/ownership-and-memory">7. Ownership and Memory &rarr;</a>
+          </nav>
+          <article class="page-content">
+            <p>Effects let a function ask the surrounding program to do something, such as provide input, stop early, or pause. A handler decides how to answer that request. TalkTalk keeps track of these requests so callers know what a function may ask for.</p>
+<h2><a href="#declaring-and-performing-an-effect" aria-hidden="true" class="anchor" id="declaring-and-performing-an-effect"></a>Declaring and performing an effect</h2>
+<p>Effect names begin with a tick:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">effect</span> <span class="effect">'ask</span>(<span class="parameter">question</span>: <span class="type">String</span>) <span class="operator">-&gt;</span> <span class="type">String</span>
+
+<span class="keyword">func</span> <span class="function">greeting</span>() <span class="operator">-&gt;</span> <span class="type">String</span> {
+	<span class="keyword">let</span> name <span class="operator">=</span> <span class="effect">'ask</span>(<span class="parameter">question</span>: <span class="string">"What is your name?"</span>)
+	<span class="string">"Hello, "</span> <span class="operator">+</span> <span class="variable">name</span>
+}</pre>
+        </div>
+        
+<p>Calling an effect is called performing it. A function with no written effect row infers one.</p>
+<h2><a href="#effect-rows" aria-hidden="true" class="anchor" id="effect-rows"></a>Effect rows</h2>
+<p>A closed function effect can be written in three forms:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">pure</span>() '[] <span class="operator">-&gt;</span> <span class="type">Int</span> { <span class="number">42</span> }
+<span class="keyword">func</span> <span class="function">writes</span>() <span class="effect">'io</span> <span class="operator">-&gt;</span> <span class="type">Void</span> {
+	<span class="variable">print</span>(<span class="string">"hello"</span>)
+}
+<span class="keyword">func</span> <span class="function">both</span>(<span class="parameter">flag</span>: <span class="type">Bool</span>) '[<span class="effect">io</span>, <span class="effect">panic</span>] <span class="operator">-&gt;</span> <span class="type">Void</span> {
+	<span class="variable">print</span>(<span class="string">"hello"</span>)
+	<span class="keyword">if</span> <span class="variable">flag</span> { <span class="keyword">unreachable</span> }
+}
+
+<span class="variable">pure</span>()</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='10' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func pure() &#39;[] -&gt; Int { 42 }
+func writes() &#39;io -&gt; Void {
+	print(&quot;hello&quot;)
+}
+func both(flag: Bool) &#39;[io, panic] -&gt; Void {
+	print(&quot;hello&quot;)
+	if flag { unreachable }
+}
+
+pure()</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p><code>'[]</code> is explicitly pure, <code>'io</code> names one closed effect, and <code>'[io, panic]</code> names several. <code>'[io, ..]</code> requires <code>io</code> while leaving the rest of the row open for inference.</p>
+<p>Effects are part of function values:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> action: () <span class="effect">'io</span> <span class="operator">-&gt;</span> <span class="type">Void</span> <span class="operator">=</span> <span class="keyword">func</span>() { <span class="variable">print</span>(<span class="string">"hi"</span>) }
+<span class="variable">action</span>()</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='2' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let action: () &#39;io -&gt; Void = func() { print(&quot;hi&quot;) }
+action()</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>The row is a requirement of invoking the value. A closure does not freeze the handler that happened to be active when it was created.</p>
+<h2><a href="#handling-and-continuing" aria-hidden="true" class="anchor" id="handling-and-continuing"></a>Handling and continuing</h2>
+<p><code>#handle</code> installs a handler for the subsequent part of the current block and for calls made from there:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">effect</span> <span class="effect">'ask</span>(<span class="parameter">value</span>: <span class="type">Int</span>) <span class="operator">-&gt;</span> <span class="type">Int</span>
+
+<span class="operator">#</span><span class="keyword">handle</span> <span class="effect">'ask</span> { value <span class="keyword">in</span>
+	<span class="effect">'continue</span> <span class="variable">value</span> <span class="operator">*</span> <span class="number">2</span>
+}
+
+<span class="variable">print</span>(<span class="effect">'ask</span>(<span class="parameter">value</span>: <span class="number">21</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='7' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>effect &#39;ask(value: Int) -&gt; Int
+
+#handle &#39;ask { value in
+	&#39;continue value * 2
+}
+
+print(&#39;ask(value: 21))</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p><code>'continue expression</code> resumes the suspended computation, making the expression the result of the effect call. The nearest handler for the same label wins.</p>
+<p>A handler that finishes without continuing aborts the handled computation. That makes effects suitable for exceptions as well as resumable operations:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">effect</span> <span class="effect">'stop</span>(<span class="parameter">message</span>: <span class="type">String</span>) <span class="operator">-&gt;</span> <span class="type">Never</span>
+
+<span class="keyword">func</span> <span class="function">guarded</span>(<span class="parameter">_</span> <span class="parameter">body</span>: () <span class="operator">-&gt;</span> <span class="type">Void</span>) <span class="operator">-&gt;</span> <span class="type">Void</span> {
+	<span class="operator">#</span><span class="keyword">handle</span> <span class="effect">'stop</span> { message <span class="keyword">in</span>
+		<span class="variable">print</span>(<span class="string">"stopped: "</span> <span class="operator">+</span> <span class="variable">message</span>)
+		<span class="keyword">return</span>
+	}
+	<span class="variable">body</span>()
+}
+
+<span class="variable">guarded</span> { <span class="effect">'stop</span>(<span class="parameter">message</span>: <span class="string">"done"</span>) }</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='11' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>effect &#39;stop(message: String) -&gt; Never
+
+func guarded(_ body: () -&gt; Void) -&gt; Void {
+	#handle &#39;stop { message in
+		print(&quot;stopped: &quot; + message)
+		return
+	}
+	body()
+}
+
+guarded { &#39;stop(message: &quot;done&quot;) }</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>The handler's extent is the code after the <code>#handle</code> statement in the same block, not code before it.</p>
+<h2><a href="#capturing-resumptions" aria-hidden="true" class="anchor" id="capturing-resumptions"></a>Capturing resumptions</h2>
+<p>A handler may bind the continuation as an additional final parameter. The resumption is a linear, one-shot value:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">effect</span> <span class="effect">'emit</span>(<span class="parameter">value</span>: <span class="type">Int</span>) <span class="operator">-&gt;</span> ()
+
+<span class="keyword">enum</span> <span class="type">Step</span> {
+	<span class="keyword">case</span> <span class="enum_member">yielded</span>(<span class="type">Int</span>, <span class="type">Resumption</span><span class="operator">&lt;</span>(), <span class="type">Step</span><span class="operator">&gt;</span>)
+	<span class="keyword">case</span> <span class="enum_member">done</span>
+}
+
+<span class="keyword">func</span> <span class="function">generate</span>() <span class="operator">-&gt;</span> <span class="type">Step</span> {
+	<span class="operator">#</span><span class="keyword">handle</span> <span class="effect">'emit</span> { value, continuation <span class="keyword">in</span> <span class="type">Step</span>.<span class="property">yielded</span>(<span class="variable">value</span>, <span class="variable">continuation</span>) }
+	<span class="effect">'emit</span>(<span class="parameter">value</span>: <span class="number">1</span>)
+	<span class="type">Step</span>.<span class="property">done</span>
+}</pre>
+        </div>
+        
+<p>Call <code>resume(k: continuation, value: ())</code> to continue or <code>cancel(k: continuation)</code> to abandon it. Either operation consumes the resumption, and cancellation deterministically runs cleanup for suspended frames.</p>
+<h2><a href="#generic-effects" aria-hidden="true" class="anchor" id="generic-effects"></a>Generic effects</h2>
+<p>Effects may be generic:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">effect</span> <span class="effect">'echo</span><span class="operator">&lt;</span><span class="type_parameter">T</span><span class="operator">&gt;</span>(<span class="parameter">value</span>: <span class="type">T</span>) <span class="operator">-&gt;</span> <span class="type">T</span></pre>
+        </div>
+        
+<p>Effect rows track separate instantiations. One handler for an effect label covers every generic instantiation in its extent, and the handler body is checked generically.</p>
+<h2><a href="#built-in-host-effects" aria-hidden="true" class="anchor" id="built-in-host-effects"></a>Built-in host effects</h2>
+<p>Core uses effects for input and output, memory allocation, task suspension, and panic. <code>unreachable</code> performs the public <code>'panic</code> effect and never returns. A program may handle it explicitly; otherwise the outer host reports the panic and terminates.</p>
+<h2><a href="#further-reading" aria-hidden="true" class="anchor" id="further-reading"></a>Further reading</h2>
+<p>TalkTalk's design belongs to the algebraic-effects and handlers family:</p>
+<ul>
+<li><a href="https://github.com/nakajima/talk/blob/main/papers/plotkin-pretnar-2013-handling-algebraic-effects.pdf">Handlers of algebraic effects</a> gives the foundational handler model.</li>
+<li><a href="https://github.com/nakajima/talk/blob/main/papers/leijen-2016-row-typed-algebraic-effects.pdf">Type directed compilation of row-typed algebraic effects</a> explains effect rows and their compilation in Koka.</li>
+<li><a href="https://github.com/nakajima/talk/blob/main/papers/schuster-brachthaeuser-ostermann-2019-zero-cost-effect-handlers.pdf">Zero-cost effect handlers by staging</a> explores efficient handler compilation.</li>
+</ul>
+<p>The exact choices made by TalkTalk, including generic handlers and invocation-time handler lookup, are recorded in <a href="https://github.com/nakajima/talk/blob/main/docs/effects.md">Effect semantics and implementation</a>.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/generics-and-protocols">&larr; 5. Generics and Protocols</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/ownership-and-memory">7. Ownership and Memory &rarr;</a>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037481"></script>
+    </main>
+  </body>
+</html>

@@ -713,7 +713,7 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
     }
 
     /// A call-site ownership marker is checked source semantics: `copy`
-    /// demands Copy or CheapClone evidence, `mut` an exclusive-borrow
+    /// demands Copy or Clone evidence, `mut` an exclusive-borrow
     /// parameter, `borrow` a borrowing parameter. The judgments defer to
     /// finalization, when the argument's slot type has resolved.
     fn note_copy_marker(&mut self, arg: &CallArg, param: &Ty) {

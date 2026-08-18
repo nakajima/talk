@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - 7. Ownership and Memory</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037482" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>7. Ownership and Memory</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory" aria-current="page">7. Ownership and Memory</a><ol class="manual-outline-sections"><li><a href="#value-snapshots">Value snapshots</a></li>
+<li><a href="#borrowing-and-mutation">Borrowing and mutation</a></li>
+<li><a href="#consuming-values">Consuming values</a></li>
+<li><a href="#linear-values">Linear values</a></li>
+<li><a href="#heap-declarations">Heap declarations</a></li>
+<li><a href="#destruction">Destruction</a></li>
+<li><a href="#ownership-marker-protocols">Ownership marker protocols</a></li>
+<li><a href="#further-reading">Further reading</a></li></ol></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/effects">&larr; 6. Effects</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/collections-and-text">8. Collections and Text &rarr;</a>
+          </nav>
+          <article class="page-content">
+            <p>Most TalkTalk values behave like independent copies. You can save an array, change the original, and the saved value stays the same. The compiler shares storage behind the scenes when it can and cleans values up when they are no longer needed.</p>
+<h2><a href="#value-snapshots" aria-hidden="true" class="anchor" id="value-snapshots"></a>Value snapshots</h2>
+<p>Assigning an array, string, struct, enum, tuple, record, or function creates an independent value snapshot. The implementation may share storage until one copy changes:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> current <span class="operator">=</span> [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]
+<span class="keyword">let</span> snapshot <span class="operator">=</span> <span class="variable">current</span>
+
+<span class="variable">current</span>.<span class="property">push</span>(<span class="number">4</span>)
+
+<span class="variable">print</span>(<span class="variable">current</span>) <span class="comment">// [1, 2, 3, 4]</span>
+<span class="variable">print</span>(<span class="variable">snapshot</span>) <span class="comment">// [1, 2, 3]</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='7' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let current = [1, 2, 3]
+let snapshot = current
+
+current.push(4)
+
+print(current) // [1, 2, 3, 4]
+print(snapshot) // [1, 2, 3]</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>The same rule applies when a value escapes through a return, global store, or closure capture: the compiler retains what is needed so the escaped value owns its snapshot.</p>
+<h2><a href="#borrowing-and-mutation" aria-hidden="true" class="anchor" id="borrowing-and-mutation"></a>Borrowing and mutation</h2>
+<p>Plain parameters and methods borrow by default. Shared borrows do not prevent later value-semantic mutation; copy-on-write preserves the reader's snapshot. A live <code>&amp;mut</code> loan is different: it promises exclusive in-place access, so an overlapping outside access is an error.</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">read</span>(<span class="parameter">_</span> <span class="parameter">value</span>: <span class="type">String</span>) <span class="operator">-&gt;</span> <span class="type">Int</span> {
+	<span class="variable">value</span>.<span class="property">count</span>()
+}
+
+<span class="keyword">let</span> text <span class="operator">=</span> <span class="string">"hello"</span>
+<span class="variable">print</span>(<span class="variable">read</span>(<span class="variable">text</span>))
+<span class="variable">print</span>(<span class="variable">read</span>(<span class="variable">text</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='7' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func read(_ value: String) -&gt; Int {
+	value.count()
+}
+
+let text = &quot;hello&quot;
+print(read(text))
+print(read(text))</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p><code>mut func</code> and <code>mut</code> parameters express writable access. See <a href="/manual/bindings-and-functions">Bindings and Functions</a> for call syntax.</p>
+<h2><a href="#consuming-values" aria-hidden="true" class="anchor" id="consuming-values"></a>Consuming values</h2>
+<p><code>consume</code> is a callee-side ownership contract. The callee receives ownership, but a caller may still use a shareable value afterward: the compiler retains a copy before the call when needed. The last use can move without a retain.</p>
+<p>This is different from a linear value, which cannot be duplicated.</p>
+<h2><a href="#linear-values" aria-hidden="true" class="anchor" id="linear-values"></a>Linear values</h2>
+<p>A declaration marked <code>'linear</code> must be consumed exactly once on every finite path. It cannot be implicitly copied or dropped:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">struct</span> <span class="type">Ticket</span> <span class="effect">'linear</span> {
+	<span class="keyword">let</span> <span class="property">seat</span>: <span class="type">Int</span>
+
+	<span class="modifier">consuming</span> <span class="keyword">func</span> <span class="function">tear</span>() <span class="operator">-&gt;</span> <span class="type">Int</span> { <span class="type">self</span>.<span class="property">seat</span> }
+}
+
+<span class="keyword">func</span> <span class="function">attend</span>() <span class="operator">-&gt;</span> <span class="type">Int</span> {
+	<span class="keyword">let</span> ticket <span class="operator">=</span> <span class="type">Ticket</span>(<span class="parameter">seat</span>: <span class="number">12</span>)
+	<span class="variable">ticket</span>.<span class="property">tear</span>()
+}
+
+<span class="variable">attend</span>()</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='12' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>struct Ticket &#39;linear {
+	let seat: Int
+
+	consuming func tear() -&gt; Int { self.seat }
+}
+
+func attend() -&gt; Int {
+	let ticket = Ticket(seat: 12)
+	ticket.tear()
+}
+
+attend()</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Calling <code>tear</code> twice is a compile error, as is reaching the end of <code>attend</code> without consuming the ticket. Linear types are for one-shot capabilities and resources where duplication or silent abandonment would be incorrect.</p>
+<h2><a href="#heap-declarations" aria-hidden="true" class="anchor" id="heap-declarations"></a>Heap declarations</h2>
+<p><code>struct Name 'heap</code> and <code>enum Name 'heap</code> opt into aliased, region-allocated reference semantics. They provide identity, shared mutation, and cycles:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">struct</span> <span class="type">Node</span> <span class="effect">'heap</span> {
+	<span class="keyword">let</span> <span class="property">value</span>: <span class="type">Int</span>
+	<span class="keyword">let</span> <span class="property">next</span>: <span class="type">Node?</span>
+}
+
+<span class="keyword">let</span> first <span class="operator">=</span> <span class="type">Node</span>(<span class="parameter">value</span>: <span class="number">1</span>, <span class="parameter">next</span>: .<span class="property">none</span>)
+<span class="keyword">let</span> second <span class="operator">=</span> <span class="type">Node</span>(<span class="parameter">value</span>: <span class="number">2</span>, <span class="parameter">next</span>: .<span class="property">some</span>(<span class="variable">first</span>))
+<span class="variable">first</span>.<span class="property">next</span> <span class="operator">=</span> .<span class="property">some</span>(<span class="variable">second</span>)
+
+<span class="variable">first</span>.<span class="property">value</span> <span class="operator">+</span> <span class="variable">second</span>.<span class="property">value</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='10' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>struct Node &#39;heap {
+	let value: Int
+	let next: Node?
+}
+
+let first = Node(value: 1, next: .none)
+let second = Node(value: 2, next: .some(first))
+first.next = .some(second)
+
+first.value + second.value</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Recursive nominal layouts infer heap indirection where it is required. Heap values are the explicit escape hatch from ordinary snapshot semantics.</p>
+<h2><a href="#destruction" aria-hidden="true" class="anchor" id="destruction"></a>Destruction</h2>
+<p>A type can conform to <code>Deinit</code> to run deterministic cleanup:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">struct</span> <span class="type">Guard</span> {
+	<span class="keyword">let</span> <span class="property">name</span>: <span class="type">String</span>
+}
+
+<span class="keyword">extend</span> <span class="type">Guard</span>: <span class="type">Deinit</span> {
+	<span class="modifier">consuming</span> <span class="keyword">func</span> <span class="function">deinit</span>() <span class="operator">-&gt;</span> <span class="type">Void</span> {
+		<span class="variable">print</span>(<span class="string">"leaving "</span> <span class="operator">+</span> <span class="type">self</span>.<span class="property">name</span>)
+	}
+}
+
+<span class="keyword">func</span> <span class="function">use_guard</span>() {
+	<span class="keyword">let</span> guard <span class="operator">=</span> <span class="type">Guard</span>(<span class="parameter">name</span>: <span class="string">"example"</span>)
+}
+
+<span class="variable">use_guard</span>()</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='15' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>struct Guard {
+	let name: String
+}
+
+extend Guard: Deinit {
+	consuming func deinit() -&gt; Void {
+		print(&quot;leaving &quot; + self.name)
+	}
+}
+
+func use_guard() {
+	let guard = Guard(name: &quot;example&quot;)
+}
+
+use_guard()</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Stored fields are torn down as their owner is destroyed. Cleanup also runs when control leaves through an effect abort or when a suspended resumption is cancelled.</p>
+<h2><a href="#ownership-marker-protocols" aria-hidden="true" class="anchor" id="ownership-marker-protocols"></a>Ownership marker protocols</h2>
+<p>Core defines <code>Copy</code>, <code>Clone</code>, <code>Borrowed</code>, <code>Owner</code>, <code>Deinit</code>, <code>Send</code>, and <code>Sync</code> to state representation and transfer roles. Payload-free enums are <code>Copy</code> automatically. Most application code observes their constraints rather than implementing low-level storage behavior directly.</p>
+<p>The remaining ownership errors cover cases the compiler cannot safely repair by making another shared copy: overlapping exclusive access, misuse of linear or unique values, uninitialized data, invalid declarations, unsupported heap placement, and unsafe operations outside an unsafe block.</p>
+<h2><a href="#further-reading" aria-hidden="true" class="anchor" id="further-reading"></a>Further reading</h2>
+<p>TalkTalk's automatic sharing and cleanup are influenced by:</p>
+<ul>
+<li><a href="https://doi.org/10.1145/3453483.3454032">Perceus: Garbage Free Reference Counting with Reuse</a>, which places retains and releases from program use.</li>
+<li><a href="https://arxiv.org/abs/1908.05647">Counting Immutable Beans</a>, which describes Lean's reference counting and reuse.</li>
+<li><a href="https://homepages.inf.ed.ac.uk/wadler/topics/linear-logic.html">Linear types can change the world!</a>, the foundation for values that must be used exactly once.</li>
+</ul>
+<p><a href="https://github.com/nakajima/talk/blob/main/docs/ownership.md">Ownership: implicit sharing and MIR dataflow</a> records how TalkTalk combines those ideas with copy-on-write values, linear resources, and exclusive access.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/effects">&larr; 6. Effects</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/collections-and-text">8. Collections and Text &rarr;</a>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037482"></script>
+    </main>
+  </body>
+</html>

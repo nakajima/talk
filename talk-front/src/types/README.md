@@ -427,7 +427,7 @@ inventing a non-principal type.
 types (hover, HIR, and the REPL); finished schemes; per-call
 instantiation tables; member resolutions (which declaration each resolved
 member use landed on — unresolved ones are the scheme-carried constraints
-the lowerer re-resolves per specialization); borrowed-to-owned CheapClone
+the lowerer re-resolves per specialization); borrowed-to-owned Clone
 coercion sites; finalized local binder types for the flow checker;
 implicit existential pack sites; and merged display names for diagnostics,
 hover, and rendering.

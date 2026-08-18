@@ -4,7 +4,7 @@ struct Wrap {
 struct Holder<Value> 'heap {
 	let value: Value
 }
-func extract<Value: CheapClone>(h: Holder<Value>) -> Value {
+func extract<Value: Clone>(h: Holder<Value>) -> Value {
 	h.value
 }
 func check() -> Int {

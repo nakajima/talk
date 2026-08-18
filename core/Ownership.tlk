@@ -11,8 +11,8 @@ pub protocol Copy {
 }
 
 // A buffer-backed value whose clone is an O(1) refcount bump (copy-on-write).
-// Conformance is legal only when every non-Copy field is itself CheapClone.
-pub protocol CheapClone {
+// Conformance is legal only when every non-Copy field is itself Clone.
+pub protocol Clone {
 	func clone() -> Self
 }
 

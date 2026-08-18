@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - 0. Getting Started</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037473" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>0. Getting Started</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started" aria-current="page">0. Getting Started</a><ol class="manual-outline-sections"><li><a href="#build-the-compiler">Build the compiler</a></li>
+<li><a href="#run-one-file">Run one file</a></li>
+<li><a href="#create-a-package">Create a package</a></li>
+<li><a href="#editor-support">Editor support</a></li>
+<li><a href="#where-to-next">Where to next</a></li></ol></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/">&larr; The TalkTalk Manual</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/syntax">1. Syntax &rarr;</a>
+          </nav>
+          <article class="page-content">
+            <p>This chapter gets a TalkTalk program running. We will build the compiler, run one file, and then create a small project. For now, building from the repository is the dependable way to install it.</p>
+<h2><a href="#build-the-compiler" aria-hidden="true" class="anchor" id="build-the-compiler"></a>Build the compiler</h2>
+<p>TalkTalk's compiler is written in Rust and currently uses a pinned nightly Rust toolchain. From the repository root:</p>
+<pre><code class="language-sh">cargo build --release
+./target/release/talk --version
+</code></pre>
+<p>Put <code>target/release/talk</code> somewhere on your <code>PATH</code> if you want to invoke it as <code>talk</code>. Released builds are also attached to the project's GitHub releases.</p>
+<h2><a href="#run-one-file" aria-hidden="true" class="anchor" id="run-one-file"></a>Run one file</h2>
+<p>Create <code>hello.tlk</code>:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="variable">print</span>(<span class="string">"Hello, TalkTalk!"</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='1' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>print(&quot;Hello, TalkTalk!&quot;)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Then run it:</p>
+<pre><code class="language-sh">talk run hello.tlk
+</code></pre>
+<p>A source file may contain declarations and top-level statements. The value of the final top-level expression is printed when it is not <code>Void</code>:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">square</span>(<span class="parameter">_</span> <span class="parameter">n</span>: <span class="type">Int</span>) <span class="operator">-&gt;</span> <span class="type">Int</span> { <span class="variable">n</span> <span class="operator">*</span> <span class="variable">n</span> }
+
+<span class="variable">square</span>(<span class="number">6</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func square(_ n: Int) -&gt; Int { n * n }
+
+square(6)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>This prints <code>36</code>.</p>
+<p>Use <code>talk check</code> when you only want diagnostics:</p>
+<pre><code class="language-sh">talk check hello.tlk
+</code></pre>
+<p>Both commands accept <code>-</code> as standard input where a source filename is accepted.</p>
+<h2><a href="#create-a-package" aria-hidden="true" class="anchor" id="create-a-package"></a>Create a package</h2>
+<pre><code class="language-sh">talk new hello
+cd hello
+talk run
+talk test
+</code></pre>
+<p>The generated package contains:</p>
+<pre><code class="language-text">hello/
+  package.tlk
+  package.lock
+  src/main.tlk
+  tests/hello.test.tlk
+</code></pre>
+<p><code>package.tlk</code> declares the package's build products and dependencies. <code>package.lock</code> records the resolved dependency graph and should be checked in. Inside a package, <code>talk run</code> chooses the package binary and <code>talk check</code> checks the package targets and tests.</p>
+<p>Arguments after <code>--</code> are passed to the program:</p>
+<pre><code class="language-sh">talk run -- one two three
+</code></pre>
+<p>They are available through <code>OS.argc()</code> from the <code>os</code> standard-library module.</p>
+<h2><a href="#editor-support" aria-hidden="true" class="anchor" id="editor-support"></a>Editor support</h2>
+<p>The compiler includes an LSP server and plain Neovim runtime files:</p>
+<pre><code class="language-sh">talk setup nvim
+talk lsp --stdio
+talk completions fish
+</code></pre>
+<p><code>talk completions</code> also supports Bash, Elvish, PowerShell, and Zsh. The repository includes a VS Code extension under <code>dev/editors/vscode</code>.</p>
+<h2><a href="#where-to-next" aria-hidden="true" class="anchor" id="where-to-next"></a>Where to next</h2>
+<p>Read <a href="/manual/syntax">Syntax</a> and <a href="/manual/values-and-types">Values and Types</a> for the language's basic shape. <a href="/manual/data-and-patterns">Data and Patterns</a>, <a href="/manual/generics-and-protocols">Generics and Protocols</a>, and <a href="/manual/effects">Effects</a> cover the features that most distinguish TalkTalk.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/">&larr; The TalkTalk Manual</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/syntax">1. Syntax &rarr;</a>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037473"></script>
+    </main>
+  </body>
+</html>

@@ -344,7 +344,7 @@ Status: accepted; implemented (2026-07-23)
  The type system is the sole authority for:
 
  - Copy;
- - CheapClone;
+ - Clone;
  - Linear;
  - Borrowed;
  - capture legality;
@@ -511,7 +511,7 @@ Status: accepted; implemented (2026-07-23)
 
  - ArgMode::Mut validation
  - ArgMode::Copy validation
- - Copy/CheapClone source diagnostics
+ - Copy/Clone source diagnostics
  - reconstruction of use semantics from parameter types
 
  Delete from compile_call and compile_indirect_call:
@@ -880,7 +880,7 @@ Eight stage-1 slices are implemented, full suite green after each. Line numbers 
 
 2. **`break`/`continue` outside a loop → checker-owned** via `Ctx.in_loop` (reset by `enter_function`, set by `enter_loop()` at `Loop`/`For` bodies in `types/generate/stmt.rs`), reported through `unsupported()`. `'continue` outside a handler was already checker-owned (`ctx.handler_ret`). The three MIR source diagnostics are downgraded to invariant assertions — errored files never reach lowering (`error_diagnostic_files` blocks them from the TypedProgram).
 
-3. **`copy` marker legality → checker-owned evidence.** All call-arg loops in `types/generate/call.rs` record marked args; finalize validates Copy-or-CheapClone via `coerce_kind_application`/`bounds_coerce_kind` (borrow-peeled, tuple-componentwise), reporting `NotConforming { protocol: "Copy or CheapClone" }`. MIR's `needs_release && !CheapClone` check in `compile_call_args` is deleted — that check was this ADR's §3 conflation (an affine value needing no cleanup passed a check meant to require Copy evidence). The reference corpus matches `.error` fragments case-insensitively, so `copy_marker_on_non_cloneable_errors` now rejects at typing with no pin change.
+3. **`copy` marker legality → checker-owned evidence.** All call-arg loops in `types/generate/call.rs` record marked args; finalize validates Copy-or-Clone via `coerce_kind_application`/`bounds_coerce_kind` (borrow-peeled, tuple-componentwise), reporting `NotConforming { protocol: "Copy or Clone" }`. MIR's `needs_release && !Clone` check in `compile_call_args` is deleted — that check was this ADR's §3 conflation (an affine value needing no cleanup passed a check meant to require Copy evidence). The reference corpus matches `.error` fragments case-insensitively, so `copy_marker_on_non_cloneable_errors` now rejects at typing with no pin change.
 
 4. **Canonical literals.** `typed_ast::Literal` is now `Int(i64)`, `Float(FloatValue)` (a bit-equality newtype), `String`/`Character` (unescaped); `PatternKind::LiteralInt(i64)`/`LiteralFloat(FloatValue)` likewise. The typed-program build canonicalizes: integers from the checker's LIT-01 side table (an `Invalid` entry is unreachable because errored files are blocked); float parsing and unescaping are infallible because the lexer validates escapes at scan time and only produces parseable float spellings. MIR's `compile_literal` is pure value→constant emission; all backend parsing, unescaping, and `CheckedIntegerLiteral`/`integer_literals` access is deleted.
 
@@ -939,7 +939,7 @@ Eight stage-1 slices are implemented, full suite green after each. Line numbers 
 
 ### Deferred, with reasons
 
-- **`check_captures` / `check_capture_list`**: these are representation-based v1 gates (`contains_buffer`/`needs_release`), not duplicate source validation. Replacing them with checker-side Copy evidence would change language semantics in both directions: it would reject plain non-Copy structs whose captures pass today, and admit CheapClone captures (e.g. String) that need closure drop glue that does not exist yet. Their deletion belongs to the capture-evidence feature wave; until then they are legitimate "unsupported runtime representation" errors under this ADR's error ownership.
+- **`check_captures` / `check_capture_list`**: these are representation-based v1 gates (`contains_buffer`/`needs_release`), not duplicate source validation. Replacing them with checker-side Copy evidence would change language semantics in both directions: it would reject plain non-Copy structs whose captures pass today, and admit Clone captures (e.g. String) that need closure drop glue that does not exist yet. Their deletion belongs to the capture-evidence feature wave; until then they are legitimate "unsupported runtime representation" errors under this ADR's error ownership.
 
 - **"cannot call a `mut func` through a shared borrow"** (`compile_call`): implemented as a place-chain judgment (`chain.base`'s type) and pinned by `rejects_mut_receiver_call_through_field_of_shared_borrow`. Moving it to the checker means enforcing receiver permissions in typing — receiver checking is currently perm-lenient, and making it strict without false positives across owned/borrowed/celled receivers is real borrow-typing design. Needs a dedicated session, not a side effect of cleanup.
 

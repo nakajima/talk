@@ -11,7 +11,7 @@ use crate::{
         body::Body,
         call_arg::{ArgMode, CallArg},
         decl::{Decl, DeclKind, Import, ImportPath, ImportedSymbols, ReceiverMode, Visibility},
-        expr::{Expr, ExprKind},
+        expr::{Expr, ExprKind, MacroToken},
         func::{CaptureMode, CaptureSpec, EffectSet, Func},
         func_signature::FuncSignature,
         generic_decl::GenericDecl,
@@ -563,11 +563,39 @@ impl<'a> Formatter<'a> {
                 }
             }
             ExprKind::CallEffect {
-                effect_name, args, ..
+                effect_name,
+                type_args,
+                args,
+                trailing_block,
+                ..
             } => {
+                let mut result = text(format!("'{}", effect_name.name_str()));
+                if !type_args.is_empty() {
+                    let type_docs: Vec<_> = type_args
+                        .iter()
+                        .map(|ty| self.format_generic_arg(ty))
+                        .collect();
+                    result = concat(
+                        result,
+                        concat(
+                            text("<"),
+                            concat(join(type_docs, concat(text(","), text(" "))), text(">")),
+                        ),
+                    );
+                }
+
+                if let Some(block) = trailing_block
+                    && args.is_empty()
+                {
+                    return group(concat(
+                        result,
+                        concat(text(" "), self.format_block_inner(block, true)),
+                    ));
+                }
+
                 let arg_docs: Vec<_> = args.iter().map(|a| self.format_call_arg(a)).collect();
-                group(concat(
-                    text(format!("'{}", effect_name.name_str())),
+                let call_doc = group(concat(
+                    result,
                     concat(
                         text("("),
                         concat(
@@ -578,7 +606,15 @@ impl<'a> Formatter<'a> {
                             concat(softline(), text(")")),
                         ),
                     ),
-                ))
+                ));
+                if let Some(block) = trailing_block {
+                    group(concat(
+                        call_doc,
+                        concat(text(" "), self.format_block_inner(block, true)),
+                    ))
+                } else {
+                    call_doc
+                }
             }
             ExprKind::As(lhs, rhs) => {
                 text("(")
@@ -760,13 +796,16 @@ impl<'a> Formatter<'a> {
                 name,
                 params,
                 body_span,
+                tokens,
                 ..
             } => {
                 let body = self
                     .source
                     .and_then(|source| source.get(body_span.start as usize..body_span.end as usize))
-                    .map(str::trim)
                     .unwrap_or_default();
+                if let Some(comments) = &self.comments {
+                    comments.borrow_mut().take_before(body_span.end);
+                }
                 text("macro ")
                     + text(name)
                     + text("(")
@@ -777,9 +816,8 @@ impl<'a> Formatter<'a> {
                             .collect(),
                         text(", "),
                     )
-                    + text(") { ")
-                    + text(body)
-                    + text(" }")
+                    + text(") ")
+                    + self.format_macro_body(body, body_span.start, tokens)
             }
             DeclKind::Struct {
                 name,
@@ -2860,6 +2898,74 @@ impl<'a> Formatter<'a> {
 
     fn format_name(&self, name: &Name) -> Doc {
         text(identifier_text(&name.name_str()))
+    }
+
+    fn format_macro_body(&self, body: &str, body_start: u32, tokens: &[MacroToken]) -> Doc {
+        let trimmed = body.trim();
+        if trimmed.is_empty() {
+            return text("{}");
+        }
+        if !trimmed.contains('\n') {
+            return text("{ ") + text(trimmed) + text(" }");
+        }
+
+        let leading_bytes = body.len() - body.trim_start().len();
+        let trimmed_start = body_start.saturating_add(leading_bytes as u32);
+        let mut offset = 0usize;
+        let lines: Vec<_> = trimmed
+            .split('\n')
+            .map(|line| {
+                let line_start = trimmed_start.saturating_add(offset as u32);
+                offset += line.len() + 1;
+                let inside_token = tokens
+                    .iter()
+                    .any(|token| token.span_start < line_start && line_start < token.span_end);
+                (line, inside_token)
+            })
+            .collect();
+
+        let indentation_width = |line: &str| {
+            line.chars()
+                .take_while(|character| matches!(character, ' ' | '\t'))
+                .map(|character| if character == '\t' { 4 } else { 1 })
+                .sum::<usize>()
+        };
+        let base_indent = lines
+            .iter()
+            .filter(|(line, inside_token)| !inside_token && !line.trim().is_empty())
+            .skip(1)
+            .map(|(line, _)| indentation_width(line))
+            .min()
+            .unwrap_or(0);
+        let indent_unit = lines
+            .iter()
+            .filter(|(line, inside_token)| !inside_token && !line.trim().is_empty())
+            .map(|(line, _)| indentation_width(line).saturating_sub(base_indent))
+            .filter(|indent| *indent > 0)
+            .min()
+            .unwrap_or(4);
+
+        let mut rendered = String::new();
+        for (index, (line, inside_token)) in lines.into_iter().enumerate() {
+            if index > 0 {
+                rendered.push('\n');
+            }
+            if inside_token {
+                rendered.push_str(line);
+                continue;
+            }
+            let content = line.trim_start_matches([' ', '\t']).trim_end();
+            if content.is_empty() {
+                continue;
+            }
+            let relative_indent = indentation_width(line).saturating_sub(base_indent);
+            rendered.push('\t');
+            rendered.push_str(&"\t".repeat(relative_indent / indent_unit));
+            rendered.push_str(&" ".repeat(relative_indent % indent_unit));
+            rendered.push_str(content);
+        }
+
+        text(format!("{{\n{rendered}\n}}"))
     }
 
     /// A possibly-dotted type head with per-segment generic args

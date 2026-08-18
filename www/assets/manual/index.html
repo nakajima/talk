@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - The TalkTalk Manual</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037473" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>The TalkTalk Manual</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/" aria-current="page">Overview</a><ol class="manual-outline-sections"><li><a href="#start-here">Start here</a></li>
+<li><a href="#conventions">Conventions</a></li></ol></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <span></span>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/getting-started">0. Getting Started &rarr;</a>
+          </nav>
+          <article class="page-content">
+            <p>TalkTalk is a programming language that looks a little like Swift or Rust. It checks your code before it runs, but tries to figure out most types for you.</p>
+<p>This manual starts with small programs and works up to TalkTalk's more unusual features. The language is experimental and still changes quickly. Source files use <code>.tlk</code>, and the command-line tool is called <code>talk</code>.</p>
+<h2><a href="#start-here" aria-hidden="true" class="anchor" id="start-here"></a>Start here</h2>
+<ol start="0">
+<li><a href="/manual/getting-started">Getting Started</a></li>
+<li><a href="/manual/syntax">Syntax</a></li>
+<li><a href="/manual/values-and-types">Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">Generics and Protocols</a></li>
+<li><a href="/manual/effects">Effects</a></li>
+<li><a href="/manual/ownership-and-memory">Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">Modules and Packages</a></li>
+<li><a href="/manual/macros">Macros</a></li>
+<li><a href="/manual/concurrency">Concurrency</a></li>
+<li><a href="/manual/testing">Testing</a></li>
+<li><a href="/manual/standard-library">The Standard Library</a></li>
+<li><a href="/manual/toolchain">The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">Unsafe Code and Interop</a></li>
+</ol>
+<h2><a href="#conventions" aria-hidden="true" class="anchor" id="conventions"></a>Conventions</h2>
+<p>Code meant for TalkTalk is fenced as <code>tlk</code>; terminal sessions are fenced as <code>sh</code>. Examples usually rely on the core library, which normal source files import automatically. A first line of <code>// no-core</code> disables that import for compiler and core-library work.</p>
+<p>The short command reference built into the compiler is also useful:</p>
+<pre><code class="language-sh">talk llm
+</code></pre>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <span></span>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/getting-started">0. Getting Started &rarr;</a>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037473"></script>
+    </main>
+  </body>
+</html>

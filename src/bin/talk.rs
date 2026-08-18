@@ -1426,7 +1426,7 @@ Ordinary structs, enums, arrays, strings, tuples, records, and functions have va
 
 Plain parameters and methods borrow by default. `consume` is a callee ownership contract: if a shareable caller value has later uses, the compiler retains it automatically; the final use can move. Returning, capturing, or storing a view generally retains the referent so the escaped value owns its snapshot. A bare borrow return rooted in a frame-owned local is rejected because ownership cannot travel in that `&T` representation.
 
-`struct Name 'linear` and `enum Name 'linear` declare values that must be consumed exactly once on every finite path and cannot be implicitly copied or dropped. `struct Name 'heap`/`enum Name 'heap` use aliased, region-allocated reference semantics; recursive nominal layouts infer the same heap indirection automatically. `*T` is a statically unique value. Marker protocols such as `Copy`, `CheapClone`, `Borrowed`, `Owner`, and `Deinit` express library ownership roles; payload-free enums are `Copy` automatically.
+`struct Name 'linear` and `enum Name 'linear` declare values that must be consumed exactly once on every finite path and cannot be implicitly copied or dropped. `struct Name 'heap`/`enum Name 'heap` use aliased, region-allocated reference semantics; recursive nominal layouts infer the same heap indirection automatically. `*T` is a statically unique value. Marker protocols such as `Copy`, `Clone`, `Borrowed`, `Owner`, and `Deinit` express library ownership roles; payload-free enums are `Copy` automatically.
 
 Static ownership errors are limited to real invariants: overlapping access involving a live `&mut` loan, duplication/drop misuse of linear or unique values, declaration well-formedness (including invalid borrowed fields or parameter modes), unsupported heap placement, definite initialization, and use of unsafe operations outside an unsafe boundary.
 
@@ -1434,7 +1434,7 @@ Low-level core code uses `#_ir(args...) { ... }`. The trusted IR includes scalar
 
 ## Core library
 
-Frequently used protocols include `Showable`, `Add`, `Equatable`, `Comparable`, bitwise/shift protocols, `Iterable`, `Iterator`, `From`, `Into`, `Copy`, `CheapClone`, `Borrowed`, `Owner`, and `Deinit`. `print(value)` renders supported values. Arrays provide copy-on-write mutation and iterator adapters. Strings are UTF-8; `String`/`Substring` iterate extended grapheme-cluster `Character` values, while `.scalars()` and `.utf8()` provide lower-level views. `Result` uses `.ok`/`.error`; `Optional` uses `.some`/`.none`.
+Frequently used protocols include `Showable`, `Add`, `Equatable`, `Comparable`, bitwise/shift protocols, `Iterable`, `Iterator`, `From`, `Into`, `Copy`, `Clone`, `Borrowed`, `Owner`, and `Deinit`. `print(value)` renders supported values. Arrays provide copy-on-write mutation and iterator adapters. Strings are UTF-8; `String`/`Substring` iterate extended grapheme-cluster `Character` values, while `.scalars()` and `.utf8()` provide lower-level views. `Result` uses `.ok`/`.error`; `Optional` uses `.some`/`.none`.
 
 ## Compiler model
 

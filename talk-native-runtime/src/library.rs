@@ -152,7 +152,7 @@ pub fn accessors(prefix: &str, string_ids: Option<(u32, u32)>) -> String {
              default:\n        talk_lib_cleanup();\n        return TALK_LIB_ERR_TRAP;\n    \
              }}\n    \
              talk_lib_boundary_armed = 1;\n    \
-             TalkValue storage = talk_alloc(talk_int((int64_t)len));\n    \
+             TalkValue storage = talk_alloc(talk_int((int64_t)len), TALK_MEM_BYTE);\n    \
              if (len != 0) {{\n        memcpy(storage.v.ptr, bytes, (size_t)len);\n    }}\n    \
              TalkValue built = talk_agg({layout}u, {display}u, 0, 3);\n    \
              built.v.agg->fields[0] = storage;\n    \

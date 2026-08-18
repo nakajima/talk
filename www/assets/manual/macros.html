@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - 10. Macros</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037484" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>10. Macros</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros" aria-current="page">10. Macros</a><ol class="manual-outline-sections"><li><a href="#declarative-macros">Declarative macros</a></li>
+<li><a href="#hygiene-and-evaluation">Hygiene and evaluation</a></li>
+<li><a href="#expansion-positions">Expansion positions</a></li>
+<li><a href="#procedural-macros">Procedural macros</a></li>
+<li><a href="#further-reading">Further reading</a></li></ol></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/modules-and-packages">&larr; 9. Modules and Packages</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/concurrency">11. Concurrency &rarr;</a>
+          </nav>
+          <article class="page-content">
+            <p>Macros write TalkTalk code for you before the compiler checks the program. Simple macros substitute pieces of syntax into a template. More advanced macros can inspect syntax and build a result. Either way, the generated code is checked like code you wrote yourself.</p>
+<h2><a href="#declarative-macros" aria-hidden="true" class="anchor" id="declarative-macros"></a>Declarative macros</h2>
+<p>A declarative macro is a balanced token template with <code>$</code> parameters:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">macro</span> <span class="macro">choose</span>(<span class="variable">$condition</span>, <span class="variable">$yes</span>, <span class="variable">$no</span>) {
+	<span class="keyword">if</span> <span class="variable">$condition</span> {
+		<span class="variable">$yes</span>
+	} <span class="keyword">else</span> {
+		<span class="variable">$no</span>
+	}
+}
+
+<span class="keyword">let</span> result <span class="operator">=</span> <span class="operator">@</span><span class="macro">choose</span>(<span class="keyword">true</span>, <span class="number">1</span>, <span class="number">2</span>)
+<span class="variable">result</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='10' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>macro choose($condition, $yes, $no) {
+	if $condition {
+		$yes
+	} else {
+		$no
+	}
+}
+
+let result = @choose(true, 1, 2)
+result</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>A macro can introduce syntax and control flow that a function cannot:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">macro</span> <span class="macro">unless</span>(<span class="variable">$condition</span>, <span class="variable">$body</span>) {
+	<span class="keyword">if</span> <span class="variable">$condition</span> {
+		()
+	} <span class="keyword">else</span> {
+		<span class="variable">$body</span>
+	}
+}
+
+<span class="keyword">let</span> done <span class="operator">=</span> <span class="keyword">false</span>
+<span class="operator">@</span><span class="macro">unless</span>(done, print(<span class="string">"still working"</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='10' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>macro unless($condition, $body) {
+	if $condition {
+		()
+	} else {
+		$body
+	}
+}
+
+let done = false
+@unless(done, print(&quot;still working&quot;))</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Rules can overload by arity. Macro invocations use <code>@name(...)</code>.</p>
+<h2><a href="#hygiene-and-evaluation" aria-hidden="true" class="anchor" id="hygiene-and-evaluation"></a>Hygiene and evaluation</h2>
+<p>Names written in a template resolve in the macro's definition context. Spliced syntax keeps the caller's context. This prevents a helper binding in a macro from accidentally capturing, or being captured by, an unrelated caller name.</p>
+<p>A caller-provided identifier spliced into binder position intentionally exposes the generated declaration. Repeating <code>$value</code> repeats its syntax and therefore may repeat evaluation; bind an expression once when that distinction matters.</p>
+<h2><a href="#expansion-positions" aria-hidden="true" class="anchor" id="expansion-positions"></a>Expansion positions</h2>
+<p>The same invocation form can expand in expression, item, nominal-member, pattern, or type position. The invocation's location determines which grammar parses the result.</p>
+<p><code>@assert(condition)</code> is compiler-provided. It preserves the source text of the condition for useful failure messages and is also used by TalkTalk's test files.</p>
+<h2><a href="#procedural-macros" aria-hidden="true" class="anchor" id="procedural-macros"></a>Procedural macros</h2>
+<p>A package may export a deterministic procedural expression macro from a <code>*.macro.tlk</code> service. Such a macro receives one balanced <code>(...)</code>, <code>[...]</code>, or <code>{...}</code> input tree and returns typed syntax. Services use syntax values and <code>quote { ... }</code>, run under fixed budgets, and cannot use inline IR or <code>#unsafe</code>.</p>
+<p>The bundled HTML module is the main example:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">use</span> html<span class="operator">::</span>{ html }
+
+<span class="keyword">let</span> name <span class="operator">=</span> <span class="string">"&lt;Ada &amp; friends&gt;"</span>
+<span class="keyword">let</span> page <span class="operator">=</span> <span class="operator">@</span><span class="macro">html</span> {
+    main <span class="operator">#</span>content .page {
+        h1 { <span class="string">"Hello, "</span> (name) }
+        <span class="operator">@</span>for number <span class="keyword">in</span> [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>] {
+            span { (number) }
+        }
+    }
+}
+
+<span class="variable">print</span>(<span class="variable">page</span>.<span class="property">into_string</span>())</pre>
+        </div>
+        
+<p>Interpolated values are escaped. The macro checks the markup while compiling and produces ordinary TalkTalk code.</p>
+<h2><a href="#further-reading" aria-hidden="true" class="anchor" id="further-reading"></a>Further reading</h2>
+<p>TalkTalk's declarative macros use lexical hygiene: names introduced by a macro do not accidentally capture names at the call site. <a href="https://www.cs.utah.edu/plt/scope-sets/">Binding as sets of scopes</a> explains the scope-set model that informs modern hygienic macro systems. TalkTalk's typed procedural services are its own constrained design, documented by <a href="https://github.com/nakajima/talk/blob/main/docs/adr/0026-macros.md">ADR 0026</a>.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/modules-and-packages">&larr; 9. Modules and Packages</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/concurrency">11. Concurrency &rarr;</a>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037484"></script>
+    </main>
+  </body>
+</html>

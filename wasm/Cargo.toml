@@ -17,8 +17,8 @@ web-sys = { version = "0.3.83", features = ["console"] }
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
 
-[target.'cfg(all(target_arch = "wasm32", target_feature = "atomics"))'.dev-dependencies]
+[target.'cfg(all(target_arch = "wasm32", target_feature = "atomics"))'.dependencies]
 wasm_thread = "0.3"
 
 [package.metadata.wasm-pack.profile.release]
-wasm-opt = ["-O", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]
+wasm-opt = ["-O", "--enable-threads", "--enable-bulk-memory", "--enable-nontrapping-float-to-int"]

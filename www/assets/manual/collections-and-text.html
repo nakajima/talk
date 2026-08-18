@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - 8. Collections and Text</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037483" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>8. Collections and Text</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text" aria-current="page">8. Collections and Text</a><ol class="manual-outline-sections"><li><a href="#arrays">Arrays</a></li>
+<li><a href="#iteration">Iteration</a></li>
+<li><a href="#ranges">Ranges</a></li>
+<li><a href="#unicode-text">Unicode text</a></li>
+<li><a href="#string-building-and-conversion">String building and conversion</a></li>
+<li><a href="#dictionaries">Dictionaries</a></li></ol></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/ownership-and-memory">&larr; 7. Ownership and Memory</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/modules-and-packages">9. Modules and Packages &rarr;</a>
+          </nav>
+          <article class="page-content">
+            <p>This chapter covers the containers and text tools used in everyday TalkTalk programs: arrays, ranges, loops, strings, and dictionaries.</p>
+<h2><a href="#arrays" aria-hidden="true" class="anchor" id="arrays"></a>Arrays</h2>
+<p><code>[T]</code> is a growable, copy-on-write array:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> numbers <span class="operator">=</span> [<span class="number">10</span>, <span class="number">20</span>, <span class="number">30</span>]
+<span class="variable">numbers</span>.<span class="property">push</span>(<span class="number">40</span>)
+<span class="variable">print</span>(<span class="variable">numbers</span>[<span class="number">1</span>])
+<span class="variable">numbers</span>[<span class="number">0</span>] <span class="operator">=</span> <span class="number">99</span>
+<span class="variable">print</span>(<span class="variable">numbers</span>.<span class="property">count</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let numbers = [10, 20, 30]
+numbers.push(40)
+print(numbers[1])
+numbers[0] = 99
+print(numbers.count)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Common operations include <code>get</code>, <code>push</code>, <code>pop</code>, <code>swap</code>, and indexed access. <code>get</code> returns an optional; subscript syntax is the direct form.</p>
+<p><code>[T; N]</code> is an <code>InlineArray</code> whose static length is part of the type. Use it for fixed-size data and static value generic APIs.</p>
+<h2><a href="#iteration" aria-hidden="true" class="anchor" id="iteration"></a>Iteration</h2>
+<p><code>for</code> uses <code>Iterable</code> and <code>Iterator</code>. Iterator adapters are lazy until collected:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> result <span class="operator">=</span> [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>].<span class="property">map</span> { <span class="variable">$0</span> <span class="operator">*</span> <span class="number">10</span> }.<span class="property">skip</span>(<span class="parameter">count</span>: <span class="number">1</span>).<span class="property">to_array</span>()
+
+<span class="variable">print</span>(<span class="variable">result</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let result = [1, 2, 3, 4].map { $0 * 10 }.skip(count: 1).to_array()
+
+print(result)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>A user type can participate by conforming to <code>Iterator</code>:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">struct</span> <span class="type">Countdown</span> {
+	<span class="keyword">let</span> <span class="property">remaining</span>: <span class="type">Int</span>
+}
+
+<span class="keyword">extend</span> <span class="type">Countdown</span>: <span class="type">Iterator</span> {
+	<span class="modifier">mut</span> <span class="keyword">func</span> <span class="function">next</span>() <span class="operator">-&gt;</span> <span class="type">Int?</span> {
+		<span class="keyword">if</span> <span class="type">self</span>.<span class="property">remaining</span> <span class="operator">==</span> <span class="number">0</span> { <span class="keyword">return</span> .<span class="property">none</span> }
+		<span class="type">self</span>.<span class="property">remaining</span> <span class="operator">=</span> <span class="type">self</span>.<span class="property">remaining</span> <span class="operator">-</span> <span class="number">1</span>
+		<span class="keyword">return</span> .<span class="property">some</span>(<span class="type">self</span>.<span class="property">remaining</span> <span class="operator">+</span> <span class="number">1</span>)
+	}
+}
+
+<span class="keyword">for</span> number <span class="keyword">in</span> <span class="type">Countdown</span>(<span class="parameter">remaining</span>: <span class="number">3</span>) {
+	<span class="variable">print</span>(<span class="variable">number</span>)
+}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='15' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>struct Countdown {
+	let remaining: Int
+}
+
+extend Countdown: Iterator {
+	mut func next() -&gt; Int? {
+		if self.remaining == 0 { return .none }
+		self.remaining = self.remaining - 1
+		return .some(self.remaining + 1)
+	}
+}
+
+for number in Countdown(remaining: 3) {
+	print(number)
+}</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p><code>for x in consume values</code> consumes the source. <code>for x in mut values</code> iterates with writeback.</p>
+<h2><a href="#ranges" aria-hidden="true" class="anchor" id="ranges"></a>Ranges</h2>
+<p><code>lower..&lt;upper</code> excludes the upper bound and <code>lower..upper</code> includes it:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">for</span> i <span class="keyword">in</span> <span class="number">0</span><span class="operator">..&lt;</span><span class="number">3</span> {
+	<span class="variable">print</span>(<span class="variable">i</span>) <span class="comment">// 0, 1, 2</span>
+}
+<span class="keyword">for</span> i <span class="keyword">in</span> <span class="number">1</span><span class="operator">..</span><span class="number">3</span> {
+	<span class="variable">print</span>(<span class="variable">i</span>) <span class="comment">// 1, 2, 3</span>
+}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='6' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>for i in 0..&lt;3 {
+	print(i) // 0, 1, 2
+}
+for i in 1..3 {
+	print(i) // 1, 2, 3
+}</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Integer ranges conform to <code>Iterable</code> without allocating an array.</p>
+<h2><a href="#unicode-text" aria-hidden="true" class="anchor" id="unicode-text"></a>Unicode text</h2>
+<p>Strings are UTF-8, and their user-facing character operations use extended grapheme clusters:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="variable">print</span>(<span class="string">"héllo 👋🏽"</span>.<span class="property">count</span>())
+<span class="variable">print</span>(<span class="string">"héllo 👋🏽"</span>.<span class="property">utf8</span>().<span class="property">count</span>())
+<span class="variable">print</span>(<span class="string">"👨‍👩‍👧‍👦"</span>.<span class="property">count</span>())</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>print(&quot;héllo 👋🏽&quot;.count())
+print(&quot;héllo 👋🏽&quot;.utf8().count())
+print(&quot;👨‍👩‍👧‍👦&quot;.count())</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Iterating a <code>String</code> or <code>Substring</code> produces <code>Character</code> values. Lower-level views are explicit:</p>
+<ul>
+<li><code>.utf8()</code> iterates encoded bytes</li>
+<li><code>.scalars()</code> iterates Unicode scalar values</li>
+<li>ordinary iteration produces grapheme-cluster <code>Character</code> values</li>
+</ul>
+<p>The text surface includes searching, splitting, trimming, replacement, Unicode classification, case conversion, normalization, and cursor/index APIs. Index types carry provenance so an index from unrelated text cannot silently address a different string.</p>
+<h2><a href="#string-building-and-conversion" aria-hidden="true" class="anchor" id="string-building-and-conversion"></a>String building and conversion</h2>
+<p><code>StringBuilder</code> supports repeated construction without a chain of intermediate strings. <code>String</code> and <code>Substring</code> implement <code>StringMethods</code>; many operations therefore read naturally as methods on either owned text or a view.</p>
+<p><code>Showable</code> converts values for display through <code>.show()</code>, and <code>print</code> accepts any <code>Showable</code> value. <code>From&lt;Source&gt;</code> and <code>Into&lt;Target&gt;</code> describe general library conversions.</p>
+<h2><a href="#dictionaries" aria-hidden="true" class="anchor" id="dictionaries"></a>Dictionaries</h2>
+<p>The standard library's <code>dict</code> module provides a growable string-keyed <code>Dict&lt;Value&gt;</code>:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">use</span> dict<span class="operator">::</span>{ Dict }
+
+<span class="keyword">let</span> scores <span class="operator">=</span> <span class="type">Dict</span><span class="operator">&lt;</span><span class="type">Int</span><span class="operator">&gt;</span>()
+<span class="variable">scores</span>.<span class="property">insert</span>(<span class="parameter">key</span>: <span class="string">"ada"</span>, <span class="parameter">value</span>: <span class="number">100</span>)
+
+<span class="keyword">match</span> <span class="variable">scores</span>.<span class="property">get</span>(<span class="parameter">key</span>: <span class="string">"ada"</span>) {
+	.<span class="enum_member">some</span>(score) <span class="operator">-&gt;</span> <span class="variable">print</span>(<span class="variable">score</span>),
+	.<span class="enum_member">none</span> <span class="operator">-&gt;</span> <span class="variable">print</span>(<span class="string">"missing"</span>)
+}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='9' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>use dict::{ Dict }
+
+let scores = Dict&lt;Int&gt;()
+scores.insert(key: &quot;ada&quot;, value: 100)
+
+match scores.get(key: &quot;ada&quot;) {
+	.some(score) -&gt; print(score),
+	.none -&gt; print(&quot;missing&quot;)
+}</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>The standard library is still growing; consult the source modules for the complete current API.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/ownership-and-memory">&larr; 7. Ownership and Memory</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/modules-and-packages">9. Modules and Packages &rarr;</a>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037483"></script>
+    </main>
+  </body>
+</html>

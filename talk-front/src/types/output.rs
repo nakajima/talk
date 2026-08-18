@@ -403,7 +403,7 @@ pub struct Elaboration {
     /// Per-file low-water mark of the checker's descending id mint: the
     /// typed-tree build mints its elaborated-node ids below this.
     pub synthetic_floors: FxHashMap<crate::node_id::FileID, u32>,
-    /// Argument nodes where a borrowed value satisfies an owned CheapClone
+    /// Argument nodes where a borrowed value satisfies an owned Clone
     /// parameter through an explicit clone coercion (ADR 0054).
     pub coerce_clones: rustc_hash::FxHashSet<NodeID>,
     /// Expression nodes implicitly packed into an existential expected type.

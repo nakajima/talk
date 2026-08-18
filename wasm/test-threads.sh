@@ -3,10 +3,9 @@
 # corpus in headless Chrome on Web-Worker threads over shared wasm
 # memory (wasm/tests/parallel.rs), against the native backends' pins.
 #
-# The flags live here, not in .cargo/config.toml, on purpose: the
-# playground build from this directory must stay single-threaded (its
-# hosting has no COOP/COEP headers, so SharedArrayBuffer is absent and
-# a shared-memory module would fail to instantiate).
+# The production build uses the same atomics and shared-memory contract.
+# Test flags remain local to this script so unrelated workspace builds do
+# not inherit the WASM target configuration.
 #
 # Requires: nightly rustc + rust-src, wasm-pack, and a Chrome/Chromium
 # with a version-matched chromedriver. CHROMEDRIVER overrides driver

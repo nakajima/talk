@@ -26,9 +26,73 @@ function initIntroExamples() {
 initIntroExamples();
 
 const wasmCacheKey = new URL(import.meta.url).search;
+const threadedTalkReady = loadThreadedTalk();
 const talk = createWasmClient();
 talk.onFailure(disableFailedActionButtons);
 talk.ready.then(enableActionButtons).catch(() => {});
+
+async function loadThreadedTalk() {
+  if (!globalThis.crossOriginIsolated || !globalThis.SharedArrayBuffer) {
+    throw new Error(
+      "The Talk playground requires cross-origin isolation and SharedArrayBuffer",
+    );
+  }
+  const wasm = await import(`/pkg/talk_wasm.js${wasmCacheKey}`);
+  await wasm.default({
+    module_or_path: `/pkg/talk_wasm_bg.wasm${wasmCacheKey}`,
+  });
+  return wasm;
+}
+
+function runThreadedProgram(source, stdin) {
+  let stdoutController;
+  let stderrController;
+  let stdoutOpen = true;
+  let stderrOpen = true;
+  const stdout = new ReadableStream({
+    start(controller) {
+      stdoutController = controller;
+    },
+    cancel() {
+      stdoutOpen = false;
+    },
+  });
+  const stderr = new ReadableStream({
+    start(controller) {
+      stderrController = controller;
+    },
+    cancel() {
+      stderrOpen = false;
+    },
+  });
+  const failStreams = (error) => {
+    if (stdoutOpen) stdoutController.error(error);
+    if (stderrOpen) stderrController.error(error);
+    stdoutOpen = false;
+    stderrOpen = false;
+  };
+  const result = (async () => {
+    const wasm = await threadedTalkReady;
+    const handle = wasm.start_program_threaded(source, stdin);
+    for (;;) {
+      const state = wasm.poll_program_threaded(handle);
+      for (const chunk of state.output) {
+        if (chunk.fd === 1 && stdoutOpen) stdoutController.enqueue(chunk.bytes);
+        if (chunk.fd === 2 && stderrOpen) stderrController.enqueue(chunk.bytes);
+      }
+      if (state.done) {
+        if (stdoutOpen) stdoutController.close();
+        if (stderrOpen) stderrController.close();
+        stdoutOpen = false;
+        stderrOpen = false;
+        return state.result;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 4));
+    }
+  })();
+  result.catch(failStreams);
+  return { stdout, stderr, result };
+}
 
 function createWasmClient() {
   const worker = new Worker(`/wasm-worker.js${wasmCacheKey}`, {
@@ -40,10 +104,11 @@ function createWasmClient() {
   let fatalError = null;
   let resolveReady;
   let rejectReady;
-  const ready = new Promise((resolve, reject) => {
+  const workerReady = new Promise((resolve, reject) => {
     resolveReady = resolve;
     rejectReady = reject;
   });
+  const ready = Promise.all([workerReady, threadedTalkReady]).then(() => undefined);
 
   const fail = (error) => {
     if (fatalError) return;
@@ -60,10 +125,11 @@ function createWasmClient() {
       resolveReady();
       return;
     }
-    if (message.type !== "result") return;
 
     const request = pending.get(message.id);
     if (!request) return;
+    if (message.type !== "result") return;
+
     pending.delete(message.id);
     if (message.error) {
       const error = new Error(message.error.message);
@@ -97,7 +163,13 @@ function createWasmClient() {
       failureListeners.add(listener);
       if (fatalError) listener(fatalError);
     },
-    runProgram: (source) => request("runProgram", { source }),
+    runProgram(source, { stdin = new Uint8Array() } = {}) {
+      if (typeof stdin === "string") stdin = new TextEncoder().encode(stdin);
+      if (!(stdin instanceof Uint8Array)) {
+        throw new TypeError("stdin must be a string or Uint8Array");
+      }
+      return runThreadedProgram(source, stdin);
+    },
     format: (source) => request("format", { source }),
     showIr: (source) => request("showIr", { source }),
     analyze: (source, currentSource) =>
@@ -416,8 +488,8 @@ function ensureDiagnosticsList(container) {
   list = document.createElement("div");
   list.className = "diagnostics-list";
   const actions = container.querySelector(".actions");
-  if (actions && actions.parentNode === container) {
-    container.insertBefore(list, actions);
+  if (actions?.parentNode) {
+    actions.parentNode.insertBefore(list, actions);
   } else {
     container.appendChild(list);
   }
@@ -684,6 +756,32 @@ function initFormattable(el) {
   });
 }
 
+async function renderOutputStream(stream, element) {
+  const decoder = new TextDecoder();
+  const reader = stream.getReader();
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      const text = decoder.decode(value, { stream: true });
+      if (text) {
+        element.hidden = false;
+        element.append(document.createTextNode(text));
+      }
+    }
+
+    const text = decoder.decode();
+    if (text) {
+      element.hidden = false;
+      element.append(document.createTextNode(text));
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 function initRunnable(el) {
   el.addEventListener("click", async function (e) {
     let container = e.target.closest(".runnable");
@@ -695,11 +793,26 @@ function initRunnable(el) {
     el.disabled = true;
 
     try {
-      let output = await talk.runProgram(source);
-      result.innerHTML = `
-        <pre class="output">${output.output}</pre>
-        <pre class="value"><span class="arrow">=> </span>${output.highlightedValue}</pre>`;
+      const run = talk.runProgram(source);
+      const stdout = document.createElement("pre");
+      stdout.className = "output";
+      stdout.hidden = true;
+      const stderr = document.createElement("pre");
+      stderr.className = "output error";
+      stderr.hidden = true;
+      const value = document.createElement("pre");
+      value.className = "value";
+      value.hidden = true;
+      result.replaceChildren(stdout, stderr, value);
       result.classList.add("active");
+
+      const streamsDone = Promise.all([
+        renderOutputStream(run.stdout, stdout),
+        renderOutputStream(run.stderr, stderr),
+      ]);
+      const [output] = await Promise.all([run.result, streamsDone]);
+      value.innerHTML = `<span class="arrow">=> </span>${output.highlightedValue}`;
+      value.hidden = false;
     } catch (error) {
       showActionError(result, error);
     } finally {

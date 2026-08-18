@@ -62,13 +62,12 @@ A handler schedules ordinary direct-style tasks whenever they pause.
 
 ```talk playground(cooperative-tasks)
 'spawn(task: func() -> () {
-	print("task started")
-	'pause()
-	print("task resumed")
+  print("task started")
+  sleep(ms: .seconds(3).as_milliseconds())
+  print("task resumed")
 })
 
 print("main continues")
-
 ```
 
 ## Cancellation runs cleanup
@@ -123,7 +122,7 @@ length(values: pair) + length(values: triple)
 Heap values provide shared identity, mutation, and cycles when value semantics are not enough.
 
 ```talk playground(cyclic-graph)
-struct Node {
+struct Node 'heap {
 	let value: Int
 	let next: Node?
 }
@@ -185,17 +184,18 @@ for number in Countdown(remaining: 3) {
 
 The checker rejects using a one-shot capability twice.
 
-```talk playground(ownership-error)
-struct Token 'linear { let id: Int }
-struct Pair {
-	let first: Token
-	let second: Token
+```tlk playground(ownership-error)
+struct Token 'linear {
+  let id: Int
+
+  consuming func spend() {}
 }
 
-func spendTwice() -> Pair {
-	let token = Token(id: 1)
-	Pair(first: token, second: token)
-}
-
-// spendTwice()
+// Wrapping this in an immediately invoked anonymous function because
+// linear values can't be globals.
+func() {
+  let token = Token(id: 123)
+  token.spend()
+  token.spend() // Comment out this line
+}()
 ```

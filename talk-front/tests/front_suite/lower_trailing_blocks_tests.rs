@@ -6,7 +6,7 @@
     #[test]
     fn trailing_blocks_become_anonymous_func_arguments() {
         let (mut ast, _) = talk::compiling::frontend::parse_ast(
-            "foo(1) { x in x }\nbar { $0 }\nbaz {}\n",
+            "foo(1) { x in x }\nbar { $0 }\nbaz {}\n'foo(1) { x in x }\n'bar { $0 }\n",
             talk_front::node_id::FileID(0),
             "-",
         )
@@ -21,13 +21,18 @@
             let talk_front::node_kinds::stmt::StmtKind::Expr(expr) = &stmt.kind else {
                 panic!("expected expression statements");
             };
-            let ExprKind::Call {
-                args,
-                trailing_block,
-                ..
-            } = &expr.kind
-            else {
-                panic!("expected calls");
+            let (args, trailing_block) = match &expr.kind {
+                ExprKind::Call {
+                    args,
+                    trailing_block,
+                    ..
+                }
+                | ExprKind::CallEffect {
+                    args,
+                    trailing_block,
+                    ..
+                } => (args, trailing_block),
+                _ => panic!("expected calls or effect performs"),
             };
             assert!(trailing_block.is_none(), "trailing block must desugar");
             let Some(CallArg {
@@ -52,12 +57,12 @@
             calls += 1;
             match calls {
                 // `{ x in x }` carries its named parameter.
-                1 => assert_eq!(func.params[0].name.name_str(), "x"),
+                1 | 4 => assert_eq!(func.params[0].name.name_str(), "x"),
                 // `{ $0 }` carries the parser-synthesized positional.
-                2 => assert_eq!(func.params[0].name.name_str(), "$0"),
+                2 | 5 => assert_eq!(func.params[0].name.name_str(), "$0"),
                 // `{}` is a zero-parameter closure.
                 _ => assert!(func.params.is_empty()),
             }
         }
-        assert_eq!(calls, 3);
+        assert_eq!(calls, 5);
     }

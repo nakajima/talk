@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - 2. Values and Types</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037476" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>2. Values and Types</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types" aria-current="page">2. Values and Types</a><ol class="manual-outline-sections"><li><a href="#primitive-types">Primitive types</a></li>
+<li><a href="#strings-and-characters">Strings and characters</a></li>
+<li><a href="#arrays-inline-arrays-tuples-and-records">Arrays, inline arrays, tuples, and records</a></li>
+<li><a href="#optional-and-result-values">Optional and result values</a></li>
+<li><a href="#function-and-borrow-types">Function and borrow types</a></li>
+<li><a href="#type-aliases">Type aliases</a></li></ol></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/syntax">&larr; 1. Syntax</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/bindings-and-functions">3. Bindings and Functions &rarr;</a>
+          </nav>
+          <article class="page-content">
+            <p>TalkTalk checks that values are used consistently, but it usually figures out their types for you. It's kind of a joke around these parts that you should never have to annotate a type if you don't want to. Ok maybe not a joke. A goal? Sure.</p>
+<p>You can still write a type when it makes the code clearer or when you want the compiler to check for one specific type.</p>
+<h2><a href="#primitive-types" aria-hidden="true" class="anchor" id="primitive-types"></a>Primitive types</h2>
+<p>The built-in scalar types are:</p>
+<ul>
+<li><code>Int</code> - a signed machine-sized integer</li>
+<li><code>Float</code> - floating-point numbers</li>
+<li><code>Bool</code> - <code>true</code> or <code>false</code></li>
+<li><code>Byte</code> - an eight-bit value</li>
+<li><code>RawPtr</code> - a low-level raw pointer. (you don't want to use this probably. i don't like how it works and it could go away.)</li>
+<li><code>Void</code>, also written <code>()</code> - the unit type and value</li>
+<li><code>Never</code> - a computation that does not return</li>
+</ul>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> count: <span class="type">Int</span> <span class="operator">=</span> <span class="number">3</span>
+<span class="keyword">let</span> ratio: <span class="type">Float</span> <span class="operator">=</span> <span class="number">0.5</span>
+<span class="keyword">let</span> ready: <span class="type">Bool</span> <span class="operator">=</span> <span class="keyword">true</span>
+<span class="keyword">let</span> nothing: () <span class="operator">=</span> ()
+
+(<span class="variable">count</span>, <span class="variable">ratio</span>, <span class="variable">ready</span>, <span class="variable">nothing</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='6' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let count: Int = 3
+let ratio: Float = 0.5
+let ready: Bool = true
+let nothing: () = ()
+
+(count, ratio, ready, nothing)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Integer and floating-point arithmetic do not mix implicitly.</p>
+<h2><a href="#strings-and-characters" aria-hidden="true" class="anchor" id="strings-and-characters"></a>Strings and characters</h2>
+<p>Strings are UTF-8. A character literal uses single quotes and produces a <code>Character</code>:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> greeting <span class="operator">=</span> <span class="string">"héllo"</span>
+<span class="keyword">let</span> letter <span class="operator">=</span> <span class="string">'é'</span>
+
+<span class="variable">print</span>(<span class="variable">greeting</span>)
+<span class="variable">print</span>(<span class="variable">letter</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let greeting = &quot;héllo&quot;
+let letter = &#39;é&#39;
+
+print(greeting)
+print(letter)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p><code>String</code> owns text; <code>Substring</code> refers to part of a string. Normal iteration keeps visible characters together, including emoji made from several Unicode scalars. Use <code>.scalars()</code> when you need Unicode scalar values and <code>.utf8()</code> when you need the encoded bytes:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> text <span class="operator">=</span> <span class="string">"héllo 👋🏽"</span>
+
+<span class="keyword">for</span> character <span class="keyword">in</span> <span class="variable">text</span> {
+	<span class="variable">print</span>(<span class="variable">character</span>)
+}
+
+<span class="keyword">for</span> scalar <span class="keyword">in</span> <span class="variable">text</span>.<span class="property">scalars</span>() {
+	<span class="variable">print</span>(<span class="variable">scalar</span>)
+}
+
+<span class="variable">print</span>(<span class="variable">text</span>.<span class="property">count</span>())
+<span class="variable">print</span>(<span class="variable">text</span>.<span class="property">utf8</span>().<span class="property">count</span>())</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='12' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let text = &quot;héllo 👋🏽&quot;
+
+for character in text {
+	print(character)
+}
+
+for scalar in text.scalars() {
+	print(scalar)
+}
+
+print(text.count())
+print(text.utf8().count())</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<h2><a href="#arrays-inline-arrays-tuples-and-records" aria-hidden="true" class="anchor" id="arrays-inline-arrays-tuples-and-records"></a>Arrays, inline arrays, tuples, and records</h2>
+<p><code>[T]</code> is a growable <code>Array&lt;T&gt;</code>. <code>[T; N]</code> is an exact-size <code>InlineArray&lt;T, N&gt;</code> whose length is part of its type:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> values: [<span class="type">Int</span>] <span class="operator">=</span> [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]
+<span class="keyword">let</span> coordinates: [<span class="type">Int</span>; <span class="number">4</span>] <span class="operator">=</span> [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>, <span class="number">4</span>]
+
+<span class="variable">print</span>(<span class="variable">values</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='4' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let values: [Int] = [1, 2, 3]
+let coordinates: [Int; 4] = [1, 2, 3, 4]
+
+print(values)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Tuples are positional:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> point: (<span class="type">Int</span>, <span class="type">Int</span>) <span class="operator">=</span> (<span class="number">10</span>, <span class="number">20</span>)
+<span class="variable">print</span>(<span class="variable">point</span>.<span class="number">0</span><span class="property">)</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='2' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let point: (Int, Int) = (10, 20)
+print(point.0)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Records are structural values:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> point <span class="operator">=</span> { <span class="parameter">x</span>: <span class="number">1</span>, <span class="parameter">y</span>: <span class="number">2</span> }
+<span class="keyword">let</span> moved <span class="operator">=</span> { <span class="parameter">x</span>: <span class="number">3</span>, <span class="parameter">y</span>: <span class="variable">point</span>.<span class="property">y</span> }
+
+<span class="variable">moved</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='4' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let point = { x: 1, y: 2 }
+let moved = { x: 3, y: point.y }
+
+moved</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>The corresponding record type is <code>{ x: Int, y: Int }</code>.</p>
+<h2><a href="#optional-and-result-values" aria-hidden="true" class="anchor" id="optional-and-result-values"></a>Optional and result values</h2>
+<p><code>T?</code> is shorthand for <code>Optional&lt;T&gt;</code>, whose cases are <code>.some(T)</code> and <code>.none</code>. <code>Result&lt;S, F&gt;</code> has <code>.ok(S)</code> and <code>.error(F)</code>:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> maybe_count: <span class="type">Int?</span> <span class="operator">=</span> .<span class="property">some</span>(<span class="number">3</span>)
+<span class="keyword">let</span> parsed: <span class="type">Result</span><span class="operator">&lt;</span><span class="type">Int</span>, <span class="type">String</span><span class="operator">&gt;</span> <span class="operator">=</span> .<span class="property">error</span>(<span class="string">"not an integer"</span>)
+
+<span class="variable">maybe_count</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='4' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let maybe_count: Int? = .some(3)
+let parsed: Result&lt;Int, String&gt; = .error(&quot;not an integer&quot;)
+
+maybe_count</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>On any two-case enum, postfix <code>?</code> extracts the first case or returns the second case from the enclosing function. Postfix <code>!</code> extracts the first case or panics:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">func</span> <span class="function">increment</span>(<span class="parameter">_</span> <span class="parameter">value</span>: <span class="type">Int?</span>) <span class="operator">-&gt;</span> <span class="type">Int?</span> {
+	<span class="keyword">let</span> n <span class="operator">=</span> <span class="variable">value</span><span class="operator">?</span>
+	<span class="keyword">return</span> .<span class="property">some</span>(<span class="variable">n</span> <span class="operator">+</span> <span class="number">1</span>)
+}</pre>
+        </div>
+        
+<p>Prefer <code>match</code>, <code>if let</code>, or <code>let ... else</code> when the two outcomes need local, explicit handling.</p>
+<h2><a href="#function-and-borrow-types" aria-hidden="true" class="anchor" id="function-and-borrow-types"></a>Function and borrow types</h2>
+<p>A function type is <code>(A, B) -&gt; R</code>. Effects, when written, appear before the arrow:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">let</span> pure: (Int) '[] <span class="operator">-&gt;</span> <span class="type">Int</span>
+<span class="keyword">let</span> writes: (String) <span class="effect">'io</span> <span class="operator">-&gt;</span> <span class="type">Void</span>
+<span class="keyword">let</span> fallible: () '[<span class="effect">io</span>, <span class="effect">panic</span>] <span class="operator">-&gt;</span> <span class="type">String</span></pre>
+        </div>
+        
+<p><code>&amp;T</code> is a shared borrow, <code>&amp;mut T</code> an exclusive borrow, and <code>*T</code> a statically unique owned value. Most ordinary code does not write these types because parameters borrow and values share implicitly. Basically if you have to write these, it's either a talktalk bug or a you bug.</p>
+<h2><a href="#type-aliases" aria-hidden="true" class="anchor" id="type-aliases"></a>Type aliases</h2>
+<p>Aliases give another name to an existing type:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">typealias</span> <span class="type">Coordinate</span> <span class="operator">=</span> (<span class="type">Int</span>, <span class="type">Int</span>)</pre>
+        </div>
+        
+<p>Aliases do not create a distinct nominal type; use a <code>struct</code> when identity and an API boundary matter.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/syntax">&larr; 1. Syntax</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/bindings-and-functions">3. Bindings and Functions &rarr;</a>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037476"></script>
+    </main>
+  </body>
+</html>

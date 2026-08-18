@@ -1213,6 +1213,8 @@ fn display_names(programs: &[ProgramInput<'_>]) -> DisplayNames {
                     name: name_of(symbol),
                     kind: if *symbol == Symbol::String {
                         TypeKind::String
+                    } else if *symbol == Symbol::Array {
+                        TypeKind::Array
                     } else {
                         TypeKind::Record
                     },
@@ -3908,9 +3910,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // Taking an owned value out of a shared borrow donates a
                 // reference like any other place read: under implicit
                 // sharing every clone at this boundary is a retain, so
-                // the old Copy/CheapClone cheapness gate has nothing
+                // the old Copy/Clone cheapness gate has nothing
                 // left to police (docs/ownership.md,
-                // cheap-clone-at-use adjudication).
+                // clone-at-use adjudication).
                 self.retain_value(operand, &owned, span)?;
             }
         }
@@ -5056,7 +5058,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             // An explicit `copy` marker clones at the argument site: the
             // callee consumes the fresh copy and the source stays put.
-            // Typing already checked the Copy/CheapClone evidence.
+            // Typing already checked the Copy/Clone evidence.
             if matches!(arg.mode, Some(ArgMode::Copy)) {
                 let mut ty = self.resolved(&arg.value.ty);
                 while let Ty::Borrow(_, inner) = ty {
@@ -6634,7 +6636,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             return self.compile_existential_pack(expr, pack, operand);
         }
         // The checker coerced this borrowed use into an owned one through
-        // an implicit CheapClone (`coerce_clones`): one reference per
+        // an implicit Clone (`coerce_clones`): one reference per
         // owned buffer.
         if expr.ownership.auto_clone {
             let ty = self.resolved(&expr.ty);
@@ -7152,6 +7154,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     bytes: Operand::Const(Constant::Int(
                         count * i64::from(layout::element_stride(element)),
                     )),
+                    kind: element,
                 });
                 for (index, item) in items.iter().enumerate() {
                     let value = self.compile_expr(item)?;
@@ -7201,13 +7204,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             ExprKind::Func(func) => self.compile_closure(func),
             ExprKind::Clone(source) => {
                 // Typing selected the clone (CHG-09): Copy duplicates the
-                // value; CheapClone adds one reference per owned buffer
+                // value; Clone adds one reference per owned buffer
                 // (copy-on-write's O(1) clone).
                 let value = self.compile_expr(source)?;
                 let source_ty = self.resolved(&source.ty);
                 if is_linear(self.program_builder, &source_ty) {
                     return Err(BackendError::new(
-                        "the `copy` marker requires a Copy or CheapClone value (linear values are never cloneable)"
+                        "the `copy` marker requires a Copy or Clone value (linear values are never cloneable)"
                             .into(),
                         expr.span,
                     ));
@@ -10556,7 +10559,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     });
                     Operand::Local(scaled)
                 };
-                self.push(Inst::Alloc { dest, bytes });
+                self.push(Inst::Alloc {
+                    dest,
+                    bytes,
+                    kind: element,
+                });
                 return Ok(Operand::Local(dest));
             }
             K::Free { ptr } => {
@@ -10869,6 +10876,10 @@ mod well_known_identity_tests {
         assert_eq!(
             super::executable(crate::name_resolution::symbol::Symbol::String),
             talk_mir::MirSymbol::STRING
+        );
+        assert_eq!(
+            super::executable(crate::name_resolution::symbol::Symbol::Array),
+            talk_mir::MirSymbol::ARRAY
         );
         assert_eq!(
             super::executable(crate::name_resolution::symbol::Symbol::Storage),

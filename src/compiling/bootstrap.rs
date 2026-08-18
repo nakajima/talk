@@ -402,9 +402,9 @@ mod tests {
         // the runtime backstop for those.
         let effectful = vec![(
             "Svc.tlk".into(),
-            "pub func nap() -> Int { sleep(ms: 0) }\n".into(),
+            "pub func now() -> Int { _io_monotonic_nanos() }\n".into(),
         )];
-        let denied = bootstrap(&effectful, &["nap".into()], &[], None, None)
+        let denied = bootstrap(&effectful, &["now".into()], &[], None, None)
             .err()
             .expect("denied effect must fail");
         assert!(denied.contains("'io"), "{denied}");

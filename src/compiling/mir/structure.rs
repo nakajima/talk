@@ -202,7 +202,7 @@ fn verify_function(module: &Module, id: usize, function: &Function, findings: &m
                 | Inst::MakeCont { dest }
                 | Inst::GetFloor { dest }
                 | Inst::EnvGet { dest, .. } => dests.push(*dest),
-                Inst::Alloc { dest, bytes } => {
+                Inst::Alloc { dest, bytes, .. } => {
                     dests.push(*dest);
                     operands.push(*bytes);
                 }

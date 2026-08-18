@@ -1,8 +1,8 @@
-<html>
-  <meta charset="utf-8">
-  <meta content="text/html" charset="UTF-8" http-equiv="Content-Type">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!doctype html>
+<html lang="en">
   <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - {TITLE}</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link href="/reset.css" rel="stylesheet">
@@ -11,10 +11,7 @@
   <body>
 {GLOBAL_NAV}
     <main class="content-page">
-      <header class="page-header">
-        <code class="page-kicker">talktalk / {SLUG}</code>
-        <h1>{TITLE}</h1>
-      </header>
+{PAGE_HEADER}
       <article class="page-content">
         {CONTENT_GOES_HERE}
       </article>

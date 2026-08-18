@@ -933,7 +933,7 @@ impl Lowering<'_> {
                 let k = self.consts.intern_ptr(offset);
                 self.code.push(Insn::Const { dest: *dest, k });
             }
-            Inst::Alloc { dest, bytes } => {
+            Inst::Alloc { dest, bytes, .. } => {
                 let count = self.reg(*bytes);
                 self.code.push(Insn::Alloc { dest: *dest, count });
             }

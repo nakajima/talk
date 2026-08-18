@@ -20,10 +20,11 @@ self.addEventListener("message", (event) => {
 
   const { id, operation, payload } = message;
   try {
+    const value = perform(operation, payload);
     self.postMessage({
       type: "result",
       id,
-      value: perform(operation, payload),
+      value,
     });
   } catch (error) {
     self.postMessage({
@@ -65,8 +66,6 @@ function describeError(error) {
 
 function perform(operation, payload) {
   switch (operation) {
-    case "runProgram":
-      return run_program(payload.source);
     case "format":
       return format(payload.source);
     case "showIr":

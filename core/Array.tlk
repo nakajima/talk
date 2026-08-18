@@ -6,7 +6,7 @@ use package::String::{ String }
 use package::StringBuilder::{ StringBuilder }
 use package::Operators::{ Add, Subtract, Multiply, Comparable, Equatable, SubscriptRead, SubscriptWrite }
 use package::Showable::{ Showable }
-use package::Ownership::{ Borrowed, CheapClone, Deinit }
+use package::Ownership::{ Borrowed, Clone, Deinit }
 use package::Host::{ panic }
 
 pub struct Array<Element> {
@@ -189,7 +189,7 @@ extend<Element> Array<Element>: SubscriptWrite<Int, Element> {
 	}
 }
 
-extend<Element> Array<Element>: CheapClone {}
+extend<Element> Array<Element>: Clone {}
 
 // Elements die with the buffer: only the LAST reference tears them
 // down (CoW sharers hold identical elements, so the `_is_unique` gate

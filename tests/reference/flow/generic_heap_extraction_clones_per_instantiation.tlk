@@ -1,7 +1,7 @@
 struct Holder<Value> 'heap {
 	let value: Value
 }
-func extract_clone<Value: CheapClone>(h: Holder<Value>) -> Value {
+func extract_clone<Value: Clone>(h: Holder<Value>) -> Value {
 	h.value
 }
 func extract_copy<Value: Copy>(h: Holder<Value>) -> Value {

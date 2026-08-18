@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - 4. Data and Patterns</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037479" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>4. Data and Patterns</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns" aria-current="page">4. Data and Patterns</a><ol class="manual-outline-sections"><li><a href="#structs">Structs</a></li>
+<li><a href="#records">Records</a></li>
+<li><a href="#enums">Enums</a></li>
+<li><a href="#exhaustive-matching">Exhaustive matching</a></li>
+<li><a href="#pattern-conditions">Pattern conditions</a></li>
+<li><a href="#gadts-generalized-algebraic-data-types">GADTs (Generalized Algebraic Data Types)</a></li>
+<li><a href="#further-reading">Further reading</a></li></ol></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/bindings-and-functions">&larr; 3. Bindings and Functions</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/generics-and-protocols">5. Generics and Protocols &rarr;</a>
+          </nav>
+          <article class="page-content">
+            <p>TalkTalk has a few ways to group data. Structs define a reusable kind of value, records are handy one-off bundles of fields, and enums describe values that can be one of several cases. Patterns let you look inside all three.</p>
+<h2><a href="#structs" aria-hidden="true" class="anchor" id="structs"></a>Structs</h2>
+<p>A struct declares stored fields and methods. It receives a memberwise initializer when it does not declare its own <code>init</code>:</p>
+<div class='runnable' data-accumulates='true' data-accumulate-group='person'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="modifier">pub</span> <span class="keyword">struct</span> <span class="type">Person</span> {
+	<span class="modifier">pub</span> <span class="keyword">let</span> <span class="property">first_name</span>: <span class="type">String</span>
+	<span class="modifier">pub</span> <span class="keyword">let</span> <span class="property">last_name</span>: <span class="type">String</span>
+
+	<span class="modifier">pub</span> <span class="keyword">func</span> <span class="function">greeting</span>() <span class="operator">-&gt;</span> <span class="type">String</span> {
+		<span class="string">"Hello, "</span> <span class="operator">+</span> <span class="type">self</span>.<span class="property">first_name</span>
+	}
+}
+
+<span class="keyword">let</span> person <span class="operator">=</span> <span class="type">Person</span>(<span class="parameter">first_name</span>: <span class="string">"Ada"</span>, <span class="parameter">last_name</span>: <span class="string">"Lovelace"</span>)
+
+<span class="variable">person</span>.<span class="property">greeting</span>()</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='12' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>pub struct Person {
+	pub let first_name: String
+	pub let last_name: String
+
+	pub func greeting() -&gt; String {
+		&quot;Hello, &quot; + self.first_name
+	}
+}
+
+let person = Person(first_name: &quot;Ada&quot;, last_name: &quot;Lovelace&quot;)
+
+person.greeting()</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>A custom initializer assigns fields and returns <code>self</code>:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">struct</span> <span class="type">Rectangle</span> {
+	<span class="keyword">let</span> <span class="property">width</span>: <span class="type">Int</span>
+	<span class="keyword">let</span> <span class="property">height</span>: <span class="type">Int</span>
+
+	<span class="keyword">init</span>(<span class="parameter">square</span> <span class="parameter">side</span>: <span class="type">Int</span>) {
+		<span class="type">self</span>.<span class="property">width</span> <span class="operator">=</span> <span class="variable">side</span>
+		<span class="type">self</span>.<span class="property">height</span> <span class="operator">=</span> <span class="variable">side</span>
+		<span class="type">self</span>
+	}
+}
+
+<span class="type">Rectangle</span>(<span class="parameter">square</span>: <span class="number">12</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='12' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>struct Rectangle {
+	let width: Int
+	let height: Int
+
+	init(square side: Int) {
+		self.width = side
+		self.height = side
+		self
+	}
+}
+
+Rectangle(square: 12)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<h2><a href="#records" aria-hidden="true" class="anchor" id="records"></a>Records</h2>
+<p>Records need no declaration and are typed by their fields:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> user <span class="operator">=</span> { <span class="parameter">name</span>: <span class="string">"Pat"</span>, <span class="parameter">active</span>: <span class="keyword">true</span>, <span class="parameter">greeting</span>: <span class="keyword">func</span>(<span class="parameter">name</span>) { <span class="string">"hi "</span> <span class="operator">+</span> <span class="variable">name</span> } }
+
+<span class="variable">print</span>(<span class="variable">user</span>.<span class="property">greeting</span>(<span class="variable">user</span>.<span class="property">name</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let user = { name: &quot;Pat&quot;, active: true, greeting: func(name) { &quot;hi &quot; + name } }
+
+print(user.greeting(user.name))</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Use records for local structural values and structs for nominal identity, conformance, constructors, or a public API.</p>
+<h2><a href="#enums" aria-hidden="true" class="anchor" id="enums"></a>Enums</h2>
+<p>Enum cases may be empty or carry values:</p>
+<div class='code-block no-run' data-accumulates='true' data-accumulate-group='enum' data-source='enum Response {
+	case ok(String)
+	case redirect(to: String)
+	case other(Int)
+}
+
+let response = Response.ok(&quot;all good&quot;)
+let redirect: Response = .redirect(to: &quot;/login&quot;)'>
+            <pre class='code-highlight'><span class="keyword">enum</span> <span class="type">Response</span> {
+	<span class="keyword">case</span> <span class="enum_member">ok</span>(<span class="type">String</span>)
+	<span class="keyword">case</span> <span class="enum_member">redirect</span>(to: <span class="type">String</span>)
+	<span class="keyword">case</span> <span class="enum_member">other</span>(<span class="type">Int</span>)
+}
+
+<span class="keyword">let</span> response <span class="operator">=</span> <span class="type">Response</span>.<span class="property">ok</span>(<span class="string">"all good"</span>)
+<span class="keyword">let</span> redirect: <span class="type">Response</span> <span class="operator">=</span> .<span class="property">redirect</span>(<span class="parameter">to</span>: <span class="string">"/login"</span>)</pre>
+        </div>
+        
+<p>Case qualification can be omitted when the expected enum type is known. Payload labels are used in construction and matching.</p>
+<h2><a href="#exhaustive-matching" aria-hidden="true" class="anchor" id="exhaustive-matching"></a>Exhaustive matching</h2>
+<p><code>match</code> is exhaustive and returns a value:</p>
+<div class='runnable' data-accumulates='true' data-accumulate-group='enum'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">message</span>(<span class="parameter">_</span> <span class="parameter">response</span>: <span class="type">Response</span>) <span class="operator">-&gt;</span> <span class="type">String</span> {
+	<span class="keyword">match</span> <span class="variable">response</span> {
+		.<span class="enum_member">ok</span>(body) <span class="operator">-&gt;</span> <span class="variable">body</span>,
+		.<span class="enum_member">redirect</span>(to: path) <span class="operator">-&gt;</span> <span class="string">"go to "</span> <span class="operator">+</span> <span class="variable">path</span>,
+		.<span class="enum_member">other</span>(code) <span class="operator">-&gt;</span> <span class="string">"status "</span> <span class="operator">+</span> <span class="variable">code</span>.<span class="property">show</span>()
+	}
+}
+
+<span class="variable">message</span>(.<span class="property">ok</span>(<span class="string">"sure"</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='9' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func message(_ response: Response) -&gt; String {
+	match response {
+		.ok(body) -&gt; body,
+		.redirect(to: path) -&gt; &quot;go to &quot; + path,
+		.other(code) -&gt; &quot;status &quot; + code.show()
+	}
+}
+
+message(.ok(&quot;sure&quot;))</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Adding a case to <code>Response</code> makes an old match incomplete until the new case is handled.</p>
+<p>Patterns include literals, bindings, <code>_</code>, tuples, enum cases, records, structs, and alternatives:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> token <span class="operator">=</span> <span class="string">"if"</span>
+<span class="keyword">let</span> point <span class="operator">=</span> { <span class="parameter">x</span>: <span class="number">10</span>, <span class="parameter">y</span>: <span class="number">0</span> }
+
+<span class="variable">print</span>(<span class="keyword">match</span> <span class="variable">token</span> { <span class="string">"if"</span><span class="operator">|</span><span class="string">"else"</span> <span class="operator">-&gt;</span> <span class="string">"keyword"</span>, _ <span class="operator">-&gt;</span> <span class="string">"name"</span> })
+
+<span class="keyword">match</span> <span class="variable">point</span> {
+	{ <span class="parameter">x</span>, <span class="parameter">y</span>: <span class="number">0</span> } <span class="operator">-&gt;</span> <span class="variable">x</span>,
+	{ <span class="parameter">y</span>, <span class="operator">..</span> } <span class="operator">-&gt;</span> <span class="variable">y</span>
+}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='9' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let token = &quot;if&quot;
+let point = { x: 10, y: 0 }
+
+print(match token { &quot;if&quot;|&quot;else&quot; -&gt; &quot;keyword&quot;, _ -&gt; &quot;name&quot; })
+
+match point {
+	{ x, y: 0 } -&gt; x,
+	{ y, .. } -&gt; y
+}</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>A struct pattern names the type and may ignore remaining fields with <code>..</code>:</p>
+<div class='runnable' data-accumulates='true' data-accumulate-group='person'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">match</span> <span class="variable">person</span> {
+	Person { first_name, <span class="operator">..</span> } <span class="operator">-&gt;</span> <span class="variable">first_name</span>
+}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>match person {
+	Person { first_name, .. } -&gt; first_name
+}</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<h2><a href="#pattern-conditions" aria-hidden="true" class="anchor" id="pattern-conditions"></a>Pattern conditions</h2>
+<p><code>if let</code> tests a pattern. Comma-separated condition clauses run left to right, short-circuit, and make earlier bindings visible to later clauses:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">if</span> <span class="keyword">let</span> .some(user) <span class="operator">=</span> <span class="variable">lookup</span>(), user.active {
+	print(user.name)
+}</pre>
+        </div>
+        
+<p>A <code>let ... else</code> guard makes the successful bindings available after the statement:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">unwrap_or_zero</span>(<span class="parameter">_</span> <span class="parameter">value</span>: <span class="type">Int?</span>) <span class="operator">-&gt;</span> <span class="type">Int</span> {
+	<span class="keyword">let</span> .some(n) <span class="operator">=</span> value <span class="keyword">else</span> { <span class="keyword">return</span> <span class="number">0</span> }
+	<span class="variable">n</span>
+}
+
+(<span class="variable">unwrap_or_zero</span>(.<span class="property">some</span>(<span class="number">3</span>)), <span class="variable">unwrap_or_zero</span>(.<span class="property">none</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='6' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func unwrap_or_zero(_ value: Int?) -&gt; Int {
+	let .some(n) = value else { return 0 }
+	n
+}
+
+(unwrap_or_zero(.some(3)), unwrap_or_zero(.none))</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<h2><a href="#gadts-generalized-algebraic-data-types" aria-hidden="true" class="anchor" id="gadts-generalized-algebraic-data-types"></a>GADTs (Generalized Algebraic Data Types)</h2>
+<p>A case may refine the enum's result type. This supports generalized algebraic data types:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">enum</span> <span class="type">Expr</span><span class="operator">&lt;</span><span class="type_parameter">Returns</span><span class="operator">&gt;</span> {
+	<span class="keyword">case</span> <span class="enum_member">int</span>(<span class="type">Int</span>) <span class="operator">-&gt;</span> <span class="type">Expr</span><span class="operator">&lt;</span><span class="type">Int</span><span class="operator">&gt;</span>
+	<span class="keyword">case</span> <span class="enum_member">string</span>(<span class="type">String</span>) <span class="operator">-&gt;</span> <span class="type">Expr</span><span class="operator">&lt;</span><span class="type">String</span><span class="operator">&gt;</span>
+}
+
+<span class="keyword">func</span> <span class="function">evaluate</span><span class="operator">&lt;</span>T<span class="operator">&gt;</span>(<span class="parameter">_</span> <span class="parameter">expression</span>: <span class="type">Expr</span><span class="operator">&lt;</span><span class="type">T</span><span class="operator">&gt;</span>) <span class="operator">-&gt;</span> <span class="type">T</span> {
+	<span class="keyword">match</span> <span class="variable">expression</span> {
+		.<span class="enum_member">int</span>(value) <span class="operator">-&gt;</span> <span class="variable">value</span>,
+		.<span class="enum_member">string</span>(value) <span class="operator">-&gt;</span> <span class="variable">value</span>
+	}
+}
+
+<span class="variable">evaluate</span>(.<span class="property">int</span>(<span class="number">42</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='13' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>enum Expr&lt;Returns&gt; {
+	case int(Int) -&gt; Expr&lt;Int&gt;
+	case string(String) -&gt; Expr&lt;String&gt;
+}
+
+func evaluate&lt;T&gt;(_ expression: Expr&lt;T&gt;) -&gt; T {
+	match expression {
+		.int(value) -&gt; value,
+		.string(value) -&gt; value
+	}
+}
+
+evaluate(.int(42))</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Inside each arm, the compiler learns the result type promised by that case. That is why the <code>Int</code> arm can return an <code>Int</code> and the <code>String</code> arm can return a <code>String</code> from the same generic function.</p>
+<h2><a href="#further-reading" aria-hidden="true" class="anchor" id="further-reading"></a>Further reading</h2>
+<p>TalkTalk's GADTs follow the same broad idea described in <a href="https://github.com/nakajima/talk/blob/main/papers/peyton-jones-vytiniotis-weirich-washburn-2006-gadts.pdf">Simple unification-based type inference for GADTs</a>. The compiler combines that idea with bidirectional checking; <a href="https://github.com/nakajima/talk/blob/main/papers/dunfield-krishnaswami-2021-bidirectional-typing.pdf">Complete and easy bidirectional typechecking for higher-rank polymorphism</a> is useful background.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/bindings-and-functions">&larr; 3. Bindings and Functions</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/generics-and-protocols">5. Generics and Protocols &rarr;</a>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037479"></script>
+    </main>
+  </body>
+</html>

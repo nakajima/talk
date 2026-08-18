@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - 15. Unsafe Code and Interop</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787037486" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="content-page manual-page">
+      <header class="page-header">
+        <div class="page-header-content">
+          <code class="page-kicker">talktalk / docs</code>
+          <div class="page-header-title-row">
+            <h1>15. Unsafe Code and Interop</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="manual-layout">
+        <aside class="manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop" aria-current="page">15. Unsafe Code and Interop</a><ol class="manual-outline-sections"><li><a href="#the-unsafe-boundary">The unsafe boundary</a></li>
+<li><a href="#inline-ir">Inline IR</a></li>
+<li><a href="#emitting-c">Emitting C</a></li>
+<li><a href="#exporting-a-native-library">Exporting a native library</a></li>
+<li><a href="#ffi-embeddings">FFI embeddings</a></li>
+<li><a href="#boundary-design">Boundary design</a></li></ol></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/toolchain">&larr; 14. The Toolchain</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <span></span>
+          </nav>
+          <article class="page-content">
+            <p>Most TalkTalk programs never need the features in this chapter. Raw pointers and inline IR let low-level code bypass some safety checks, while the C interface lets TalkTalk call into a larger application. Use the regular library first, and keep these boundaries small.</p>
+<h2><a href="#the-unsafe-boundary" aria-hidden="true" class="anchor" id="the-unsafe-boundary"></a>The unsafe boundary</h2>
+<p>Raw-pointer operations and inline IR outside Core perform an intrinsic <code>'unsafe</code> effect. A lexical block acknowledges and discharges it:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="operator">#</span><span class="keyword">unsafe</span> {
+	<span class="comment">// Trusted raw storage operations belong here.</span>
+}</pre>
+        </div>
+        
+<p>This is not a runtime handler. It is a static trust boundary: the programmer accepts obligations that ordinary type and ownership checking cannot prove. Keep the block small and expose a typed safe operation around it.</p>
+<h2><a href="#inline-ir" aria-hidden="true" class="anchor" id="inline-ir"></a>Inline IR</h2>
+<p>Trusted core code uses <code>#_ir(args...) { ... }</code> for primitives including scalar math and comparison, allocation and free, load and store, retain and copy, pointer offsets, fixed-array access, conversion, and host I/O.</p>
+<p>Inline IR is compiler-facing syntax, not a general optimization escape hatch. It is unavailable to deterministic procedural macro services. Incorrect use can violate memory and ownership invariants even when surrounding TalkTalk code looks well typed.</p>
+<h2><a href="#emitting-c" aria-hidden="true" class="anchor" id="emitting-c"></a>Emitting C</h2>
+<p>Generate a complete C program:</p>
+<pre><code class="language-sh">talk c program.tlk &gt; program.c
+</code></pre>
+<p>Or let TalkTalk invoke a C compiler:</p>
+<pre><code class="language-sh">talk build --native program.tlk -o program
+</code></pre>
+<p>The generated C links the static TalkTalk runtime and implements the same finalized MIR semantics as the bytecode target.</p>
+<h2><a href="#exporting-a-native-library" aria-hidden="true" class="anchor" id="exporting-a-native-library"></a>Exporting a native library</h2>
+<p>The C command can emit host-callable wrappers for selected public functions:</p>
+<pre><code class="language-sh">talk c library.tlk \
+    --export add \
+    --prefix example \
+    --header library.h \
+    --manifest library.manifest \
+    &gt; library.c
+</code></pre>
+<p><code>--export</code> is repeatable. <code>--allow-effect EFFECT</code> declares which effects an exported boundary may perform. The generated header describes the C ABI, and the manifest maps TalkTalk export names to external symbols.</p>
+<p>Only use effect allowances the host actually supplies. A pure exported function is the simplest and safest boundary.</p>
+<h2><a href="#ffi-embeddings" aria-hidden="true" class="anchor" id="ffi-embeddings"></a>FFI embeddings</h2>
+<p>The repository contains three host-facing layers:</p>
+<ul>
+<li><code>talk-ffi</code> - a C API for compiling and running TalkTalk</li>
+<li><code>talk-swift</code> - a Swift package over the C API</li>
+<li><code>wasm</code> - browser and JavaScript embedding of the bytecode compiler/runtime</li>
+</ul>
+<p>Their own READMEs and generated headers are the API references. These embeddings compile source through the same frontend and execute validated bytecode, rather than defining a second language implementation.</p>
+<h2><a href="#boundary-design" aria-hidden="true" class="anchor" id="boundary-design"></a>Boundary design</h2>
+<p>A good unsafe or host boundary has four properties:</p>
+<ol>
+<li>raw operations are confined to one small implementation,</li>
+<li>the public signature uses ordinary TalkTalk values,</li>
+<li>ownership transfer is explicit at the ABI edge, and</li>
+<li>safe tests compare the boundary against a trusted reference behavior.</li>
+</ol>
+<p>Unsafe code removes a check; it does not remove the invariant the check was protecting.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/toolchain">&larr; 14. The Toolchain</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <span></span>
+          </nav>
+        </div>
+        <div class="manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787037486"></script>
+    </main>
+  </body>
+</html>

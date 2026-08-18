@@ -52,7 +52,7 @@ F	deinit_created_instance_still_dispatches_hook	R	MEM-01,MEM-02,MEM-03,MEM-04,ME
 F	heap_struct_classifies_as_object	R	AGG-01,AGG-02,HEAP-01,MEM-01,MEM-05	B
 F	value_struct_with_heap_field_stays_value	R	AGG-01,AGG-02,HEAP-01,MEM-01,MEM-05	B
 F	rejects_heap_struct_claiming_copy	R	AGG-01,AGG-02,HEAP-01,MEM-01,MEM-05	B
-F	rejects_heap_struct_claiming_cheap_clone	R	AGG-01,AGG-02,HEAP-01,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05	B
+F	rejects_heap_struct_claiming_clone	R	AGG-01,AGG-02,HEAP-01,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05	B
 F	heap_aliases_freely_without_moves_or_conflicts	R	HEAP-01,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05,OWN-01,OWN-02,OWN-04	B
 F	heap_field_assignment_through_alias_is_clean	R	AGG-01,AGG-02,HEAP-01,MEM-01,MEM-05,OWN-01,OWN-02,OWN-04	B
 F	heap_borrowed_param_field_assignment_is_clean	R	AGG-01,AGG-02,BOR-01,BOR-02,EXE-02,HEAP-01,MEM-01,MEM-05,OWN-01,OWN-02,OWN-04	B
@@ -83,7 +83,7 @@ F	http_router_misses_cleanly	R	IO-01,IO-02	B
 F	dict_with_string_values_borrows_safely	R	BOR-01,BOR-02,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05	B
 F	dict_with_string_values_runs_on_vm	R	MEM-01,MEM-02,MEM-03,MEM-04,MEM-05	B
 F	generic_heap_extraction_clones_per_instantiation	R	GEN-01,HEAP-01,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05	B
-F	generic_heap_extraction_retains_cheap_clone_enum_payloads	R	AGG-03,GEN-01,HEAP-01,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05	B
+F	generic_heap_extraction_retains_clone_enum_payloads	R	AGG-03,GEN-01,HEAP-01,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05	B
 F	generic_heap_extraction_rejects_non_cheap_owned_instantiation	R	GEN-01,HEAP-01,MEM-01,MEM-05,OWN-01,OWN-02,OWN-04	B
 F	heap_constructor_place_read_consume_params_balance	R	AGG-01,AGG-02,EXE-02,HEAP-01,MEM-01,MEM-05,OWN-01,OWN-02,OWN-04	B
 F	heap_constructor_place_read_consume_params_run_on_vm	R	AGG-01,AGG-02,EXE-02,HEAP-01,MEM-01,MEM-05,OWN-01,OWN-02,OWN-04	B
@@ -220,7 +220,7 @@ V	vm_runs_as_expressions	R	DYN-01,DYN-02	B
 V	vm_runs_existential_return_and_generic_bound_dispatch	R	DYN-01,DYN-02,GEN-01	B
 V	vm_runs_existentials_in_records_and_enums	R	AGG-01,AGG-02,AGG-03,DYN-01,DYN-02	B
 V	vm_runs_existentials_in_arrays	R	DYN-01,DYN-02,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05	B
-V	vm_balances_borrowed_cheap_clone_existential_pack	R	BOR-01,BOR-02,DYN-01,DYN-02,HEAP-01,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05	B
+V	vm_balances_borrowed_clone_existential_pack	R	BOR-01,BOR-02,DYN-01,DYN-02,HEAP-01,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05	B
 V	vm_runs_gadt_hidden_payload_packed_as_existential	R	AGG-03,DYN-01,DYN-02	B
 V	vm_runs_gadt_hidden_payload_direct_bound_call	R	AGG-03,DYN-01,DYN-02,EXE-01,EXE-04	B
 V	vm_runs_existential_member_dispatch_with_associated_binding	R	DYN-01,DYN-02,EXE-02	B
@@ -302,14 +302,14 @@ V	vm_for_loop_element_feeds_borrow_callback	R	BOR-01,BOR-02,CORE-02,EXE-01,EXE-0
 V	vm_for_loop_over_skip_adapter_chain	R	CORE-02,EXE-03	B
 V	vm_for_loop_over_map_adapter	R	CORE-02,EXE-03	B
 V	vm_consume_for_loop_moves_elements_out	R	CORE-02,EXE-03,OWN-01,OWN-02,OWN-04	B
-V	vm_consume_for_loop_moves_non_cheap_clone_elements_out	R	CORE-02,EXE-03,HEAP-01,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05,OWN-01,OWN-02,OWN-04	B
+V	vm_consume_for_loop_moves_non_clone_elements_out	R	CORE-02,EXE-03,HEAP-01,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05,OWN-01,OWN-02,OWN-04	B
 V	vm_consume_for_loop_elements_feed_consuming_callback	R	CORE-02,EXE-01,EXE-03,EXE-04,OWN-01,OWN-02,OWN-04	B
 V	vm_generic_borrowed_payload_coerces_into_owned_slot	R	AGG-03,BOR-01,BOR-02,EXE-01,EXE-04,GEN-01,OWN-01,OWN-02,OWN-04	B
 V	vm_mutated_array_local_drops_balanced	R	EXE-02,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05,OWN-01,OWN-02,OWN-04	B
 V	vm_reassigned_shared_array_keeps_sharer_alive	R	MEM-01,MEM-02,MEM-03,MEM-04,MEM-05,OWN-01,OWN-02,OWN-04	B
 V	vm_mut_for_loop_writes_back_ints	R	BOR-01,BOR-02,CORE-02,EXE-01,EXE-03,EXE-04	B
 V	vm_mut_for_loop_writes_back_droppable_strings	R	BOR-01,BOR-02,CORE-02,EXE-03,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05,OWN-01,OWN-02,OWN-04	B
-V	vm_mut_for_loop_writes_back_non_cheap_clone_elements	R	BOR-01,BOR-02,CORE-02,EXE-03,HEAP-01,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05	B
+V	vm_mut_for_loop_writes_back_non_clone_elements	R	BOR-01,BOR-02,CORE-02,EXE-03,HEAP-01,MEM-01,MEM-02,MEM-03,MEM-04,MEM-05	B
 V	vm_mut_for_loop_source_usable_after	R	CORE-02,EXE-03	B
 V	vm_mut_for_loop_source_can_be_mut_borrowed_again_after	R	BOR-01,BOR-02,CORE-02,EXE-03	B
 V	vm_consuming_protocol_default_on_borrowed_projection	R	AGG-01,AGG-02,BOR-01,BOR-02,WIT-01	B

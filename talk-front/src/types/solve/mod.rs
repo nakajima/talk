@@ -87,7 +87,7 @@ pub struct Solver<'s> {
     /// for selecting among label-overloaded methods. Bare member
     /// references have no entry and cannot disambiguate a set.
     pub member_call_slots: &'s FxHashMap<NodeID, Vec<crate::types::callables::WrittenSlot>>,
-    /// Argument nodes where a borrowed value satisfied an owned CheapClone
+    /// Argument nodes where a borrowed value satisfied an owned Clone
     /// parameter by cloning (an O(1) buffer retain, emitted by lowering).
     pub coerce_clones: &'s mut FxHashSet<NodeID>,
     /// Expression nodes the final solve committed to an implicit `Into`
@@ -545,7 +545,7 @@ impl<'s> Solver<'s> {
                 found_inner,
                 donation,
             } => {
-                if donation == Donation::CheapClone {
+                if donation == Donation::Clone {
                     self.coerce_clones.insert(origin.node);
                 }
                 queue.push(Constraint::Eq(expected, found_inner, origin.nested()));

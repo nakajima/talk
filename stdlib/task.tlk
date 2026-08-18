@@ -1,23 +1,15 @@
-// Direct-style concurrency (ADR 0067): waiting is a park effect, not a
-// poll protocol. Every operation here is straight-line code that
-// checks its source, acts when ready, and performs a park effect when
-// not — under core's blocking fallbacks (Host.tlk) a park blocks this
-// worker; under a cooperative scheduler (stdlib `coop`), whose clauses
-// bind the resumption (ADR 0068), it suspends the task. The channel endpoint
-// types keep their ADR 0060 lifecycle
-// guards; the runtime layers (queues, reservation, registration,
-// park/wake, deadlines — ADRs 0059/0062/0063) are unchanged.
+// Direct-style concurrency (ADR 0067): every operation checks its
+// source, acts when ready, and waits when not. Core's blocking fallback
+// waits the worker; a cooperative scheduler binds the resumption and
+// waits only the task. Channel endpoint lifecycle and the runtime's
+// queue, registration, wake, and deadline layers remain unchanged.
 
 // Install the full set of root fallbacks — the same rows core's
 // `_with_host` gives the program entry — and run `body` under them
-// with `arg` passed through. The worker convention twice over: a
-// spawned worker's closure must carry a pure row to cross the
-// boundary, and a closure cannot capture owned values, so state
-// arrives as an argument.
-pub func run_blocking<A, T>(
-	consume arg: A,
-	consume body: (consume A) '[io, alloc, yield, panic, park_recv, park_send, park_sleep, park_recv2] -> T
-) -> T {
+// with `arg` passed through. A runtime-spawned closure must be
+// self-contained across the boundary, and a closure cannot capture
+// owned values, so state arrives as an argument.
+pub func run_blocking<A, T>(consume arg: A, consume body: (consume A) '[io, alloc, yield, panic, recv, send, wait_until] -> T) -> T {
 	#handle 'io { request in
 		'continue _io_host(request: request)
 	}
@@ -33,51 +25,75 @@ pub func run_blocking<A, T>(
 		_io_host(request: .exit(1))
 		loop {}
 	}
-	// The blocking park fallbacks, tail-resumptive like core's
-	// `_with_host` (ADR 0068): register, block the worker, unregister,
-	// continue at the perform site — constant stack no matter how many
-	// times the body parks.
-	#handle 'park_recv { handle in
-		let registered = _chan_ctl(handle: handle, op: 4)
+	// Tail-resumptive blocking fallbacks keep constant stack depth.
+	#handle 'recv { channels in
+		let i = 0
+		loop i < channels.count() {
+			if let .some(handle) = channels.get(i) {
+				let registered = _chan_ctl(handle: handle, op: 4)
+			}
+			i = i + 1
+		}
 		let parked = _chan_ctl(handle: 0, op: 6)
-		let released = _chan_ctl(handle: handle, op: 5)
+		let j = 0
+		loop j < channels.count() {
+			if let .some(handle) = channels.get(j) {
+				let released = _chan_ctl(handle: handle, op: 5)
+			}
+			j = j + 1
+		}
 		'continue
 	}
-	#handle 'park_send { handle in
+	#handle 'send { handle in
 		let registered = _chan_ctl(handle: handle, op: 11)
 		let parked = _chan_ctl(handle: 0, op: 6)
 		let released = _chan_ctl(handle: handle, op: 12)
 		'continue
 	}
-	#handle 'park_sleep { deadline_ms in
-		let registered = _chan_ctl(handle: deadline_ms, op: 14)
+	#handle 'wait_until { deadline in
+		let nanos = deadline._nanoseconds()
+		let registered = _chan_ctl(handle: nanos, op: 14)
 		let parked = _chan_ctl(handle: 0, op: 6)
-		let released = _chan_ctl(handle: deadline_ms, op: 15)
-		'continue
-	}
-	#handle 'park_recv2 { a, b in
-		let first = _chan_ctl(handle: a, op: 4)
-		let second = _chan_ctl(handle: b, op: 4)
-		let parked = _chan_ctl(handle: 0, op: 6)
-		let drop_second = _chan_ctl(handle: b, op: 5)
-		let drop_first = _chan_ctl(handle: a, op: 5)
+		let released = _chan_ctl(handle: nanos, op: 15)
 		'continue
 	}
 	body(arg)
 }
 
+// Invoke one parallel worker under its own standard host fallbacks. The
+// worker function travels as explicit state because spawned closures cannot
+// capture owned values across the isolation boundary.
+func _run_parallel_worker<A, T>(
+	consume state: (A, (consume A) '[io, alloc, yield, panic, recv, send, wait_until] -> T)
+) -> T {
+	let (job, worker) = state
+	run_blocking(arg: job, body: worker)
+}
+
+// Materialize the borrowed worker as an owned task operand before bundling
+// it with the job transferred to the capture-free runtime entry.
+func _spawn_parallel_worker<A, T>(
+	consume job: A,
+	consume worker: (consume A) '[io, alloc, yield, panic, recv, send, wait_until] -> T
+) -> Int {
+	_task_spawn(arg: (job, worker), worker: _run_parallel_worker)
+}
+
 // Run every job on its own parallel worker and return the outputs in
 // argument order (ADR 0058). Structured: every worker completes before
 // this returns, and no handle escapes. Transfer capabilities gate the
-// boundary: jobs move to workers, outputs move back, and the worker
-// closure must carry a pure row (install fallbacks inside via
-// `run_blocking` when the body needs effects).
-pub func parallel_run<A, T>(consume jobs: [A], worker: (consume A) -> T) -> [T] where A: Send && T: Send {
+// boundary: jobs move to workers and outputs move back. Each worker gets
+// its own standard host fallbacks; user-defined effects still need handlers
+// inside the worker.
+pub func parallel_run<A, T>(
+	consume jobs: [A],
+	worker: (consume A) '[io, alloc, yield, panic, recv, send, wait_until] -> T
+) -> [T] where A: Send && T: Send {
 	let handles: [Int] = []
 	let feed = jobs.into_iter()
 	loop {
 		if let .some(job) = feed.next() {
-			handles.push(_task_spawn(arg: job, worker: worker))
+			handles.push(_spawn_parallel_worker(job: job, worker: worker))
 		} else {
 			break
 		}
@@ -110,10 +126,9 @@ pub struct Sender<T> {
 		// The runtime queue is untyped, so only Talk code can release a
 		// value nobody will ever take: a send to a dead receiver drops
 		// the value here instead of enqueueing it.
-		if _chan_ctl(handle: self.handle, op: 9) == 1 { _chan_send(
-			handle: self.handle,
-			value: value
-		) }
+		if _chan_ctl(handle: self.handle, op: 9) == 1 {
+			_chan_send(handle: self.handle, value: value)
+		}
 	}
 }
 
@@ -130,7 +145,9 @@ extend<T> Sender<T> {
 
 extend<T> Sender<T>: Deinit {
 	consuming func deinit() -> Void {
-		if self.guard.is_last() { let ignored = _chan_ctl(handle: self.handle, op: 2) }
+		if self.guard.is_last() {
+			let ignored = _chan_ctl(handle: self.handle, op: 2)
+		}
 	}
 }
 
@@ -144,9 +161,13 @@ pub struct Receiver<T> {
 	pub func recv() -> T? {
 		loop {
 			let status = _chan_ctl(handle: self.handle, op: 0)
-			if status == 0 { return Optional.some(_chan_take<T>(handle: self.handle)) }
-			if status == 2 { return Optional.none }
-			'park_recv(handle: self.handle)
+			if status == 0 {
+				return Optional.some(_chan_take<T>(handle: self.handle))
+			}
+			if status == 2 {
+				return Optional.none
+			}
+			'recv(channels: [self.handle])
 		}
 	}
 }
@@ -172,8 +193,10 @@ extend<T> Receiver<T>: Deinit {
 
 pub func channel<T>() -> (Sender<T>, Receiver<T>) where T: Send {
 	let handle = _chan_ctl(handle: 0, op: 7)
-	(Sender(handle: handle, guard: _drop_token()),
-	Receiver(handle: handle, guard: _drop_token()))
+	(
+		Sender(handle: handle, guard: _drop_token()),
+		Receiver(handle: handle, guard: _drop_token())
+	)
 }
 
 // === Bounded channels (ADR 0062/0067) =================================
@@ -189,12 +212,14 @@ pub struct BoundedSender<T> {
 
 	pub func send(consume value: T) -> Bool {
 		loop {
-			if _chan_ctl(handle: self.handle, op: 9) == 0 { return false }
+			if _chan_ctl(handle: self.handle, op: 9) == 0 {
+				return false
+			}
 			if _chan_ctl(handle: self.handle, op: 10) == 1 {
 				_chan_send(handle: self.handle, value: value)
 				return true
 			}
-			'park_send(handle: self.handle)
+			'send(handle: self.handle)
 		}
 	}
 }
@@ -208,29 +233,29 @@ extend<T> BoundedSender<T> {
 
 extend<T> BoundedSender<T>: Deinit {
 	consuming func deinit() -> Void {
-		if self.guard.is_last() { let ignored = _chan_ctl(handle: self.handle, op: 2) }
+		if self.guard.is_last() {
+			let ignored = _chan_ctl(handle: self.handle, op: 2)
+		}
 	}
 }
 
 pub func channel_bounded<T>(capacity: Int) -> (BoundedSender<T>, Receiver<T>) where T: Send {
-	let bound = if capacity < 1 {
-		1
-	} else {
-		capacity
-	}
+	let bound = if capacity < 1 { 1 } else { capacity }
 	let handle = _chan_ctl(handle: bound, op: 7)
-	(BoundedSender(handle: handle, guard: _drop_token()),
-	Receiver(handle: handle, guard: _drop_token()))
+	(
+		BoundedSender(handle: handle, guard: _drop_token()),
+		Receiver(handle: handle, guard: _drop_token())
+	)
 }
 
 // === Timers (ADR 0063/0067) ===========================================
 
-// Sleep at least `ms` of monotonic time, parking until the deadline.
-pub func sleep(ms: Int) -> () {
-	let deadline = _chan_ctl(handle: 0, op: 13) + ms
-	loop _chan_ctl(handle: 0, op: 13) < deadline { 'park_sleep(
-		deadline_ms: deadline
-	) }
+// Sleep at least `duration` of monotonic time.
+pub func sleep(_ duration: Duration) -> () {
+	let deadline = Instant.now().adding(duration)
+	loop Instant.now() < deadline {
+		'wait_until(deadline: deadline)
+	}
 }
 
 // === select (ADR 0061/0067) ===========================================
@@ -245,8 +270,12 @@ pub enum Either<L, R> {
 // side's value stays queued for a later receive.
 pub func select_recv<T, U>(a: &Receiver<T>, b: &Receiver<U>) -> Either<T?, U?> {
 	loop {
-		if _chan_ctl(handle: a.handle, op: 0) != 1 { return Either.left(a.recv()) }
-		if _chan_ctl(handle: b.handle, op: 0) != 1 { return Either.right(b.recv()) }
-		'park_recv2(a: a.handle, b: b.handle)
+		if _chan_ctl(handle: a.handle, op: 0) != 1 {
+			return Either.left(a.recv())
+		}
+		if _chan_ctl(handle: b.handle, op: 0) != 1 {
+			return Either.right(b.recv())
+		}
+		'recv(channels: [a.handle, b.handle])
 	}
 }

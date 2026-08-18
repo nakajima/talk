@@ -129,7 +129,7 @@ pub enum TypeError {
     },
     /// The value-adaptation judgment refused a borrow → owned crossing
     /// (ADR 0054): the slot consumes an owned value, and the borrowed
-    /// argument's rigid type carries no Copy/CheapClone evidence to
+    /// argument's rigid type carries no Copy/Clone evidence to
     /// donate one.
     CannotDonate {
         ty: String,
@@ -302,7 +302,7 @@ pub enum TypeError {
     IrrefutableConditionalPattern,
     UnreachableCode,
     CannotInfer,
-    /// A `Copy`/`CheapClone` conformance whose fields don't support it.
+    /// A `Copy`/`Clone` conformance whose fields don't support it.
     NonConformingField {
         protocol: String,
         field: String,
@@ -647,7 +647,7 @@ impl Display for TypeError {
             TypeError::CannotDonate { ty } => {
                 write!(
                     f,
-                    "this position consumes an owned {ty}, but the argument is borrowed and {ty} has no Copy or CheapClone evidence to donate an owned value — add that bound, or pass an owned value"
+                    "this position consumes an owned {ty}, but the argument is borrowed and {ty} has no Copy or Clone evidence to donate an owned value — add that bound, or pass an owned value"
                 )
             }
             TypeError::UnconformableUnknown { protocol } => {

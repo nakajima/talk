@@ -31,13 +31,13 @@ pub(crate) enum Site {
 }
 
 /// The donation tier a borrow uses to fill an owned slot. `Copy` extracts
-/// by value (nothing to emit), `CheapClone` by an O(1) retain that lowering
+/// by value (nothing to emit), `Clone` by an O(1) retain that lowering
 /// emits at the recorded node, `Share` by the implicit-sharing
 /// clone-at-boundary rule (lowering derives the retain from the type).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Donation {
     Copy,
-    CheapClone,
+    Clone,
     Share,
 }
 
@@ -55,13 +55,13 @@ pub(crate) enum Adapted {
     Mismatch { expected: Ty, found: Ty },
     /// A borrow donates into the owned slot: equate `expected` with the
     /// borrow's referent and realize the tier (record `coerce_clones` on
-    /// `CheapClone`).
+    /// `Clone`).
     Donate {
         expected: Ty,
         found_inner: Ty,
         donation: Donation,
     },
-    /// A rigid slot whose bounds carry no Copy/CheapClone evidence cannot
+    /// A rigid slot whose bounds carry no Copy/Clone evidence cannot
     /// accept a borrow: report non-conformance (bounds are closed, so no
     /// later fact can rescue it).
     NoEvidence { expected: Ty },
@@ -302,7 +302,7 @@ pub(crate) fn donation_tier(catalog: &TypeCatalog, ty: &Ty) -> Option<Donation> 
 
 /// Whether a `copy`-marked argument of this (resolved) type has the
 /// evidence an explicit clone requires: a value-copy tier (`Copy` or
-/// `CheapClone`), judged through a borrow and componentwise through
+/// `Clone`), judged through a borrow and componentwise through
 /// tuples. `Share` deliberately does not count — the marker asks for a
 /// clone, not a retain.
 pub(crate) fn copy_marker_evidence(catalog: &TypeCatalog, ty: &Ty) -> bool {
@@ -312,7 +312,7 @@ pub(crate) fn copy_marker_evidence(catalog: &TypeCatalog, ty: &Ty) -> bool {
         Ty::Error => true,
         Ty::Nominal(..) | Ty::Param(_) => matches!(
             donation_tier(catalog, ty),
-            Some(Donation::Copy | Donation::CheapClone)
+            Some(Donation::Copy | Donation::Clone)
         ),
         _ => false,
     }
@@ -322,7 +322,7 @@ impl From<CoerceKind> for Donation {
     fn from(kind: CoerceKind) -> Self {
         match kind {
             CoerceKind::Copy => Donation::Copy,
-            CoerceKind::CheapClone => Donation::CheapClone,
+            CoerceKind::Clone => Donation::Clone,
         }
     }
 }

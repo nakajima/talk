@@ -30,7 +30,7 @@ Talk IR.
 The required baseline includes:
 
 - strings and arrays with deterministic cleanup;
-- type-specific `CheapClone` and copy-on-write mutation;
+- type-specific `Clone` and copy-on-write mutation;
 - element finalization, including nested arrays;
 - freely aliasing `'heap` references and visible mutation through aliases;
 - direct cyclic `'heap` object graphs that tear down without leaks;
@@ -236,7 +236,7 @@ A newly created sibling value is a distinct instance and receives its own hook.
 
 ### Copy-on-write
 
-An O(1) `CheapClone` of a buffer-backed value retains the buffer once and
+An O(1) `Clone` of a buffer-backed value retains the buffer once and
 constructs a second owner. It does not retain or clone each element because the
 single shared buffer remains the sole owner of those element instances.
 
@@ -266,8 +266,8 @@ Element replacement preserves the language assignment order:
 Array destruction begins release of its buffer. Only the final owner destroys
 initialized elements, in reverse index order, and deallocates the buffer.
 
-`Array<Element>` may be selected for `CheapClone` only when every possible
-detachment can clone `Element` under already selected Copy or CheapClone
+`Array<Element>` may be selected for `Clone` only when every possible
+detachment can clone `Element` under already selected Copy or Clone
 evidence. The current unconditional core conformance is not authority and must
 be constrained during the R1 source-core migration. Affine host handles and
 other non-cloneable resources may be stored in a unique array, but such an
@@ -302,14 +302,14 @@ bypassed.
 
 `NominalRepresentation::Heap` means identity and shared reference semantics.
 A source use may duplicate a heap reference without invoking the user `Copy` or
-`CheapClone` protocols. Type checking must publish a distinct checked `Alias`
+`Clone` protocols. Type checking must publish a distinct checked `Alias`
 edge with structural alias evidence. MIR preserves that edge and verifies the
 evidence. Lowering turns it into explicit external-root acquisition.
 
 This is a contract gap in the current ADR 0032 mode vocabulary. R1
 implementation cannot begin until the G0 amendment adds Alias to TypedProgram,
 CheckedMir, validation, verification, printers, and negative tests. Heap types
-remain forbidden from declaring `Copy` or `CheapClone`; intrinsic reference
+remain forbidden from declaring `Copy` or `Clone`; intrinsic reference
 aliasing is not a value-copy conformance and does not add a `.clone()` witness.
 
 Type checking selects Alias, Move, or Borrow contextually and never from
@@ -779,7 +779,7 @@ fallback representation for safe managed operations.
 - Consuming arguments, owned returns, explicit transfers, ordinary owning
   assignments, aggregate fields, and heap-field initializations publish the
   required Move, Alias, or Borrow edge exactly once.
-- Heap declarations cannot claim `Copy` or `CheapClone`.
+- Heap declarations cannot claim `Copy` or `Clone`.
 - Selected buffer clones prove every future detachment can clone the element.
 - Borrowed views cannot appear in owned fields, globals, or escaping captures.
 - Unsafe/FFI ownership policies and nonescaping callback shape are explicit.

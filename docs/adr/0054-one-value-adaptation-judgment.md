@@ -10,7 +10,7 @@ lowering sites, each with locally-different rules, evidence, and diagnostics:
 
 | site | judgment it re-implements |
 |---|---|
-| `solve/mod.rs` borrow→owned path (~:560) | donate on Return/Body; Copy = free copy; CheapClone = retain (records `coerce_clones`); else error |
+| `solve/mod.rs` borrow→owned path (~:560) | donate on Return/Body; Copy = free copy; Clone = retain (records `coerce_clones`); else error |
 | `unify.rs push_apply_param_eq` | auto-borrow at immediate application |
 | `unify.rs push_borrow_downgrade_eq` | covariant return downgrade (`&mut` → `&`) |
 | `member.rs push_immediate_argument_eq` | receiver borrow-matching for requirement binding |
@@ -37,7 +37,7 @@ memory-safety-bearing:
 - The **`T` vs `&T` diagnostic** on consuming rigid params: correct
   rejection, incomprehensible rendering, because the failing site is a bare
   `Eq` that never knew it was an adaptation question ("this call must own
-  the value; `&T` can't donate because T isn't known Copy/CheapClone — add
+  the value; `&T` can't donate because T isn't known Copy/Clone — add
   `consume` or clone" is the answer the user needed).
 - Two of the eight sites are *documented copies* of a third — divergence
   maintained by comment.
@@ -52,7 +52,7 @@ memory-safety-bearing:
 
    where `Adaptation` is a small closed enum: `Identity`, `Borrow` (auto-
    borrow), `Downgrade` (`&mut`→`&`), `Donate` (borrow fills owned slot:
-   `Copy` tier = free copy, `CheapClone` tier = retain), `Consume`
+   `Copy` tier = free copy, `Clone` tier = retain), `Consume`
    (ownership transfer into the callee/slot). `site` carries only what
    changes the rule today: application vs nested position (ApplyBorrow's
    distinction), return vs argument, marker (`copy`) vs implicit, pack
@@ -62,7 +62,7 @@ memory-safety-bearing:
 
 2. **The evidence.** Typing publishes the chosen `Adaptation` per node in one
    artifact table — the generalization of today's `coerce_clones` (which
-   records only the CheapClone tier). "Typing publishes, lowering reads"
+   records only the Clone tier). "Typing publishes, lowering reads"
    (ADR 0015/0038) applied to adaptation: MIR stops re-deriving *any*
    crossing decision.
 
@@ -74,7 +74,7 @@ memory-safety-bearing:
 
 4. **One diagnostic.** A failed adaptation renders as an adaptation error
    ("this position needs an owned `T`; the borrowed argument can't donate
-   because `T` has no Copy/CheapClone evidence — declare the parameter
+   because `T` has no Copy/Clone evidence — declare the parameter
    `consume`, or clone at the call") instead of eight flavors of type
    mismatch.
 

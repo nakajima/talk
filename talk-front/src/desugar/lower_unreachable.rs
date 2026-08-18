@@ -69,6 +69,7 @@ impl LowerUnreachable {
                 mode: None,
                 mode_span: None,
             }],
+            trailing_block: None,
         };
     }
 }

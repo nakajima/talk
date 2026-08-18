@@ -723,7 +723,10 @@ fn worker_task_main(
     arg: Transfer,
     budgets: Budgets,
 ) -> Result<(Transfer, Vec<u8>, Vec<u8>), String> {
-    let mut io = crate::io::CaptureIO::default();
+    // Workers buffer output for join-order replay but need the real host
+    // clock: CaptureIO's synthetic clock advances only when read, so a
+    // deadline wait would repeatedly sleep against nearly the same time.
+    let mut io = crate::io::ReplIO::default();
     let result = {
         let mut machine = Machine {
             slots: vec![],
@@ -1606,6 +1609,9 @@ pub struct ValueNames {
     /// The core String struct: its values render as quoted text read
     /// from byte memory.
     pub string_struct: Option<Symbol>,
+    /// The core Array struct: its initialized elements render through
+    /// the memory allocation's recorded element kind.
+    pub array_struct: Option<Symbol>,
 }
 
 /// Talk-style rendering, matching the derived-show formats:
@@ -1661,6 +1667,9 @@ fn render_agg(
             "\"{}\"",
             escape_string(&String::from_utf8_lossy(bytes))
         ));
+    }
+    if desc.symbol.is_some() && desc.symbol == names.array_struct {
+        return render_array(machine, names, slots);
     }
     let type_name = |symbol: &Symbol| {
         names
@@ -1732,6 +1741,48 @@ fn string_bytes(field_values: &[Value]) -> Option<(Pointer, i64)> {
         [Value::Ptr(base), Value::I64(len), ..] => Some((*base, *len)),
         _ => None,
     }
+}
+
+fn render_array(machine: &Machine, names: &ValueNames, slots: &[Value]) -> Result<String, String> {
+    let [
+        Value::Ptr(base),
+        Value::I64(count),
+        Value::I64(capacity),
+        ..,
+    ] = slots
+    else {
+        return Err("vm: Array value does not have Array's shape".into());
+    };
+    if *count < 0 || *capacity < 0 || count > capacity {
+        return Err(format!(
+            "vm: malformed Array bounds: count {count}, capacity {capacity}"
+        ));
+    }
+    let count = usize::try_from(*count).map_err(|_| "vm: Array count out of range")?;
+    if count == 0 {
+        return Ok("[]".into());
+    }
+    let kind = machine
+        .allocations
+        .live_record(*base)
+        .and_then(|record| (!record.mixed).then_some(record.stored).flatten())
+        .ok_or("vm: Array storage has no single initialized element kind")?;
+    let stride = match kind {
+        MemKind::Byte => 1,
+        MemKind::I64 | MemKind::F64 | MemKind::Bool | MemKind::Ptr | MemKind::Boxed => 8,
+    };
+    let mut rendered = Vec::with_capacity(count);
+    for index in 0..count {
+        let offset = index
+            .checked_mul(stride)
+            .ok_or("vm: Array element offset out of range")?;
+        let pointer = base
+            .checked_add(offset)
+            .ok_or("vm: Array element address out of range")?;
+        let value = machine.load_value(pointer, kind)?;
+        rendered.push(render_value(machine, names, &value)?);
+    }
+    Ok(format!("[{}]", rendered.join(", ")))
 }
 
 /// Build one flat aggregate: a `Void`-filled slot vector of the layout's
