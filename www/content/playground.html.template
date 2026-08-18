@@ -17,7 +17,7 @@
       <div class="playground-runner runnable">
         <aside class="example-library">
           <div class="playground-panel-title"><strong>Examples</strong></div>
-          <div class="example-list" data-example-catalog data-initial-example="exhaustive-match"></div>
+          <div class="example-list" data-example-catalog></div>
         </aside>
         <section class="playground-editor">
           <div class="playground-panel-title">

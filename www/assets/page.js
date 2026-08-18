@@ -118,6 +118,7 @@ function createWasmClient() {
     pending.clear();
     for (const listener of failureListeners) listener(error);
   };
+  ready.catch(fail);
 
   worker.addEventListener("message", (event) => {
     const message = event.data;
