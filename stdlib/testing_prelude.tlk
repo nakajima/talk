@@ -1,7 +1,9 @@
 use ansi::{ ColorfulString }
 use testing::{ Failure, TestCase, fail, registerTest, report }
 
+// Test cases registered while the test module initializes.
 pub let __talktalk_tests = Array<TestCase>(capacity: 0)
+// Assertion failures recorded while the registered tests run.
 pub let __talktalk_failures = Array<Failure>(capacity: 0)
 let __talktalk_current_test = ""
 let __talktalk_filter_enabled = false
@@ -27,6 +29,7 @@ let __talktalk_filter_name = ""
 	'continue ()
 }
 
+// Runs every registered test, prints the report, and returns the failure count.
 pub func __talktalk_runAllAndReport() -> Int {
 	for testCase in __talktalk_tests {
 		__talktalk_current_test = testCase.name.to_string()

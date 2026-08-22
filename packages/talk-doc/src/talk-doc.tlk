@@ -1,0 +1,15 @@
+use fs::{ Path }
+
+// A preliminary package-discovery record retained for future generator work.
+//
+// The current CLI uses its own `SourceModule` pipeline and does not construct this
+// type, so no traversal or visibility invariants are enforced here yet.
+pub struct Package {
+	// A source path placeholder; file contents and module identity are not stored.
+	pub struct File {
+		let path: Path
+	}
+
+	let root: Path
+	let files: [File]
+}

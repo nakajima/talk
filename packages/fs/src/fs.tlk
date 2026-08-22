@@ -1,0 +1,513 @@
+// Unsafe operations are scoped in Directory.entries.
+let _directory_entry_directory = 1
+let _directory_entry_symlink = 3
+
+use os::{ OS }
+
+extend Path {
+	// Joins lexical components with `/` separators.
+	//
+	// An initial `/` component renders exactly one leading separator. Empty paths
+	// render as an empty string; no normalization or host lookup occurs.
+	pub func to_string() -> String {
+		if self.components.count == 0 { return "" }
+
+		let str = self.components.get(0).to_string()
+		let i = 1
+		loop i < self.components.count {
+			let component = self.components.get(i).to_string()
+			if str.to_string() == "/" {
+				str = str + component
+			} else {
+				str = str + "/" + component
+			}
+			i = i + 1
+		}
+		str.to_string()
+	}
+
+	// Returns a new path with `component` appended as one lexical component.
+	//
+	// The component is not split, normalized, or checked for separators. Existing
+	// path storage is copied so the receiver remains unchanged.
+	pub func appending(consume component: String) -> Path {
+		let count = self.components.count + 1
+		let storage = _storage<String>(capacity: count)
+		let i = 0
+		loop i < self.components.count {
+			storage.set(index: i, value: self.components.get(i).to_string())
+			i = i + 1
+		}
+		storage.set(index: self.components.count, value: component)
+		Path(components: Array<String>(storage: storage, count: count, capacity: count))
+	}
+
+	// Returns whether the first component is the `/` root marker.
+	pub func is_absolute() -> Bool {
+		self.components.count > 0 && self.components.get(0).to_string() == "/"
+	}
+
+	// Resolve "." and ".." lexically, without touching the file system:
+	// "." drops out, ".." pops one component, ".." at the root of an
+	// absolute path goes nowhere, and leading ".."s of a relative path
+	// are kept.
+	pub func normalized() -> Path {
+		let out: [String] = []
+		if self.is_absolute() { out.push("/") }
+		let i = 0
+		loop i < self.components.count {
+			let component = self.components.get(i).to_string()
+			if component == "/" || component == "." {
+				// The root marker is already in `out`; "." is a no-op.
+			} else {
+				if component == ".." {
+					if out.count == 0 {
+						out.push("..")
+					} else {
+						let last = out.get(out.count - 1).to_string()
+						if last == ".." {
+							out.push("..")
+						} else {
+							if last != "/" { out.pop() }
+						}
+					}
+				} else {
+					out.push(component)
+				}
+			}
+			i = i + 1
+		}
+		Path(components: out)
+	}
+
+	// Replace a leading "~" component with the value of $HOME. The answer
+	// is none when the path has no leading tilde and none is needed, and
+	// none when HOME is not set.
+	pub func expanding_tilde() -> Path? {
+		if self.components.count == 0 { return Optional.some(self) }
+		if self.components.get(0).to_string() != "~" { return Optional.some(self) }
+		match OS.getenv(name: "HOME") {
+			.none -> Optional.none,
+			.some(home) -> {
+				let expanded = Path(home)
+				let i = 1
+				loop i < self.components.count {
+					expanded = expanded.appending(component: self.components.get(i).to_string())
+					i = i + 1
+				}
+				Optional.some(expanded)
+			}
+		}
+	}
+
+	// Prepend the current working directory to a relative path; absolute
+	// paths are returned unchanged. The answer is none when the cwd cannot
+	// be determined. No "."/".." resolution happens here: that is what
+	// normalized and expanded are for.
+	pub func absolute() -> Path? {
+		if self.is_absolute() { return Optional.some(self) }
+		match OS.cwd() {
+			.none -> Optional.none,
+			.some(cwd) -> {
+				let result = Path(cwd)
+				let i = 0
+				loop i < self.components.count {
+					result = result.appending(component: self.components.get(i).to_string())
+					i = i + 1
+				}
+				Optional.some(result)
+			}
+		}
+	}
+
+	// Applies tilde expansion, absolutization, and lexical normalization in order.
+	//
+	// This does not access path components or resolve symlinks. `none` means HOME
+	// or the current working directory required by the input was unavailable;
+	// compare `canonicalized`, which requires an existing host path.
+	pub func expanded() -> Path? {
+		match self.expanding_tilde() {
+			.none -> Optional.none,
+			.some(tilde) -> {
+				match tilde.absolute() {
+					.none -> Optional.none,
+					.some(full) -> Optional.some(full.normalized())
+				}
+			}
+		}
+	}
+
+	// Canonicalize through the host (POSIX realpath): every component is
+	// resolved, symlinks included, so the path must exist. The answer is
+	// none when the host cannot resolve it.
+	pub func canonicalized() -> Path? {
+		#unsafe {
+			let path_string = self.to_string()
+			let path_buf = _alloc<Byte>(count: path_string.byte_count + 1)
+			_copy(
+				from: path_string.storage.base,
+				to: path_buf,
+				length: path_string.byte_count
+			)
+
+			let len = _io_realpath_len(path: path_buf)
+			if len < 0 {
+				_free(ptr: path_buf)
+				return Optional.none
+			}
+
+			let buf = _alloc<Byte>(count: len)
+			let copied = _io_realpath_copy(path: path_buf, buf: buf)
+			_free(ptr: path_buf)
+			if copied < 0 {
+				_free(ptr: buf)
+				return Optional.none
+			}
+
+			let copied = _io_clamp(count: copied, capacity: len)
+			Optional.some(
+				Path(String(base: ByteStorage(base: buf), byte_count: copied, capacity: copied))
+			)
+		}
+	}
+}
+
+extend Path: Showable {
+	// Displays the lexical path using the same joining rules as `to_string`.
+	pub func show() -> String {
+		self.to_string()
+	}
+}
+
+// A lightweight directory path, not an open directory handle.
+//
+// Each call to `entries` asks the host to enumerate the path afresh. Enumeration
+// failures are represented as an empty or partial array rather than `Result`;
+// use this API for traversal where best-effort behavior is acceptable.
+pub struct Directory {
+	// The directory path passed to host enumeration operations.
+	pub let path: Path
+
+	// Enumerates immediate children and classifies directories, files, and symlinks.
+	//
+	// Names are appended to `path` without canonicalizing symlinks. Failure to
+	// open the directory returns an empty array; an error during iteration returns
+	// entries collected before the error.
+	pub func entries() -> [DirectoryEntry] {
+		#unsafe {
+			let path_string = self.path.to_string()
+			let path_buf = _alloc<Byte>(count: path_string.byte_count + 1)
+			_copy(
+				from: path_string.storage.base,
+				to: path_buf,
+				length: path_string.byte_count
+			)
+
+			let real_count = _io_dir_count(path: path_buf)
+			if real_count < 0 {
+				_free(ptr: path_buf)
+				return []
+			}
+
+			let capacity = real_count
+			let storage = _storage<DirectoryEntry>(capacity: capacity)
+
+			let i = 0
+			let out = 0
+
+			loop i < real_count {
+				let name_len = _io_dir_entry_len(path: path_buf, index: i)
+				if name_len < 0 {
+					break
+				}
+
+				let name_buf = _alloc<Byte>(count: name_len)
+				let copied = _io_dir_entry_copy(path: path_buf, index: i, buf: name_buf)
+				if copied < 0 {
+					_free(ptr: name_buf)
+					break
+				}
+
+				let name = String(
+					base: ByteStorage(base: name_buf),
+					byte_count: copied,
+					capacity: copied
+				)
+				let entry_path = self.path.appending(component: name)
+				let kind = _io_dir_entry_kind(path: path_buf, index: i)
+
+				if kind == _directory_entry_directory {
+					storage.set(
+						index: out,
+						value: DirectoryEntry.directory(Directory(path: entry_path))
+					)
+				} else {
+					if kind == _directory_entry_symlink {
+						storage.set(index: out, value: DirectoryEntry.symlink(entry_path))
+					} else {
+						storage.set(index: out, value: DirectoryEntry.file(FsFile(path: entry_path)))
+					}
+				}
+				i = i + 1
+				out = out + 1
+			}
+
+			_free(ptr: path_buf)
+			Array<DirectoryEntry>(storage: storage, count: out, capacity: capacity)
+		}
+	}
+
+	// Performs a depth-first pre-order traversal beneath this directory.
+	//
+	// `fn` sees a child directory before its descendants. Symbolic links are
+	// reported but never followed, avoiding link cycles; enumeration errors use
+	// the same best-effort behavior as `entries`.
+	pub func walk(fn: (DirectoryEntry) -> ()) {
+		for entry in self.entries() {
+			match entry {
+				.directory(directory) -> {
+					fn(entry)
+					directory.walk(fn: fn)
+				},
+				other -> fn(other)
+			}
+		}
+	}
+}
+
+// A file entry discovered while traversing a directory.
+pub struct FsFile {
+	// The file path discovered during directory enumeration.
+	pub let path: Path
+}
+
+// The kind and path of an entry returned by directory traversal.
+pub enum DirectoryEntry {
+	// A child directory that can itself be enumerated.
+	case directory(Directory)
+	// A regular file.
+	case file(FsFile)
+	// A symbolic link; the path names the link rather than its target.
+	case symlink(Path)
+}
+
+extend Directory: Showable {
+	// Formats the wrapper as `Directory(path:<lexical path>)` for diagnostics.
+	pub func show() -> String {
+		"Directory(path:" + self.path.to_string() + ")"
+	}
+}
+
+// extend DirectoryEntry: Showable {
+// 	func show() {
+// 		match self {
+// 			.directory(directory) -> directory.show(),
+// 			.file(file) -> file.show(),
+// 			.symlink(path) -> path.show()
+// 		}
+// 	}
+// }
+
+// A lexical file-system path represented as components.
+//
+// A leading `/` component marks an absolute path. Construction does not touch
+// the file system or resolve `.`, `..`, `~`, or symlinks; use `normalized`,
+// `expanded`, or `canonicalized` for those progressively stronger operations.
+pub struct Path {
+	// Lexical path components; an initial `/` component marks an absolute path.
+	pub let components: [String]
+
+	init(components: [String]) {
+		self.components = components
+	}
+
+	// Splits a path spelling into components while preserving a leading root marker.
+	pub init(_ string: String) {
+		// `split` omits empty components, so the absolute-path marker is
+		// restored explicitly: a leading separator becomes the "/" root
+		// component `to_string` and `appending` already understand.
+		let all: [String] = []
+		if string.starts_with(needle: "/") { all.push("/") }
+		for part in string.split(character: '/').into_iter() {
+			all.push(part.to_string())
+		}
+		self.components = all
+	}
+}
+
+// An open host file descriptor with synchronous read, write, seek, and stat operations.
+//
+// Methods return operation-specific `Error` values carrying negative errno
+// codes. The handle is not automatically invalidated after `close`, so callers
+// must avoid subsequent operations and repeated closes.
+pub struct File {
+	// A failed host file operation. Each payload is the host's negated errno.
+	pub enum Error {
+		// Opening the requested path failed.
+		case open(Int)
+		// Reading from the file descriptor failed.
+		case read(Int)
+		// Writing to the file descriptor failed.
+		case write(Int)
+		// Repositioning the file offset failed.
+		case seek(Int)
+		// Querying file metadata failed.
+		case stat(Int)
+	}
+
+	// The access requested when opening a file.
+	pub enum Mode {
+		// Open for reading only.
+		case r
+		// Open for writing, creating or truncating the file.
+		case w
+		// Open for both reading and writing, creating the file if needed.
+		case rw
+	}
+
+	// An offset interpreted relative to a particular file position.
+	pub enum SeekFrom {
+		// `Int` bytes from the beginning of the file.
+		case start(Int)
+		// `Int` bytes from the current file offset.
+		case current(Int)
+		// `Int` bytes from the end of the file.
+		case end(Int)
+	}
+
+	let fd: Int
+	let mode: Mode
+
+	// Open the file at `path`: `.r` reads, `.w` truncates or creates,
+	// `.rw` reads and writes, creating the file when missing.
+	pub static func open(path: Path, mode: Mode) -> Result<File, Error> {
+		let flags = match mode {
+			.r -> O_RDONLY,
+			.w -> O_WRONLY + O_CREAT + O_TRUNC,
+			.rw -> O_RDWR + O_CREAT
+		}
+		let permissions = S_IRUSR + S_IWUSR
+		let fd = open_path(path: path.to_string(), flags: flags, mode: permissions)
+		if fd < 0 { return .error(.open(fd)) }
+		.ok(File(fd: fd, mode: mode))
+	}
+
+	// Reads from the current offset until the host reports end-of-file.
+	//
+	// The buffer starts at 4096 bytes or the current file size, whichever is
+	// larger, and doubles as needed. On error, partial bytes are discarded and
+	// returned storage is freed.
+	pub func read() -> Result<String, Error> {
+		#unsafe {
+			let capacity = 4096
+			let size = _io_file_size(fd: self.fd)
+			if size > capacity { capacity = size }
+			let buf = _alloc<Byte>(count: capacity)
+			let total = 0
+			loop {
+				let n = _io_read(
+					fd: self.fd,
+					buf: _ptr_add(ptr: buf, offset: total),
+					count: capacity - total
+				)
+				if n < 0 {
+					_free(ptr: buf)
+					return .error(.read(n))
+				}
+				if n == 0 { break }
+				total = total + n
+				if total == capacity {
+					let grown = _alloc<Byte>(count: capacity * 2)
+					_copy(from: buf, to: grown, length: total)
+					_free(ptr: buf)
+					buf = grown
+					capacity = capacity * 2
+				}
+			}
+			.ok(String(base: ByteStorage(base: buf), byte_count: total, capacity: capacity))
+		}
+	}
+
+	// Performs one host read of at most `count` bytes from the current offset.
+	//
+	// `count` must be non-negative. A short read is successful and advances the
+	// descriptor by only the bytes received. Unlike `read()`, this does not loop
+	// to fill the requested count.
+	pub func read(count: Int) -> Result<String, Error> {
+		#unsafe {
+			let buf = _alloc<Byte>(count: count)
+			let n = _io_read(fd: self.fd, buf: buf, count: count)
+			if n < 0 {
+				_free(ptr: buf)
+				return .error(.read(n))
+			}
+			let clamped = _io_clamp(count: n, capacity: count)
+			return .ok(String(base: ByteStorage(base: buf), byte_count: clamped, capacity: count))
+		}
+	}
+
+	// Write the whole string, looping over partial writes. The answer
+	// is the byte count written.
+	pub func write(_ string: String) -> Result<Int, Error> {
+		#unsafe {
+			let total = 0
+			loop total < string.byte_count {
+				let n = _io_write(
+					fd: self.fd,
+					buf: _ptr_add(ptr: string.storage.base, offset: total),
+					count: string.byte_count - total
+				)
+				if n < 0 { return .error(.write(n)) }
+				total = total + n
+			}
+			.ok(total)
+		}
+	}
+
+	// Moves the descriptor offset relative to the selected origin.
+	//
+	// Success returns the new absolute byte offset. Host failure preserves the
+	// negative errno in `Error.seek`.
+	pub func seek(from: SeekFrom) -> Result<Int, Error> {
+		match from {
+			.start(offset) -> self.seek(offset: offset, whence: SEEK_SET),
+			.current(offset) -> self.seek(offset: offset, whence: SEEK_CUR),
+			.end(offset) -> self.seek(offset: offset, whence: SEEK_END)
+		}
+	}
+
+	// Queries the current byte offset by seeking zero bytes from `.current`.
+	pub func tell() -> Result<Int, Error> {
+		self.seek(from: .current(0))
+	}
+
+	// Returns the descriptor's current file size from host metadata.
+	//
+	// This does not change the file offset. Metadata failure is returned as
+	// `Error.stat` with the host's negative errno.
+	pub func size() -> Result<Int, Error> {
+		let size = _io_file_size(fd: self.fd)
+		if size < 0 { return .error(.stat(size)) }
+		.ok(size)
+	}
+
+	// Requests one host close and returns zero or a negative errno.
+	//
+	// The stored descriptor is not invalidated, so repeated closes or later I/O
+	// remain the caller's responsibility.
+	pub func close() -> Int {
+		_io_close(fd: self.fd)
+	}
+
+	// Returns whether the stored descriptor is non-negative.
+	//
+	// This reflects construction only; it remains true after `close` because the
+	// handle does not mutate its descriptor.
+	pub func is_valid() -> Bool { self.fd >= 0 }
+
+	func seek(offset: Int, whence: Int) -> Result<Int, Error> {
+		let position = _io_seek(fd: self.fd, offset: offset, whence: whence)
+		if position < 0 { return .error(.seek(position)) }
+		.ok(position)
+	}
+}

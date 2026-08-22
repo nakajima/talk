@@ -1,0 +1,343 @@
+// Associates line comments with the declarations they document.
+//
+// The lexer drops comments from the token stream and preserves their
+// byte spans on ParseOutcome.comments; every Decl carries its own byte
+// span. This pass joins the two sorted lists without touching the
+// parser: a contiguous run of comment lines attaches to the
+// declaration whose first token begins on the line directly below the
+// run. The scan from a comment run to its decl moves FORWARD over
+// whitespace and the leading modifier keywords (pub, static, mut,
+// consuming), which the parser consumes before the decl's own span
+// starts. A blank line anywhere in the gap detaches the run, and a
+// comment sharing its line with preceding code is trailing — both land
+// in `orphans`.
+//
+// Only decls reachable from file items and nominal bodies are
+// considered (variants, properties, methods, inits, requirements,
+// nested nominals); local decls inside function bodies are skipped.
+// Entries carry the decl's span as the join key back to the AST, in
+// source order, so consumers can merge-join while walking the tree.
+//
+// `parse_file_source` leaves ParseOutcome.docs empty; the
+// `parse_file_docs_source` entry point runs this pass so consumers that
+// do not need documentation never pay for it.
+
+use package::Lexer::{ Comment }
+use package::Ast::{ Decl, DeclKind, Item }
+use package::Parser::{ ParseOutcome, DocumentedDecl, parse_file_source }
+
+// The result of joining scanner comment spans to parser declaration spans.
+//
+// `entries` is sorted by declaration position and contains only leading,
+// contiguous line-comment groups. Trailing comments, groups separated by a
+// blank line, pragmas, and comments without a following declaration are orphans.
+pub struct DocIndex {
+	// Successfully attached declaration/comment groups in declaration order.
+	pub let entries: [DocumentedDecl]
+	// Comments that attached to nothing: trailing, blank-line
+	// separated, or stranded with no decl below them.
+	pub let orphans: [Comment]
+}
+
+struct DeclSpan {
+	let start: Int
+	let end: Int
+}
+
+// The outcome of attaching one finished comment group: the advanced
+// span cursor, the entry when the group attached, or the group's
+// comments as orphans when it did not.
+struct Flush {
+	let si: Int
+	let entry: DocumentedDecl?
+	let orphans: [Comment]
+}
+
+let newline_byte = 10 // "\n"
+let return_byte = 13 // "\r"
+let space_byte = 32 // " "
+let tab_byte = 9 // "\t"
+let left_brace_byte = 123 // "{"
+let right_brace_byte = 125 // "}"
+let underscore_byte = 95 // "_"
+
+func is_ident_byte(b: Int) -> Bool {
+	if b >= 97 && b <= 122 { return true } // a-z
+	if b >= 65 && b <= 90 { return true } // A-Z
+	if b >= 48 && b <= 57 { return true } // 0-9
+	b == underscore_byte
+}
+
+// The end of the decl-leading modifier keyword starting at pos, or -1.
+// The byte after the word must not continue an identifier.
+func modifier_end(source: String, pos: Int) -> Int {
+	let view = source.utf8()
+	let n = view.count()
+	let words = ["pub", "static", "mut", "consuming"]
+	for w in words {
+		let wv = w.utf8()
+		let wn = wv.count()
+		if pos + wn > n { continue }
+		let i = 0
+		let matches = true
+		loop i < wn {
+			if view.at(index: pos + i)._toInt() != wv.at(index: i)._toInt() {
+				matches = false
+				break
+			}
+			i = i + 1
+		}
+		if matches {
+			let after = pos + wn
+			if after < n && is_ident_byte(b: view.at(index: after)._toInt()) { continue }
+			return after
+		}
+	}
+	0 - 1
+}
+
+// The end of the `use` keyword starting at pos, or -1. Like
+// modifier_end, the byte after the word must not continue an
+// identifier.
+func use_keyword_end(source: String, pos: Int) -> Int {
+	let view = source.utf8()
+	let n = view.count()
+	let wv = "use".utf8()
+	let wn = wv.count()
+	if pos + wn > n { return 0 - 1 }
+	let i = 0
+	loop i < wn {
+		if view.at(index: pos + i)._toInt() != wv.at(index: i)._toInt() {
+			return 0 - 1
+		}
+		i = i + 1
+	}
+	let after = pos + wn
+	if after < n && is_ident_byte(b: view.at(index: after)._toInt()) { return 0 - 1 }
+	after
+}
+
+// Attach a finished comment group: scan forward from the last
+// comment's end over whitespace (failing on a blank line) and leading
+// modifiers, then check the landing position against the decl spans.
+func flush_group(source: String, group: [Comment], spans: &[DeclSpan], si: Int) -> Flush {
+	if group.is_empty() { return Flush(si: si, entry: .none, orphans: []) }
+	let view = source.utf8()
+	let n = view.count()
+	let last = group[group.count - 1]
+	let i = last.end
+	let newlines = 0
+	let ok = true
+	let settled = false
+	loop settled == false {
+		if i >= n { ok = false; break }
+		let b = view.at(index: i)._toInt()
+		if b == newline_byte {
+			newlines = newlines + 1
+			if newlines >= 2 { ok = false; break }
+			i = i + 1
+			continue
+		}
+		if b == space_byte || b == tab_byte || b == return_byte {
+			i = i + 1
+			continue
+		}
+		let mend = modifier_end(source: source, pos: i)
+		if mend >= 0 {
+			i = mend
+			continue
+		}
+		settled = true
+	}
+	if ok {
+		// Imports are never documentation targets: a comment run
+		// directly above a `use` block skips the block and lands on
+		// the declaration on the line directly below it. The
+		// blank-line rule still applies there: a blank line between
+		// the block and the declaration detaches, and a blank line
+		// between the comment and the first `use` already detached
+		// above.
+		if use_keyword_end(source: source, pos: i) >= 0 {
+			let in_block = true
+			loop in_block {
+				i = use_keyword_end(source: source, pos: i)
+				// Past the complete import, including a multiline named
+				// import. A newline ends the declaration only when all
+				// opened braces have closed.
+				let braces = 0
+				let import_done = false
+				loop i < n && import_done == false {
+					let b = view.at(index: i)._toInt()
+					if b == left_brace_byte { braces = braces + 1 }
+					if b == right_brace_byte { braces = braces - 1 }
+					i = i + 1
+					if b == newline_byte && braces == 0 { import_done = true }
+				}
+				let skipping = true
+				loop skipping {
+					if i >= n { skipping = false; continue }
+					let b = view.at(index: i)._toInt()
+					if b == space_byte || b == tab_byte || b == return_byte {
+						i = i + 1
+						continue
+					}
+					skipping = false
+				}
+				if use_keyword_end(source: source, pos: i) >= 0 { continue }
+				in_block = false
+			}
+			// Landing below the block: only leading modifiers and the
+			// spaces between them are crossed — any newline here is a
+			// blank line after the block.
+			let settling = true
+			loop settling {
+				if i >= n { ok = false; break }
+				let b = view.at(index: i)._toInt()
+				if b == newline_byte { ok = false; break }
+				if b == space_byte || b == tab_byte || b == return_byte {
+					i = i + 1
+					continue
+				}
+				let mend = modifier_end(source: source, pos: i)
+				if mend >= 0 {
+					i = mend
+					continue
+				}
+				settling = false
+			}
+		}
+		if ok {
+			loop si < spans.count && spans[si].start < i { si = si + 1 }
+			if si < spans.count && spans[si].start == i {
+				let entry = DocumentedDecl(decl_start: spans[si].start, decl_end: spans[si].end, comments: group)
+				return Flush(si: si, entry: .some(entry), orphans: [])
+			}
+		}
+	}
+	Flush(si: si, entry: .none, orphans: group)
+}
+
+func collect_decl_spans(decls: &[Decl], consume spans: [DeclSpan]) -> [DeclSpan] {
+	for d in decls {
+		spans.push(DeclSpan(start: d.start, end: d.end))
+		spans = collect_member_spans(kind: d.kind, spans: spans)
+	}
+	spans
+}
+
+func collect_member_spans(kind: DeclKind, consume spans: [DeclSpan]) -> [DeclSpan] {
+	match kind {
+		.struct_decl(_, _, _, _, _, body, _, _) -> collect_decl_spans(decls: body.decls, spans: spans),
+		.enum_decl(_, _, _, _, _, body, _, _) -> collect_decl_spans(decls: body.decls, spans: spans),
+		.protocol_decl(_, _, _, _, _, body, _) -> collect_decl_spans(decls: body.decls, spans: spans),
+		.extend_decl(_, _, _, _, body) -> collect_decl_spans(decls: body.decls, spans: spans),
+		_ -> spans
+	}
+}
+
+func collect_item_spans(items: &[Item], consume spans: [DeclSpan]) -> [DeclSpan] {
+	for item in items {
+		if let .decl_item(d) = item {
+			spans.push(DeclSpan(start: d.start, end: d.end))
+			spans = collect_member_spans(kind: d.kind, spans: spans)
+		}
+	}
+	spans
+}
+
+// Attaches leading line-comment groups without changing the parser token stream.
+//
+// A group must end on the line immediately before a declaration after skipping
+// declaration modifiers. Imports may be crossed as one block, but any blank line
+// breaks attachment. The merge is ordered and local declarations are excluded.
+pub func collect_doc_comments(source: String, outcome: &ParseOutcome) -> DocIndex {
+	let view = source.utf8()
+	let spans = collect_item_spans(items: outcome.items, spans: [])
+	let entries: [DocumentedDecl] = []
+	let orphans: [Comment] = []
+	let group: [Comment] = []
+	let si = 0
+	for c in outcome.comments {
+		// A comment sharing its line with preceding code is trailing.
+		let trailing = false
+		let j = c.start - 1
+		loop j >= 0 {
+			let b = view.at(index: j)._toInt()
+			if b == newline_byte { break }
+			if b == space_byte || b == tab_byte || b == return_byte {
+				j = j - 1
+				continue
+			}
+			trailing = true
+			break
+		}
+		if trailing {
+			let f = flush_group(source: source, group: group, spans: spans, si: si)
+			si = f.si
+			group = []
+			if let .some(e) = f.entry { entries.push(e) }
+			for o in f.orphans { orphans.push(Comment(start: o.start, end: o.end)) }
+			orphans.push(Comment(start: c.start, end: c.end))
+			continue
+		}
+		// `// no-core` is a compiler pragma, not documentation: it
+		// breaks the current group and never attaches.
+		if c.end - c.start == 10 {
+			let is_pragma = true
+			let pragma = "// no-core".utf8()
+			let p = 0
+			loop p < 10 {
+				if view.at(index: c.start + p)._toInt() != pragma.at(index: p)._toInt() {
+					is_pragma = false
+					break
+				}
+				p = p + 1
+			}
+			if is_pragma {
+				let f = flush_group(source: source, group: group, spans: spans, si: si)
+				si = f.si
+				group = []
+				if let .some(e) = f.entry { entries.push(e) }
+				for o in f.orphans { orphans.push(Comment(start: o.start, end: o.end)) }
+				orphans.push(Comment(start: c.start, end: c.end))
+				continue
+			}
+		}
+		// A group continues only across adjacent comment lines.
+		if group.is_empty() == false {
+			let k = group[group.count - 1].end
+			let newlines = 0
+			let blocked = false
+			loop k < c.start {
+				let b = view.at(index: k)._toInt()
+				if b == newline_byte {
+					newlines = newlines + 1
+				} else if b == space_byte || b == tab_byte || b == return_byte { } else {
+					blocked = true
+				}
+				k = k + 1
+			}
+			if blocked || newlines != 1 {
+				let f = flush_group(source: source, group: group, spans: spans, si: si)
+				si = f.si
+				group = []
+				if let .some(e) = f.entry { entries.push(e) }
+				for o in f.orphans { orphans.push(Comment(start: o.start, end: o.end)) }
+			}
+		}
+		group.push(Comment(start: c.start, end: c.end))
+	}
+	let f = flush_group(source: source, group: group, spans: spans, si: si)
+	if let .some(e) = f.entry { entries.push(e) }
+	for o in f.orphans { orphans.push(Comment(start: o.start, end: o.end)) }
+	DocIndex(entries: entries, orphans: orphans)
+}
+
+// The documenting whole-file entry: the plain parse plus this pass's
+// attachments on ParseOutcome.docs. `parse_file_source` leaves docs
+// empty so consumers that never read documentation do not pay for it.
+pub func parse_file_docs_source(source: String) -> ParseOutcome {
+	let outcome = parse_file_source(source: source)
+	let docs = collect_doc_comments(source: source, outcome: outcome)
+	ParseOutcome(items: outcome.items, failure: outcome.failure, diags: outcome.diags, comments: outcome.comments, metas: outcome.metas, docs: docs.entries)
+}

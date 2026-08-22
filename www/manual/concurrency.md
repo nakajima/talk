@@ -1,41 +1,86 @@
 # 11. Concurrency
 
-TalkTalk can run several jobs without making you mark every calling function as `async`. Code can sleep, wait for a message, or run work in parallel while still reading from top to bottom.
+TalkTalk has two complementary ways to run work: cooperative tasks on one worker and structured parallel jobs across workers. Both use direct-style source. Code can sleep or wait for a channel while still reading from top to bottom.
 
-Most APIs in this chapter come from the `task` module. Every executable runs its top-level statements as the root task of Core's cooperative scheduler, so ordinary task code does not need to import `coop` or call a scheduler explicitly. The `coop` module remains available when an explicit nested scheduler scope is useful.
+Most APIs in this chapter come from `task`. Core supplies the task effects and runs every executable's top-level statements as an implicit cooperative root task. The `coop` module is only needed for an explicit nested scheduling scope.
 
-## Sleeping without function coloring
+## Function coloring and direct style
+
+In many languages a function that may pause must be declared `async`, returns a future rather than its ordinary result, and can only be called with `await`. Every caller that wants to pause in turn becomes `async`. The two incompatible call chains are often called *function colors*.
+
+TalkTalk does not add an async function kind. Waiting is an effect performed from an ordinary function. A handler can resume the suspended computation immediately, block the current worker, or store its one-shot resumption while another task runs. Calls and return values keep their ordinary shape:
 
 ```tlk
 use task::{ sleep }
 
-print("before")
-sleep(.milliseconds(100))
-print("after")
+func reminder() -> String {
+    sleep(.milliseconds(100))
+    "time is up"
+}
+
+reminder()
 ```
 
-`sleep` performs the internal wait effect until a monotonic deadline. The same source can run under the blocking host fallback or a cooperative scheduler.
+This does not mean waiting is invisible to the type system. `sleep` performs `wait_until`, and that effect is present in the inferred function row. Effect inference propagates the requirement through callers without requiring `async`, `await`, or a future-valued return type. A closed effect annotation still has to admit the operation.
+
+## The implicit root scheduler
+
+Every executable starts with one root task containing its top-level statements. Core's cooperative scheduler runs that task and every task it spawns. The root does not need a `run` wrapper:
+
+```tlk
+'spawn(task: func() {
+    print("child starts")
+    'yield()
+    print("child resumes")
+})
+
+print("root")
+'yield()
+```
+
+`'spawn` adds a child task. `'yield` suspends the current task voluntarily so another ready task can run. The scheduler also switches tasks when one waits for a channel or deadline. If the root finishes while children remain, the scheduler continues until all children finish.
+
+Cooperative tasks do not run simultaneously on the same worker. A task changes only at an explicit suspension operation, which makes direct-style local state straightforward. Scheduling order beyond the documented rules is not an API guarantee.
+
+`coop::run` installs the same scheduler around a closure when a nested scheduling scope is useful. A nearer user-defined handler may intercept the task effects to implement a different local policy.
+
+## Waiting and blocking fallbacks
+
+`sleep` computes an absolute monotonic deadline and waits until that deadline has passed. Spurious or coarse host wakes are harmless because it checks the clock again. Hosts may wake late, never early.
+
+The same wait effects have blocking outer handlers. Code running without a cooperative task handler can block its worker and then continue. The compiler may select this cheaper path when the reachable program does not need cooperative scheduling. `run_blocking` installs the standard blocking host handlers for a runtime worker boundary.
+
+The source operation is the same either way; the nearest handler determines whether the task or the whole worker waits.
 
 ## Structured parallel work
 
 `parallel_run` starts one worker per input, waits for every worker, and returns results in input order:
 
 ```tlk
-use task::{ parallel_run }
+use task::{ parallel_run, sleep }
 
 let doubled = parallel_run(
-    jobs: [1, 2, 3],
-    worker: func(consume value: Int) -> Int { value * 2 }
+    jobs: [1, 2, 3, 4],
+    worker: func(consume value: Int) -> Int {
+        sleep(.milliseconds(20))
+        value * 2
+    }
 )
 
 print(doubled)
 ```
 
-Jobs and results must conform to `Send`. Each worker runs under its own standard handlers for I/O, allocation, yielding, panic, channels, and timers, so operations such as `sleep` can be used directly. User-defined effects must still be handled inside the worker; handlers from the spawning task do not cross the isolation boundary. Worker handles do not escape, so returning from `parallel_run` means the whole group has finished.
+The worker receives each job by ownership and may use the standard host effects for I/O, allocation, yielding, panic, channels, and timers. User-defined handlers from the spawning task do not cross the worker boundary; install those inside the worker when needed.
+
+Jobs and results must conform to `Send`. Native targets transfer them into shared-memory workers using thread-safe ownership transitions. The reference VM gives each worker an isolated machine and structurally copies transferable values. `Send` excludes observable identity, so these implementations have the same source-visible value behavior.
+
+Worker handles never escape. Returning from `parallel_run` proves that every worker has completed and every result has transferred back. Nested parallel scopes use help-based joining so a worker waiting for children can run queued work instead of consuming a pool slot indefinitely. Targets without thread support may run the same structured operation sequentially.
+
+Use cooperative tasks for many waiting operations and local orchestration. Use `parallel_run` for independent jobs that should consume CPU in parallel.
 
 ## Channels
 
-Channels are multi-producer, single-consumer transfer queues:
+Channels transfer values between tasks or workers. They are multi-producer and single-consumer:
 
 ```tlk
 use task::{ channel }
@@ -45,9 +90,13 @@ sender.send(value: 42)
 print(receiver.recv())
 ```
 
-`Sender.clone()` creates another logical sender. `Receiver.recv()` returns the next `T`, or `.none` after every sender has gone away and the queue is empty. Endpoint destruction updates channel lifecycle state automatically.
+`Sender.clone()` creates another logical producer. `Receiver.recv()` returns the next `T`, or `.none` after every sender has been destroyed and the queue is empty. Destroying the receiver closes the other direction; later sends drop their undelivered values safely.
 
-A bounded channel adds backpressure:
+Channel payloads must be `Send`. A send moves the payload into the runtime queue. A waiting receive suspends its task under the cooperative scheduler or blocks under the host fallback. Sending, receiving, and closing wake waiters through the same check-register-park protocol so a wake racing with a wait is not lost.
+
+## Bounded channels and backpressure
+
+An unbounded sender can produce values faster than the receiver consumes them, causing the queue and memory use to grow without limit. A bounded channel caps queued and reserved values. When it is full, `send` waits until the consumer makes room:
 
 ```tlk
 use task::{ channel_bounded }
@@ -55,14 +104,16 @@ use task::{ channel_bounded }
 let (sender, receiver) = channel_bounded<Int>(capacity: 8)
 let delivered = sender.send(value: 42)
 
-delivered
+(delivered, receiver.recv())
 ```
 
-Bounded `send` waits for capacity and returns `false` if the receiver has closed before delivery.
+Bounded channels are useful for pipelines, network ingestion, and any producer whose rate should follow a slower consumer. The bound is enforced with an atomic reservation so racing producers cannot overfill it. `send` returns `false` if the receiver closes before delivery; otherwise it returns `true` after enqueueing the value.
+
+Backpressure can expose a real dependency cycle: if every task waits to send to a full queue and no task can receive, the program waits. Capacity is part of the pipeline design, not a substitute for arranging progress.
 
 ## Selecting receivers
 
-`select_recv` races two receivers, chooses the first ready side, and leaves the losing value queued:
+`select_recv` waits for either of two receivers, chooses the first ready side, and leaves the losing value queued:
 
 ```tlk
 use task::{ Either, channel, select_recv }
@@ -77,26 +128,14 @@ match select_recv(a: left, b: right) {
 }
 ```
 
-If both sides are ready, the left side wins. A closed channel counts as ready and returns `.none`.
+If both sides are ready, the left side wins. This tie rule is deterministic, not fair; swap the receivers when a caller wants to rotate priority. A closed channel counts as ready and produces `.none`. Wakes are readiness hints rather than claims, so the losing side does not lose its queued value.
 
-## Cooperative tasks and the implicit root scheduler
+## Resumptions are the mechanism
 
-Core exposes the `'spawn` task effect. Every executable runs inside an implicit cooperative root scheduler that handles spawned tasks, yields, channel waits, and deadlines while code remains in direct style:
+A cooperative wait is an ordinary effect handler with an extra continuation binder. The handler stores the suspended task as a linear `Resumption`, runs other ready tasks, and later resumes it when its channel or deadline becomes ready. Cancellation consumes the same one-shot value and runs cleanup for every suspended frame.
 
-```tlk
-'spawn(task: func() -> () {
-    print("child")
-    'yield()
-    print("child resumed")
-})
+This is why direct-style concurrency does not require compiler-generated future state machines. The source scheduler in Core uses the same effect and resumption features available to application code; runtimes provide only threads, transfer queues, monotonic time, and parking.
 
-print("root")
-```
+## Current boundaries
 
-No `coop` import or `run` wrapper is required. The scheduler drains spawned tasks even if the root task finishes first. `coop::run` installs the same scheduler for an explicit nested scope; a nearer user-defined handler may instead intercept the task effects to provide different scheduling behavior within its own scope.
-
-A spawned closure should receive owned state as an argument at worker boundaries rather than capture non-transferable values.
-
-## Resumptions are the foundation
-
-Effects provide the suspension mechanism. A scheduler may continue a resumption later; cancellation consumes it and runs cleanup. Linear resumptions prevent two workers from resuming the same continuation twice.
+The task surface is deliberately structured. There are no detached task handles, and dropping a handle cannot silently choose between cancellation and detachment because no such handle escapes. Parallel output order follows input order, but concurrent I/O writes may interleave. Use values or channels to establish an order before printing when deterministic output matters.

@@ -27,6 +27,40 @@ let nothing: () = ()
 
 Integer and floating-point arithmetic do not mix implicitly.
 
+## Integer overflow
+
+`Int` is a signed 64-bit two's-complement integer with values from `-9223372036854775808` through `9223372036854775807`. Ordinary `+`, `-`, `*`, and unary `-` trap when their mathematical result is outside that range. Division traps on zero and on the one overflowing case, the minimum value divided by `-1`.
+
+```tlk norun
+// This traps instead of silently changing sign.
+9223372036854775807 + 1
+```
+
+When overflow is an expected validation result, the checked methods return `.none` instead of trapping:
+
+```tlk
+let max = 9223372036854775807
+
+(
+    max.checked_add(1),
+    20.checked_mul(2),
+    1.checked_div(0)
+)
+```
+
+This evaluates to `(Optional.none, Optional.some(40), Optional.none)`. The checked family is `checked_add(_:)`, `checked_sub(_:)`, `checked_mul(_:)`, `checked_div(_:)`, and `checked_neg()`.
+
+Low-level code that deliberately needs arithmetic modulo `2^64` can opt out explicitly:
+
+```tlk
+let max = 9223372036854775807
+max.unchecked_add(1)
+```
+
+This evaluates to `-9223372036854775808`. The wrapping family is `unchecked_add(_:)`, `unchecked_sub(_:)`, `unchecked_mul(_:)`, `unchecked_div(_:)`, and `unchecked_neg()`. `unchecked_div` wraps the minimum-value divided by `-1` case, but division by zero still traps because it has no modular result.
+
+Use ordinary operators by default, checked methods when failure should be data, and `unchecked_*` only when modular arithmetic is intentional.
+
 ## Strings and characters
 
 Strings are UTF-8. A character literal uses single quotes and produces a `Character`:

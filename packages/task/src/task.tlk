@@ -1,0 +1,300 @@
+// Direct-style concurrency (ADR 0067): every operation checks its
+// source, acts when ready, and waits when not. Core's blocking fallback
+// waits the worker; a cooperative scheduler binds the resumption and
+// waits only the task. Channel endpoint lifecycle and the runtime's
+// queue, registration, wake, and deadline layers remain unchanged.
+
+// Install the full set of root fallbacks — the same rows core's
+// `_with_host` gives the program entry — and run `body` under them
+// with `arg` passed through. A runtime-spawned closure must be
+// self-contained across the boundary, and a closure cannot capture
+// owned values, so state arrives as an argument.
+pub func run_blocking<A, T>(consume arg: A, consume body: (consume A) '[io, alloc, yield, panic, wait] -> T) -> T {
+	#handle 'io { request in
+		'continue _io_host(request: request)
+	}
+	#handle 'alloc { allocation in
+		'continue
+	}
+	#handle 'yield {
+		'continue
+	}
+	#handle 'panic { message in
+		write_string(fd: STDERR_FD, s: message)
+		write_string(fd: STDERR_FD, s: "\n")
+		_io_host(request: .exit(1))
+		loop {}
+	}
+	// The tail-resumptive blocking fallback keeps constant stack depth.
+	#handle 'wait { reasons in
+		_block_wait(reasons: reasons)
+		'continue
+	}
+	body(arg)
+}
+
+// Invoke one parallel worker under its own standard host fallbacks. The
+// worker function travels as explicit state because spawned closures cannot
+// capture owned values across the isolation boundary.
+func _run_parallel_worker<A, T>(
+	consume state: (A, (consume A) '[io, alloc, yield, panic, wait] -> T)
+) -> T {
+	let (job, worker) = state
+	run_blocking(arg: job, body: worker)
+}
+
+// Materialize the borrowed worker as an owned task operand before bundling
+// it with the job transferred to the capture-free runtime entry.
+func _spawn_parallel_worker<A, T>(
+	consume job: A,
+	consume worker: (consume A) '[io, alloc, yield, panic, wait] -> T
+) -> Int {
+	_task_spawn(arg: (job, worker), worker: _run_parallel_worker)
+}
+
+// Run every job on its own parallel worker and return the outputs in
+// argument order (ADR 0058). Structured: every worker completes before
+// this returns, and no handle escapes. Transfer capabilities gate the
+// boundary: jobs move to workers and outputs move back. Each worker gets
+// its own standard host fallbacks; user-defined effects still need handlers
+// inside the worker.
+pub func parallel_run<A, T>(
+	consume jobs: [A],
+	worker: (consume A) '[io, alloc, yield, panic, wait] -> T
+) -> [T] where A: Send && T: Send {
+	let handles: [Int] = []
+	let feed = jobs.into_iter()
+	loop {
+		if let .some(job) = feed.next() {
+			handles.push(_spawn_parallel_worker(job: job, worker: worker))
+		} else {
+			break
+		}
+	}
+	let outputs: [T] = []
+	let joined = handles.into_iter()
+	loop {
+		if let .some(handle) = joined.next() {
+			outputs.push(_task_join<T>(handle: handle))
+		} else {
+			break
+		}
+	}
+	outputs
+}
+
+// === Channels (ADR 0059/0067) =========================================
+//
+// A multi-producer, single-consumer transfer channel. `recv` blocks in
+// the direct style: value, or `none` once every sender is gone.
+// Implicit sharing may duplicate endpoint values by retain, and a
+// `Deinit` hook runs once per copy (ADR 0060); each endpoint carries a
+// `DropToken` and gates its lifecycle op on `is_last()`.
+
+// A clonable sending endpoint for an unbounded, multi-producer channel.
+//
+// Each explicit `clone` registers another logical sender; the receiver observes
+// closure only after every sender is dropped. Values transfer across workers,
+// so `T` must satisfy `Send`. Sending never waits for capacity.
+pub struct Sender<T> {
+	let handle: Int
+	let guard: DropToken
+
+	// Transfers `value` to the receiver without backpressure.
+	//
+	// If the receiver has already been dropped, the value is discarded through
+	// typed drop glue. Compare `BoundedSender.send`, which can wait and reports
+	// whether delivery won the race with receiver closure.
+	pub func send(consume value: T) -> Void {
+		// The runtime queue is untyped, so only Talk code can release a
+		// value nobody will ever take: a send to a dead receiver drops
+		// the value here instead of enqueueing it.
+		if _chan_ctl(handle: self.handle, op: 9) == 1 {
+			_chan_send(handle: self.handle, value: value)
+		}
+	}
+}
+
+// A separate extension: the constructor call needs Sender's generic
+// init generalized, which it is not inside the struct's own binding
+// group.
+extend<T> Sender<T> {
+	// Creates another logical producer for the same unbounded queue.
+	//
+	// The runtime sender count is retained and the copy receives a fresh drop token,
+	// so the receiver observes closure only after both logical senders disappear.
+	pub func clone() -> Sender<T> {
+		let ignored = _chan_ctl(handle: self.handle, op: 1)
+		Sender(handle: self.handle, guard: _drop_token())
+	}
+}
+
+extend<T> Sender<T>: Deinit {
+	consuming func deinit() -> Void {
+		if self.guard.is_last() {
+			let ignored = _chan_ctl(handle: self.handle, op: 2)
+		}
+	}
+}
+
+// The single receiving endpoint shared by bounded and unbounded channels.
+//
+// `recv` preserves FIFO queue order. Dropping the final receiver drains queued
+// values through typed drop glue and causes later sends to fail or discard their
+// values. Receiver endpoints are intentionally not clonable.
+pub struct Receiver<T> {
+	let handle: Int
+	let guard: DropToken
+
+	// Receive directly: the queued value, or `none` once every sender
+	// is gone and the queue is drained. Parks between checks; a
+	// spurious wake just re-checks.
+	pub func recv() -> T? {
+		loop {
+			let status = _chan_ctl(handle: self.handle, op: 0)
+			if status == 0 {
+				return Optional.some(_chan_take<T>(handle: self.handle))
+			}
+			if status == 2 {
+				return Optional.none
+			}
+			'wait(reasons: [WaitReason.recv(self.handle)])
+		}
+	}
+}
+
+extend<T> Receiver<T>: Deinit {
+	consuming func deinit() -> Void {
+		if self.guard.is_last() {
+			// Drain before release: queued values free through their
+			// own typed drop glue, which the untyped runtime queue
+			// cannot run. A send racing this drain can still strand a
+			// value until the channel record itself dies.
+			loop {
+				if _chan_ctl(handle: self.handle, op: 0) == 0 {
+					let dropped: T = _chan_take<T>(handle: self.handle)
+				} else {
+					break
+				}
+			}
+			let ignored = _chan_ctl(handle: self.handle, op: 3)
+		}
+	}
+}
+
+// Creates an unbounded FIFO transfer channel.
+//
+// Sends never wait for capacity and can grow the runtime queue until the
+// receiver drains it. Use `channel_bounded` when producers need backpressure.
+pub func channel<T>() -> (Sender<T>, Receiver<T>) where T: Send {
+	let handle = _chan_ctl(handle: 0, op: 7)
+	(
+		Sender(handle: handle, guard: _drop_token()),
+		Receiver(handle: handle, guard: _drop_token())
+	)
+}
+
+// === Bounded channels (ADR 0062/0067) =================================
+//
+// Backpressure in the direct style: `send` claims a slot by ATOMIC
+// RESERVATION and delivers, parking while the queue is full. It
+// returns `true` on delivery and `false` when the receiver is gone —
+// the undelivered value frees here, through its own typed drop glue.
+
+// A clonable producer endpoint with atomic capacity reservation.
+//
+// Unlike `Sender`, `send` waits while the queue is full. Reservations prevent
+// multiple workers from overfilling the bound, and receiver closure wakes
+// blocked producers so they can return `false`.
+pub struct BoundedSender<T> {
+	let handle: Int
+	let guard: DropToken
+
+	// Waits for a queue slot and transfers `value`, returning true on delivery.
+	//
+	// Returns false if the receiver is gone before a slot is reserved; the
+	// undelivered value is then dropped by the caller-side typed path.
+	pub func send(consume value: T) -> Bool {
+		loop {
+			if _chan_ctl(handle: self.handle, op: 9) == 0 {
+				return false
+			}
+			if _chan_ctl(handle: self.handle, op: 10) == 1 {
+				_chan_send(handle: self.handle, value: value)
+				return true
+			}
+			'wait(reasons: [WaitReason.send(self.handle)])
+		}
+	}
+}
+
+extend<T> BoundedSender<T> {
+	// Creates another logical producer for the same bounded queue.
+	//
+	// The runtime sender count is retained and the copy receives a fresh drop token,
+	// so channel closure waits for both logical senders to disappear.
+	pub func clone() -> BoundedSender<T> {
+		let ignored = _chan_ctl(handle: self.handle, op: 1)
+		BoundedSender(handle: self.handle, guard: _drop_token())
+	}
+}
+
+extend<T> BoundedSender<T>: Deinit {
+	consuming func deinit() -> Void {
+		if self.guard.is_last() {
+			let ignored = _chan_ctl(handle: self.handle, op: 2)
+		}
+	}
+}
+
+// Creates a FIFO transfer channel with producer backpressure.
+//
+// Capacities below one are clamped to one, so this is never a rendezvous
+// channel. The returned receiver is the same single-consumer type used by
+// unbounded channels.
+pub func channel_bounded<T>(capacity: Int) -> (BoundedSender<T>, Receiver<T>) where T: Send {
+	let bound = if capacity < 1 { 1 } else { capacity }
+	let handle = _chan_ctl(handle: bound, op: 7)
+	(
+		BoundedSender(handle: handle, guard: _drop_token()),
+		Receiver(handle: handle, guard: _drop_token())
+	)
+}
+
+// === Timers (ADR 0063/0067) ===========================================
+
+// Suspends until at least `duration` of monotonic time has elapsed.
+//
+// The deadline is absolute, so spurious wakes simply recheck the clock.
+// Non-positive durations return immediately.
+pub func sleep(_ duration: Duration) -> () {
+	let deadline = Instant.now().adding(duration)
+	loop Instant.now() < deadline {
+		'wait(reasons: [WaitReason.deadline(deadline)])
+	}
+}
+
+// === select (ADR 0061/0067) ===========================================
+
+// Identifies which of two differently typed operations produced a value.
+pub enum Either<L, R> {
+	// Contains the value produced by the left operation.
+	case left(L)
+	// Contains the value produced by the right operation.
+	case right(R)
+}
+
+// Race two receivers: the first ready side wins, ties go left, and a
+// closed channel counts as ready (its receive is `none`). The losing
+// side's value stays queued for a later receive.
+pub func select_recv<T, U>(a: &Receiver<T>, b: &Receiver<U>) -> Either<T?, U?> {
+	loop {
+		if _chan_ctl(handle: a.handle, op: 0) != 1 {
+			return Either.left(a.recv())
+		}
+		if _chan_ctl(handle: b.handle, op: 0) != 1 {
+			return Either.right(b.recv())
+		}
+		'wait(reasons: [WaitReason.recv(a.handle), WaitReason.recv(b.handle)])
+	}
+}

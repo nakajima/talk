@@ -316,7 +316,14 @@ fn hover_to_js(
 
     let hover_obj = Object::new();
     set_str(&hover_obj, "contents", &hover.contents)?;
-    let contents_markdown = format!("```talk\n{}\n```", hover.contents);
+    let mut contents_markdown = format!("```talk\n{}\n```", hover.contents);
+    if let Some(documentation) = &hover.documentation {
+        contents_markdown.push_str("\n\n");
+        contents_markdown.push_str(documentation);
+        set_str(&hover_obj, "documentation", documentation)?;
+    } else {
+        Reflect::set(&hover_obj, &JsValue::from_str("documentation"), &JsValue::NULL)?;
+    }
     set_str(&hover_obj, "contents_markdown", &contents_markdown)?;
 
     let (start_line, start_col, _, _) = line_info_for_offset(text, hover.range.start);

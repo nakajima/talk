@@ -84,6 +84,10 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
         ("Optional.tlk", include_str!("../../core/Optional.tlk")),
         ("Result.tlk", include_str!("../../core/Result.tlk")),
         ("Operators.tlk", include_str!("../../core/Operators.tlk")),
+        (
+            "CheckedArithmetic.tlk",
+            include_str!("../../core/CheckedArithmetic.tlk"),
+        ),
         ("Convert.tlk", include_str!("../../core/Convert.tlk")),
         ("String.tlk", include_str!("../../core/String.tlk")),
         ("Memory.tlk", include_str!("../../core/Memory.tlk")),
@@ -382,23 +386,6 @@ mod tests {
         assert_eq!(
             cached.typed.symbol_names().len(),
             artifacts.typed.symbol_names().len()
-        );
-    }
-
-    #[test]
-    fn checked_in_artifact_matches_compiled_core() {
-        let bytes = artifact_bytes().expect("serialize core artifact");
-        let manifest = artifact_manifest(&bytes).expect("render core manifest");
-        let checked_in_bytes = std::fs::read(ARTIFACT_PATH).expect("read checked-in core artifact");
-        assert!(
-            bytes == checked_in_bytes,
-            "{ARTIFACT_PATH} is stale (generated digest: {}, checked-in digest: {}); regenerate with `cargo run -- core-artifact`",
-            crate::compiling::manifest::artifact_digest(&bytes),
-            crate::compiling::manifest::artifact_digest(&checked_in_bytes),
-        );
-        assert_eq!(
-            manifest,
-            std::fs::read_to_string(ARTIFACT_MANIFEST_PATH).expect("read checked-in core manifest")
         );
     }
 

@@ -1,0 +1,172 @@
+// A compiler-provided type with documentation but no Talk declaration.
+pub struct Builtin {
+	// The source spelling recognized by name resolution.
+	pub let name: String
+}
+
+// The documented shape of a function declaration.
+pub struct Function {
+	// The complete source-spelled declaration header without visibility.
+	pub let signature: String
+	// The source-spelled function name.
+	pub let name: String
+	// The generic parameters in declaration order.
+	pub let generics: [DocumentableID]
+	// The parameters in declaration order.
+	pub let params: [DocumentableID]
+	// The declared effects.
+	pub let effects: [DocumentableID]
+	// The return type, when one was declared.
+	pub let returns: DocumentableID?
+}
+
+// The documented shape of a global binding.
+pub struct Global {
+	// The binder name from the top-level `let` pattern.
+	pub let name: String
+	// The explicit type annotation, when one was written.
+	pub let type: DocumentableID?
+}
+
+// A documented function attached to a nominal type.
+pub struct Method {
+	// The function represented by this method.
+	pub let function: Function
+	// Whether the member belongs to its type rather than an instance.
+	pub let is_static: Bool
+}
+
+// The documented shape of a stored property.
+pub struct Property {
+	// The source-spelled property name.
+	pub let name: String
+	// The explicit type annotation, when one was written.
+	pub let type: DocumentableID?
+	// Whether the member belongs to its type rather than an instance.
+	pub let is_static: Bool
+}
+
+// The documented shape of an enum variant.
+pub struct Variant {
+	// The source-spelled case name.
+	pub let name: String
+	// References to the payload type spellings, in declaration order.
+	pub let payloads: [DocumentableID]
+}
+
+// The source spelling of a type annotation or generic parameter.
+pub struct Type {
+	// The exact source spelling of the type or generic parameter.
+	pub let name: String
+}
+
+// The documented name and type of a function parameter.
+pub struct Parameter {
+	// The local parameter name, without its external argument label.
+	pub let name: String
+	// The explicit type annotation, when one was written.
+	pub let type: DocumentableID?
+}
+
+// A declared effect and its function-shaped interface.
+pub struct EffectDeclaration {
+	// The complete source-spelled declaration header without visibility.
+	pub let signature: String
+	// The effect name without its leading quote.
+	pub let name: String
+	// The generic parameters in declaration order.
+	pub let generics: [DocumentableID]
+	// The operation parameters in declaration order.
+	pub let params: [DocumentableID]
+	// The declared result type.
+	pub let returns: DocumentableID
+}
+
+// An effect named in a function signature.
+pub struct Effect {
+	// The effect name without its leading quote.
+	pub let name: String
+}
+
+// A typed reference into `DocumentableCollection.items`.
+//
+// Every payload is a zero-based item index. The case records the expected
+// `Documentable` case so callers cannot accidentally treat, for example, a
+// parameter entry as a type entry.
+pub enum DocumentableID {
+	// Refers to a compiler-provided builtin type entry.
+	case builtin(Int)
+	// Refers to a top-level function entry.
+	case function(Int)
+	// Refers to a top-level binding entry.
+	case global(Int)
+	// Refers to a method entry owned by a nominal declaration.
+	case method(Int)
+	// Refers to a struct or enum entry.
+	case nominal(Int)
+	// Refers to a stored-property entry.
+	case property(Int)
+	// Refers to a type spelling used by another entry.
+	case type(Int)
+	// Refers to an enum-variant entry.
+	case variant(Int)
+	// Refers to a top-level effect declaration.
+	case effect_declaration(Int)
+	// Refers to an effect name used by a function entry.
+	case #"effect"(Int)
+	// Refers to a function-parameter entry.
+	case parameter(Int)
+}
+
+// The nominal declarations currently represented by the documentation model.
+pub enum Nominal {
+	// A struct's name, generic parameters, public properties, and public methods.
+	case #"struct"(name: String, generics: [DocumentableID], properties: [DocumentableID], methods: [DocumentableID])
+	// An enum's name, generic parameters, variants, and public methods.
+	case #"enum"(name: String, generics: [DocumentableID], variants: [DocumentableID], methods: [DocumentableID])
+	// A protocol's name, generic parameters, property requirements, and methods.
+	//
+	// Methods include both bodyless requirements and default implementations.
+	// Associated types are not yet represented as independently linkable members.
+	case #"protocol"(name: String, generics: [DocumentableID], properties: [DocumentableID], methods: [DocumentableID])
+}
+
+// A declaration or signature component stored in the flat documentation graph.
+//
+// Top-level and member declarations reference separate entries for parameter,
+// effect, generic, and type spellings. This preserves one source-ordered store
+// while `DocumentableID` keeps references kind-checked.
+pub enum Documentable {
+	// A compiler-provided type documented without a Talk declaration.
+	case builtin(Builtin)
+	// A top-level function declaration.
+	case function(Function)
+	// A top-level `let` declaration.
+	case global(Global)
+	// A function declared inside a nominal type.
+	case method(Method)
+	// A struct or enum declaration.
+	case nominal(Nominal)
+	// A stored property declared inside a struct.
+	case property(Property)
+	// A source-spelled type annotation or generic parameter.
+	case type(Type)
+	// An enum case and its payload types.
+	case variant(Variant)
+	// A top-level effect declaration.
+	case effect_declaration(EffectDeclaration)
+	// An effect named by a function signature.
+	case #"effect"(Effect)
+	// A function parameter and its optional type.
+	case parameter(Parameter)
+}
+
+// A declaration model paired with its documentation lines.
+pub struct DocumentableEntry {
+	// The declaration or signature component stored at this index.
+	pub let value: Documentable
+	// Comment text with the leading `//` and one optional space removed.
+	pub let documentation: [String]
+	// The exact declaration source for functions and methods; otherwise `none`.
+	pub let source: String?
+}

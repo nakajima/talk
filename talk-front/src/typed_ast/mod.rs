@@ -477,6 +477,10 @@ pub struct FrameFacts {
     /// Symbols referenced from inside a nested function value (the
     /// letrec decision for local function binders).
     pub nested_refs: rustc_hash::FxHashSet<Symbol>,
+    /// Symbols assigned anywhere in the frame (a superset of `celled`):
+    /// a loan binding that is later reassigned cannot stay a loan —
+    /// the slot must own from birth (docs/ownership.md).
+    pub assigned: rustc_hash::FxHashSet<Symbol>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]

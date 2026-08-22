@@ -1,8 +1,23 @@
 // no-core
+// Constructs `Self` from a caller-supplied source value.
+//
+// `From` is invoked explicitly as a static-style conversion owned by the target
+// type. It is not the compiler's implicit adaptation hook; declare `Into` on
+// the source type when values should cross typed boundaries automatically.
 pub protocol From<Source> {
+	// Produces a target value from `Source` according to the conformer's
+	// contract.
 	func from(value: Source) -> Self
 }
 
+// Defines an ownership-transferring conversion from `Self` to `Target`.
+//
+// A unique declared `Into<Target>` conformance may be inserted implicitly at
+// typed arguments, annotated bindings, returns, and other adaptation sites.
+// Synthesized reflexive conformances do not trigger conversion, and ambiguous
+// conversion rows are rejected rather than selected by declaration order.
 pub protocol Into<Target> {
+	// Consumes the source so owned storage can be donated to the target when
+	// possible.
 	consuming func into() -> Target
 }

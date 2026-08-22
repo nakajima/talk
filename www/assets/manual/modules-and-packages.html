@@ -6,23 +6,24 @@
     <title>talktalk - 9. Modules and Packages</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787039527" rel="stylesheet">
+    <link href="/style.css?t=1787386841" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
       <a class="global-nav-brand" href="/">talktalk</a>
       <div class="global-nav-links">
         <a href="/">Language</a>
-        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/manual/" aria-current="page">Guide</a>
+        <a href="/docs/">Docs</a>
         <a href="/playground">Playground</a>
         <a href="/qa">Q/A</a>
         <a href="/philosophy">Philosophy</a>
       </div>
     </nav>
-    <main class="content-page manual-page">
-      <header class="page-header">
-        <div class="page-header-content">
-          <code class="page-kicker">talktalk / docs</code>
+    <main class="site-page manual-page">
+      <header class="site-page-header">
+        <div class="site-page-heading">
+          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/modules-and-packages" aria-current="page">9. Modules and Packages</a></nav>
           <div class="page-header-title-row">
             <h1>9. Modules and Packages</h1>
             
@@ -30,10 +31,10 @@
         </div>
       </header>
 
-      <div class="manual-layout">
-        <aside class="manual-outline">
+      <div class="site-page-layout manual-layout">
+        <aside class="site-page-sidebar manual-outline">
           <nav aria-label="Manual table of contents">
-            <span class="manual-outline-title">Contents</span>
+            <span class="site-nav-label manual-outline-title">Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -57,16 +58,19 @@
 <li><a href="/manual/standard-library">13. The Standard Library</a></li>
 <li><a href="/manual/toolchain">14. The Toolchain</a></li>
 <li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+<li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
+<li><a href="/manual/mir-reference">B. MIR Reference</a></li>
+<li><a href="/manual/bytecode-reference">C. Bytecode Reference</a></li>
             </ol>
           </nav>
         </aside>
-        <div class="manual-document">
+        <div class="site-page-content manual-document">
           <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
             <a class="manual-previous" href="/manual/collections-and-text">&larr; 8. Collections and Text</a>
             <a class="manual-contents" href="/manual/">All chapters</a>
             <a class="manual-next" href="/manual/macros">10. Macros &rarr;</a>
           </nav>
-          <article class="page-content">
+          <article class="prose page-content">
             <p>As a program grows, you can split it across files and bring names in with <code>use</code>. A package groups those files into a library or executable and records any outside code the project needs.</p>
 <h2><a href="#visibility" aria-hidden="true" class="anchor" id="visibility"></a>Visibility</h2>
 <p>Top-level declarations and members are private to their file unless marked <code>pub</code>:</p>
@@ -79,7 +83,6 @@
 	<span class="type">User</span>(<span class="parameter">name</span>: <span class="string">"Ada"</span>)
 }</pre>
         </div>
-        
 <p>Only a module's public surface can be imported elsewhere.</p>
 <h2><a href="#imports" aria-hidden="true" class="anchor" id="imports"></a>Imports</h2>
 <p><code>use</code> can select names, alias them, import a module surface, or recursively import source submodules:</p>
@@ -91,7 +94,6 @@
 <span class="keyword">use</span> super<span class="operator">::</span>shared<span class="operator">::</span>{ Thing }
 <span class="keyword">use</span> dependency<span class="operator">::</span>{ API }</pre>
         </div>
-        
 <p>Paths have distinct roots:</p>
 <ul>
 <li><code>package::</code> begins at the current package's source root</li>
@@ -108,7 +110,6 @@
 <span class="keyword">use</span> os<span class="operator">::</span>{ OS }
 <span class="keyword">use</span> task<span class="operator">::</span>{ channel, sleep }</pre>
         </div>
-        
 <h2><a href="#package-manifests" aria-hidden="true" class="anchor" id="package-manifests"></a>Package manifests</h2>
 <p><code>talk new hello</code> creates a <code>package.tlk</code> like this:</p>
 <div class='code-block no-run'>
@@ -119,7 +120,6 @@
 	<span class="parameter">dependencies</span>: []
 )</pre>
         </div>
-        
 <p>A package may build libraries and named binaries:</p>
 <div class='code-block no-run'>
             <pre class='code-highlight'><span class="keyword">let</span> builds: [<span class="type">PackageArtifact</span>] <span class="operator">=</span> [
@@ -127,7 +127,6 @@
 	.<span class="property">bin</span>(<span class="parameter">named</span>: <span class="string">"server"</span>, <span class="parameter">from</span>: <span class="string">"src/server.tlk"</span>)
 ]</pre>
         </div>
-        
 <p>Run a named binary with:</p>
 <pre><code class="language-sh">talk run --bin server
 </code></pre>
@@ -140,7 +139,6 @@
 	.<span class="property">path</span>(<span class="parameter">package</span>: <span class="string">"shared"</span>, <span class="parameter">path</span>: <span class="string">"../shared"</span>)
 ]</pre>
         </div>
-        
 <p>Use the package commands to manage resolution:</p>
 <pre><code class="language-sh">talk install
 talk dependencies
@@ -158,9 +156,9 @@ talk update widgets
             <a class="manual-next" href="/manual/macros">10. Macros &rarr;</a>
           </nav>
         </div>
-        <div class="manual-rail" aria-hidden="true"></div>
+        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
       </div>
-      <script type="module" src="/page.js?t=1787039527"></script>
+      <script type="module" src="/page.js?t=1787386841"></script>
     </main>
   </body>
 </html>

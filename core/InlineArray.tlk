@@ -5,8 +5,10 @@ use package::Operators::{ Comparable }
 // An exact-size aggregate. Its elements are stored directly in the value;
 // Count is part of the type and is not stored at runtime.
 pub struct InlineArray<Element, static Count: Int> {
+	// Returns the compile-time element count carried by this type.
 	pub func count() -> Int { Count }
 
+	// Borrows an element when `index` is within `0..<Count`.
 	pub func get(_ index: Int) -> Optional<&Element> {
 		if index < 0 { return .none }
 		if Count <= index { return .none }

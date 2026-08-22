@@ -345,7 +345,9 @@ use crate::token_kind::TokenKind;
 
 // The bridged result types are frontend data (ADR 0057 slice 3b); the
 // bridge constructs them and re-exports the historical paths.
-pub use crate::front::macro_host::{BridgedDeclWrapper, BridgedExprMacro, BridgedFail, BridgedParse};
+pub use crate::front::macro_host::{
+    BridgedDeclWrapper, BridgedDoc, BridgedExprMacro, BridgedFail, BridgedParse,
+};
 
 /// Decode a `lex_tokens` result: the token stream (comments included
 /// as LineComment tokens) and whether the scan completed. A trailing
@@ -730,6 +732,25 @@ impl ResultAdapter<'_, '_> {
                 position(&take(&mut fields, "end")?)?,
             ));
         }
+        let mut docs = Vec::new();
+        for doc in self.array(&take(&mut outcome, "docs")?)? {
+            let mut fields = self.record(&doc, "DocumentedDecl")?;
+            let decl_start = position(&take(&mut fields, "decl_start")?)?;
+            let decl_end = position(&take(&mut fields, "decl_end")?)?;
+            let mut doc_comments = Vec::new();
+            for comment in self.array(&take(&mut fields, "comments")?)? {
+                let mut comment_fields = self.record(&comment, "Comment")?;
+                doc_comments.push((
+                    position(&take(&mut comment_fields, "start")?)?,
+                    position(&take(&mut comment_fields, "end")?)?,
+                ));
+            }
+            docs.push(crate::front::macro_host::BridgedDoc {
+                decl_start,
+                decl_end,
+                comments: doc_comments,
+            });
+        }
         let mut roots = Vec::new();
         for item in self.array(&take(&mut outcome, "items")?)? {
             roots.push(self.item(&item)?);
@@ -738,6 +759,7 @@ impl ResultAdapter<'_, '_> {
             roots,
             meta: std::mem::take(&mut self.meta),
             comments,
+            docs,
             failure,
             diags,
             next_node_id: self.ids.last,

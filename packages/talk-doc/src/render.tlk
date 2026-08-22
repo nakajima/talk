@@ -1,0 +1,825 @@
+// Renders a DocumentableCollection as HTML pages.
+//
+// Structural fragments use the stdlib HTML macro or concatenate only static
+// markup with values escaped by `render_html`. Doc comments pass through
+// talk-md and re-enter as explicitly trusted rendered markup.
+
+use package::autolink::{ SymbolLink, render_documentation, symbol_href }
+use package::documentable::{ Documentable, DocumentableEntry, DocumentableID }
+use package::highlight::{ highlight_source }
+use package::symbols::{ anchor_for, signature_of, symbol_links, symbol_page }
+use package::store::{ DocumentableCollection }
+use html::{ html, render_html, Markup, PreEscaped }
+
+// Navigation metadata for one generated module page.
+pub struct ModuleLink {
+	// The dotted module name shown in navigation.
+	pub let name: String
+	// The generated documentation filename.
+	pub let file: String
+	// The number of public declarations rendered on the module page.
+	pub let declarations: Int
+	// Module-level documentation lines used by package indexes.
+	pub let documentation: [String]
+	// The module's work-in-progress description, when marked.
+	pub let wip: String?
+
+	// Creates navigation metadata for a module without module documentation.
+	pub init(name: String, file: String, declarations: Int) {
+		self.name = name
+		self.file = file
+		self.declarations = declarations
+		self.documentation = []
+		self.wip = .none
+	}
+
+	// Creates navigation metadata carrying module-level documentation.
+	pub init(name: String, file: String, declarations: Int, documentation: [String]) {
+		self.name = name
+		self.file = file
+		self.declarations = declarations
+		self.documentation = documentation
+		self.wip = .none
+	}
+
+	// Creates navigation metadata with documentation and WIP status.
+	pub init(name: String, file: String, declarations: Int, documentation: [String], wip: String?) {
+		self.name = name
+		self.file = file
+		self.declarations = declarations
+		self.documentation = documentation
+		self.wip = wip
+	}
+}
+
+// One standalone declaration page produced by a bulk module render.
+pub struct RenderedPage {
+	// The output filename relative to the package documentation directory.
+	pub let file: String
+	// The complete HTML document.
+	pub let contents: String
+}
+
+func is_word_byte(value: Int) -> Bool {
+	(value >= 65 && value <= 90)
+		|| (value >= 97 && value <= 122)
+		|| (value >= 48 && value <= 57)
+		|| value == 95
+}
+
+func signature_slice(signature: &String, start: Int, end: Int) -> String {
+	signature.utf8().slice(start: start, byte_count: end - start).to_string()
+}
+
+func styled_word(word: String, class_name: String, href: String?) -> String {
+	let contents = if class_name.byte_count == 0 {
+		render_html(value: word)
+	} else {
+		let markup = @html { span class=(class_name) { (word) } }
+		markup.into_string()
+	}
+	if let .some(destination) = href {
+		let link = @html { a .docs-symbol-link href=(destination) { (PreEscaped(value: contents)) } }
+		return link.into_string()
+	}
+	contents
+}
+
+func next_non_space_is_colon(signature: &String, start: Int) -> Bool {
+	let bytes = signature.utf8()
+	let index = start
+	loop index < bytes.count() {
+		let value = bytes.at(index: index)._toInt()
+		if value != 32 && value != 9 { return value == 58 }
+		index = index + 1
+	}
+	false
+}
+
+func signature_html(signature: &String, module: &String, owner: &String, page: &String, symbols: &[SymbolLink], declaration_href: &String?) -> String {
+	let bytes = signature.utf8()
+	let output = ""
+	let cursor = 0
+	let index = 0
+	let declaration_kind = ""
+	loop index < bytes.count() {
+		if is_word_byte(value: bytes.at(index: index)._toInt()) == false {
+			index = index + 1
+			continue
+		}
+		if cursor < index {
+			output = output + render_html(value: signature_slice(signature: signature, start: cursor, end: index))
+		}
+		let end = index + 1
+		loop end < bytes.count() && is_word_byte(value: bytes.at(index: end)._toInt()) { end = end + 1 }
+		let word = signature_slice(signature: signature, start: index, end: end)
+		let keyword = word == "builtin" || word == "effect" || word == "func" || word == "struct" || word == "enum" || word == "protocol" || word == "let" || word == "static" || word == "mut" || word == "consuming" || word == "consume" || word == "case"
+		let declaration_keyword = word == "builtin" || word == "effect" || word == "func" || word == "struct" || word == "enum" || word == "protocol" || word == "let" || word == "case"
+		let first = word.utf8().at(index: 0)._toInt()
+		let href: String? = if keyword == false && declaration_kind.byte_count > 0 {
+			match declaration_href {
+				.some(value) -> .some(value.to_string()),
+				.none -> .none
+			}
+		} else if keyword == false && declaration_kind.byte_count == 0 && next_non_space_is_colon(signature: signature, start: end) == false {
+			symbol_href(reference: word, module: module, owner: owner, current_page: page, symbols: symbols)
+		} else {
+			.none
+		}
+		let has_href = match href { .some(_) -> true, .none -> false }
+		let class_name = if keyword {
+			"keyword"
+		} else if declaration_kind == "func" {
+			"function"
+		} else if declaration_kind == "effect" {
+			"effect"
+		} else if declaration_kind == "builtin" || declaration_kind == "struct" || declaration_kind == "enum" || declaration_kind == "protocol" {
+			"type"
+		} else if first >= 65 && first <= 90 || has_href {
+			"type"
+		} else {
+			""
+		}
+		output = output + styled_word(word: word, class_name: class_name, href: href)
+		declaration_kind = if declaration_keyword { word } else { "" }
+		index = end
+		cursor = end
+	}
+	if cursor < bytes.count() {
+		output = output + render_html(value: signature_slice(signature: signature, start: cursor, end: bytes.count()))
+	}
+	output
+}
+
+struct MemberView {
+	let group: String
+	let anchor: String
+	let signature: String
+	let signature_html: String
+	let documentation: String
+	let source_html: String
+}
+
+struct SummaryView {
+	let group: String
+	let signature_html: String
+	let documentation: String
+}
+
+struct EntryView {
+	let group: String
+	let anchor: String
+	let signature: String
+	let signature_html: String
+	let documentation: String
+	let source_html: String
+	let members: [MemberView]?
+}
+
+extend MemberView: Clone {}
+extend SummaryView: Clone {}
+extend Optional<[MemberView]>: Clone {}
+extend EntryView: Clone {}
+
+func wip_banner(description: &String?, module: &String, page: &String, symbols: &[SymbolLink]) -> String {
+	if let .some(value) = description {
+		let lines = if value.byte_count == 0 {
+			["This module is still under development."]
+		} else {
+			[value.to_string()]
+		}
+		let rendered = render_documentation(documentation: lines, heading_offset: 2, module: module, owner: "", current_page: page, symbols: symbols)
+		return "<aside class=\"site-notice docs-wip-banner\" role=\"note\"><strong>Work in progress</strong><div class=\"prose\">" + rendered + "</div></aside>"
+	}
+	""
+}
+
+func source_disclosure(source: &String?) -> String {
+	if let .some(value) = source {
+		let highlighted = PreEscaped(value: highlight_source(source: value))
+		let markup = @html {
+			details .docs-source {
+				summary { "View Source" }
+				pre { code { (highlighted) } }
+			}
+		}
+		return markup.into_string()
+	}
+	""
+}
+
+func append_member(collection: &DocumentableCollection, module: &String, page: &String, symbols: &[SymbolLink], owner: String, parent: String, group: String, id: DocumentableID, mut members: [MemberView]) -> Void {
+	let found: DocumentableEntry? = collection.get(id: id)
+	if let .some(entry) = found {
+		let signature = signature_of(collection: collection, entry: entry)
+		let source_html = match entry.value {
+			.method(_) -> source_disclosure(source: entry.source),
+			_ -> ""
+		}
+		members.push(MemberView(
+			group: group,
+			anchor: parent + "-" + anchor_for(signature: signature),
+			signature: signature,
+			signature_html: signature_html(signature: signature, module: module, owner: owner, page: page, symbols: symbols, declaration_href: .none),
+			documentation: render_documentation(documentation: entry.documentation, heading_offset: 3, module: module, owner: owner, current_page: page, symbols: symbols),
+			source_html: source_html
+		))
+	}
+}
+
+func member_views(collection: &DocumentableCollection, module: &String, page: &String, symbols: &[SymbolLink], owner: String, parent: String, properties: &[DocumentableID], variants: &[DocumentableID], methods: &[DocumentableID]) -> [MemberView] {
+	let members: [MemberView] = []
+	for id in properties { append_member(collection: collection, module: module, page: page, symbols: symbols, owner: owner, parent: parent, group: "Properties", id: id, members: members) }
+	for id in variants { append_member(collection: collection, module: module, page: page, symbols: symbols, owner: owner, parent: parent, group: "Cases", id: id, members: members) }
+	for id in methods { append_member(collection: collection, module: module, page: page, symbols: symbols, owner: owner, parent: parent, group: "Methods", id: id, members: members) }
+	members
+}
+
+func declaration_group(entry: &DocumentableEntry) -> String {
+	match entry.value {
+		.builtin(_) -> "Builtins",
+		.nominal(value) -> match value {
+			.#"protocol"(name: _, generics: _, properties: _, methods: _) -> "Protocols",
+			.#"struct"(name: _, generics: _, properties: _, methods: _) -> "Structs",
+			.#"enum"(name: _, generics: _, variants: _, methods: _) -> "Enums"
+		},
+		.effect_declaration(_) -> "Effects",
+		.function(_) -> "Functions",
+		.global(_) -> "Globals",
+		_ -> ""
+	}
+}
+
+func declaration_name(entry: &DocumentableEntry) -> String {
+	match entry.value {
+		.builtin(value) -> value.name.clone(),
+		.function(value) -> value.name.clone(),
+		.global(value) -> value.name.clone(),
+		.effect_declaration(value) -> "'" + value.name.clone(),
+		.nominal(value) -> match value {
+			.#"protocol"(name: name, generics: _, properties: _, methods: _) -> name.clone(),
+			.#"struct"(name: name, generics: _, properties: _, methods: _) -> name.clone(),
+			.#"enum"(name: name, generics: _, variants: _, methods: _) -> name.clone()
+		},
+		_ -> ""
+	}
+}
+
+func is_top_level(entry: &DocumentableEntry) -> Bool {
+	match entry.value {
+		.builtin(_) -> true,
+		.nominal(_) -> true,
+		.function(_) -> true,
+		.global(_) -> true,
+		.effect_declaration(_) -> true,
+		_ -> false
+	}
+}
+
+// Returns the output filename for a rendered top-level declaration.
+pub func symbol_file(module_page: &String, collection: &DocumentableCollection, entry: &DocumentableEntry) -> String? {
+	if is_top_level(entry: entry) == false { return .none }
+	.some(symbol_page(module_page: module_page, signature: signature_of(collection: collection, entry: entry)))
+}
+
+func entry_view(collection: &DocumentableCollection, module: &String, page: &String, symbols: &[SymbolLink], entry: &DocumentableEntry, documentation_heading_offset: Int) -> EntryView {
+	let signature = signature_of(collection: collection, entry: entry)
+	let anchor = anchor_for(signature: signature.clone())
+	let members: [MemberView]? = match entry.value {
+		.nominal(nominal) -> .some(match nominal {
+			.#"struct"(name: name, generics: _, properties: properties, methods: methods) -> member_views(collection: collection, module: module, page: page, symbols: symbols, owner: name.clone(), parent: anchor, properties: properties, variants: [], methods: methods),
+			.#"enum"(name: name, generics: _, variants: variants, methods: methods) -> member_views(collection: collection, module: module, page: page, symbols: symbols, owner: name.clone(), parent: anchor, properties: [], variants: variants, methods: methods),
+			.#"protocol"(name: name, generics: _, properties: properties, methods: methods) -> member_views(collection: collection, module: module, page: page, symbols: symbols, owner: name.clone(), parent: anchor, properties: properties, variants: [], methods: methods)
+		}),
+		_ -> .none
+	}
+	let owner = match entry.value {
+		.nominal(nominal) -> match nominal {
+			.#"struct"(name: name, generics: _, properties: _, methods: _) -> name.clone(),
+			.#"enum"(name: name, generics: _, variants: _, methods: _) -> name.clone(),
+			.#"protocol"(name: name, generics: _, properties: _, methods: _) -> name.clone()
+		},
+		_ -> ""
+	}
+	let source_html = match entry.value {
+		.function(_) -> source_disclosure(source: entry.source),
+		.effect_declaration(_) -> source_disclosure(source: entry.source),
+		_ -> ""
+	}
+	EntryView(
+		group: declaration_group(entry: entry),
+		anchor: anchor,
+		signature: signature.clone(),
+		signature_html: signature_html(signature: signature, module: module, owner: owner, page: page, symbols: symbols, declaration_href: .none),
+		documentation: render_documentation(documentation: entry.documentation, heading_offset: documentation_heading_offset, module: module, owner: owner, current_page: page, symbols: symbols),
+		source_html: source_html,
+		members: members
+	)
+}
+
+func entry_views(collection: &DocumentableCollection, module: &String, page: &String, symbols: &[SymbolLink], documentation_heading_offset: Int) -> [EntryView] {
+	let views: [EntryView] = []
+	for entry in collection.items {
+		if is_top_level(entry: entry) {
+			views.push(entry_view(collection: collection, module: module, page: page, symbols: symbols, entry: entry, documentation_heading_offset: documentation_heading_offset))
+		}
+	}
+	views
+}
+
+func summary_documentation(documentation: &[String]) -> [String] {
+	let summary: [String] = []
+	for line in documentation {
+		if line.byte_count == 0 {
+			if summary.is_empty() == false { break }
+			continue
+		}
+		summary.push(line.to_string())
+	}
+	summary
+}
+
+func summary_views(collection: &DocumentableCollection, module: &String, page: &String, symbols: &[SymbolLink]) -> [SummaryView] {
+	let views: [SummaryView] = []
+	for entry in collection.items {
+		if is_top_level(entry: entry) {
+			let signature = signature_of(collection: collection, entry: entry)
+			let anchor = anchor_for(signature: signature.clone())
+			let href = symbol_page(module_page: page, signature: signature.clone()) + "#" + anchor
+			let declaration_href: String? = .some(href.clone())
+			views.push(SummaryView(
+				group: declaration_group(entry: entry),
+				signature_html: signature_html(signature: signature, module: module, owner: "", page: page, symbols: symbols, declaration_href: declaration_href),
+				documentation: render_documentation(documentation: summary_documentation(documentation: entry.documentation), heading_offset: 2, module: module, owner: "", current_page: page, symbols: symbols)
+			))
+		}
+	}
+	views
+}
+
+func render_summary_group(title: String, summaries: &[SummaryView]) -> String {
+	let grouped: [SummaryView] = []
+	for summary in summaries {
+		if summary.group == title { grouped.push(summary.clone()) }
+	}
+	if grouped.is_empty() { return "" }
+	let markup = @html {
+		section .docs-api-group id=("group-" + anchor_for(signature: title)) {
+			h3 { (title) }
+			div .docs-api-list {
+				@for summary in grouped {
+					article .docs-api-summary {
+						code .docs-api-signature { (PreEscaped(value: summary.signature_html)) }
+						@if summary.documentation.byte_count > 0 {
+							div .prose .docs { (PreEscaped(value: summary.documentation)) }
+						}
+					}
+				}
+			}
+		}
+	}
+	markup.into_string()
+}
+
+func render_summaries(summaries: &[SummaryView]) -> String {
+	let output = StringBuilder()
+	for title in declaration_group_titles() {
+		output.append(string: render_summary_group(title: title, summaries: summaries))
+	}
+	output.finish()
+}
+
+func render_entry_members(members: &[MemberView]) -> String {
+	let markup = @html {
+		div .docs-members {
+			@for member in members {
+				section .docs-member id=(member.anchor) {
+					h4 { code { (PreEscaped(value: member.signature_html)) } }
+					@if member.documentation.byte_count > 0 {
+						div .prose .docs { (PreEscaped(value: member.documentation)) }
+					}
+					@if member.source_html.byte_count > 0 {
+						(PreEscaped(value: member.source_html))
+					}
+				}
+			}
+		}
+	}
+	markup.into_string()
+}
+
+func render_entry(entry: &EntryView) -> String {
+	let members = PreEscaped(value: match entry.members {
+		.some(values) -> if values.is_empty() { "" } else { render_entry_members(members: values) },
+		.none -> ""
+	})
+	let markup = @html {
+		section .docs-declaration id=(entry.anchor) {
+			h3 { code { (PreEscaped(value: entry.signature_html)) } }
+			@if entry.documentation.byte_count > 0 {
+				div .prose .docs { (PreEscaped(value: entry.documentation)) }
+			}
+			@if entry.source_html.byte_count > 0 {
+				(PreEscaped(value: entry.source_html))
+			}
+			(members)
+		}
+	}
+	markup.into_string()
+}
+
+func render_entry_group(title: String, entries: &[EntryView]) -> String {
+	let rendered = StringBuilder()
+	for entry in entries {
+		if entry.group == title { rendered.append(string: render_entry(entry: entry)) }
+	}
+	let contents = rendered.finish()
+	if contents.byte_count == 0 { return "" }
+	let markup = @html {
+		section .docs-declaration-group {
+			h2 { (title) }
+			(PreEscaped(value: contents))
+		}
+	}
+	markup.into_string()
+}
+
+func declaration_group_titles() -> [String] {
+	["Builtins", "Protocols", "Structs", "Enums", "Effects", "Globals", "Functions"]
+}
+
+func render_entry_views(entries: &[EntryView]) -> String {
+	let output = StringBuilder()
+	for title in declaration_group_titles() {
+		output.append(string: render_entry_group(title: title, entries: entries))
+	}
+	output.finish()
+}
+
+// Renders declaration sections without page chrome or module navigation.
+//
+// Top-level entries are grouped by declaration kind and retain source order within
+// each group; nominal members nest under their owner. Attached comments are parsed
+// as Markdown and inserted as trusted rendered markup.
+pub func render_entries(collection: &DocumentableCollection) -> String {
+	let symbols = symbol_links(module: "", page: "", collection: collection)
+	let entries = entry_views(collection: collection, module: "", page: "", symbols: symbols, documentation_heading_offset: 3)
+	render_entry_views(entries: entries)
+}
+
+func module_navigation(modules: &[ModuleLink], current: String) -> Markup {
+	let output = ""
+	for module in modules {
+		let class_name = if module.name == current { "active" } else { "" }
+		let link = @html {
+			a class=(class_name) href=(module.file) {
+				(module.name)
+				@if let .some(description) = module.wip {
+					span .docs-nav-wip title=(description) { "WIP" }
+				}
+			}
+		}
+		output = output + link.into_string()
+	}
+	let links = PreEscaped(value: output)
+	@html {
+		div .site-nav-group .docs-nav-group {
+			span .site-nav-label .docs-nav-label { "Modules" }
+			(links)
+		}
+	}
+}
+
+func catalog_navigation(package: String, modules: &[ModuleLink], current: String) -> Markup {
+	let core_class = if package == "Core" { "active" } else { "" }
+	@html {
+		div .site-nav-group .docs-nav-group {
+			span .site-nav-label .docs-nav-label { "Libraries" }
+			a href="/docs/" { "All libraries" }
+			a class=(core_class) href="/docs/core/" { "Core" }
+			@if package != "Core" {
+				a .active href="./" { (package) }
+			}
+		}
+		(module_navigation(modules: modules, current: current))
+	}
+}
+
+func summary_navigation(summaries: &[SummaryView]) -> Markup {
+	let links = StringBuilder()
+	for title in declaration_group_titles() {
+		let found = false
+		for summary in summaries {
+			if summary.group == title { found = true; break }
+		}
+		if found {
+			let link = @html { a href=("#group-" + anchor_for(signature: title)) { (title) } }
+			links.append(string: link.into_string())
+		}
+	}
+	let rendered = PreEscaped(value: links.finish())
+	@html {
+		span .site-nav-label .docs-nav-label { "On this page" }
+		(rendered)
+	}
+}
+
+func symbol_navigation_group(title: String, entries: &[EntryView]) -> String {
+	let grouped: [EntryView] = []
+	for entry in entries {
+		if entry.group == title { grouped.push(entry.clone()) }
+	}
+	if grouped.is_empty() { return "" }
+	let markup = @html {
+		div .site-nav-group .docs-page-index-group {
+			span .site-nav-label .docs-page-index-heading { (title) }
+			@for entry in grouped {
+				a .docs-page-index-entry href=("#" + entry.anchor) { (entry.signature) }
+				@if let .some(members) = entry.members {
+					@for member in members {
+						a .docs-page-index-member href=("#" + member.anchor) { (member.signature) }
+					}
+				}
+			}
+		}
+	}
+	markup.into_string()
+}
+
+func symbol_navigation(entries: &[EntryView]) -> Markup {
+	let groups = StringBuilder()
+	for title in declaration_group_titles() {
+		groups.append(string: symbol_navigation_group(title: title, entries: entries))
+	}
+	let rendered_groups = PreEscaped(value: groups.finish())
+	@html {
+		span .site-nav-label .docs-nav-label { "On this page" }
+		(rendered_groups)
+	}
+}
+
+func page_html(title: String, content: String) -> String {
+	"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"></meta>"
+		+ "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></meta><title>"
+		+ render_html(value: title)
+		+ "</title><link rel=\"icon\" href=\"/favicon.svg\" type=\"image/svg+xml\"></link>"
+		+ "<link rel=\"stylesheet\" href=\"/reset.css\"></link><link rel=\"stylesheet\" href=\"/style.css\"></link>"
+		+ "<link rel=\"stylesheet\" href=\"/docs.css\"></link></head><body>"
+		+ "<nav class=\"global-nav\" aria-label=\"Global navigation\"><a class=\"global-nav-brand\" href=\"/\">talktalk</a>"
+		+ "<div class=\"global-nav-links\"><a href=\"/\">Language</a><a href=\"/manual/\">Guide</a>"
+		+ "<a aria-current=\"page\" href=\"/docs/\">Docs</a><a href=\"/playground\">Playground</a>"
+		+ "<a href=\"/qa\">Q/A</a><a href=\"/philosophy\">Philosophy</a></div></nav>"
+		+ content + "</body></html>"
+}
+
+func module_header(package: String, module: String) -> String {
+	let markup = @html {
+		header .site-page-header .docs-proposal-header {
+			div .site-page-heading .docs-proposal-heading {
+				nav .site-breadcrumbs .docs-breadcrumbs .docs-header-breadcrumbs aria-label="Breadcrumb" {
+					a href="../" { "Docs" } " / " a href="index.html" { (package) } " / " a href=(module + ".html") aria-current="page" { (module) }
+				}
+				h1 { (module) }
+			}
+		}
+	}
+	markup.into_string()
+}
+
+func module_shell(catalog: PreEscaped, wip: PreEscaped, module_documentation: PreEscaped, entries: PreEscaped, page_index: PreEscaped) -> String {
+	let markup = @html {
+		div .site-page-layout .docs-proposal-shell {
+			aside .site-page-sidebar .docs-catalog aria-label="Documentation sections" { (catalog) }
+			article .site-page-content .docs-reference {
+				(wip)
+				div .prose .docs .docs-module-documentation { (module_documentation) }
+				h2 .docs-reference-title { "API Reference" }
+				(entries)
+			}
+			aside .site-page-rail .docs-page-index aria-label="Symbols on this page" { (page_index) }
+		}
+	}
+	markup.into_string()
+}
+
+func member_group_titles() -> [String] {
+	["Properties", "Cases", "Methods"]
+}
+
+func render_symbol_member_group(title: String, members: &[MemberView]) -> String {
+	let grouped: [MemberView] = []
+	for member in members {
+		if member.group == title { grouped.push(member.clone()) }
+	}
+	if grouped.is_empty() { return "" }
+	let markup = @html {
+		section .docs-symbol-member-group id=("members-" + anchor_for(signature: title)) {
+			h2 { (title) }
+			@for member in grouped {
+				article .docs-member id=(member.anchor) {
+					h3 { code { (PreEscaped(value: member.signature_html)) } }
+					@if member.documentation.byte_count > 0 {
+						div .prose .docs { (PreEscaped(value: member.documentation)) }
+					}
+					@if member.source_html.byte_count > 0 {
+						(PreEscaped(value: member.source_html))
+					}
+				}
+			}
+		}
+	}
+	markup.into_string()
+}
+
+func render_symbol_members(members: &[MemberView]) -> String {
+	let output = StringBuilder()
+	for title in member_group_titles() {
+		output.append(string: render_symbol_member_group(title: title, members: members))
+	}
+	output.finish()
+}
+
+func symbol_page_navigation(entry: &EntryView) -> String {
+	let output = StringBuilder()
+	output.append(string: "<span class=\"site-nav-label docs-nav-label\">On this page</span><a href=\"#" + render_html(value: entry.anchor) + "\">Overview</a>")
+	if let .some(members) = entry.members {
+		for title in member_group_titles() {
+			let found = false
+			for member in members {
+				if member.group == title { found = true; break }
+			}
+			if found {
+				output.append(string: "<a href=\"#members-" + anchor_for(signature: title.clone()) + "\">" + render_html(value: title) + "</a>")
+			}
+		}
+	}
+	if entry.source_html.byte_count > 0 {
+		output.append(string: "<a href=\"#source\">Source</a>")
+	}
+	output.finish()
+}
+
+func symbol_header(package: String, module: String, name: String, anchor: &String) -> String {
+	"<header class=\"site-page-header docs-proposal-header docs-symbol-header\"><div class=\"site-page-heading docs-proposal-heading\">"
+		+ "<nav class=\"site-breadcrumbs docs-breadcrumbs docs-header-breadcrumbs\" aria-label=\"Breadcrumb\"><a href=\"../\">Docs</a> / <a href=\"index.html\">"
+		+ render_html(value: package) + "</a> / <a href=\"" + render_html(value: module + ".html") + "\">"
+		+ render_html(value: module) + "</a> / <a href=\"#" + render_html(value: anchor) + "\" aria-current=\"page\">"
+		+ render_html(value: name) + "</a></nav><h1>" + render_html(value: name) + "</h1></div></header>"
+}
+
+func symbol_overview(entry: &EntryView, documentation: &String) -> String {
+	let source = if entry.source_html.byte_count > 0 {
+		"<section class=\"docs-symbol-source\" id=\"source\">" + entry.source_html.to_string() + "</section>"
+	} else {
+		""
+	}
+	"<section class=\"docs-symbol\" id=\"" + render_html(value: entry.anchor) + "\"><code class=\"docs-symbol-signature\">"
+		+ entry.signature_html.to_string() + "</code><div class=\"prose docs docs-symbol-documentation\">" + documentation.to_string()
+		+ "</div>" + source + "</section>"
+}
+
+func symbol_reference(entry: &EntryView, documentation: &String, members: &String, wip_html: &String) -> String {
+	"<article class=\"site-page-content docs-reference\">" + wip_html.to_string()
+		+ symbol_overview(entry: entry, documentation: documentation) + members.to_string() + "</article>"
+}
+
+func symbol_shell(reference: &String, catalog: &String, page_index: &String) -> String {
+	"<div class=\"site-page-layout docs-proposal-shell\"><aside class=\"site-page-sidebar docs-catalog\" aria-label=\"Documentation sections\">"
+		+ catalog.to_string() + "</aside>" + reference.to_string()
+		+ "<aside class=\"site-page-rail docs-page-index\" aria-label=\"Sections on this page\">" + page_index.to_string() + "</aside></div>"
+}
+
+func render_symbol_view(package: String, module: String, name: String, view: &EntryView, catalog_html: &String, wip_html: &String) -> String {
+	let members = match view.members { .some(values) -> render_symbol_members(members: values), .none -> "" }
+	let page_index = symbol_page_navigation(entry: view)
+	let header = symbol_header(package: package.clone(), module: module, name: name.clone(), anchor: view.anchor)
+	let reference = symbol_reference(entry: view, documentation: view.documentation, members: members, wip_html: wip_html)
+	let shell = symbol_shell(reference: reference, catalog: catalog_html, page_index: page_index)
+	let content = "<main class=\"site-page docs-proposal docs-design-1\">" + header + shell + "</main>"
+	page_html(title: name + " - " + package, content: content)
+}
+
+// Renders one top-level declaration and any members on its standalone page.
+pub func render_symbol_page(package: String, module: String, module_page: String, collection: &DocumentableCollection, entry: &DocumentableEntry, modules: &[ModuleLink], symbols: &[SymbolLink]) -> String {
+	if is_top_level(entry: entry) {
+		let signature = signature_of(collection: collection, entry: entry)
+		let page = symbol_page(module_page: module_page, signature: signature)
+		let view = entry_view(collection: collection, module: module, page: page, symbols: symbols, entry: entry, documentation_heading_offset: 1)
+		let name = declaration_name(entry: entry)
+		let catalog = catalog_navigation(package: package.clone(), modules: modules, current: module.clone()).into_string()
+		let wip = wip_banner(description: collection.module_wip, module: module, page: page, symbols: symbols)
+		return render_symbol_view(package: package, module: module, name: name, view: view, catalog_html: catalog, wip_html: wip)
+	}
+	""
+}
+
+// Renders every top-level declaration in one pass, reusing parsed documentation,
+// highlighted source, signatures, and module navigation across output pages.
+pub func render_symbol_pages(package: String, module: String, module_page: String, collection: &DocumentableCollection, modules: &[ModuleLink], symbols: &[SymbolLink]) -> [RenderedPage] {
+	let pages: [RenderedPage] = []
+	let views = entry_views(collection: collection, module: module, page: module_page, symbols: symbols, documentation_heading_offset: 1)
+	let catalog = catalog_navigation(package: package.clone(), modules: modules, current: module.clone()).into_string()
+	let wip = wip_banner(description: collection.module_wip, module: module, page: module_page, symbols: symbols)
+	let view_index = 0
+	for entry in collection.items {
+		if is_top_level(entry: entry) {
+			let view = views[view_index]
+			let file = symbol_page(module_page: module_page, signature: view.signature.clone())
+			pages.push(RenderedPage(
+				file: file,
+				contents: render_symbol_view(package: package.clone(), module: module.clone(), name: declaration_name(entry: entry), view: view, catalog_html: catalog, wip_html: wip)
+			))
+			view_index = view_index + 1
+		}
+	}
+	pages
+}
+
+// Renders a module overview followed by categorized API summaries.
+//
+// Each summary contains the declaration name, linked signature, and first
+// documentation paragraph. Full documentation, members, and source live on the
+// standalone page produced by `render_symbol_pages`. Categories use a stable
+// semantic order while summaries within each category retain source order.
+pub func render_module_page(package: String, module: String, collection: &DocumentableCollection, modules: &[ModuleLink], symbols: &[SymbolLink]) -> String {
+	let page = ""
+	for link in modules {
+		if link.name == module { page = link.file }
+	}
+	let summaries = summary_views(collection: collection, module: module, page: page, symbols: symbols)
+	let wip = PreEscaped(value: wip_banner(description: collection.module_wip, module: module, page: page, symbols: symbols))
+	let module_documentation = PreEscaped(value: render_documentation(documentation: collection.module_documentation, heading_offset: 1, module: module, owner: "", current_page: page, symbols: symbols))
+	let entries = PreEscaped(value: render_summaries(summaries: summaries))
+	let catalog = PreEscaped(value: catalog_navigation(package: package.clone(), modules: modules, current: module.clone()).into_string())
+	let page_index = PreEscaped(value: summary_navigation(summaries: summaries).into_string())
+	let header = PreEscaped(value: module_header(package: package.clone(), module: module.clone()))
+	let shell = PreEscaped(value: module_shell(catalog: catalog, wip: wip, module_documentation: module_documentation, entries: entries, page_index: page_index))
+	let content = @html { main class="site-page docs-proposal docs-design-1" { (header) (shell) } }
+	page_html(title: module + " - " + package, content: content.into_string())
+}
+
+func index_header(package: String) -> String {
+	let markup = @html {
+		header .site-page-header .docs-proposal-header {
+			div .site-page-heading .docs-proposal-heading {
+				nav .site-breadcrumbs .docs-breadcrumbs .docs-header-breadcrumbs aria-label="Breadcrumb" {
+					a href="../" { "Docs" } " / " a href="index.html" aria-current="page" { (package) }
+				}
+				h1 { (package) }
+			}
+		}
+	}
+	markup.into_string()
+}
+
+func index_shell(package: String, modules: &[ModuleLink], symbols: &[SymbolLink]) -> String {
+	let catalog = PreEscaped(value: catalog_navigation(package: package.clone(), modules: modules, current: "").into_string())
+	let module_list = StringBuilder()
+	for module in modules {
+		let documentation = render_documentation(
+			documentation: summary_documentation(documentation: module.documentation),
+			heading_offset: 2,
+			module: module.name,
+			owner: "",
+			current_page: "index.html",
+			symbols: symbols
+		)
+		let row = "<article class=\"docs-module-summary\"><a href=\"" + render_html(value: module.file) + "\">"
+			+ render_html(value: module.name) + "</a>"
+		if let .some(description) = module.wip {
+			row = row + "<span class=\"docs-module-wip\" title=\"" + render_html(value: description) + "\">WIP</span>"
+		}
+		if documentation.byte_count > 0 {
+			row = row + "<div class=\"prose docs-module-summary-documentation\">" + documentation + "</div>"
+		}
+		module_list.append(string: row + "</article>")
+	}
+	let rendered_modules = PreEscaped(value: module_list.finish())
+	let markup = @html {
+		div .site-page-layout .docs-proposal-shell {
+			aside .site-page-sidebar .docs-catalog aria-label="Documentation sections" { (catalog) }
+			article .site-page-content .docs-reference {
+				div .docs-module-list { (rendered_modules) }
+			}
+			aside .site-page-rail .docs-page-index aria-hidden="true" {}
+		}
+	}
+	markup.into_string()
+}
+
+// Renders a package landing page and module catalog.
+//
+// `modules` is expected in the deterministic order chosen by the generator;
+// filenames must already be safe relative links. Packages with empty modules
+// still list those modules even when they contain no public declarations.
+pub func render_index_page(package: String, modules: &[ModuleLink]) -> String {
+	render_index_page_with_symbols(package: package, modules: modules, symbols: [])
+}
+
+// Renders a package landing page with autolinked module summaries.
+pub func render_index_page_with_symbols(package: String, modules: &[ModuleLink], symbols: &[SymbolLink]) -> String {
+	let header = PreEscaped(value: index_header(package: package.clone()))
+	let shell = PreEscaped(value: index_shell(package: package.clone(), modules: modules, symbols: symbols))
+	let content = @html { main class="site-page docs-proposal docs-design-1" { (header) (shell) } }
+	page_html(title: package, content: content.into_string())
+}

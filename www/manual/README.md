@@ -23,9 +23,25 @@ This manual starts with small programs and works up to TalkTalk's more unusual f
 14. [The Toolchain](toolchain.md)
 15. [Unsafe Code and Interop](unsafe-and-interop.md)
 
-## Conventions
+## Reference appendices
 
-Code meant for TalkTalk is fenced as `tlk`; terminal sessions are fenced as `sh`. Examples usually rely on the core library, which normal source files import automatically. A first line of `// no-core` disables that import for compiler and core-library work.
+- [A. Type Inference Reference](type-inference.md)
+- [B. MIR Reference](mir-reference.md)
+- [C. Bytecode Reference](bytecode-reference.md)
+
+## Reading the examples
+
+TalkTalk source is fenced as `tlk`; terminal sessions are fenced as `sh`. On the website, an ordinary `tlk` block is editable and runnable. Each runnable block is a complete program unless the text says otherwise.
+
+A block marked `norun` is displayed as source without interactive controls. It may describe an API boundary, depend on files not shown, or deliberately show only part of a program. A block marked `accumulate(name)` shares source with earlier blocks in the same named group. Running a later accumulated block also includes those earlier declarations.
+
+Examples normally use the core library, which source files import automatically. A first line of `// no-core` disables that import for compiler and core-library work. Standard-library modules such as `task`, `fs`, and `dict` still require an explicit `use`.
+
+Comments after expressions sometimes show expected output or explain a compile-time error. Placeholder text such as `...` is explanatory and is not valid TalkTalk unless the surrounding text explicitly defines it.
+
+Shell commands that name repository paths assume the repository root. Commands without paths usually assume the current directory is inside a package. The manual calls out commands that behave differently outside a package.
+
+The language changes quickly. The manual describes the supported source model; editor hover and public declarations in Core or the standard library show the exact current signatures. Compiler implementation documents under `docs/` explain design decisions but are not a second language specification.
 
 The short command reference built into the compiler is also useful:
 

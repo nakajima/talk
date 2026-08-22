@@ -1,40 +1,87 @@
 // no-core
+// Defines the `+` operator for a right-hand operand type.
+//
+// `RHS` and `Ret` may differ from `Self`, allowing mixed-type addition and
+// concatenation. Operands are borrowed unless a concrete signature says
+// otherwise.
 pub protocol Add<RHS> {
+	// The operation's result type.
 	associated Ret
+	// Combines `Self` with a right-hand operand using addition semantics.
 	func add(_ rhs: RHS) -> Ret
 }
 
+// Defines the `-` operator with independent right-hand and result types.
+//
+// Concrete integer conformances use the language's trapping arithmetic
+// contract; wrapping or checked behavior is exposed by explicit `Int` methods
+// instead.
 pub protocol Subtract<RHS> {
+	// The operation's result type.
 	associated Ret
 
+	// Subtracts the right-hand operand from this value.
 	func minus(_ rhs: RHS) -> Ret
 }
 
+// Defines the `*` operator with independent right-hand and result types.
+//
+// The protocol specifies dispatch shape only; overflow and precision behavior
+// belong to each concrete conformance.
 pub protocol Multiply<RHS> {
+	// The operation's result type.
 	associated Ret
 
+	// Multiplies this value by the right-hand operand.
 	func multiply(_ rhs: RHS) -> Ret
 }
 
+// Defines the `/` operator with independent right-hand and result types.
+//
+// A conformance must document zero-divisor and rounding behavior; integer and
+// floating-point conformances intentionally have different failure semantics.
 pub protocol Divide<RHS> {
+	// The operation's result type.
 	associated Ret
 
+	// Divides this value by the right-hand operand.
 	func divide(_ rhs: RHS) -> Ret
 }
 
+// Defines `value[index]` reads for an index type `I`.
+//
+// The associated result may be an owned value or a borrow. Bounds behavior is a
+// conformance contract: core `Array` traps, while checked collections can
+// return an optional result.
 pub protocol SubscriptRead<I> {
+	// The value type returned by indexed reads.
 	associated T
 
+	// Reads the element selected by `at` using the conformance's bounds policy.
 	func subscript_read(at: I) -> T
 }
 
+// Defines `value[index] = replacement` through an exclusive receiver.
+//
+// `replacement` is consumed into the collection. Bounds and copy-on-write
+// behavior are supplied by the concrete conformance.
 pub protocol SubscriptWrite<I, T> {
+	// Consumes `value` into the slot selected by `at` using the conformance's
+	// bounds policy.
 	mut func subscript_write(at: I, consume value: T) -> Void
 }
 
+// Defines semantic equality against `RHS`.
+//
+// Conformances should be reflexive for ordinary values and keep `equals`
+// consistent with derived `notEquals`. Collections and hashes rely on equal
+// values remaining equal while observed through borrowed references.
 pub protocol Equatable<RHS = Self> {
+	// Compares `Self` with `RHS` according to the conforming type's equality
+	// semantics.
 	func equals(_ rhs: RHS) -> Bool
 
+	// Returns whether the two values are not equal.
 	func notEquals(_ rhs: RHS) -> Bool {
 		if self.equals(rhs) {
 			false
@@ -44,293 +91,382 @@ pub protocol Equatable<RHS = Self> {
 	}
 }
 
+// Provides unary arithmetic negation and its result type.
 pub protocol Negatable {
+	// The operation's result type.
 	associated Ret
 
+	// Returns the arithmetic negation of this value.
 	func negated() -> Ret
 }
 
+// Provides bitwise AND with a right-hand operand.
 pub protocol BitwiseAnd<RHS> {
+	// The operation's result type.
 	associated Ret
 
+	// Returns the bitwise AND of both operands.
 	func bitAnd(_ rhs: RHS) -> Ret
 }
 
+// Provides bitwise OR with a right-hand operand.
 pub protocol BitwiseOr<RHS> {
+	// The operation's result type.
 	associated Ret
 
+	// Returns the bitwise OR of both operands.
 	func bitOr(_ rhs: RHS) -> Ret
 }
 
+// Provides bitwise exclusive OR with a right-hand operand.
 pub protocol BitwiseXor<RHS> {
+	// The operation's result type.
 	associated Ret
 
+	// Returns the bitwise exclusive OR of both operands.
 	func bitXor(_ rhs: RHS) -> Ret
 }
 
+// Provides a left shift by a right-hand count.
 pub protocol ShiftLeft<RHS> {
+	// The operation's result type.
 	associated Ret
 
+	// Shifts this value left by the requested number of bits.
 	func shiftLeft(_ rhs: RHS) -> Ret
 }
 
+// Provides a right shift by a right-hand count.
 pub protocol ShiftRight<RHS> {
+	// The operation's result type.
 	associated Ret
 
+	// Shifts this value right by the requested number of bits.
 	func shiftRight(_ rhs: RHS) -> Ret
 }
 
+// Provides unary bitwise complementation.
 pub protocol Complement {
+	// The operation's result type.
 	associated Ret
 
+	// Returns the bitwise complement of this value.
 	func complement() -> Ret
 }
 
+// Provides unary logical negation.
 pub protocol Not {
+	// The operation's result type.
 	associated Ret
 
+	// Returns the logical negation of this value.
 	func not() -> Ret
 }
 
 extend Bool: Not {
+	// Returns the logical negation of this value.
 	pub func not() -> Bool {
 		#_ir { %? = cmp Bool %0 == false }
 	}
 }
 
 extend Int: Add<Int> {
+	// Adds signed integers, trapping on overflow.
 	pub func add(_ rhs: Int) -> Int {
 		#_ir { %? = add Int %0 %1 }
 	}
 }
 
 extend Float: Add<Float> {
+	// Adds two floating-point values.
 	pub func add(_ rhs: Float) -> Float {
 		#_ir { %? = add Float %0 %1 }
 	}
 }
 
 extend Int: Subtract<Int> {
+	// Subtracts signed integers, trapping when the difference overflows.
 	pub func minus(_ rhs: Int) -> Int {
 		#_ir { %? = sub Int %0 %1 }
 	}
 }
 
 extend Float: Subtract<Float> {
+	// Subtracts using the runtime's IEEE-754 floating-point operation.
 	pub func minus(_ rhs: Float) -> Float {
 		#_ir { %? = sub Float %0 %1 }
 	}
 }
 
 extend Int: Multiply<Int> {
+	// Multiplies signed integers, trapping when the product overflows.
 	pub func multiply(_ rhs: Int) -> Int {
 		#_ir { %? = mul Int %0 %1 }
 	}
 }
 
 extend Float: Multiply<Float> {
+	// Multiplies using the runtime's IEEE-754 floating-point operation.
 	pub func multiply(_ rhs: Float) -> Float {
 		#_ir { %? = mul Float %0 %1 }
 	}
 }
 
 extend Int: Divide<Int> {
+	// Divides signed integers with truncation toward zero.
+	//
+	// A zero divisor and the unrepresentable `Int.min / -1` quotient trap. Use
+	// `checked_div` when either condition should produce `none` instead.
 	pub func divide(_ rhs: Int) -> Int {
 		#_ir { %? = div Int %0 %1 }
 	}
 }
 
 extend Float: Divide<Float> {
+	// Divides using the runtime's IEEE-754 floating-point operation.
+	//
+	// Zero divisors, infinities, and NaN follow floating-point semantics rather
+	// than integer division traps.
 	pub func divide(_ rhs: Float) -> Float {
 		#_ir { %? = div Float %0 %1 }
 	}
 }
 
 extend Int: Equatable<Int> {
+	// Compares signed integer values directly.
 	pub func equals(_ rhs: Int) -> Bool {
 		#_ir { %? = cmp Int %0 == %1 }
 	}
 }
 
 extend Float: Equatable<Float> {
+	// Uses IEEE-754 equality; NaN is unequal to every value, including itself.
 	pub func equals(_ rhs: Float) -> Bool {
 		#_ir { %? = cmp Float %0 == %1 }
 	}
 }
 
 extend Bool: Equatable<Bool> {
+	// Compares the two Boolean values.
 	pub func equals(_ rhs: Bool) -> Bool {
 		#_ir { %? = cmp Bool %0 == %1 }
 	}
 }
 
 extend Byte: Equatable<Byte> {
+	// Compares unsigned byte values directly.
 	pub func equals(_ rhs: Byte) -> Bool {
 		#_ir { %? = cmp Byte %0 == %1 }
 	}
 }
 
 extend Int: Negatable {
+	// Negates a signed integer, trapping for `Int.min`.
 	pub func negated() -> Int {
 		#_ir { %? = sub Int 0 %0 }
 	}
 }
 
 extend Int: BitwiseAnd<Int> {
+	// Returns the bitwise AND of both operands.
 	pub func bitAnd(_ rhs: Int) -> Int {
 		#_ir { %? = and Int %0 %1 }
 	}
 }
 
 extend Int: BitwiseOr<Int> {
+	// Returns the bitwise OR of both operands.
 	pub func bitOr(_ rhs: Int) -> Int {
 		#_ir { %? = or Int %0 %1 }
 	}
 }
 
 extend Int: BitwiseXor<Int> {
+	// Returns the bitwise exclusive OR of both operands.
 	pub func bitXor(_ rhs: Int) -> Int {
 		#_ir { %? = xor Int %0 %1 }
 	}
 }
 
 extend Int: ShiftLeft<Int> {
+	// Shifts left in 64-bit two's-complement representation, discarding high
+	// bits.
+	//
+	// The shift count is masked to six bits, so shifting by 64 is equivalent to
+	// shifting by zero.
 	pub func shiftLeft(_ rhs: Int) -> Int {
 		#_ir { %? = shl Int %0 %1 }
 	}
 }
 
 extend Int: ShiftRight<Int> {
+	// Arithmetically shifts the signed value right, preserving its sign bit.
+	//
+	// The shift count is masked to six bits, so shifting by 64 is equivalent to
+	// shifting by zero.
 	pub func shiftRight(_ rhs: Int) -> Int {
 		#_ir { %? = shr Int %0 %1 }
 	}
 }
 
 extend Int: Complement {
+	// Returns the bitwise complement of this value.
 	pub func complement() -> Int {
 		#_ir { %? = not Int %0 }
 	}
 }
 
 extend Byte: BitwiseAnd<Byte> {
+	// Returns the bitwise AND of both operands.
 	pub func bitAnd(_ rhs: Byte) -> Byte {
 		#_ir { %? = and Byte %0 %1 }
 	}
 }
 
 extend Byte: BitwiseOr<Byte> {
+	// Returns the bitwise OR of both operands.
 	pub func bitOr(_ rhs: Byte) -> Byte {
 		#_ir { %? = or Byte %0 %1 }
 	}
 }
 
 extend Byte: BitwiseXor<Byte> {
+	// Returns the bitwise exclusive OR of both operands.
 	pub func bitXor(_ rhs: Byte) -> Byte {
 		#_ir { %? = xor Byte %0 %1 }
 	}
 }
 
 extend Byte: ShiftLeft<Int> {
+	// Shifts the eight-bit value left and discards bits beyond the byte.
+	//
+	// The shift count is masked to three bits, so shifting by 8 is a no-op.
 	pub func shiftLeft(_ rhs: Int) -> Byte {
 		#_ir { %? = shl Byte %0 %1 }
 	}
 }
 
 extend Byte: ShiftRight<Int> {
+	// Logically shifts the unsigned byte right, introducing zero bits.
+	//
+	// The shift count is masked to three bits, so shifting by 8 is a no-op.
 	pub func shiftRight(_ rhs: Int) -> Byte {
 		#_ir { %? = shr Byte %0 %1 }
 	}
 }
 
 extend Byte: Complement {
+	// Returns the bitwise complement of this value.
 	pub func complement() -> Byte {
 		#_ir { %? = not Byte %0 }
 	}
 }
 
 extend Float: Negatable {
+	// Flips the floating-point sign through subtraction from positive zero.
 	pub func negated() -> Float {
 		#_ir { %? = sub Float 0.0 %0 }
 	}
 }
 
+// Defines ordering predicates compatible with a type's equality semantics.
+//
+// Conformers implement `gt`; defaults derive the other relations assuming
+// ordinary trichotomy. Types with unordered values must override those
+// defaults, as `Float` does for NaN, so each predicate preserves the underlying
+// comparison semantics.
 pub protocol Comparable<RHS>: Equatable<RHS> {
+	// Returns whether `Self` is greater than `RHS`; defaults derive the other
+	// relations from `gt`.
 	func gt(_ rhs: RHS) -> Bool
 
+	// Returns whether `Self` is greater than or equal to `RHS`.
 	func gte(_ rhs: RHS) -> Bool {
 		self.gt(rhs) || self.equals(rhs)
 	}
 
+	// Returns whether `Self` is less than `RHS`; defaults derive the other
+	// relations from `gt`.
 	func lt(_ rhs: RHS) -> Bool {
 		!self.gt(rhs) && !self.equals(rhs)
 	}
 
+	// Returns whether `Self` is less than or equal to `RHS`.
 	func lte(_ rhs: RHS) -> Bool {
 		self.equals(rhs) || !self.gt(rhs)
 	}
 }
 
 extend Int: Comparable<Int> {
+	// Compares signed integer values with greater-than.
 	pub func gt(_ rhs: Int) -> Bool {
 		#_ir { %? = cmp Int %0 > %1 }
 	}
 
-	// Direct scalar bodies for the derived comparisons: the protocol
-	// defaults build them from `gt`/`equals` with short-circuit
-	// branches, which blocks call-site inlining of the hottest loop
-	// guards (`i < n`).
+	// Compares signed integer values with greater-than-or-equal.
+	//
+	// Scalar conformances provide direct bodies instead of the protocol
+	// defaults so hot loop guards remain available for call-site inlining.
 	pub func gte(_ rhs: Int) -> Bool {
 		#_ir { %? = cmp Int %0 >= %1 }
 	}
 
+	// Compares signed integer values with less-than.
 	pub func lt(_ rhs: Int) -> Bool {
 		#_ir { %? = cmp Int %0 < %1 }
 	}
 
+	// Compares signed integer values with less-than-or-equal.
 	pub func lte(_ rhs: Int) -> Bool {
 		#_ir { %? = cmp Int %0 <= %1 }
 	}
 }
 
 extend Float: Comparable<Float> {
+	// Uses IEEE-754 greater-than; comparisons involving NaN are false.
 	pub func gt(_ rhs: Float) -> Bool {
 		#_ir { %? = cmp Float %0 > %1 }
 	}
 
-	// Direct scalar bodies for the derived comparisons: the protocol
-	// defaults build them from `gt`/`equals` with short-circuit
-	// branches, which blocks call-site inlining of the hottest loop
-	// guards (`i < n`).
+	// Uses IEEE-754 greater-than-or-equal; comparisons involving NaN are false.
+	//
+	// This direct override is required both for NaN semantics and to keep
+	// scalar comparisons available for call-site inlining.
 	pub func gte(_ rhs: Float) -> Bool {
 		#_ir { %? = cmp Float %0 >= %1 }
 	}
 
+	// Uses IEEE-754 less-than; comparisons involving NaN are false.
 	pub func lt(_ rhs: Float) -> Bool {
 		#_ir { %? = cmp Float %0 < %1 }
 	}
 
+	// Uses IEEE-754 less-than-or-equal; comparisons involving NaN are false.
 	pub func lte(_ rhs: Float) -> Bool {
 		#_ir { %? = cmp Float %0 <= %1 }
 	}
 }
 
 extend Byte: Comparable<Byte> {
+	// Compares unsigned eight-bit values with greater-than.
 	pub func gt(_ rhs: Byte) -> Bool {
 		#_ir { %? = cmp Byte %0 > %1 }
 	}
 
-	// Direct scalar bodies for the derived comparisons: the protocol
-	// defaults build them from `gt`/`equals` with short-circuit
-	// branches, which blocks call-site inlining of the hottest loop
-	// guards (`i < n`).
+	// Compares unsigned eight-bit values with greater-than-or-equal.
+	//
+	// The direct scalar body avoids short-circuit branches from the protocol
+	// default.
 	pub func gte(_ rhs: Byte) -> Bool {
 		#_ir { %? = cmp Byte %0 >= %1 }
 	}
 
+	// Compares unsigned eight-bit values with less-than.
 	pub func lt(_ rhs: Byte) -> Bool {
 		#_ir { %? = cmp Byte %0 < %1 }
 	}
 
+	// Compares unsigned eight-bit values with less-than-or-equal.
 	pub func lte(_ rhs: Byte) -> Bool {
 		#_ir { %? = cmp Byte %0 <= %1 }
 	}

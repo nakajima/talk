@@ -1,5 +1,5 @@
 // no-core
-use package::InlineArray::{ InlineArray }
+use package::Array::{ Array }
 use package::Time::{ Instant }
 
 // Direct-style concurrency (ADR 0067) over one-shot resumptions
@@ -10,15 +10,22 @@ use package::Time::{ Instant }
 // immediately when no cooperative scheduler intercepts it.
 pub effect 'yield() -> ()
 
-// Wait until any channel has a value or closes. Static specialization
-// keeps the handle list inline while one source handler covers every N.
-pub effect 'recv<static N: Int>(channels: [Int; N]) -> ()
+// Why a task is parked: the wake sources one wait registers.
+// `recv` is ready when the channel has a value or closes, `send` when
+// the bounded channel has room or its receiver is gone, and `deadline`
+// when the monotonic clock reaches the absolute instant.
+pub enum WaitReason {
+	case recv(Int)
+	case send(Int)
+	case deadline(Instant)
+}
 
-// Wait until a bounded channel has room or its receiver is gone.
-pub effect 'send(handle: Int) -> ()
-
-// Wait until the monotonic clock reaches an absolute deadline.
-pub effect 'wait_until(deadline: Instant) -> ()
+// Wait until any reason is ready. A resumed operation re-checks its
+// sources, so wakes are advisory and spurious wakes just wait again.
+// The reason list is a plain array, not a static-length one: a generic
+// effect occurs in rows at each instantiation, and functions inferred
+// at one arity would fail to match rows written with the bare label.
+pub effect 'wait(reasons: [WaitReason]) -> ()
 
 // === Task runtime (ADR 0058) ==========================================
 //
@@ -36,11 +43,16 @@ pub func _task_spawn<A, T>(consume arg: A, consume worker: (consume A) -> T) -> 
 	#_ir(arg, worker) { %? = task_spawn $0 $1 }
 }
 
+// Waits for `handle` and transfers its result exactly once; invalid or repeated
+// joins trap.
 pub func _task_join<T>(handle: Int) -> T {
 	#_ir(handle) { %? = task_join T $0 }
 }
 
-// The host's available parallelism (at least 1).
+// Returns the runtime's worker-width hint, clamped by the host to at least one.
+//
+// This is scheduling capacity, not a guarantee that a spawned task runs
+// concurrently.
 pub func _task_width() -> Int {
 	#_ir { %? = task_width }
 }
@@ -54,10 +66,13 @@ pub func _task_width() -> Int {
 // drop, external-wait registration, park). Handles never leave the
 // stdlib channel types that wrap them.
 
+// Transfers `value` into the runtime queue identified by `handle`.
 pub func _chan_send<T>(handle: Int, consume value: T) -> Void {
 	#_ir(handle, value) { chan_send $0 $1 }
 }
 
+// Removes one queued value after channel status has established that one is
+// ready.
 pub func _chan_take<T>(handle: Int) -> T {
 	#_ir(handle) { %? = chan_take T $0 }
 }
@@ -86,6 +101,12 @@ pub func _chan_ctl(handle: Int, op: Int) -> Int {
 // and linearity (which never derives Send) keeps resumptions on the
 // worker that minted them.
 
+// A one-shot suspended effect continuation local to the worker that captured
+// it.
+//
+// Resuming supplies `R` at the perform site and returns the handled extent's
+// `A`. The linear type must be consumed exactly once by `resume` or `cancel`;
+// it cannot be copied, dropped implicitly, or transferred to another worker.
 pub struct Resumption<R, A> 'linear {
 	let slot: Int
 }

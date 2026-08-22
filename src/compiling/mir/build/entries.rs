@@ -325,6 +325,49 @@ impl<'a> ProgramBuilder<'a> {
             blocks,
         };
 
+        // A script of ONLY declarations is the global initializer, not
+        // the program: when a zero-parameter `main` exists, it is the
+        // program and the initializer runs ahead of it. (Before this,
+        // any top-level `let` anywhere in the program silently
+        // suppressed `main` — a package module's global constant could
+        // keep the binary's entry from ever being called.)
+        let declares_only = script.iter().all(
+            |node| matches!(node, Node::Decl(decl) if matches!(decl.kind, DeclKind::Let { .. })),
+        );
+        if declares_only && let Ok(main) = self.named_entry("main", false) {
+            let main = self.demand(main, Vec::new(), Span::SYNTHESIZED)?;
+            let combined = self.reserve("script_init");
+            let mut fx = FunctionBuilder::new(self, 0, 0);
+            fx.generated_origin = GeneratedMir::ProgramEntry;
+            let scratch = fx.fresh_local();
+            fx.push(Inst::Call {
+                dest: scratch,
+                func: id,
+                args: Vec::new(),
+                unwind: None,
+            });
+            let result = fx.fresh_local();
+            fx.push(Inst::Call {
+                dest: result,
+                func: main,
+                args: Vec::new(),
+                unwind: None,
+            });
+            let (n_locals, blocks, _return_repr, debug_names) =
+                fx.finish(Operand::Local(result))?;
+            self.functions[combined] = Function {
+                debug_names,
+                frame_sites: Default::default(),
+                param_reprs: Vec::new(),
+                return_repr: None,
+                name: "script_init".into(),
+                arity: 0,
+                locals: crate::compiling::mir::build::LocalInfo::uniform(n_locals),
+                blocks,
+            };
+            return self.wrap_with_teardown(combined, None);
+        }
+
         self.wrap_with_teardown(id, returned_global)
     }
 
@@ -593,13 +636,9 @@ impl<'a> ProgramBuilder<'a> {
 
     /// A symbol's display name, from whichever program declared it.
     fn symbol_name(&self, symbol: Symbol) -> Option<String> {
-        self.programs.iter().find_map(|input| {
-            input
-                .program
-                .symbol_names()
-                .get(&symbol)
-                .cloned()
-        })
+        self.programs
+            .iter()
+            .find_map(|input| input.program.symbol_names().get(&symbol).cloned())
     }
 
     /// Resolve one exported service function (ADR 0043 call ABI): public,

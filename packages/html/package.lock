@@ -1,0 +1,15 @@
+Lock(
+    format: 1,
+    fingerprint: "f3c430e88b22f39287f151ccf4f5d9bec995dff089ee90521daeaf743edd7e46",
+    root_dependencies: ["87fb31824ea81a7105ca22cb3a09fdace24a7368bea88cd2fbe926764dbcf300"],
+    packages: [
+        .path(
+            id: "87fb31824ea81a7105ca22cb3a09fdace24a7368bea88cd2fbe926764dbcf300",
+            package: "syntax",
+            version: "0.1.0",
+            path: "../syntax",
+            base: "root",
+            dependencies: [],
+        ),
+    ]
+)

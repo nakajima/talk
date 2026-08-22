@@ -1,0 +1,1609 @@
+// The self-hosted lexer (ADR 0043 stage 2). Token values stay opaque to
+// user code outside the syntax API. Procedural invocation records cross the
+// private macro-service seam with their canonical kind tags and ranges.
+// `lex` is a validation export rendering the frozen dump-format token
+// section compared byte-for-byte by the differential harness.
+
+// Every lexical category emitted by the canonical scanner.
+//
+// Cases cover literals, keywords, punctuation, prefixed payloads, and the
+// parser-only EOF sentinel. Stable names and spellings feed diagnostics, dumps,
+// macro token records, and compatibility tests, so changing a case affects more
+// than the parser's local dispatch.
+pub enum TokenKind {
+	// An unquoted or backtick-quoted identifier.
+	case identifier
+	// A decimal integer literal.
+	case int_number
+	// A floating-point literal.
+	case float_number
+	// A double-quoted string literal.
+	case string_literal
+	// A single-quoted character literal.
+	case character_literal
+	// The `let` keyword.
+	case keyword_let
+	// The Boolean literal `true`.
+	case keyword_true
+	// The Boolean literal `false`.
+	case keyword_false
+	// The `=` punctuation or operator token.
+	case equals
+	// The `,` punctuation or operator token.
+	case comma
+	// The `.` punctuation or operator token.
+	case dot
+	// The `..` punctuation or operator token.
+	case dot_dot
+	// The `...` punctuation or operator token.
+	case dot_dot_dot
+	// The `..<` punctuation or operator token.
+	case dot_dot_less
+	// The `(` punctuation or operator token.
+	case left_paren
+	// The `)` punctuation or operator token.
+	case right_paren
+	// The `[` punctuation or operator token.
+	case left_bracket
+	// The `]` punctuation or operator token.
+	case right_bracket
+	// The `{` punctuation or operator token.
+	case left_brace
+	// The `}` punctuation or operator token.
+	case right_brace
+	// A logical line break retained for statement separation.
+	case newline
+	// A standalone `_` wildcard or omitted label.
+	case underscore
+	// The `any` keyword.
+	case keyword_any
+	// The `as` keyword.
+	case keyword_as
+	// The `func` keyword.
+	case keyword_func
+	// The `if` keyword.
+	case keyword_if
+	// The `else` keyword.
+	case keyword_else
+	// The `loop` keyword.
+	case keyword_loop
+	// The `enum` keyword.
+	case keyword_enum
+	// The `case` keyword.
+	case keyword_case
+	// The `match` keyword.
+	case keyword_match
+	// The `return` keyword.
+	case keyword_return
+	// The `struct` keyword.
+	case keyword_struct
+	// The `extend` keyword.
+	case keyword_extend
+	// The `break` keyword.
+	case keyword_break
+	// The `init` keyword.
+	case keyword_init
+	// The `protocol` keyword.
+	case keyword_protocol
+	// The `import` keyword.
+	case keyword_import
+	// The `use` keyword.
+	case keyword_use
+	// The `pub` keyword.
+	case keyword_pub
+	// The `public` keyword.
+	case keyword_public
+	// The `linear` keyword.
+	case keyword_linear
+	// The `macro` keyword.
+	case keyword_macro
+	// The `static` keyword.
+	case keyword_static
+	// The `associated` keyword.
+	case keyword_associated
+	// The `typealias` keyword.
+	case keyword_typealias
+	// The `effect` keyword.
+	case keyword_effect
+	// The `handling` keyword.
+	case keyword_handling
+	// The `in` keyword.
+	case keyword_in
+	// The `continue` keyword.
+	case keyword_continue
+	// The `unreachable` keyword.
+	case keyword_unreachable
+	// The `mut` keyword.
+	case keyword_mut
+	// The `consuming` keyword.
+	case keyword_consuming
+	// The `for` keyword.
+	case keyword_for
+	// The `+` punctuation or operator token.
+	case plus
+	// The `+=` punctuation or operator token.
+	case plus_equals
+	// The `-` punctuation or operator token.
+	case minus
+	// The `-=` punctuation or operator token.
+	case minus_equals
+	// The `->` punctuation or operator token.
+	case arrow
+	// The `*` punctuation or operator token.
+	case star
+	// The `*=` punctuation or operator token.
+	case star_equals
+	// The `/` punctuation or operator token.
+	case slash
+	// The `/=` punctuation or operator token.
+	case slash_equals
+	// The `%` punctuation or operator token.
+	case percent
+	// The `!` punctuation or operator token.
+	case bang
+	// The `!=` punctuation or operator token.
+	case bang_equals
+	// The `==` punctuation or operator token.
+	case equals_equals
+	// The `<` punctuation or operator token.
+	case less
+	// The `<=` punctuation or operator token.
+	case less_equals
+	// The `<<` punctuation or operator token.
+	case less_less
+	// The `>` punctuation or operator token.
+	case greater
+	// The `>=` punctuation or operator token.
+	case greater_equals
+	// The `>>` punctuation or operator token.
+	case greater_greater
+	// The `&` punctuation or operator token.
+	case amp
+	// The `&&` punctuation or operator token.
+	case amp_amp
+	// The `&=` punctuation or operator token.
+	case amp_equals
+	// The `|` punctuation or operator token.
+	case pipe
+	// The `||` punctuation or operator token.
+	case pipe_pipe
+	// The `:` punctuation or operator token.
+	case colon
+	// The `::` punctuation or operator token.
+	case double_colon
+	// The `?` punctuation or operator token.
+	case question_mark
+	// The `;` punctuation or operator token.
+	case semicolon
+	// The `@` punctuation or operator token.
+	case at_sign
+	// The `~` punctuation or operator token.
+	case tilde
+	// The `~=` punctuation or operator token.
+	case tilde_equals
+	// The `^` punctuation or operator token.
+	case caret
+	// The `^=` punctuation or operator token.
+	case caret_equals
+	// An `@`-prefixed attribute name whose lexeme excludes the sigil.
+	case attribute
+	// A `$`-prefixed macro antiquotation name.
+	case dollar
+	// A `$`-prefixed type-inference variable.
+	case bound_var
+	// A `#`-prefixed compiler form such as `#unsafe` or `#handle`.
+	case hash
+	// A `%`-prefixed inline-IR register.
+	case ir_register
+	// A quote-prefixed effect name.
+	case effect_name
+	// A standalone quote token.
+	case single_quote
+	// Never produced by scan: the parser-side end-of-stream sentinel.
+	case eof
+	// Comments re-enter the stream only through `lex_tokens` (the
+	// highlighter's surface); the parser never sees them.
+	case line_comment
+}
+
+// Returns the frozen PascalCase name used by validation dumps.
+//
+// This differs from `kind_spelling`, which returns source punctuation, keywords,
+// or placeholders. Renaming an output changes differential-parser fixtures.
+pub func kind_name(kind: TokenKind) -> String {
+	match kind {
+		.identifier -> "Identifier",
+		.int_number -> "Int",
+		.float_number -> "Float",
+		.string_literal -> "StringLiteral",
+		.character_literal -> "CharacterLiteral",
+		.keyword_let -> "Let",
+		.keyword_true -> "True",
+		.keyword_false -> "False",
+		.equals -> "Equals",
+		.comma -> "Comma",
+		.dot -> "Dot",
+		.dot_dot -> "DotDot",
+		.dot_dot_dot -> "DotDotDot",
+		.dot_dot_less -> "DotDotLess",
+		.left_paren -> "LeftParen",
+		.right_paren -> "RightParen",
+		.left_bracket -> "LeftBracket",
+		.right_bracket -> "RightBracket",
+		.left_brace -> "LeftBrace",
+		.right_brace -> "RightBrace",
+		.newline -> "Newline",
+		.underscore -> "Underscore",
+		.keyword_any -> "Any",
+		.keyword_as -> "As",
+		.keyword_func -> "Func",
+		.keyword_if -> "If",
+		.keyword_else -> "Else",
+		.keyword_loop -> "Loop",
+		.keyword_enum -> "Enum",
+		.keyword_case -> "Case",
+		.keyword_match -> "Match",
+		.keyword_return -> "Return",
+		.keyword_struct -> "Struct",
+		.keyword_extend -> "Extend",
+		.keyword_break -> "Break",
+		.keyword_init -> "Init",
+		.keyword_protocol -> "Protocol",
+		.keyword_import -> "Import",
+		.keyword_use -> "Use",
+		.keyword_pub -> "Pub",
+		.keyword_public -> "Public",
+		.keyword_linear -> "Linear",
+		.keyword_macro -> "Macro",
+		.keyword_static -> "Static",
+		.keyword_associated -> "Associated",
+		.keyword_typealias -> "Typealias",
+		.keyword_effect -> "Effect",
+		.keyword_handling -> "Handling",
+		.keyword_in -> "In",
+		.keyword_continue -> "Continue",
+		.keyword_unreachable -> "Unreachable",
+		.keyword_mut -> "Mut",
+		.keyword_consuming -> "Consuming",
+		.keyword_for -> "For",
+		.plus -> "Plus",
+		.plus_equals -> "PlusEquals",
+		.minus -> "Minus",
+		.minus_equals -> "MinusEquals",
+		.arrow -> "Arrow",
+		.star -> "Star",
+		.star_equals -> "StarEquals",
+		.slash -> "Slash",
+		.slash_equals -> "SlashEquals",
+		.percent -> "Percent",
+		.bang -> "Bang",
+		.bang_equals -> "BangEquals",
+		.equals_equals -> "EqualsEquals",
+		.less -> "Less",
+		.less_equals -> "LessEquals",
+		.less_less -> "LessLess",
+		.greater -> "Greater",
+		.greater_equals -> "GreaterEquals",
+		.greater_greater -> "GreaterGreater",
+		.amp -> "Amp",
+		.amp_amp -> "AmpAmp",
+		.amp_equals -> "AmpEquals",
+		.pipe -> "Pipe",
+		.pipe_pipe -> "PipePipe",
+		.colon -> "Colon",
+		.double_colon -> "DoubleColon",
+		.question_mark -> "QuestionMark",
+		.semicolon -> "Semicolon",
+		.at_sign -> "At",
+		.tilde -> "Tilde",
+		.tilde_equals -> "TildeEquals",
+		.caret -> "Caret",
+		.caret_equals -> "CaretEquals",
+		.attribute -> "Attribute",
+		.dollar -> "Dollar",
+		.bound_var -> "BoundVar",
+		.hash -> "Hash",
+		.ir_register -> "IRRegister",
+		.effect_name -> "EffectName",
+		.single_quote -> "SingleQuote",
+		.eof -> "EOF",
+		.line_comment -> "LineComment"
+	}
+}
+
+// The user-facing spelling of a kind (the reference `TokenKind::as_str`):
+// literal spellings verbatim, token classes as placeholders.
+pub func kind_spelling(kind: TokenKind) -> String {
+	match kind {
+		.identifier -> "<ident>",
+		.int_number -> "<int>",
+		.float_number -> "<float>",
+		.string_literal -> "\"<string>\"",
+		.character_literal -> "'<character>'",
+		.keyword_let -> "let",
+		.keyword_true -> "true",
+		.keyword_false -> "false",
+		.equals -> "=",
+		.comma -> ",",
+		.dot -> ".",
+		.dot_dot -> "..",
+		.dot_dot_dot -> "...",
+		.dot_dot_less -> "..<",
+		.left_paren -> "(",
+		.right_paren -> ")",
+		.left_bracket -> "[",
+		.right_bracket -> "]",
+		.left_brace -> "{",
+		.right_brace -> "}",
+		.newline -> "\n",
+		.underscore -> "_",
+		.keyword_any -> "any",
+		.keyword_as -> "as",
+		.keyword_func -> "func",
+		.keyword_if -> "if",
+		.keyword_else -> "else",
+		.keyword_loop -> "loop",
+		.keyword_enum -> "enum",
+		.keyword_case -> "case",
+		.keyword_match -> "match",
+		.keyword_return -> "return",
+		.keyword_struct -> "struct",
+		.keyword_extend -> "extend",
+		.keyword_break -> "break",
+		.keyword_init -> "init",
+		.keyword_protocol -> "protocol",
+		.keyword_import -> "import",
+		.keyword_use -> "use",
+		.keyword_pub -> "pub",
+		.keyword_public -> "public",
+		.keyword_linear -> "linear",
+		.keyword_macro -> "macro",
+		.keyword_static -> "static",
+		.keyword_associated -> "associated",
+		.keyword_typealias -> "typealias",
+		.keyword_effect -> "effect",
+		.keyword_handling -> "handling",
+		.keyword_in -> "in",
+		.keyword_continue -> "continue",
+		.keyword_unreachable -> "unreachable",
+		.keyword_mut -> "mut",
+		.keyword_consuming -> "consuming",
+		.keyword_for -> "for",
+		.plus -> "+",
+		.plus_equals -> "+=",
+		.minus -> "-",
+		.minus_equals -> "-=",
+		.arrow -> "->",
+		.star -> "*",
+		.star_equals -> "*=",
+		.slash -> "/",
+		.slash_equals -> "/=",
+		.percent -> "%",
+		.bang -> "!",
+		.bang_equals -> "!=",
+		.equals_equals -> "==",
+		.less -> "<",
+		.less_equals -> "<=",
+		.less_less -> "<<",
+		.greater -> ">",
+		.greater_equals -> ">=",
+		.greater_greater -> ">>",
+		.amp -> "&",
+		.amp_amp -> "&&",
+		.amp_equals -> "&=",
+		.pipe -> "|",
+		.pipe_pipe -> "||",
+		.colon -> ":",
+		.double_colon -> "::",
+		.question_mark -> "?",
+		.semicolon -> ";",
+		.at_sign -> "@",
+		.tilde -> "~",
+		.tilde_equals -> "~=",
+		.caret -> "^",
+		.caret_equals -> "^=",
+		.attribute -> "@<attr>",
+		.dollar -> "$",
+		.bound_var -> "$<var>",
+		.hash -> "#",
+		.ir_register -> "%<reg>",
+		.effect_name -> "'<effect>",
+		.single_quote -> "'",
+		.eof -> "EOF",
+		.line_comment -> "//"
+	}
+}
+
+// One canonical lexical token with complete and parser-facing byte ranges.
+//
+// `span` covers the full spelling. `lexeme` excludes sigils and identifier
+// quotes when name resolution needs only the payload; for ordinary tokens the
+// ranges are equal. Both are half-open UTF-8 byte offsets into the same source.
+pub struct Token {
+	// The lexical category assigned by the scanner.
+	pub let kind: TokenKind
+	// The complete token spelling as a half-open byte range.
+	pub let span: Range<Int>
+	// The parser-facing value as a half-open byte range. This excludes
+	// sigils and identifier quotes; for ordinary tokens it equals span.
+	pub let lexeme: Range<Int>
+}
+
+func token(kind: TokenKind, start: Int, end: Int) -> Token {
+	Token(kind: kind, span: start..<end, lexeme: start..<end)
+}
+
+func token_with_lexeme(kind: TokenKind, start: Int, end: Int, lexeme_start: Int, lexeme_end: Int) -> Token {
+	Token(kind: kind, span: start..<end, lexeme: lexeme_start..<lexeme_end)
+}
+
+// A dropped line comment's span, preserved for the parse dump's
+// comments section.
+pub struct Comment {
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// The partial products of one deterministic scanner pass.
+//
+// Comments are deliberately separate from parser tokens so ordinary parsing
+// pays no trivia cost. On error, `tokens` contains the valid prefix and
+// `error_pos` points where scanning stopped; callers may still parse that prefix.
+pub struct ScanResult {
+	// Non-comment tokens in source order.
+	pub let tokens: [Token]
+	// Line-comment spans in source order.
+	pub let comments: [Comment]
+	// The scanner error message, when tokenization stopped early.
+	pub let error: String?
+	// The scan cursor when the error was detected (line/col derive from
+	// it); meaningless without an error.
+	pub let error_pos: Int
+}
+
+// ASCII bytes the scanner dispatches on (spans are byte offsets and
+// every token boundary is ASCII).
+let newline_byte = 10 // "\n"
+let space_byte = 32 // " "
+let tab_byte = 9 // "\t"
+let return_byte = 13 // "\r"
+let slash_byte = 47 // "/"
+let quote_byte = 34 // '"'
+let tick_byte = 39 // "'"
+let backslash_byte = 92 // "\\"
+let dot_byte = 46 // "."
+let less_byte = 60 // "<"
+let zero_byte = 48 // "0"
+let nine_byte = 57 // "9"
+let lower_a_byte = 97 // "a"
+let lower_z_byte = 122 // "z"
+let upper_a_byte = 65 // "A"
+let upper_z_byte = 90 // "Z"
+let underscore_byte = 95 // "_"
+let lower_n_byte = 110 // "n"
+let lower_t_byte = 116 // "t"
+let lower_r_byte = 114 // "r"
+let lower_u_byte = 117 // "u"
+let lower_f_byte = 102 // "f"
+let upper_f_byte = 70 // "F"
+let open_brace_byte = 123 // "{"
+let close_brace_byte = 125 // "}"
+let left_bracket_byte = 91 // "["
+let right_bracket_byte = 93 // "]"
+let percent_byte = 37 // "%"
+let question_byte = 63 // "?"
+let at_byte = 64 // "@"
+let dollar_byte = 36 // "$"
+let hash_byte = 35 // "#" 
+
+func is_digit(b: Int) -> Bool {
+	b >= zero_byte && b <= nine_byte
+}
+
+func is_alpha(b: Int) -> Bool {
+	(b >= lower_a_byte && b <= lower_z_byte) || (b >= upper_a_byte && b <= upper_z_byte) || b == underscore_byte
+}
+
+func is_alnum(b: Int) -> Bool {
+	is_digit(b: b) || is_alpha(b: b)
+}
+
+func is_space(b: Int) -> Bool {
+	b == space_byte || b == tab_byte || b == return_byte
+}
+
+// Probe outcomes for the tick disambiguation and escape validation.
+enum CharProbe {
+	case literal(Int)
+	case not_literal
+	// The message and the scan cursor at the failure.
+	case failed(String, Int)
+}
+
+enum EscapeProbe {
+	case fine(Int)
+	// The message and the scan cursor at the failure.
+	case failed(String, Int)
+}
+
+// Validate one escape starting AFTER the backslash; returns the index
+// after the escape. Mirrors the reference `scan_literal_escape`.
+func scan_escape(view: UTF8View, n: Int, after: Int, allow_tick: Bool, unterminated: String) -> EscapeProbe {
+	if after >= n {
+		return EscapeProbe.failed(unterminated, n)
+	}
+	let e = view.at(index: after)._toInt()
+	if e == lower_n_byte || e == lower_t_byte || e == lower_r_byte || e == quote_byte || e == backslash_byte || e == newline_byte {
+		return EscapeProbe.fine(after + 1)
+	}
+	if allow_tick && e == tick_byte {
+		return EscapeProbe.fine(after + 1)
+	}
+	if e == lower_u_byte {
+		if after + 1 >= n || view.at(index: after + 1)._toInt() != open_brace_byte {
+			return EscapeProbe.failed("Invalid unicode escape", after + 1)
+		}
+		let i = after + 2
+		let value = 0
+		let digits = 0
+		loop i < n && is_hex(b: view.at(index: i)._toInt()) {
+			value = value * 16 + hex_value(b: view.at(index: i)._toInt())
+			digits = digits + 1
+			i = i + 1
+		}
+		let closed = i < n && view.at(index: i)._toInt() == close_brace_byte
+		if closed == false {
+			return EscapeProbe.failed("Invalid unicode escape", i)
+		}
+		if digits < 1 || digits > 6 {
+			return EscapeProbe.failed("Invalid unicode escape", i + 1)
+		}
+		let surrogate = value >= 55296 && value <= 57343
+		if value > 1114111 || surrogate {
+			return EscapeProbe.failed("Invalid unicode escape", i + 1)
+		}
+		return EscapeProbe.fine(i + 1)
+	}
+	EscapeProbe.failed("Invalid escape: '" + view.slice(start: after, byte_count: 1).to_string() + "'", after + 1)
+}
+
+func is_hex(b: Int) -> Bool {
+	is_digit(b: b) || (b >= lower_a_byte && b <= lower_f_byte) || (b >= upper_a_byte && b <= upper_f_byte)
+}
+
+func hex_value(b: Int) -> Int {
+	if is_digit(b: b) {
+		b - zero_byte
+	} else {
+		if b >= lower_a_byte {
+			b - lower_a_byte + 10
+		} else {
+			b - upper_a_byte + 10
+		}
+	}
+}
+
+// The reference `character_literal_candidate`: decide whether a tick
+// opens a character literal, without committing the scan position.
+func probe_character(view: UTF8View, n: Int, after_tick: Int) -> CharProbe {
+	let saw_content = false
+	let definite = false
+	let i = after_tick
+	loop {
+		if i >= n {
+			if definite {
+				return CharProbe.failed("Unterminated character literal", n)
+			}
+			return CharProbe.not_literal
+		}
+		let c = view.at(index: i)._toInt()
+		if c == tick_byte {
+			if saw_content {
+				return CharProbe.literal(i + 1)
+			}
+			return CharProbe.failed("Empty character literal", i)
+		}
+		if c == newline_byte {
+			return CharProbe.not_literal
+		}
+		if c == backslash_byte {
+			saw_content = true
+			definite = true
+			let escape = scan_escape(view: view, n: n, after: i + 1, allow_tick: true, unterminated: "Unterminated character literal")
+			if let .failed(message, failed_at) = escape {
+				return CharProbe.failed(message, failed_at)
+			}
+			if let .fine(next) = escape {
+				i = next
+			}
+			continue
+		}
+		saw_content = true
+		if is_space(b: c) == false {
+			definite = true
+		}
+		i = i + 1
+	}
+}
+
+// The end of an identifier run starting at `i`: ASCII alphanumerics
+// and `_` byte-by-byte, non-ASCII by decoding the scalar and asking
+// core's Unicode tables — the reference rule is `is_alphanumeric`.
+func ident_end(view: UTF8View, n: Int, i: Int) -> Int {
+	let j = i
+	loop j < n {
+		let b = view.at(index: j)._toInt()
+		if b < 128 {
+			if is_alnum(b: b) == false {
+				return j
+			}
+			j = j + 1
+			continue
+		}
+		let packed = _utf8_decode(storage: view.storage, offset: view.start + j, end: view.start + n)
+		let scalar = packed / 8
+		let size = packed - (packed / 8) * 8
+		if scalar_is_alphanumeric(scalar: scalar) == false {
+			return j
+		}
+		j = j + size
+	}
+	j
+}
+
+// Render a scalar for an "Unexpected character" message the way the
+// reference does: raw when it stands on its own, `\u{…}` escaped when
+// it would be invisible (approximated by "not alphanumeric").
+// A UTF-8 scalar's byte length from its lead byte.
+func scalar_byte_length(b: Int) -> Int {
+	if b < 128 { return 1 }
+	if b < 224 { return 2 }
+	if b < 240 { return 3 }
+	4
+}
+
+func describe_scalar(view: UTF8View, n: Int, i: Int) -> String {
+	let packed = _utf8_decode(storage: view.storage, offset: view.start + i, end: view.start + n)
+	let scalar = packed / 8
+	let size = packed - (packed / 8) * 8
+	if scalar_is_alphanumeric(scalar: scalar) {
+		return view.slice(start: i, byte_count: size).to_string()
+	}
+	"\\u{" + to_hex(value: scalar) + "}"
+}
+
+func to_hex(value: Int) -> String {
+	if value == 0 {
+		return "0"
+	}
+	let digits = ""
+	let v = value
+	loop v > 0 {
+		let d = v - (v / 16) * 16
+		let glyph = match d {
+			10 -> "a",
+			11 -> "b",
+			12 -> "c",
+			13 -> "d",
+			14 -> "e",
+			15 -> "f",
+			_ -> d.show()
+		}
+		digits = glyph + digits
+		v = v / 16
+	}
+	digits
+}
+
+// Scans UTF-8 source into canonical tokens and detached line comments.
+//
+// Token and comment ranges are half-open byte offsets. The scanner stops at the
+// first malformed token but returns the valid prefix for editor recovery. It
+// does not balance delimiters; `capture_token_trees` performs that second step.
+pub func scan(source: String) -> ScanResult {
+	let tokens: [Token] = []
+	let comments: [Comment] = []
+	let error: String? = Optional.none
+	let error_pos = 0
+	let view = source.utf8()
+	let n = view.count()
+	let i = 0
+	loop i < n {
+		let b = view.at(index: i)._toInt()
+
+		// Newline runs collapse into one token.
+		if b == newline_byte {
+			let start = i
+			loop i < n && view.at(index: i)._toInt() == newline_byte {
+				i = i + 1
+			}
+			tokens.push(token(kind: .newline, start: start, end: i))
+			continue
+		}
+
+		if b == space_byte || b == tab_byte || b == return_byte {
+			i = i + 1
+			continue
+		}
+
+		// Line comments drop from the token stream; their spans are
+		// preserved for the parse dump's comments section.
+		if b == slash_byte && i + 1 < n && view.at(index: i + 1)._toInt() == slash_byte {
+			let start = i
+			loop i < n && view.at(index: i)._toInt() != newline_byte {
+				i = i + 1
+			}
+			comments.push(Comment(start: start, end: i))
+			continue
+		}
+
+		if is_digit(b: b) {
+			let start = i
+			loop i < n && (is_digit(b: view.at(index: i)._toInt()) || view.at(index: i)._toInt() == underscore_byte) {
+				i = i + 1
+			}
+			// One dot then a digit continues a Float; two dots are a
+			// range operator after an Int. `_` separators ride along.
+			let fractional = i + 1 < n && view.at(index: i)._toInt() == dot_byte && is_digit(b: view.at(index: i + 1)._toInt())
+			if fractional {
+				i = i + 1
+				loop i < n && (is_digit(b: view.at(index: i)._toInt()) || view.at(index: i)._toInt() == underscore_byte) {
+					i = i + 1
+				}
+				tokens.push(token(kind: .float_number, start: start, end: i))
+			} else {
+				tokens.push(token(kind: .int_number, start: start, end: i))
+			}
+			continue
+		}
+
+		if is_alpha(b: b) {
+			let start = i
+			i = ident_end(view: view, n: n, i: i)
+			let word = view.slice(start: start, byte_count: i - start)
+			let kind = match word {
+				"_" -> TokenKind.underscore,
+				"any" -> TokenKind.keyword_any,
+				"as" -> TokenKind.keyword_as,
+				"func" -> TokenKind.keyword_func,
+				"let" -> TokenKind.keyword_let,
+				"if" -> TokenKind.keyword_if,
+				"else" -> TokenKind.keyword_else,
+				"true" -> TokenKind.keyword_true,
+				"false" -> TokenKind.keyword_false,
+				"loop" -> TokenKind.keyword_loop,
+				"enum" -> TokenKind.keyword_enum,
+				"case" -> TokenKind.keyword_case,
+				"match" -> TokenKind.keyword_match,
+				"return" -> TokenKind.keyword_return,
+				"struct" -> TokenKind.keyword_struct,
+				"extend" -> TokenKind.keyword_extend,
+				"break" -> TokenKind.keyword_break,
+				"init" -> TokenKind.keyword_init,
+				"protocol" -> TokenKind.keyword_protocol,
+				"import" -> TokenKind.keyword_import,
+				"use" -> TokenKind.keyword_use,
+				"pub" -> TokenKind.keyword_pub,
+				"public" -> TokenKind.keyword_public,
+				"linear" -> TokenKind.keyword_linear,
+				"macro" -> TokenKind.keyword_macro,
+				"static" -> TokenKind.keyword_static,
+				"associated" -> TokenKind.keyword_associated,
+				"typealias" -> TokenKind.keyword_typealias,
+				"effect" -> TokenKind.keyword_effect,
+				"handling" -> TokenKind.keyword_handling,
+				"in" -> TokenKind.keyword_in,
+				"continue" -> TokenKind.keyword_continue,
+				"unreachable" -> TokenKind.keyword_unreachable,
+				"mut" -> TokenKind.keyword_mut,
+				"consuming" -> TokenKind.keyword_consuming,
+				"for" -> TokenKind.keyword_for,
+				_ -> TokenKind.identifier
+			}
+			tokens.push(token(kind: kind, start: start, end: i))
+			continue
+		}
+
+		// String literal: span includes the quotes; escapes stay raw.
+		if b == quote_byte {
+			let start = i
+			i = i + 1
+			let open = true
+			let bad = false
+			loop i < n && open && bad == false {
+				let c = view.at(index: i)._toInt()
+				if c == backslash_byte {
+					let escape = scan_escape(view: view, n: n, after: i + 1, allow_tick: false, unterminated: "Unterminated string")
+					if let .failed(message, failed_at) = escape {
+						error = Optional.some(message)
+						error_pos = failed_at
+						bad = true
+					}
+					if let .fine(next) = escape {
+						i = next
+					}
+				} else {
+					if c == quote_byte {
+						i = i + 1
+						open = false
+					} else {
+						i = i + 1
+					}
+				}
+			}
+			if bad {
+				break
+			}
+			if open {
+				error = Optional.some("Unterminated string")
+				error_pos = i
+				break
+			}
+			tokens.push(token(kind: .string_literal, start: start, end: i))
+			continue
+		}
+
+		// A tick opens an effect name (`'io`), an effect row (`'[…]`),
+		// or a character literal (`'a'`). An identifier run not closed
+		// by another tick commits to an effect name; otherwise a probe
+		// decides without moving the scan.
+		if b == tick_byte {
+			let start = i
+			let effectish = i + 1 < n && is_alnum(b: view.at(index: i + 1)._toInt())
+			if effectish {
+				let run_end = ident_end(view: view, n: n, i: i + 1)
+				let closed = run_end < n && view.at(index: run_end)._toInt() == tick_byte
+				if closed == false {
+					tokens.push(token_with_lexeme(kind: .effect_name, start: i, end: run_end, lexeme_start: i + 1, lexeme_end: run_end))
+					i = run_end
+					continue
+				}
+			}
+			let row_opener = false
+			if i + 1 < n && view.at(index: i + 1)._toInt() == left_bracket_byte {
+				let j = i + 1
+				loop j < n && row_opener == false {
+					let c = view.at(index: j)._toInt()
+					if c == right_bracket_byte {
+						row_opener = true
+					}
+					if c == tick_byte || c == newline_byte {
+						j = n
+					}
+					j = j + 1
+				}
+			}
+			if row_opener {
+				// The row's tick stands alone; `[` lexes next round.
+				tokens.push(token(kind: .single_quote, start: i, end: i + 1))
+				i = i + 1
+				continue
+			}
+			let probe = probe_character(view: view, n: n, after_tick: i + 1)
+			if let .failed(message, failed_at) = probe {
+				error = Optional.some(message)
+				error_pos = failed_at
+				break
+			}
+			if let .literal(end) = probe {
+				tokens.push(token(kind: .character_literal, start: start, end: end))
+				i = end
+				continue
+			}
+			// Not a literal: a bare tick keeps its own span.
+			tokens.push(token(kind: .single_quote, start: i, end: i + 1))
+			i = i + 1
+			continue
+		}
+
+		// Sigil-prefixed forms keep the complete spelling in span and the
+		// value after the sigil in lexeme.
+		if b == percent_byte && i + 1 < n && (is_digit(b: view.at(index: i + 1)._toInt()) || view.at(index: i + 1)._toInt() == question_byte) {
+			let register_start = i + 1
+			let j = register_start
+			loop j < n && (is_digit(b: view.at(index: j)._toInt()) || view.at(index: j)._toInt() == question_byte) {
+				j = j + 1
+			}
+			tokens.push(token_with_lexeme(kind: .ir_register, start: i, end: j, lexeme_start: register_start, lexeme_end: j))
+			i = j
+			continue
+		}
+		// #"..." spells a literal identifier, letting keywords be used
+		// as names. Its lexeme excludes the # and the quotes.
+		if b == hash_byte && i + 1 < n && view.at(index: i + 1)._toInt() == quote_byte {
+			let start = i + 2
+			let j = start
+			let open = true
+			let bad = false
+			loop j < n && open {
+				let c = view.at(index: j)._toInt()
+				if c == newline_byte { break }
+				if c == backslash_byte {
+					error = Optional.some("Invalid escape: '\\\\'")
+					error_pos = j
+					bad = true
+					break
+				}
+				if c == quote_byte {
+					open = false
+				} else {
+					j = j + 1
+				}
+			}
+			if bad { break }
+			if open {
+				error = Optional.some("Unterminated string")
+				error_pos = j
+				break
+			}
+			if j == start {
+				error = Optional.some("Empty quoted identifier")
+				error_pos = j
+				break
+			}
+			tokens.push(token_with_lexeme(kind: .identifier, start: i, end: j + 1, lexeme_start: start, lexeme_end: j))
+			i = j + 1
+			continue
+		}
+		if b == at_byte && i + 1 < n && is_alnum(b: view.at(index: i + 1)._toInt()) {
+			let end = ident_end(view: view, n: n, i: i + 1)
+			tokens.push(token_with_lexeme(kind: .attribute, start: i, end: end, lexeme_start: i + 1, lexeme_end: end))
+			i = end
+			continue
+		}
+		if b == dollar_byte && i + 1 < n && is_alnum(b: view.at(index: i + 1)._toInt()) {
+			let end = ident_end(view: view, n: n, i: i + 1)
+			tokens.push(token_with_lexeme(kind: .bound_var, start: i, end: end, lexeme_start: i + 1, lexeme_end: end))
+			i = end
+			continue
+		}
+		if b == dollar_byte {
+			tokens.push(token(kind: .dollar, start: i, end: i + 1))
+			i = i + 1
+			continue
+		}
+		if b == hash_byte {
+			tokens.push(token(kind: .hash, start: i, end: i + 1))
+			i = i + 1
+			continue
+		}
+
+		if b == dot_byte {
+			if i + 1 < n && view.at(index: i + 1)._toInt() == dot_byte {
+				if i + 2 < n && view.at(index: i + 2)._toInt() == dot_byte {
+					tokens.push(token(kind: .dot_dot_dot, start: i, end: i + 3))
+					i = i + 3
+				} else if i + 2 < n && view.at(index: i + 2)._toInt() == less_byte {
+					tokens.push(token(kind: .dot_dot_less, start: i, end: i + 3))
+					i = i + 3
+				} else {
+					tokens.push(token(kind: .dot_dot, start: i, end: i + 2))
+					i = i + 2
+				}
+			} else {
+				tokens.push(token(kind: .dot, start: i, end: i + 1))
+				i = i + 1
+			}
+			continue
+		}
+
+		// Two-character operators, longest spelling first.
+		if i + 1 < n {
+			let pair = view.slice(start: i, byte_count: 2)
+			let two = match pair {
+				"==" -> TokenKind.equals_equals,
+				"!=" -> TokenKind.bang_equals,
+				"<=" -> TokenKind.less_equals,
+				">=" -> TokenKind.greater_equals,
+				"+=" -> TokenKind.plus_equals,
+				"-=" -> TokenKind.minus_equals,
+				"*=" -> TokenKind.star_equals,
+				"/=" -> TokenKind.slash_equals,
+				"~=" -> TokenKind.tilde_equals,
+				"^=" -> TokenKind.caret_equals,
+				"&=" -> TokenKind.amp_equals,
+				"->" -> TokenKind.arrow,
+				"<<" -> TokenKind.less_less,
+				">>" -> TokenKind.greater_greater,
+				"&&" -> TokenKind.amp_amp,
+				"||" -> TokenKind.pipe_pipe,
+				"::" -> TokenKind.double_colon,
+				_ -> TokenKind.identifier
+			}
+			if is_operator(kind: two) {
+				tokens.push(token(kind: two, start: i, end: i + 2))
+				i = i + 2
+				continue
+			}
+		}
+
+		let glyph = view.slice(start: i, byte_count: 1)
+		let one = match glyph {
+			"=" -> TokenKind.equals,
+			"," -> TokenKind.comma,
+			"(" -> TokenKind.left_paren,
+			")" -> TokenKind.right_paren,
+			"[" -> TokenKind.left_bracket,
+			"]" -> TokenKind.right_bracket,
+			"{" -> TokenKind.left_brace,
+			"}" -> TokenKind.right_brace,
+			"?" -> TokenKind.question_mark,
+			";" -> TokenKind.semicolon,
+			"@" -> TokenKind.at_sign,
+			"%" -> TokenKind.percent,
+			"+" -> TokenKind.plus,
+			"-" -> TokenKind.minus,
+			"*" -> TokenKind.star,
+			"/" -> TokenKind.slash,
+			"!" -> TokenKind.bang,
+			"<" -> TokenKind.less,
+			">" -> TokenKind.greater,
+			"&" -> TokenKind.amp,
+			"|" -> TokenKind.pipe,
+			":" -> TokenKind.colon,
+			"~" -> TokenKind.tilde,
+			"^" -> TokenKind.caret,
+			_ -> TokenKind.identifier
+		}
+		if is_operator(kind: one) {
+			tokens.push(token(kind: one, start: i, end: i + 1))
+			i = i + 1
+			continue
+		}
+
+		// Anything else is a lex error, like the reference lexer, which
+		// consumes the character before erroring.
+		let unexpected = if b < 128 {
+			glyph.to_string()
+		} else {
+			describe_scalar(view: view, n: n, i: i)
+		}
+		error = Optional.some("Unexpected character: '" + unexpected + "'")
+		error_pos = i + scalar_byte_length(b: b)
+		break
+	}
+	ScanResult(tokens: tokens, comments: comments, error: error, error_pos: error_pos)
+}
+
+func is_operator(kind: TokenKind) -> Bool {
+	match kind {
+		.identifier -> false,
+		_ -> true
+	}
+}
+
+// Appends the UTF-8 bytes of `text` to a dump buffer.
+pub func append(mut buf: [Byte], text: String) -> Void {
+	let bytes = text.utf8()
+	let i = 0
+	loop i < bytes.count() {
+		buf.push(bytes.at(index: i))
+		i = i + 1
+	}
+}
+
+// Appends the decimal spelling of `value` to a dump buffer.
+pub func append_int(mut buf: [Byte], value: Int) -> Void {
+	append(buf: buf, text: value.show())
+}
+
+// Appends a diagnostic snippet for a short, single-line byte range.
+//
+// Empty, multi-line, or longer-than-40-byte ranges are omitted. Quotes,
+// backslashes, tabs, and returns are escaped so the validation dump remains one
+// deterministic line; offsets are raw UTF-8 bytes.
+pub func append_snippet(mut buf: [Byte], view: UTF8View, start: Int, end: Int) -> Void {
+	if end <= start || end - start > 40 {
+		return ()
+	}
+	let j = start
+	loop j < end {
+		if view.at(index: j)._toInt() == newline_byte {
+			return ()
+		}
+		j = j + 1
+	}
+	append(buf: buf, text: " \"")
+	let k = start
+	loop k < end {
+		let c = view.at(index: k)._toInt()
+		if c == backslash_byte {
+			append(buf: buf, text: "\\\\")
+		} else {
+			if c == quote_byte {
+				append(buf: buf, text: "\\\"")
+			} else {
+				if c == tab_byte {
+					append(buf: buf, text: "\\t")
+				} else {
+					if c == return_byte {
+						append(buf: buf, text: "\\r")
+					} else {
+						buf.push(view.at(index: k))
+					}
+				}
+			}
+		}
+		k = k + 1
+	}
+	append(buf: buf, text: "\"")
+}
+
+// Scans source and renders the frozen token validation format.
+//
+// Output includes token kinds, half-open byte spans, eligible snippets, and the
+// first scanner error. This is a debugging/compatibility view; use `scan` for
+// structured tokens.
+pub func lex(source: String) -> String {
+	let result = scan(source: source)
+	let view = source.utf8()
+	let out: [Byte] = []
+	append(buf: out, text: "tokens:\n")
+	for token in result.tokens {
+		append(buf: out, text: "  ")
+		append(buf: out, text: kind_name(kind: token.kind))
+		append(buf: out, text: " @")
+		append_int(buf: out, value: token.span.lower)
+		append(buf: out, text: "..")
+		append_int(buf: out, value: token.span.upper)
+		append_snippet(buf: out, view: view, start: token.span.lower, end: token.span.upper)
+		append(buf: out, text: "\n")
+	}
+	if let .some(message) = result.error {
+		append(buf: out, text: "  lexer error: ")
+		append(buf: out, text: message)
+		append(buf: out, text: "\n")
+	}
+	String.from_bytes(bytes: out)
+}
+
+// MARK: Token trees (ADR 0043): balanced grouping over the scanner's
+// tokens. These are the public, macro-facing values. Their token ranges
+// always index the source string that accompanied the capture.
+
+// The paired delimiters that can own a token-tree group.
+pub enum Delimiter {
+	// A group delimited by `(` and `)`.
+	case paren
+	// A group delimited by `[` and `]`.
+	case bracket
+	// A group delimited by `{` and `}`.
+	case brace
+}
+
+func delimiter_text(delimiter: Delimiter) -> String {
+	match delimiter {
+		.paren -> "(",
+		.bracket -> "[",
+		.brace -> "{"
+	}
+}
+
+// A balanced macro token tree.
+pub enum TokenTree {
+	// One token that is not an opening delimiter.
+	case leaf(Token)
+	// A delimited group containing recursively nested trees.
+	case group(Group)
+}
+
+// A balanced token-tree group with explicit opening and closing tokens.
+//
+// `delimiter` agrees with both token kinds, and `children` excludes the outer
+// pair. Source ranges remain on the original tokens rather than the group.
+pub struct Group {
+	// The kind shared by the opening and closing delimiters.
+	pub let delimiter: Delimiter
+	// The opening delimiter token.
+	pub let open: Token
+	// The closing delimiter token.
+	pub let close: Token
+	// The token trees nested inside the group.
+	pub let children: [TokenTree]
+}
+
+// Canonical tokens owned by one half-open source extent.
+//
+// Token ranges still index the accompanying original or virtual source. Parser
+// category entry points consume this value directly and never re-lex rendered
+// text, which preserves macro provenance and exact boundaries.
+pub struct TokenRange {
+	// Canonical tokens wholly contained by `span`.
+	pub let tokens: [Token]
+	// The byte range occupied in the source.
+	pub let span: Range<Int>
+}
+
+// A procedural macro invocation's source identity, text, and balanced token tree.
+//
+// The outer delimiter is retained so a macro can distinguish `()`, `[]`, and
+// `{}`. Tokens continue to index `source`; manufacturing a new string does not
+// manufacture a new hygienic identifier.
+pub struct MacroInput {
+	// The identifier of the source file.
+	pub let source_id: Int
+	// The source text.
+	pub let source: String
+	// The captured token tree.
+	pub let tree: TokenTree
+}
+
+// A delimiter-balance failure encountered while building token trees.
+pub enum TokenTreeError {
+	// A closing delimiter appeared with no open group.
+	case unexpected_closer(Token)
+	// A group closed with a different delimiter than it opened with.
+	case mismatched_closer(Token, Token)
+	// Input ended while the opening delimiter was still unmatched.
+	case unclosed(Token)
+}
+
+// Completed top-level trees plus the first delimiter-balance failure.
+//
+// On failure, `trees` retains groups completed before the offending token; the
+// error carries the tokens needed to report unexpected, mismatched, or unclosed
+// delimiters.
+pub struct TokenTreeResult {
+	// Successfully completed top-level trees in source order.
+	pub let trees: [TokenTree]
+	// The delimiter error, when balancing failed.
+	pub let error: TokenTreeError?
+}
+
+struct Frame {
+	let opener: Token
+	let expected: Delimiter
+	let parent: [TokenTree]
+}
+
+func opens(kind: TokenKind) -> Delimiter? {
+	match kind {
+		.left_paren -> Optional.some(Delimiter.paren),
+		.left_bracket -> Optional.some(Delimiter.bracket),
+		.left_brace -> Optional.some(Delimiter.brace),
+		_ -> Optional.none
+	}
+}
+
+func closes(kind: TokenKind) -> Delimiter? {
+	match kind {
+		.right_paren -> Optional.some(Delimiter.paren),
+		.right_bracket -> Optional.some(Delimiter.bracket),
+		.right_brace -> Optional.some(Delimiter.brace),
+		_ -> Optional.none
+	}
+}
+
+func same_delimiter(a: Delimiter, b: Delimiter) -> Bool {
+	match a {
+		.paren -> if let .paren = b { true } else { false },
+		.bracket -> if let .bracket = b { true } else { false },
+		.brace -> if let .brace = b { true } else { false }
+	}
+}
+
+func span_text(start: Int, end: Int) -> String {
+	start.show() + ".." + end.show()
+}
+
+func empty_trees() -> [TokenTree] {
+	[]
+}
+
+// Capture a flat token stream into balanced trees. Delimiter failures are
+// structured so a macro caller can attach diagnostics without parsing text.
+pub func capture_token_trees(tokens: [Token]) -> TokenTreeResult {
+	let stack: [Frame] = []
+	let current: [TokenTree] = []
+	let index = 0
+	loop index < tokens.count {
+		let token = tokens.get(index)
+		index = index + 1
+		if let .some(delimiter) = opens(kind: token.kind) {
+			stack.push(Frame(opener: token, expected: delimiter, parent: current))
+			current = empty_trees()
+			continue
+		}
+		if let .some(delimiter) = closes(kind: token.kind) {
+			let popped = stack.pop()
+			if let .some(frame) = popped {
+				if same_delimiter(a: frame.expected, b: delimiter) {
+					let children = current
+					current = frame.parent
+					current.push(TokenTree.group(Group(delimiter: delimiter, open: frame.opener, close: token, children: children)))
+					continue
+				}
+				return TokenTreeResult(trees: empty_trees(), error: Optional.some(TokenTreeError.mismatched_closer(token, frame.opener)))
+			}
+			return TokenTreeResult(trees: empty_trees(), error: Optional.some(TokenTreeError.unexpected_closer(token)))
+		}
+		current.push(TokenTree.leaf(token))
+	}
+	let leftover = stack.pop()
+	if let .some(frame) = leftover {
+		return TokenTreeResult(trees: empty_trees(), error: Optional.some(TokenTreeError.unclosed(frame.opener)))
+	}
+	TokenTreeResult(trees: current, error: Optional.none)
+}
+
+func token_kind_from_tag(tag: Int) -> TokenKind? {
+	match tag {
+		0 -> .some(.identifier),
+		1 -> .some(.int_number),
+		2 -> .some(.float_number),
+		3 -> .some(.string_literal),
+		4 -> .some(.character_literal),
+		5 -> .some(.keyword_let),
+		6 -> .some(.keyword_true),
+		7 -> .some(.keyword_false),
+		8 -> .some(.equals),
+		9 -> .some(.comma),
+		10 -> .some(.dot),
+		11 -> .some(.dot_dot),
+		12 -> .some(.dot_dot_dot),
+		13 -> .some(.dot_dot_less),
+		14 -> .some(.left_paren),
+		15 -> .some(.right_paren),
+		16 -> .some(.left_bracket),
+		17 -> .some(.right_bracket),
+		18 -> .some(.left_brace),
+		19 -> .some(.right_brace),
+		20 -> .some(.newline),
+		21 -> .some(.underscore),
+		22 -> .some(.keyword_any),
+		23 -> .some(.keyword_as),
+		24 -> .some(.keyword_func),
+		25 -> .some(.keyword_if),
+		26 -> .some(.keyword_else),
+		27 -> .some(.keyword_loop),
+		28 -> .some(.keyword_enum),
+		29 -> .some(.keyword_case),
+		30 -> .some(.keyword_match),
+		31 -> .some(.keyword_return),
+		32 -> .some(.keyword_struct),
+		33 -> .some(.keyword_extend),
+		34 -> .some(.keyword_break),
+		35 -> .some(.keyword_init),
+		36 -> .some(.keyword_protocol),
+		37 -> .some(.keyword_import),
+		38 -> .some(.keyword_use),
+		39 -> .some(.keyword_pub),
+		40 -> .some(.keyword_public),
+		41 -> .some(.keyword_linear),
+		42 -> .some(.keyword_macro),
+		43 -> .some(.keyword_static),
+		44 -> .some(.keyword_associated),
+		45 -> .some(.keyword_typealias),
+		46 -> .some(.keyword_effect),
+		47 -> .some(.keyword_handling),
+		48 -> .some(.keyword_in),
+		49 -> .some(.keyword_continue),
+		50 -> .some(.keyword_unreachable),
+		51 -> .some(.keyword_mut),
+		52 -> .some(.keyword_consuming),
+		53 -> .some(.keyword_for),
+		54 -> .some(.plus),
+		55 -> .some(.plus_equals),
+		56 -> .some(.minus),
+		57 -> .some(.minus_equals),
+		58 -> .some(.arrow),
+		59 -> .some(.star),
+		60 -> .some(.star_equals),
+		61 -> .some(.slash),
+		62 -> .some(.slash_equals),
+		63 -> .some(.percent),
+		64 -> .some(.bang),
+		65 -> .some(.bang_equals),
+		66 -> .some(.equals_equals),
+		67 -> .some(.less),
+		68 -> .some(.less_equals),
+		69 -> .some(.less_less),
+		70 -> .some(.greater),
+		71 -> .some(.greater_equals),
+		72 -> .some(.greater_greater),
+		73 -> .some(.amp),
+		74 -> .some(.amp_amp),
+		75 -> .some(.amp_equals),
+		76 -> .some(.pipe),
+		77 -> .some(.pipe_pipe),
+		78 -> .some(.colon),
+		79 -> .some(.double_colon),
+		80 -> .some(.question_mark),
+		81 -> .some(.semicolon),
+		82 -> .some(.at_sign),
+		83 -> .some(.tilde),
+		84 -> .some(.tilde_equals),
+		85 -> .some(.caret),
+		86 -> .some(.caret_equals),
+		87 -> .some(.attribute),
+		88 -> .some(.dollar),
+		89 -> .some(.bound_var),
+		90 -> .some(.hash),
+		91 -> .some(.ir_register),
+		92 -> .some(.effect_name),
+		93 -> .some(.single_quote),
+		94 -> .some(.eof),
+		95 -> .some(.line_comment),
+		_ -> .none
+	}
+}
+
+func decode_hex_digit(byte: Int) -> Int {
+	if byte >= 48 && byte <= 57 { return byte - 48 }
+	if byte >= 97 && byte <= 102 { return byte - 87 }
+	0 - 1
+}
+
+func decode_hex_word(view: UTF8View, start: Int) -> Int? {
+	if start < 0 || start + 8 > view.count() { return .none }
+	let value = 0
+	let index = start
+	loop index < start + 8 {
+		let digit = decode_hex_digit(byte: view.at(index: index)._toInt())
+		if digit < 0 { return .none }
+		value = value * 16 + digit
+		index = index + 1
+	}
+	.some(value)
+}
+
+// Decode canonical token records without imposing tree structure: the
+// wrapper macro ABI hands over a declaration's token run, which is not a
+// single delimited group. Empty input decodes to an empty token list.
+pub func decode_token_records(encoded: String) -> [Token]? {
+	let view = encoded.utf8()
+	if (view.count() / 40) * 40 != view.count() { return .none }
+	let tokens: [Token] = []
+	let index = 0
+	loop index < view.count() {
+		let tag: Int
+		let span_start: Int
+		let span_end: Int
+		let lexeme_start: Int
+		let lexeme_end: Int
+		if let .some(value) = decode_hex_word(view: view, start: index) { tag = value } else { return .none }
+		if let .some(value) = decode_hex_word(view: view, start: index + 8) { span_start = value } else { return .none }
+		if let .some(value) = decode_hex_word(view: view, start: index + 16) { span_end = value } else { return .none }
+		if let .some(value) = decode_hex_word(view: view, start: index + 24) { lexeme_start = value } else { return .none }
+		if let .some(value) = decode_hex_word(view: view, start: index + 32) { lexeme_end = value } else { return .none }
+		let kind: TokenKind
+		if let .some(value) = token_kind_from_tag(tag: tag) { kind = value } else { return .none }
+		if span_start > span_end || lexeme_start < span_start || lexeme_end > span_end { return .none }
+		tokens.push(Token(kind: kind, span: span_start..<span_end, lexeme: lexeme_start..<lexeme_end))
+		index = index + 40
+	}
+	.some(tokens)
+}
+
+// Decode the parser-recorded canonical token records supplied by the macro
+// service ABI. This does not inspect token spelling or run the lexer again.
+pub func capture_macro_input(source_id: Int, source: String, encoded: String) -> MacroInput? {
+	if encoded.utf8().count() == 0 { return .none }
+	let tokens: [Token]
+	if let .some(decoded) = decode_token_records(encoded: encoded) { tokens = decoded } else { return .none }
+	let captured = capture_token_trees(tokens: tokens)
+	if captured.trees.count != 1 { return .none }
+	for tree in captured.trees {
+		match tree {
+			.group(group) -> return .some(MacroInput(source_id: source_id, source: source, tree: .group(group))),
+			_ -> return .none
+		}
+	}
+	.none
+}
+
+func append_tree_tokens(mut tokens: [Token], tree: &TokenTree) -> Void {
+	match tree {
+		.leaf(token) -> tokens.push(token),
+		.group(group) -> {
+			tokens.push(group.open)
+			let index = 0
+			loop index < group.children.count {
+				append_tree_tokens(tokens: tokens, tree: group.children[index])
+				index = index + 1
+			}
+			tokens.push(group.close)
+		}
+	}
+}
+
+// Flatten one tree back to its canonical tokens, preserving every token
+// and byte range. This is a token operation, not source reconstruction.
+pub func token_tree_range(tree: &TokenTree) -> TokenRange {
+	let tokens: [Token] = []
+	append_tree_tokens(tokens: tokens, tree: tree)
+	match tree {
+		.leaf(token) -> TokenRange(tokens: tokens, span: token.span),
+		.group(group) -> TokenRange(tokens: tokens, span: group.open.span.lower..<group.close.span.upper)
+	}
+}
+
+// The tokens inside a group, excluding its delimiters. Empty groups still
+// retain a meaningful source extent for parser EOF diagnostics.
+pub func group_contents(group: &Group) -> TokenRange {
+	let tokens: [Token] = []
+	let index = 0
+	loop index < group.children.count {
+		append_tree_tokens(tokens: tokens, tree: group.children[index])
+		index = index + 1
+	}
+	TokenRange(tokens: tokens, span: group.open.span.upper..<group.close.span.lower)
+}
+
+func token_tree_error_line(error: TokenTreeError) -> String {
+	match error {
+		.unexpected_closer(closer) -> "tokentree.unexpected-closer closer at " + span_text(start: closer.span.lower, end: closer.span.upper) + " has no open group",
+		.mismatched_closer(closer, opener) -> "tokentree.mismatched-closer closer at " + span_text(start: closer.span.lower, end: closer.span.upper) + " does not match the group opened at " + span_text(start: opener.span.lower, end: opener.span.upper),
+		.unclosed(opener) -> "tokentree.unclosed group opened at " + span_text(start: opener.span.lower, end: opener.span.upper) + " is never closed"
+	}
+}
+
+// Appends indentation for the requested nesting depth.
+pub func indent(mut buf: [Byte], depth: Int) -> Void {
+	let d = 0
+	loop d < depth {
+		append(buf: buf, text: "  ")
+		d = d + 1
+	}
+}
+
+func render_leaf(mut buf: [Byte], view: UTF8View, token: Token, depth: Int) -> Void {
+	indent(buf: buf, depth: depth)
+	append(buf: buf, text: kind_name(kind: token.kind))
+	append(buf: buf, text: " @")
+	append_int(buf: buf, value: token.span.lower)
+	append(buf: buf, text: "..")
+	append_int(buf: buf, value: token.span.upper)
+	append_snippet(buf: buf, view: view, start: token.span.lower, end: token.span.upper)
+	append(buf: buf, text: "\n")
+}
+
+func render_trees(mut buf: [Byte], view: UTF8View, list: &[TokenTree], depth: Int) -> Void {
+	let index = 0
+	loop index < list.count {
+		let tree = list.get(index)
+		if let .leaf(token) = tree {
+			render_leaf(buf: buf, view: view, token: token, depth: depth)
+		}
+		if let .group(inner) = tree {
+			indent(buf: buf, depth: depth)
+			append(buf: buf, text: "Group ")
+			append(buf: buf, text: delimiter_text(delimiter: inner.delimiter))
+			append(buf: buf, text: " open@")
+			append(buf: buf, text: span_text(start: inner.open.span.lower, end: inner.open.span.upper))
+			append(buf: buf, text: " close@")
+			append(buf: buf, text: span_text(start: inner.close.span.lower, end: inner.close.span.upper))
+			append(buf: buf, text: "\n")
+			render_trees(buf: buf, view: view, list: inner.children, depth: depth + 1)
+		}
+		index = index + 1
+	}
+}
+
+// Scans, balances, and renders macro token trees in the validation format.
+//
+// Unlike `lex`, this exposes delimiter nesting and reports mismatched, unexpected,
+// or unclosed delimiters. Use `capture_token_trees` for the structured result.
+pub func trees(source: String) -> String {
+	let out: [Byte] = []
+	append(buf: out, text: "trees:\n")
+	let result = scan(source: source)
+	if let .some(message) = result.error {
+		append(buf: out, text: "token tree error: tokentree.lex ")
+		append(buf: out, text: message)
+		append(buf: out, text: "\n")
+		return String.from_bytes(bytes: out)
+	}
+	let grouped = capture_token_trees(tokens: result.tokens)
+	if let .some(error) = grouped.error {
+		append(buf: out, text: "token tree error: ")
+		append(buf: out, text: token_tree_error_line(error: error))
+		append(buf: out, text: "\n")
+		return String.from_bytes(bytes: out)
+	}
+	let view = source.utf8()
+	render_trees(buf: out, view: view, list: grouped.trees, depth: 1)
+	String.from_bytes(bytes: out)
+}

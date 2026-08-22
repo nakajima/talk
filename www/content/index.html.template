@@ -10,7 +10,7 @@
   </head>
   <body>
 {GLOBAL_NAV}
-    <main>
+    <main class="tour-page">
       <header>
         <h1><code>print(<span class="string">"hi, it’s talktalk"</span>)</code></h1>
         <div class="intro">

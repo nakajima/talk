@@ -1,0 +1,407 @@
+// talk-doc: generate an HTML doc site for a package.
+//
+//   talk-doc [package-root] [out-dir] [source-root] [display-name]
+//     [--core-source path] [--core-docs-base URL] [--only source-path ...]
+//
+// Defaults: root ".", out dir "docs", source root "<root>/src", and
+// the package manifest's name. The output directory must already exist.
+// Every .tlk file becomes a module summary page, and every public top-level
+// declaration receives a standalone reference page. A leading `// WIP:` marker
+// adds work-in-progress status to the module index and its generated pages. A
+// Core source catalog makes Core symbols linkable without rendering duplicate
+// pages. `--only` still indexes every module but writes pages only for the listed
+// source paths.
+
+use fs::{ Directory, File, Path }
+use os::{ OS }
+use package::autolink::{ SymbolLink }
+use package::render::{ ModuleLink, render_index_page_with_symbols, render_module_page, render_symbol_pages }
+use package::store::{ DocumentableCollection }
+use package::symbols::{ symbol_links }
+
+struct SourceModule {
+	let path: String
+	let name: String
+	let page: String
+	let collection: DocumentableCollection
+}
+
+func argument(index: Int, fallback: String) -> String {
+	let arguments = OS.args()
+	if arguments.count <= index { return fallback }
+	arguments[index].to_string()
+}
+
+func selected_path(paths: &[String], path: &String) -> Bool {
+	for selected in paths {
+		if selected == path { return true }
+	}
+	false
+}
+
+func collect_tlk_paths(directory: Directory, mut paths: [String]) -> Void {
+	for entry in directory.entries() {
+		match entry {
+			.directory(child) -> collect_tlk_paths(directory: child, paths: paths),
+			.file(file) -> {
+				let path = file.path.to_string()
+				if path.ends_with(needle: ".tlk") && path.ends_with(needle: ".test.tlk") == false {
+					paths.push(path)
+				}
+			},
+			.symlink(path) -> {
+				let value = path.to_string()
+				if value.ends_with(needle: ".tlk") && value.ends_with(needle: ".test.tlk") == false {
+					paths.push(value)
+				}
+			}
+		}
+	}
+}
+
+func collect_markdown_paths(directory: Directory, mut paths: [String]) -> Void {
+	for entry in directory.entries() {
+		match entry {
+			.directory(child) -> collect_markdown_paths(directory: child, paths: paths),
+			.file(file) -> {
+				let path = file.path.to_string()
+				if path.ends_with(needle: ".md") { paths.push(path) }
+			},
+			.symlink(path) -> {
+				let value = path.to_string()
+				if value.ends_with(needle: ".md") { paths.push(value) }
+			}
+		}
+	}
+}
+
+func path_before(_ lhs: &String, _ rhs: &String) -> Bool {
+	let left = lhs.utf8()
+	let right = rhs.utf8()
+	let count = if left.count() < right.count() {
+		left.count()
+	} else {
+		right.count()
+	}
+	let index = 0
+	loop index < count {
+		let left_byte = left.at(index: index)._toInt()
+		let right_byte = right.at(index: index)._toInt()
+		if left_byte < right_byte { return true }
+		if left_byte > right_byte { return false }
+		index = index + 1
+	}
+	left.count() < right.count()
+}
+
+func sort_paths(consume paths: [String]) -> [String] {
+	let i = 1
+	loop i < paths.count {
+		let j = i
+		loop j > 0 && path_before(paths[j], paths[j - 1]) {
+			paths.swap(i: j, j: j - 1)
+			j = j - 1
+		}
+		i = i + 1
+	}
+	paths
+}
+
+func slice_bytes(s: &String, start: Int) -> String {
+	let view = s.utf8()
+	let bytes: [Byte] = []
+	let i = start
+	loop i < view.count() {
+		bytes.push(view.at(index: i))
+		i = i + 1
+	}
+	String.from_bytes(bytes: bytes)
+}
+
+func strip_suffix(s: &String, suffix: String) -> String {
+	if s.ends_with(needle: suffix) == false { return s }
+	let view = s.utf8()
+	let bytes: [Byte] = []
+	let i = 0
+	loop i < view.count() - suffix.byte_count {
+		bytes.push(view.at(index: i))
+		i = i + 1
+	}
+	String.from_bytes(bytes: bytes)
+}
+
+func trim_start(s: &String) -> String {
+	let view = s.utf8()
+	let i = 0
+	loop i < view.count() {
+		let b = view.at(index: i)._toInt()
+		if b == 32 || b == 9 { i = i + 1; continue }
+		break
+	}
+	slice_bytes(s: s, start: i)
+}
+
+// "root/src/foo/bar.tlk" -> "foo.bar"; the page file is the same name
+// plus ".html". Each stage binds a NEW name: rebinding a local inside
+// an `if` branch currently leaks the old value.
+func module_name(path: String, source_root: String) -> String {
+	let without_root = if path.starts_with(needle: source_root) {
+		slice_bytes(s: path, start: source_root.byte_count)
+	} else {
+		slice_bytes(s: path, start: 0)
+	}
+	let without_slash = if without_root.starts_with(needle: "/") {
+		slice_bytes(s: without_root, start: 1)
+	} else {
+		slice_bytes(s: without_root, start: 0)
+	}
+	let stem = strip_suffix(s: without_slash, suffix: ".tlk")
+	let view = stem.utf8()
+	let dot = ".".utf8().at(index: 0)
+	let bytes: [Byte] = []
+	let i = 0
+	loop i < view.count() {
+		let b = view.at(index: i)
+		if b._toInt() == 47 {
+			bytes.push(dot)
+		} else {
+			bytes.push(b)
+		}
+		i = i + 1
+	}
+	String.from_bytes(bytes: bytes)
+}
+
+func read_source(path: String) -> String? {
+	match File.open(path: Path(path), mode: .r) {
+		.ok(file) -> {
+			let result = match file.read() {
+				.ok(text) -> .some(text),
+				.error(_) -> .none
+			}
+			file.close()
+			result
+		},
+		.error(_) -> .none
+	}
+}
+
+func builtin_name(path: &String) -> String {
+	let filename = ""
+	for component in path.split(character: '/').into_iter() {
+		filename = component.to_string()
+	}
+	strip_suffix(s: filename, suffix: ".md")
+}
+
+func builtin_module(core_source_root: String) -> SourceModule {
+	let documentation_root = core_source_root + "/builtins"
+	let paths: [String] = []
+	collect_markdown_paths(directory: Directory(path: Path(documentation_root)), paths: paths)
+	let collection = DocumentableCollection()
+	for path in sort_paths(paths: paths) {
+		if let .some(markdown) = read_source(path: path) {
+			let documentation: [String] = []
+			for line in markdown.lines() { documentation.push(line.to_string()) }
+			collection.add_builtin(name: builtin_name(path: path), documentation: documentation)
+		}
+	}
+	SourceModule(
+		path: documentation_root,
+		name: "Builtins",
+		page: "Builtins.html",
+		collection: collection
+	)
+}
+
+// The package name from the manifest's `name: "..."` line, or
+// "package" when the manifest cannot be read.
+func package_name(root: String) -> String {
+	if let .some(manifest) = read_source(path: root + "/package.tlk") {
+		for line in manifest.split(character: '\n').into_iter() {
+			let text = line.to_string()
+			let trimmed = trim_start(s: text)
+			if trimmed.starts_with(needle: "name: \"") {
+				let rest = slice_bytes(s: trimmed, start: 7)
+				for piece in rest.split(character: '"').into_iter() {
+					return piece.to_string()
+				}
+			}
+		}
+	}
+	"package"
+}
+
+func append_external_symbols(source_root: String, page_base: String, mut symbols: [SymbolLink]) -> Void {
+	let paths: [String] = []
+	collect_tlk_paths(directory: Directory(path: Path(source_root)), paths: paths)
+	for path in sort_paths(paths: paths) {
+		if let .some(source) = read_source(path: path) {
+			let collection = DocumentableCollection()
+			collection.collect_public(source: source)
+			if collection.items.is_empty() { continue }
+			let name = module_name(path: path, source_root: source_root)
+			for symbol in symbol_links(module: name, page: page_base + name + ".html", collection: collection) {
+				symbols.push(symbol.clone())
+			}
+		}
+	}
+	let builtins = builtin_module(core_source_root: source_root)
+	for symbol in symbol_links(module: builtins.name, page: page_base + builtins.page, collection: builtins.collection) {
+		symbols.push(symbol.clone())
+	}
+}
+
+func write_page(dir: String, file: String, contents: String) -> Bool {
+	let path = dir + "/" + file
+	match File.open(path: Path(path), mode: .w) {
+		.ok(opened) -> {
+			let result = match opened.write(contents) {
+				.ok(_) -> true,
+				.error(_) -> false
+			}
+			opened.close()
+			result
+		},
+		.error(_) -> false
+	}
+}
+
+// Generates deterministic package, module-summary, and symbol-reference pages.
+//
+// Test files are excluded and only public declarations are rendered. `--only`
+// limits page writes but still indexes every module for stable navigation. When
+// configured, Core declarations join symbol resolution but link to the supplied
+// Core documentation base instead of rendering into this package. The output
+// directory must already exist; unreadable sources are skipped.
+pub func main() '[io, alloc, panic] -> () {
+	#unsafe {
+		let root = strip_suffix(s: argument(index: 1, fallback: "."), suffix: "/")
+		let out_dir = strip_suffix(s: argument(index: 2, fallback: "docs"), suffix: "/")
+		let source_root = strip_suffix(
+			s: argument(index: 3, fallback: root + "/src"),
+			suffix: "/"
+		)
+		let display_name = argument(index: 4, fallback: package_name(root: root))
+		let core_source_root = ""
+		let core_docs_base = "/docs/core/"
+		let restricted = false
+		let selected: [String] = []
+		let arguments = OS.args()
+		let argument_index = 5
+		loop argument_index < arguments.count {
+			let value = arguments[argument_index].to_string()
+			if value == "--core-source" && argument_index + 1 < arguments.count {
+				core_source_root = strip_suffix(s: arguments[argument_index + 1].to_string(), suffix: "/")
+				argument_index = argument_index + 2
+				continue
+			}
+			if value == "--core-docs-base" && argument_index + 1 < arguments.count {
+				core_docs_base = strip_suffix(s: arguments[argument_index + 1].to_string(), suffix: "/") + "/"
+				argument_index = argument_index + 2
+				continue
+			}
+			if value == "--only" {
+				restricted = true
+				argument_index = argument_index + 1
+				continue
+			}
+			if restricted { selected.push(value) }
+			argument_index = argument_index + 1
+		}
+
+		let builtin_source_root = if core_source_root.byte_count > 0 {
+			core_source_root
+		} else if display_name == "Core" {
+			source_root
+		} else {
+			""
+		}
+
+		let paths: [String] = []
+		collect_tlk_paths(directory: Directory(path: Path(source_root)), paths: paths)
+		let sorted = sort_paths(paths: paths)
+
+		let modules: [SourceModule] = []
+		for path in sorted {
+			if let .some(source) = read_source(path: path) {
+				let collection = DocumentableCollection()
+				collection.collect_public(source: source)
+				if collection.items.is_empty() { continue }
+				let name = module_name(path: path, source_root: source_root)
+				modules.push(SourceModule(
+					path: path,
+					name: name,
+					page: name + ".html",
+					collection: collection
+				))
+			}
+		}
+
+		if builtin_source_root == source_root {
+			modules.push(builtin_module(core_source_root: builtin_source_root))
+		}
+
+		let wrote_all = true
+		let links: [ModuleLink] = []
+		let symbols: [SymbolLink] = []
+		for module in modules {
+			let module_documentation: [String] = []
+			for line in module.collection.module_documentation {
+				module_documentation.push(line.to_string())
+			}
+			let module_wip: String? = match module.collection.module_wip {
+				.some(value) -> .some(value.to_string()),
+				.none -> .none
+			}
+			links.push(ModuleLink(
+				name: module.name,
+				file: module.page,
+				declarations: module.collection.items.count,
+				documentation: module_documentation,
+				wip: module_wip
+			))
+			for symbol in symbol_links(module: module.name, page: module.page, collection: module.collection) {
+				symbols.push(symbol.clone())
+			}
+		}
+		if builtin_source_root.byte_count > 0 && builtin_source_root != source_root {
+			append_external_symbols(source_root: builtin_source_root, page_base: core_docs_base, symbols: symbols)
+		}
+		for module in modules {
+			if restricted && selected_path(paths: selected, path: module.path) == false { continue }
+			let page = render_module_page(
+				package: display_name,
+				module: module.name,
+				collection: module.collection,
+				modules: links,
+				symbols: symbols
+			)
+			if write_page(dir: out_dir, file: module.page, contents: page) == false {
+				wrote_all = false
+			}
+			for symbol in render_symbol_pages(
+				package: display_name,
+				module: module.name,
+				module_page: module.page,
+				collection: module.collection,
+				modules: links,
+				symbols: symbols
+			) {
+				if write_page(dir: out_dir, file: symbol.file, contents: symbol.contents) == false {
+					wrote_all = false
+				}
+			}
+		}
+
+		let index = render_index_page_with_symbols(package: display_name, modules: links, symbols: symbols)
+		if write_page(dir: out_dir, file: "index.html", contents: index) == false {
+			wrote_all = false
+		}
+
+		if wrote_all == false {
+			print("error: could not write every page; create the output directory `" + out_dir + "` first")
+			'panic(message: "talk-doc: output directory is not writable")
+		}
+	}
+}

@@ -35,7 +35,6 @@
   min-width: 0;
   min-height: 34rem;
   margin: 3rem 0 0;
-  border: 1px solid var(--color-tin-1);
 }
 
 .playground-panel-title {

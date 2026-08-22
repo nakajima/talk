@@ -1,0 +1,27 @@
+use fs::{ Path }
+use package::documentable::{ DocumentableID }
+
+// A zero-based index into the generator's module collection.
+pub typealias ModuleID = Int
+
+// A preliminary module-index record not yet used by the current CLI pipeline.
+//
+// When populated, declaration arrays contain typed IDs into one documentable
+// collection and `submodules` indexes one package module table. IDs are meaningful
+// only within those owning collections.
+pub struct Module {
+	let path: Path
+	let funcs: [DocumentableID]
+	let nominals: [DocumentableID]
+	let globals: [DocumentableID]
+	let submodules: [ModuleID]
+
+	// Creates an empty module index for `path`.
+	pub init(path: Path) {
+		self.path = path
+		self.funcs = []
+		self.nominals = []
+		self.globals = []
+		self.submodules = []
+	}
+}

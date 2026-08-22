@@ -12,7 +12,7 @@
 {GLOBAL_NAV}
     <main class="content-page">
 {PAGE_HEADER}
-      <article class="page-content">
+      <article class="prose page-content">
         {CONTENT_GOES_HERE}
       </article>
       <script type="module" src="/page.js"></script>

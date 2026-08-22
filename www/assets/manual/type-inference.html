@@ -1,0 +1,496 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - A. Type Inference Reference</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787386852" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Guide</a>
+        <a href="/docs/">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="site-page manual-page">
+      <header class="site-page-header">
+        <div class="site-page-heading">
+          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/type-inference" aria-current="page">A. Type Inference Reference</a></nav>
+          <div class="page-header-title-row">
+            <h1>A. Type Inference Reference</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="site-page-layout manual-layout">
+        <aside class="site-page-sidebar manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="site-nav-label manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+<li><a href="/manual/type-inference" aria-current="page">A. Type Inference Reference</a><ol class="manual-outline-sections"><li><a href="#unknowns-and-constraints">Unknowns and constraints</a></li>
+<li><a href="#inference-and-checking">Inference and checking</a></li>
+<li><a href="#function-bodies">Function bodies</a></li>
+<li><a href="#binding-groups-and-recursion">Binding groups and recursion</a></li>
+<li><a href="#generalization">Generalization</a></li>
+<li><a href="#instantiation-and-specialization">Instantiation and specialization</a></li>
+<li><a href="#protocol-constraints">Protocol constraints</a></li>
+<li><a href="#member-inference">Member inference</a></li>
+<li><a href="#record-rows">Record rows</a></li>
+<li><a href="#effect-rows">Effect rows</a></li>
+<li><a href="#patterns-and-gadts">Patterns and GADTs</a></li>
+<li><a href="#static-value-inference">Static value inference</a></li>
+<li><a href="#literals-and-defaulting">Literals and defaulting</a></li>
+<li><a href="#when-to-annotate">When to annotate</a></li>
+<li><a href="#inspecting-inferred-types">Inspecting inferred types</a></li>
+<li><a href="#further-reading">Further reading</a></li></ol></li>
+<li><a href="/manual/mir-reference">B. MIR Reference</a></li>
+<li><a href="/manual/bytecode-reference">C. Bytecode Reference</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="site-page-content manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/unsafe-and-interop">&larr; 15. Unsafe Code and Interop</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/mir-reference">B. MIR Reference &rarr;</a>
+          </nav>
+          <article class="prose page-content">
+            <p>TalkTalk uses local, constraint-based type inference. The checker assigns a type to every expression, infers polymorphic signatures where it can, selects protocol witnesses, records effect rows, and publishes the concrete substitutions the compiler will specialize. This appendix describes where information comes from, what becomes generic, and when an annotation is required.</p>
+<h2><a href="#unknowns-and-constraints" aria-hidden="true" class="anchor" id="unknowns-and-constraints"></a>Unknowns and constraints</h2>
+<p>When the checker encounters an expression whose type is not known, it creates a type variable. It does not immediately guess a concrete type. Instead it records constraints:</p>
+<ul>
+<li>two types, record rows, or effect rows must agree;</li>
+<li>a type must conform to a protocol;</li>
+<li>a receiver must have a named member of a particular type;</li>
+<li>one value must adapt to the type expected at its use;</li>
+<li>a static generic value must satisfy an equality or comparison.</li>
+</ul>
+<p>The solver repeatedly uses new information until no constraint can make further progress. Information therefore flows in both directions and across source order:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> values <span class="operator">=</span> []
+<span class="variable">values</span>.<span class="property">push</span>(<span class="number">42</span>)
+
+<span class="variable">values</span>.<span class="property">count</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='4' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let values = []
+values.push(42)
+
+values.count</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>The empty array begins as <code>[Element]</code> for an unknown <code>Element</code>. <code>push(42)</code> later constrains <code>Element</code> to <code>Int</code>; the final expression returns the array's count.</p>
+<p>An inconsistent constraint produces a diagnostic at the operation that introduced it. An unsolved but potentially reusable constraint may instead become part of an inferred generic signature.</p>
+<h2><a href="#inference-and-checking" aria-hidden="true" class="anchor" id="inference-and-checking"></a>Inference and checking</h2>
+<p>Expression typing has two modes.</p>
+<p>In <em>inference</em> mode, the expression produces a type. The literal <code>42</code> can produce <code>Int</code>, and a function literal produces a function type from its parameters, body, and effects.</p>
+<p>In <em>checking</em> mode, the context supplies an expected type and the checker pushes it inward. Expected types explain leading-dot enum cases, closure parameters, empty collections, existential packing, and GADT match results:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> count: <span class="type">Int?</span> <span class="operator">=</span> .<span class="property">some</span>(<span class="number">3</span>)
+<span class="keyword">let</span> transform: (Int) <span class="operator">-&gt;</span> <span class="type">Int</span> <span class="operator">=</span> <span class="keyword">func</span>(<span class="parameter">value</span>: <span class="type">Int</span>) <span class="operator">-&gt;</span> Int { <span class="variable">value</span> <span class="operator">+</span> <span class="number">1</span> }
+
+(<span class="variable">transform</span>(<span class="variable">count</span><span class="operator">!</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='4' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let count: Int? = .some(3)
+let transform: (Int) -&gt; Int = func(value: Int) -&gt; Int { value + 1 }
+
+(transform(count!))</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p><code>.some</code> is resolved as <code>Optional&lt;Int&gt;.some</code> from the annotation. The function type tells the closure that <code>$0</code> is an <code>Int</code>.</p>
+<p>If an expression first infers a type and its context expects another, the adaptation judgment decides whether ordinary equality, borrowing, value sharing, cloning, conversion, or existential packing is permitted. The compiler records that decision once; later phases do not guess again.</p>
+<h2><a href="#function-bodies" aria-hidden="true" class="anchor" id="function-bodies"></a>Function bodies</h2>
+<p>An unannotated function gets unknown parameter and result types. Operations in the body constrain them:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">add_one</span>(<span class="parameter">value</span>) { <span class="variable">value</span> <span class="operator">+</span> <span class="number">1</span> }
+
+<span class="variable">add_one</span>(<span class="number">41</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func add_one(value) { value + 1 }
+
+add_one(41)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>The integer operation constrains <code>value</code> and the result. A final expression constrains the return type. An explicit <code>return</code> contributes the same constraint, and all reachable returns must agree.</p>
+<p>A written annotation is a requirement, not a hint:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">size</span>(<span class="parameter">_</span> <span class="parameter">text</span>: <span class="type">String</span>) <span class="operator">-&gt;</span> <span class="type">Int</span> {
+	<span class="variable">text</span>.<span class="property">count</span>()
+}
+
+<span class="variable">size</span>(<span class="string">"hello"</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func size(_ text: String) -&gt; Int {
+	text.count()
+}
+
+size(&quot;hello&quot;)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>The body is checked against <code>String</code> and <code>Int</code>. Public declarations may infer types, but annotations make an API easier to understand and keep later implementation edits from silently changing it.</p>
+<h2><a href="#binding-groups-and-recursion" aria-hidden="true" class="anchor" id="binding-groups-and-recursion"></a>Binding groups and recursion</h2>
+<p>Top-level functions and values are ordered by their references. Mutually dependent declarations form a strongly connected binding group and are checked together.</p>
+<p>Every declaration in a group first receives a monomorphic skeleton. Recursive calls use that skeleton while the body is being checked, so recursion cannot call itself at unrelated types. After the whole group solves, eligible unknowns may be generalized.</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">sum_to</span>(<span class="parameter">n</span>) {
+	<span class="keyword">if</span> <span class="variable">n</span> <span class="operator">&lt;=</span> <span class="number">0</span> { <span class="keyword">return</span> <span class="number">0</span> }
+	<span class="variable">n</span> <span class="operator">+</span> <span class="variable">sum_to</span>(<span class="variable">n</span> <span class="operator">-</span> <span class="number">1</span>)
+}
+
+<span class="variable">sum_to</span>(<span class="number">255</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='6' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func sum_to(n) {
+	if n &lt;= 0 { return 0 }
+	n + sum_to(n - 1)
+}
+
+sum_to(255)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>The recursive uses consistently constrain <code>n</code> and the result to <code>Int</code>. This example uses addition so ordinary inputs such as <code>255</code> stay within TalkTalk's machine-sized <code>Int</code>; an unchecked factorial would overflow quickly.</p>
+<p>A non-recursive inferred function can be used at several types when its remaining constraints support that polymorphism. The compiler instantiates its finished signature independently at each use.</p>
+<h2><a href="#generalization" aria-hidden="true" class="anchor" id="generalization"></a>Generalization</h2>
+<p>A polymorphic signature is conceptually:</p>
+<pre><code class="language-text">forall parameters. predicates =&gt; type
+</code></pre>
+<p><code>func identity(value) { value }</code> leaves one type unknown but consistently shared between parameter and result, so it generalizes to the equivalent of <code>&lt;T&gt;(T) -&gt; T</code>.</p>
+<p>Generalization occurs for eligible top-level binding groups. It is restricted to syntactic values such as functions and constants. An evaluated expression that can create or observe mutable state remains monomorphic. If one binder in a recursive group fails this value restriction, the group remains monomorphic.</p>
+<p>Local <code>let</code> bindings inside function bodies do not generalize. Each local has one type for that invocation. Write a generic function declaration or an explicitly generic closure-bearing API when local polymorphism is required.</p>
+<p>Written generics are rigid while their body is checked:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">pair</span><span class="operator">&lt;</span>T<span class="operator">&gt;</span>(<span class="parameter">_</span> <span class="parameter">value</span>: <span class="type">T</span>) <span class="operator">-&gt;</span> (<span class="type">T</span>, <span class="type">T</span>) {
+	(<span class="variable">value</span>, <span class="variable">value</span>)
+}
+
+<span class="variable">pair</span>(<span class="number">42</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func pair&lt;T&gt;(_ value: T) -&gt; (T, T) {
+	(value, value)
+}
+
+pair(42)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>The body must work for every <code>T</code>; it cannot specialize <code>T</code> to the first concrete operation that happens to use it.</p>
+<h2><a href="#instantiation-and-specialization" aria-hidden="true" class="anchor" id="instantiation-and-specialization"></a>Instantiation and specialization</h2>
+<p>Using a polymorphic declaration replaces each quantified parameter with a fresh unknown and re-emits its predicates. Solving determines a substitution for that use:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">identity</span>(<span class="parameter">value</span>) { <span class="variable">value</span> }
+
+<span class="keyword">let</span> number <span class="operator">=</span> <span class="variable">identity</span>(<span class="number">42</span>)
+<span class="keyword">let</span> text <span class="operator">=</span> <span class="variable">identity</span>(<span class="string">"hello"</span>)
+
+(<span class="variable">number</span>, <span class="variable">text</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='6' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func identity(value) { value }
+
+let number = identity(42)
+let text = identity(&quot;hello&quot;)
+
+(number, text)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>The compiler records <code>T = Int</code> at the first call and <code>T = String</code> at the second. Lowering creates concrete specialized implementations. Generic types and protocol evidence do not require runtime type tags merely because source inference omitted annotations.</p>
+<p>Explicit generic arguments can pin an otherwise inferred substitution when needed.</p>
+<h2><a href="#protocol-constraints" aria-hidden="true" class="anchor" id="protocol-constraints"></a>Protocol constraints</h2>
+<p>A generic operation can leave a protocol obligation rather than one concrete type. In this function, <code>&lt;</code> requires <code>Comparable&lt;T&gt;</code>:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">smaller</span><span class="operator">&lt;</span>T: Comparable<span class="operator">&lt;</span>T<span class="operator">&gt;&gt;</span>(<span class="parameter">_</span> <span class="parameter">a</span>: <span class="type">T</span>, <span class="parameter">_</span> <span class="parameter">b</span>: <span class="type">T</span>) <span class="operator">-&gt;</span> <span class="type">T</span> {
+	<span class="keyword">if</span> <span class="variable">a</span> <span class="operator">&lt;</span> <span class="variable">b</span> {
+		<span class="variable">a</span>
+	} <span class="keyword">else</span> {
+		<span class="variable">b</span>
+	}
+}
+
+<span class="variable">smaller</span>(<span class="number">3</span>, <span class="number">7</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='9' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func smaller&lt;T: Comparable&lt;T&gt;&gt;(_ a: T, _ b: T) -&gt; T {
+	if a &lt; b {
+		a
+	} else {
+		b
+	}
+}
+
+smaller(3, 7)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Declared bounds and inferred obligations share one predicate system. At each call, the solver chooses a conformance and records the witness used by specialization.</p>
+<p>Associated types are projections selected by a conformance. Equality constraints such as <code>I.Element == Int</code> may be declared in <code>where</code>, or an associated equality may be retained when a function body proves it is part of the inferred API. Ordinary undeclared same-type requirements are not silently added to a written generic signature.</p>
+<p>A generic parameter mentioned only in constraints but not determined by parameters, result, <code>Self</code>, or a connecting equality is ambiguous and rejected.</p>
+<h2><a href="#member-inference" aria-hidden="true" class="anchor" id="member-inference"></a>Member inference</h2>
+<p><code>receiver.member</code> creates a member constraint. If the receiver type is known, lookup resolves a struct field or method, enum member, protocol requirement, conformance witness, or record field.</p>
+<p>If the receiver is still unknown, the constraint can ride an inferred signature:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">func</span> <span class="function">run</span>(<span class="parameter">value</span>) { <span class="variable">value</span>.<span class="property">go</span>() }</pre>
+        </div>
+<p>Conceptually, <code>run</code> says that its parameter has a <code>go</code> member with the inferred callable type. Different call sites may satisfy that requirement with unrelated nominal methods or with a record field containing a function. Each specialization resolves the member statically.</p>
+<p>When several protocol requirements provide the same label and none is preferred by the types, lookup is ambiguous. Use protocol-qualified syntax to select the intended requirement.</p>
+<h2><a href="#record-rows" aria-hidden="true" class="anchor" id="record-rows"></a>Record rows</h2>
+<p>A record type is a sorted set of labeled field types and an optional tail.</p>
+<p>A <em>closed</em> row has exactly its listed fields:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> point: { <span class="parameter">x</span>: <span class="type">Int</span>, <span class="parameter">y</span>: <span class="type">Int</span> } <span class="operator">=</span> { <span class="parameter">y</span>: <span class="number">2</span>, <span class="parameter">x</span>: <span class="number">1</span> }</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='1' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let point: { x: Int, y: Int } = { y: 2, x: 1 }</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>An <em>open</em> row has required fields plus an unknown remainder. Field access on a parameter naturally infers one:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">func</span> <span class="function">name</span>(<span class="parameter">value</span>) { <span class="variable">value</span>.<span class="property">name</span> }
+
+<span class="variable">name</span>({ <span class="parameter">id</span>: <span class="number">1</span>, <span class="parameter">name</span>: <span class="string">"Ada"</span> })
+<span class="variable">name</span>({ <span class="parameter">active</span>: <span class="keyword">true</span>, <span class="parameter">name</span>: <span class="string">"Grace"</span> })</pre>
+        </div>
+<p>The inferred parameter is approximately <code>{ name: T, ..row }</code>. Unifying rows matches fields by label, unifies matching field types, and sends fields found on only one side into the other side's tail. A closed row has no tail and therefore cannot absorb an extra or missing field when exact equality is required.</p>
+<p>Row parameters are generalized and instantiated like type parameters. The recorded call-site row is intended to become concrete before MIR layout, so every runtime field offset is static. The current executable backends do not yet cover every inferred open-row value, including the generic <code>name</code> example above. Closed records and patterns over concrete scrutinee shapes are supported; use <code>..</code> to ignore known extra fields.</p>
+<h2><a href="#effect-rows" aria-hidden="true" class="anchor" id="effect-rows"></a>Effect rows</h2>
+<p>Every function type carries the effects that invoking it may perform. A function without a written effect annotation begins with an open row, and performed operations or effectful calls add entries to it:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">report</span>(<span class="parameter">message</span>) { <span class="variable">print</span>(<span class="variable">message</span>) }
+
+<span class="variable">report</span>(<span class="string">"done"</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func report(message) { print(message) }
+
+report(&quot;done&quot;)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p><code>report</code> infers the host effects required by <code>print</code>. A higher-order function's row can retain an open tail standing for effects of its callback. This is effect polymorphism: a pure callback does not acquire effects merely because another callback could have them.</p>
+<p>A handler removes its handled occurrence from the surrounding row. Function values resolve handlers at invocation, so effect widening does not capture runtime authority.</p>
+<p>Written closed rows are upper bounds checked at the declaration:</p>
+<ul>
+<li><code>'[]</code> permits no effects;</li>
+<li><code>'io</code> permits one closed effect;</li>
+<li><code>'[io, panic]</code> permits that set;</li>
+<li><code>'[io, ..]</code> requires <code>io</code> and leaves a tail open.</li>
+</ul>
+<p>Generic effect labels include their type arguments in the row. Separate instantiations remain distinct even though one label-scoped handler can handle them generically.</p>
+<h2><a href="#patterns-and-gadts" aria-hidden="true" class="anchor" id="patterns-and-gadts"></a>Patterns and GADTs</h2>
+<p>A pattern constrains its scrutinee and introduces types for bindings. Enum payload types come from the selected constructor. All alternatives in an or-pattern must introduce compatible bindings.</p>
+<p>A GADT case can refine the enum's result type inside one match arm. The checker treats those refinements as local givens: they can prove constraints in that arm but cannot unsafely rewrite assumptions outside it.</p>
+<p>When all arms infer one common result, the match can infer it. When the only possible result type changes according to distinct GADT refinements, there is no principal type to guess; annotate the function return or the binding receiving the match.</p>
+<p>After solving, exhaustiveness checking removes impossible GADT cases and checks the remaining constructor space. It also warns when an earlier arm makes a later arm unreachable.</p>
+<h2><a href="#static-value-inference" aria-hidden="true" class="anchor" id="static-value-inference"></a>Static value inference</h2>
+<p>A <code>static</code> generic parameter is a compile-time value that participates in type identity:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">length</span><span class="operator">&lt;</span><span class="modifier">static</span> N: Int<span class="operator">&gt;</span>(<span class="parameter">_</span> <span class="parameter">values</span>: [<span class="type">Int</span>; <span class="type">N</span>]) <span class="operator">-&gt;</span> <span class="type">Int</span> {
+	<span class="type">N</span>
+}
+
+<span class="variable">length</span>([<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>])</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func length&lt;static N: Int&gt;(_ values: [Int; N]) -&gt; Int {
+	N
+}
+
+length([1, 2, 3])</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>The inline array constrains <code>N</code> to <code>3</code>. Static equalities and comparisons are solved as predicates. The accepted expression language is intentionally limited so static normalization and specialization remain predictable.</p>
+<h2><a href="#literals-and-defaulting" aria-hidden="true" class="anchor" id="literals-and-defaulting"></a>Literals and defaulting</h2>
+<p>A contextual type can determine a literal through its expected operation or collection element. Without useful context, built-in integer, floating-point, Boolean, character, and string literals use their ordinary core types.</p>
+<p>Defaulting happens only after ordinary solving has stopped. It resolves safe conventional leftovers, such as a borrow permission that was never forced exclusive. It does not invent a nominal receiver when several declarations could satisfy a member, choose an arbitrary protocol conformance, or guess a GADT result with no principal type.</p>
+<h2><a href="#when-to-annotate" aria-hidden="true" class="anchor" id="when-to-annotate"></a>When to annotate</h2>
+<p>Add an annotation when:</p>
+<ul>
+<li>it is part of a public API contract;</li>
+<li>an empty collection or leading-dot case has no useful context;</li>
+<li>overloaded members or conformances remain ambiguous;</li>
+<li>a recursive group needs a signature stronger than monomorphic recursion can infer;</li>
+<li>a GADT match has no principal result type;</li>
+<li>an existential package must be selected explicitly;</li>
+<li>a closed effect boundary should reject newly introduced effects; or</li>
+<li>the inferred type is correct but obscures intent.</li>
+</ul>
+<p>Do not add annotations merely to help downstream code generation. Once type checking succeeds, the compiler's recorded types, substitutions, witnesses, and adaptations are the sole semantic input to lowering.</p>
+<h2><a href="#inspecting-inferred-types" aria-hidden="true" class="anchor" id="inspecting-inferred-types"></a>Inspecting inferred types</h2>
+<p>Use editor hover or the command line:</p>
+<pre><code class="language-sh">talk hover source.tlk --line 10 --column 5
+</code></pre>
+<p>The REPL's <code>/type</code> command is useful for isolated expressions. Rendered inferred signatures may expose generated parameter names or internal member predicates when no source syntax expresses the full qualified type; those names describe the solved scheme rather than a required annotation spelling.</p>
+<h2><a href="#further-reading" aria-hidden="true" class="anchor" id="further-reading"></a>Further reading</h2>
+<p>The implementation overview in <code>talk-front/src/types/README.md</code> maps this model to compiler modules. The main research lineages are Hindley-Milner generalization, OutsideIn(X) constraints and implications, qualified types and type classes, row-polymorphic records, Koka-style effect rows, and bidirectional GADT checking. Papers cited by that implementation document are mirrored under <code>papers/</code>.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/unsafe-and-interop">&larr; 15. Unsafe Code and Interop</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/mir-reference">B. MIR Reference &rarr;</a>
+          </nav>
+        </div>
+        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787386852"></script>
+    </main>
+  </body>
+</html>

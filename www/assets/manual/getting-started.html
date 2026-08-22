@@ -6,23 +6,24 @@
     <title>talktalk - 0. Getting Started</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787039517" rel="stylesheet">
+    <link href="/style.css?t=1787386812" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
       <a class="global-nav-brand" href="/">talktalk</a>
       <div class="global-nav-links">
         <a href="/">Language</a>
-        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/manual/" aria-current="page">Guide</a>
+        <a href="/docs/">Docs</a>
         <a href="/playground">Playground</a>
         <a href="/qa">Q/A</a>
         <a href="/philosophy">Philosophy</a>
       </div>
     </nav>
-    <main class="content-page manual-page">
-      <header class="page-header">
-        <div class="page-header-content">
-          <code class="page-kicker">talktalk / docs</code>
+    <main class="site-page manual-page">
+      <header class="site-page-header">
+        <div class="site-page-heading">
+          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/getting-started" aria-current="page">0. Getting Started</a></nav>
           <div class="page-header-title-row">
             <h1>0. Getting Started</h1>
             
@@ -30,10 +31,10 @@
         </div>
       </header>
 
-      <div class="manual-layout">
-        <aside class="manual-outline">
+      <div class="site-page-layout manual-layout">
+        <aside class="site-page-sidebar manual-outline">
           <nav aria-label="Manual table of contents">
-            <span class="manual-outline-title">Contents</span>
+            <span class="site-nav-label manual-outline-title">Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started" aria-current="page">0. Getting Started</a><ol class="manual-outline-sections"><li><a href="#build-the-compiler">Build the compiler</a></li>
@@ -56,16 +57,19 @@
 <li><a href="/manual/standard-library">13. The Standard Library</a></li>
 <li><a href="/manual/toolchain">14. The Toolchain</a></li>
 <li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+<li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
+<li><a href="/manual/mir-reference">B. MIR Reference</a></li>
+<li><a href="/manual/bytecode-reference">C. Bytecode Reference</a></li>
             </ol>
           </nav>
         </aside>
-        <div class="manual-document">
+        <div class="site-page-content manual-document">
           <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
             <a class="manual-previous" href="/manual/">&larr; The TalkTalk Manual</a>
             <a class="manual-contents" href="/manual/">All chapters</a>
             <a class="manual-next" href="/manual/syntax">1. Syntax &rarr;</a>
           </nav>
-          <article class="page-content">
+          <article class="prose page-content">
             <p>This chapter gets a TalkTalk program running. We will build the compiler, run one file, and then create a small project. For now, building from the repository is the dependable way to install it.</p>
 <h2><a href="#build-the-compiler" aria-hidden="true" class="anchor" id="build-the-compiler"></a>Build the compiler</h2>
 <p>TalkTalk's compiler is written in Rust and currently uses a pinned nightly Rust toolchain. From the repository root:</p>
@@ -161,9 +165,9 @@ talk completions fish
             <a class="manual-next" href="/manual/syntax">1. Syntax &rarr;</a>
           </nav>
         </div>
-        <div class="manual-rail" aria-hidden="true"></div>
+        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
       </div>
-      <script type="module" src="/page.js?t=1787039517"></script>
+      <script type="module" src="/page.js?t=1787386812"></script>
     </main>
   </body>
 </html>

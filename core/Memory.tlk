@@ -1,31 +1,65 @@
 // no-core
 use package::Ownership::{ Clone, Owner, Send }
 
+// Describes a memory-management event exposed to the allocation effect.
 pub enum Allocation {
+	// Requests storage for the given number of bytes.
 	case allocate(Int)
+	// Releases an allocation owned by the caller.
 	case free
+	// Adds an owner to a reference-counted allocation.
 	case retain
+	// Removes an owner and frees the allocation when its count reaches zero.
 	case release
 }
 
+// Reports allocation and reference-count transitions to the ambient memory
+// handler.
+//
+// The runtime operation still performs the actual memory action; this effect is
+// a capability and observation boundary rather than a user-space allocator API.
 pub effect 'alloc(allocation: Allocation) -> Void
 
+// Allocates zero-filled raw storage sized for `count` values of `Element`.
+//
+// The returned pointer carries no length or initialization state. Negative
+// counts, overflow, alignment, and every later access remain trusted-runtime
+// concerns.
 pub func _alloc<Element>(count: Int) 'alloc -> RawPtr {
 	#_ir(count) { %? = alloc Element $0 }
 }
 
+// Moves `value` into the `Element` slot at `ptr` without dropping prior
+// contents.
+//
+// The slot must be uninitialized or its previous value must already have been
+// moved out. `ptr` must be live, aligned, and valid for the complete layout.
 pub func _store<Element>(ptr: RawPtr, consume value: Element) 'alloc -> Void {
 	#_ir(value, ptr) { store Element $0 $1 }
 }
 
+// Loads and re-owns the `Element` bits stored at `ptr`.
+//
+// Reading an uninitialized, moved-out, misaligned, or differently typed slot is
+// invalid. Callers must also ensure the slot is not later destroyed as a second
+// owner.
 pub func _load<Element>(ptr: RawPtr) 'alloc -> Element {
 	#_ir(ptr) { %? = load Element $0 }
 }
 
+// Copies `length` raw bytes with memmove-style overlap semantics.
+//
+// Both ranges must lie within live allocations. This is a byte copy: it does
+// not retain embedded owners or establish typed initialization by itself.
 pub func _copy(from: RawPtr, to: RawPtr, length: Int) 'alloc -> Void {
 	#_ir(from, to, length) { copy Byte $0 $1 $2 }
 }
 
+// Exchanges two initialized `Element` slots without retaining or dropping
+// either.
+//
+// Both pointers must be live, aligned, and valid for the same complete element
+// layout.
 pub func _swap<Element>(a: RawPtr, b: RawPtr) 'alloc -> Void {
 	#_ir(a, b) { swap Element $0 $1 }
 }
@@ -34,6 +68,7 @@ func _take_owned<Element>(consume value: Element) -> Element {
 	value
 }
 
+// Replaces the current value and returns the previous value.
 pub func replace<Element>(mut place: Element, consume replacement: Element) -> Element {
 	let previous: Element = #_ir(place) { %? = take Element $0 }
 	place = _take_owned(value: consume replacement)
@@ -54,10 +89,16 @@ pub func _retain<Element>(value: &Element) 'alloc -> Void {
 	#_ir(value) { retain Element $0 }
 }
 
+// Produces a pointer `offset` bytes from `ptr` while preserving allocation
+// identity.
+//
+// The result may be out of bounds; it must not be dereferenced unless the
+// caller has separately proved that the target range lies in the allocation.
 pub func _ptr_add(ptr: RawPtr, offset: Int) 'alloc -> RawPtr {
 	#_ir(ptr, offset) { %? = add RawPtr $0 $1 }
 }
 
+// Returns whether both pointers refer to the same managed allocation.
 pub func _same_allocation(lhs: RawPtr, rhs: RawPtr) -> Bool {
 	#_ir(lhs, rhs) { %? = cmp RawPtr $0 == $1 }
 }
@@ -68,14 +109,24 @@ pub func _is_unique(ptr: RawPtr) 'alloc -> Bool {
 	#_ir(ptr) { %? = is_unique $0 }
 }
 
+// A reference-counted raw allocation interpreted as contiguous `Element` slots.
+//
+// The type stores capacity nowhere: callers own all bounds and initialization
+// invariants. `get` requires an initialized slot; `set` may initialize reserved
+// storage. Prefer `Array` unless implementing a core container.
 pub struct Storage<Element> {
+	// The base address of the storage allocation.
 	pub let base: RawPtr
 
+	// Borrows the initialized element at `index`; bounds are the caller's
+	// responsibility.
 	pub func get(_ index: Int) -> &Element {
 		let ptr: RawPtr = #_ir(self.base, index) { %? = gep Element $0 $1 }
 		_load<Element>(ptr: ptr)
 	}
 
+	// Stores `value` at `index`; the slot's initialization state is the
+	// caller's responsibility.
 	pub func set(index: Int, consume value: Element) -> Void {
 		let ptr: RawPtr = #_ir(self.base, index) { %? = gep Element $0 $1 }
 		_store<Element>(ptr: ptr, value: value)
@@ -93,18 +144,27 @@ extend<Element> Storage<Element>: Clone {}
 // moves its elements.
 extend<Element> Storage<Element>: Send where Element: Send {}
 
+// Allocates typed storage with room for `capacity` elements.
 pub func _storage<Element>(capacity: Int) 'alloc -> Storage<Element> {
 	Storage<Element>(base: _alloc<Element>(count: capacity))
 }
 
+// A reference-counted raw byte allocation used by UTF-8 and encoded tables.
+//
+// Like `Storage`, it carries no length or capacity. Owners such as `String`
+// track those bounds separately; callers of `get` and `set` must stay within
+// the allocation.
 pub struct ByteStorage {
+	// The base address of the storage allocation.
 	pub let base: RawPtr
 
+	// Loads the byte at `index`; bounds are the caller's responsibility.
 	pub func get(_ index: Int) -> Byte {
 		let ptr: RawPtr = #_ir(self.base, index) { %? = gep Byte $0 $1 }
 		_load<Byte>(ptr: ptr)
 	}
 
+	// Stores `value` in the byte slot at `index`.
 	pub func set(index: Int, value: Byte) -> Void {
 		let ptr: RawPtr = #_ir(self.base, index) { %? = gep Byte $0 $1 }
 		_store<Byte>(ptr: ptr, value: value)
@@ -119,11 +179,13 @@ extend ByteStorage: Clone {}
 // carry no further conditions.
 extend ByteStorage: Send {}
 
+// Allocates byte storage with the requested capacity.
 pub func _byte_storage(capacity: Int) 'alloc -> ByteStorage {
 	ByteStorage(base: _alloc<Byte>(count: capacity))
 }
 
 extend Byte {
+	// Widens this byte to its non-negative integer value.
 	pub func _toInt() -> Int {
 		#_ir { %? = btoi %0 }
 	}

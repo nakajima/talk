@@ -2,10 +2,20 @@
 use package::Operators::{ Equatable }
 use package::Result::{ Result }
 
+// A value that is either present or absent without an error payload.
+//
+// Use `Optional` when absence is expected and needs no explanation; use
+// `Result` when callers must distinguish failure reasons. Mapping and defaults
+// are consuming so an owned payload moves exactly once.
 pub enum Optional<Wrapped> {
+	// Contains a present value.
 	case some(Wrapped)
+	// Represents the absence of a value.
 	case none
 
+	// Applies `transform` only to a present payload.
+	//
+	// The optional and payload are consumed; `none` does not invoke the callback.
 	pub consuming func map<T>(transform: (Wrapped) -> T) -> T? {
 		match self {
 			.some(t) -> .some(transform(t)),
@@ -13,6 +23,9 @@ pub enum Optional<Wrapped> {
 		}
 	}
 
+	// Moves out a present payload or invokes `default` for `none`.
+	//
+	// The fallback is lazy and is never evaluated when a value is present.
 	pub consuming func or(default: () -> Wrapped) -> Wrapped {
 		match self {
 			.some(t) -> t,
@@ -20,6 +33,9 @@ pub enum Optional<Wrapped> {
 		}
 	}
 
+	// Converts `some` to `ok` and `none` to a lazily produced `error`.
+	//
+	// The error callback is skipped when the optional contains a value.
 	pub consuming func or_err<E>(default: () -> E) -> Result<Wrapped, E> {
 		match self {
 			.some(t) -> .ok(t),

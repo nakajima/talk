@@ -166,13 +166,15 @@ impl PackageManifest {
         Ok(manifest)
     }
 
-    fn parse(path: &Path, source: &str) -> Result<Self, PackageError> {
+    pub(crate) fn parse(path: &Path, source: &str) -> Result<Self, PackageError> {
         let mut config = DriverConfig::new("PackageManifest");
-        // The manifest DSL names Package without a `use`.
-        if let Some((id, module)) = super::stdlib::module_with_id("Package") {
+        // The manifest DSL names Package without a `use`. The Package
+        // builtin compiles manifest-free (src/compiling/builtin_packages.rs),
+        // so parsing a manifest never re-enters manifest parsing.
+        if let Some((id, module, _)) = super::builtin_packages::try_compiled("Package") {
             std::rc::Rc::make_mut(&mut config.modules)
-                .import_compiled((*module).clone(), id)
-                .expect("Package stdlib module registers once per session");
+                .import_shared(module, id)
+                .expect("Package builtin registers once per session");
         }
         let driver = Driver::new(vec![Source::in_memory(path.to_path_buf(), source)], config);
         let parsed = driver.parse().map_err(|error| PackageError::Manifest {
@@ -1704,10 +1706,6 @@ pub struct PackageProject {
     manifest: PackageManifest,
     lock: PackageLock,
     package_roots: FxHashMap<String, PathBuf>,
-    /// Compiled-library cache root override (ADR 0056); `None` resolves
-    /// the shared cache root (src/compiling/cache.rs) at use. Tests
-    /// inject a temporary root to stay hermetic.
-    compile_cache_root: Option<PathBuf>,
 }
 
 impl PackageProject {
@@ -2072,21 +2070,12 @@ impl PackageProject {
             manifest,
             lock,
             package_roots,
-            compile_cache_root: None,
         })
     }
 
     /// The compiled-library cache root this project reads and writes.
     fn compile_cache_root(&self) -> Option<PathBuf> {
-        self.compile_cache_root
-            .clone()
-            .or_else(super::cache::cache_root)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn with_compile_cache_root(mut self, root: PathBuf) -> Self {
-        self.compile_cache_root = Some(root);
-        self
+        super::cache::cache_root()
     }
 }
 
@@ -2095,18 +2084,18 @@ use crate::compiling::module::{Module, ModuleEnvironment, ModuleId};
 use std::rc::Rc;
 
 #[derive(Clone)]
-struct CompiledLibrary {
-    module: Module,
-    typed: std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
-    module_id: ModuleId,
+pub(crate) struct CompiledLibrary {
+    pub(crate) module: Module,
+    pub(crate) typed: std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
+    pub(crate) module_id: ModuleId,
     /// The canonical source paths the library's compile closure spanned
     /// — the redirect table a cached image hands to importing compiles
     /// (ADR 0056).
-    files: Vec<PathBuf>,
+    pub(crate) files: Vec<PathBuf>,
     /// The library's own disk-cache key (ADR 0056): downstream
     /// libraries close their keys over it, so a source change here
     /// invalidates everything built on top.
-    cache_key: Option<[u8; 32]>,
+    pub(crate) cache_key: Option<[u8; 32]>,
 }
 
 struct CompiledGraph {
@@ -2639,9 +2628,7 @@ impl PackageProject {
     }
 
     /// Compile one package library, or replay its cached image (ADR
-    /// 0056). The key closes over the library's sources, the keys of
-    /// the libraries it builds on, its reserved session module id, and
-    /// the compiler stamp; only clean compiles are stored.
+    /// 0056), against this project's cache root.
     #[allow(clippy::too_many_arguments)]
     fn cached_library(
         &self,
@@ -2653,48 +2640,20 @@ impl PackageProject {
         shared: &Rc<std::cell::RefCell<crate::compiling::driver::SharedCatalog>>,
         dependency_keys: Option<&[[u8; 32]]>,
     ) -> Result<CompiledLibrary, PackageError> {
-        let stem = format!("packages/{}", manifest.import_name());
-        let key = dependency_keys.and_then(|keys| library_cache_key(&stem, root, module_id, keys));
-        if let Some(key) = key
-            && let Some(image) = self.load_library_image(&stem, &key)
-        {
-            return Ok(CompiledLibrary {
-                module: image.module,
-                typed: std::sync::Arc::new(image.typed),
-                module_id,
-                files: image.files,
-                cache_key: Some(key),
-            });
-        }
-        let compiled =
-            self.compile_library(manifest, root, library, module_id, environment, shared)?;
-        if let Some(key) = key {
-            self.store_library_image(&stem, &key, &compiled);
-        }
-        Ok(CompiledLibrary {
-            cache_key: key,
-            ..compiled
-        })
-    }
-
-    fn load_library_image(&self, stem: &str, key: &[u8; 32]) -> Option<LibraryImage> {
-        let payload = super::cache::load_in(&self.compile_cache_root()?, stem, key)?;
-        bincode::deserialize(&payload).ok()
-    }
-
-    fn store_library_image(&self, stem: &str, key: &[u8; 32], compiled: &CompiledLibrary) {
-        let Some(root) = self.compile_cache_root() else {
-            return;
-        };
-        let image = LibraryImageRef {
-            module: &compiled.module,
-            typed: compiled.typed.as_ref(),
-            files: &compiled.files,
-        };
-        let Ok(payload) = bincode::serialize(&image) else {
-            return;
-        };
-        super::cache::store_in(&root, stem, key, &payload);
+        let import_name = manifest.import_name();
+        let stem = format!("packages/{import_name}");
+        let source = manifest.source_path(root, library)?;
+        cached_library(
+            self.compile_cache_root().as_deref(),
+            &stem,
+            root,
+            &import_name,
+            &source,
+            module_id,
+            environment,
+            shared,
+            dependency_keys,
+        )
     }
 
     fn compile_graph(
@@ -2752,82 +2711,16 @@ impl PackageProject {
         Ok(CompiledGraph { dependencies, base })
     }
 
-    fn compile_library(
-        &self,
-        manifest: &PackageManifest,
-        root: &Path,
-        library: &str,
-        module_id: ModuleId,
-        environment: ModuleEnvironment,
-        shared: &Rc<std::cell::RefCell<crate::compiling::driver::SharedCatalog>>,
-    ) -> Result<CompiledLibrary, PackageError> {
-        let source = manifest.source_path(root, library)?;
-        let workspace_root =
-            root.join("src")
-                .canonicalize()
-                .map_err(|source| PackageError::Io {
-                    context: format!(
-                        "failed to find package source directory under {}",
-                        root.display()
-                    ),
-                    source,
-                })?;
-        let mut config = DriverConfig::new(manifest.import_name());
-        config.module_id = module_id;
-        config.mode = CompilationMode::Library;
-        config.modules = Rc::new(environment);
-        config.catalog = shared.clone();
-        config.workspace_root = Some(workspace_root.clone());
-        config.source_root = Some(workspace_root);
-        let driver = Driver::new_bare(vec![Source::from(source)], config);
-        let parsed = driver.parse().map_err(|error| {
-            PackageError::Compile(format!("failed to parse {}: {error:?}", manifest.name))
-        })?;
-        // The compile closure: every file parse discovery pulled in.
-        // Importing compiles redirect local imports for exactly these
-        // paths to the finished module (ADR 0056).
-        let files = parsed
-            .phase
-            .asts
-            .keys()
-            .filter_map(|source| source.source_path())
-            .map(|path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
-            .collect();
-        let resolved = parsed.resolve_names().map_err(|error| {
-            PackageError::Compile(format!("failed to resolve {}: {error:?}", manifest.name))
-        })?;
-        let typed = resolved.type_check();
-        if typed.has_errors() {
-            return Err(PackageError::Compile(
-                typed
-                    .diagnostics()
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            ));
-        }
-        let program = std::sync::Arc::new(typed.phase.program.clone());
-        let module = typed.module(manifest.import_name());
-        Ok(CompiledLibrary {
-            module,
-            typed: program,
-            module_id,
-            files,
-            cache_key: None,
-        })
-    }
-
     fn base_environment() -> ModuleEnvironment {
         let mut environment = ModuleEnvironment::default();
         environment.import_core(super::core::compile());
         // Manifests name the Package module's DSL without a `use`, so it
-        // registers here. Everything else stays demand-driven: stdlib
-        // modules register as each target's imports are discovered.
-        if let Some((id, module)) = super::stdlib::module_with_id("Package") {
+        // registers here. Everything else stays demand-driven: builtin
+        // packages register as each target's imports are discovered.
+        if let Some((id, module, _)) = super::builtin_packages::try_compiled("Package") {
             environment
                 .import_compiled((*module).clone(), id)
-                .expect("Package stdlib module registers once per session");
+                .expect("Package builtin registers once per session");
         }
         environment
     }
@@ -2851,6 +2744,139 @@ impl PackageProject {
         }
         Ok(environment)
     }
+}
+
+/// Compile one package library, or replay its cached image (ADR 0056).
+/// The key closes over the library's sources, the keys of the libraries
+/// it builds on, its reserved session module id, and the compiler
+/// stamp; only clean compiles are stored. Free of any project so
+/// builtin packages (src/compiling/builtin_packages.rs) ride the same
+/// pipeline.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn cached_library(
+    cache_root: Option<&Path>,
+    stem: &str,
+    root: &Path,
+    import_name: &str,
+    source: &Path,
+    module_id: ModuleId,
+    environment: ModuleEnvironment,
+    shared: &Rc<std::cell::RefCell<crate::compiling::driver::SharedCatalog>>,
+    dependency_keys: Option<&[[u8; 32]]>,
+) -> Result<CompiledLibrary, PackageError> {
+    let key = dependency_keys.and_then(|keys| library_cache_key(stem, root, module_id, keys));
+    if let Some(key) = key
+        && let Some(image) = load_library_image(cache_root, stem, &key)
+    {
+        return Ok(CompiledLibrary {
+            module: image.module,
+            typed: std::sync::Arc::new(image.typed),
+            module_id,
+            files: image.files,
+            cache_key: Some(key),
+        });
+    }
+    let compiled = compile_library(root, import_name, source, module_id, environment, shared)?;
+    if let Some(key) = key {
+        store_library_image(cache_root, stem, &key, &compiled);
+    }
+    Ok(CompiledLibrary {
+        cache_key: key,
+        ..compiled
+    })
+}
+
+fn load_library_image(
+    cache_root: Option<&Path>,
+    stem: &str,
+    key: &[u8; 32],
+) -> Option<LibraryImage> {
+    let payload = super::cache::load_in(cache_root?, stem, key)?;
+    bincode::deserialize(&payload).ok()
+}
+
+fn store_library_image(
+    cache_root: Option<&Path>,
+    stem: &str,
+    key: &[u8; 32],
+    compiled: &CompiledLibrary,
+) {
+    let Some(root) = cache_root else {
+        return;
+    };
+    let image = LibraryImageRef {
+        module: &compiled.module,
+        typed: compiled.typed.as_ref(),
+        files: &compiled.files,
+    };
+    let Ok(payload) = bincode::serialize(&image) else {
+        return;
+    };
+    super::cache::store_in(root, stem, key, &payload);
+}
+
+fn compile_library(
+    root: &Path,
+    import_name: &str,
+    source: &Path,
+    module_id: ModuleId,
+    environment: ModuleEnvironment,
+    shared: &Rc<std::cell::RefCell<crate::compiling::driver::SharedCatalog>>,
+) -> Result<CompiledLibrary, PackageError> {
+    let workspace_root = root
+        .join("src")
+        .canonicalize()
+        .map_err(|source| PackageError::Io {
+            context: format!(
+                "failed to find package source directory under {}",
+                root.display()
+            ),
+            source,
+        })?;
+    let mut config = DriverConfig::new(import_name);
+    config.module_id = module_id;
+    config.mode = CompilationMode::Library;
+    config.modules = Rc::new(environment);
+    config.catalog = shared.clone();
+    config.workspace_root = Some(workspace_root.clone());
+    config.source_root = Some(workspace_root);
+    let driver = Driver::new_bare(vec![Source::from(source.to_path_buf())], config);
+    let parsed = driver.parse().map_err(|error| {
+        PackageError::Compile(format!("failed to parse {import_name}: {error:?}"))
+    })?;
+    // The compile closure: every file parse discovery pulled in.
+    // Importing compiles redirect local imports for exactly these
+    // paths to the finished module (ADR 0056).
+    let files = parsed
+        .phase
+        .asts
+        .keys()
+        .filter_map(|source| source.source_path())
+        .map(|path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf()))
+        .collect();
+    let resolved = parsed.resolve_names().map_err(|error| {
+        PackageError::Compile(format!("failed to resolve {import_name}: {error:?}"))
+    })?;
+    let typed = resolved.type_check();
+    if typed.has_errors() {
+        return Err(PackageError::Compile(
+            typed
+                .diagnostics()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ));
+    }
+    let program = std::sync::Arc::new(typed.phase.program.clone());
+    let module = typed.module(import_name);
+    Ok(CompiledLibrary {
+        module,
+        typed: program,
+        module_id,
+        files,
+        cache_key: None,
+    })
 }
 
 pub fn normalized_import_name(package_name: &str) -> String {
@@ -2915,7 +2941,10 @@ fn is_talk_keyword(name: &str) -> bool {
 }
 
 fn is_compiler_module_name(name: &str) -> bool {
-    matches!(name, "Core" | "fs" | "ansi" | "testing")
+    // Builtin package names (fs, testing, ...) are not reserved: a
+    // project's own dependency of the same name shadows the builtin,
+    // exactly as parse discovery resolves it.
+    name == "Core"
 }
 
 fn is_sha256(value: &str) -> bool {

@@ -6,23 +6,24 @@
     <title>talktalk - 12. Testing</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787039528" rel="stylesheet">
+    <link href="/style.css?t=1787386846" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
       <a class="global-nav-brand" href="/">talktalk</a>
       <div class="global-nav-links">
         <a href="/">Language</a>
-        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/manual/" aria-current="page">Guide</a>
+        <a href="/docs/">Docs</a>
         <a href="/playground">Playground</a>
         <a href="/qa">Q/A</a>
         <a href="/philosophy">Philosophy</a>
       </div>
     </nav>
-    <main class="content-page manual-page">
-      <header class="page-header">
-        <div class="page-header-content">
-          <code class="page-kicker">talktalk / docs</code>
+    <main class="site-page manual-page">
+      <header class="site-page-header">
+        <div class="site-page-heading">
+          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/testing" aria-current="page">12. Testing</a></nav>
           <div class="page-header-title-row">
             <h1>12. Testing</h1>
             
@@ -30,10 +31,10 @@
         </div>
       </header>
 
-      <div class="manual-layout">
-        <aside class="manual-outline">
+      <div class="site-page-layout manual-layout">
+        <aside class="site-page-sidebar manual-outline">
           <nav aria-label="Manual table of contents">
-            <span class="manual-outline-title">Contents</span>
+            <span class="site-nav-label manual-outline-title">Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -56,16 +57,19 @@
 <li><a href="/manual/standard-library">13. The Standard Library</a></li>
 <li><a href="/manual/toolchain">14. The Toolchain</a></li>
 <li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+<li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
+<li><a href="/manual/mir-reference">B. MIR Reference</a></li>
+<li><a href="/manual/bytecode-reference">C. Bytecode Reference</a></li>
             </ol>
           </nav>
         </aside>
-        <div class="manual-document">
+        <div class="site-page-content manual-document">
           <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
             <a class="manual-previous" href="/manual/concurrency">&larr; 11. Concurrency</a>
             <a class="manual-contents" href="/manual/">All chapters</a>
             <a class="manual-next" href="/manual/standard-library">13. The Standard Library &rarr;</a>
           </nav>
-          <article class="page-content">
+          <article class="prose page-content">
             <p>Put tests in files ending with <code>.test.tlk</code>, then run <code>talk test</code>. TalkTalk finds the tests in your package, runs them, and reports which assertions passed or failed.</p>
 <h2><a href="#a-first-test" aria-hidden="true" class="anchor" id="a-first-test"></a>A first test</h2>
 <p>A generated package contains:</p>
@@ -74,7 +78,6 @@
 	<span class="operator">@</span><span class="macro">assert</span>(<span class="number">1</span> <span class="operator">+</span> <span class="number">1</span> <span class="operator">==</span> <span class="number">2</span>)
 }</pre>
         </div>
-        
 <p>Run it with:</p>
 <pre><code class="language-sh">talk test
 </code></pre>
@@ -91,7 +94,6 @@ talk test tests/
 	<span class="variable">assertMessage</span>(<span class="number">2</span> <span class="operator">+</span> <span class="number">2</span> <span class="operator">==</span> <span class="number">4</span>, <span class="string">"addition should work"</span>)
 }</pre>
         </div>
-        
 <p>A failed assertion records a test failure rather than panicking the entire test runner.</p>
 <h2><a href="#selecting-and-automating-tests" aria-hidden="true" class="anchor" id="selecting-and-automating-tests"></a>Selecting and automating tests</h2>
 <p>Run one exact test name:</p>
@@ -114,9 +116,9 @@ talk test tests/
             <a class="manual-next" href="/manual/standard-library">13. The Standard Library &rarr;</a>
           </nav>
         </div>
-        <div class="manual-rail" aria-hidden="true"></div>
+        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
       </div>
-      <script type="module" src="/page.js?t=1787039528"></script>
+      <script type="module" src="/page.js?t=1787386846"></script>
     </main>
   </body>
 </html>

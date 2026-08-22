@@ -6,23 +6,24 @@
     <title>talktalk - The TalkTalk Manual</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787039516" rel="stylesheet">
+    <link href="/style.css?t=1787386812" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
       <a class="global-nav-brand" href="/">talktalk</a>
       <div class="global-nav-links">
         <a href="/">Language</a>
-        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/manual/" aria-current="page">Guide</a>
+        <a href="/docs/">Docs</a>
         <a href="/playground">Playground</a>
         <a href="/qa">Q/A</a>
         <a href="/philosophy">Philosophy</a>
       </div>
     </nav>
-    <main class="content-page manual-page">
-      <header class="page-header">
-        <div class="page-header-content">
-          <code class="page-kicker">talktalk / docs</code>
+    <main class="site-page manual-page">
+      <header class="site-page-header">
+        <div class="site-page-heading">
+          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/" aria-current="page">The TalkTalk Manual</a></nav>
           <div class="page-header-title-row">
             <h1>The TalkTalk Manual</h1>
             
@@ -30,13 +31,14 @@
         </div>
       </header>
 
-      <div class="manual-layout">
-        <aside class="manual-outline">
+      <div class="site-page-layout manual-layout">
+        <aside class="site-page-sidebar manual-outline">
           <nav aria-label="Manual table of contents">
-            <span class="manual-outline-title">Contents</span>
+            <span class="site-nav-label manual-outline-title">Contents</span>
             <ol>
               <li><a href="/manual/" aria-current="page">Overview</a><ol class="manual-outline-sections"><li><a href="#start-here">Start here</a></li>
-<li><a href="#conventions">Conventions</a></li></ol></li>
+<li><a href="#reference-appendices">Reference appendices</a></li>
+<li><a href="#reading-the-examples">Reading the examples</a></li></ol></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
 <li><a href="/manual/syntax">1. Syntax</a></li>
 <li><a href="/manual/values-and-types">2. Values and Types</a></li>
@@ -53,16 +55,19 @@
 <li><a href="/manual/standard-library">13. The Standard Library</a></li>
 <li><a href="/manual/toolchain">14. The Toolchain</a></li>
 <li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+<li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
+<li><a href="/manual/mir-reference">B. MIR Reference</a></li>
+<li><a href="/manual/bytecode-reference">C. Bytecode Reference</a></li>
             </ol>
           </nav>
         </aside>
-        <div class="manual-document">
+        <div class="site-page-content manual-document">
           <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
             <span></span>
             <a class="manual-contents" href="/manual/">All chapters</a>
             <a class="manual-next" href="/manual/getting-started">0. Getting Started &rarr;</a>
           </nav>
-          <article class="page-content">
+          <article class="prose page-content">
             <p>TalkTalk is a programming language that looks a little like Swift or Rust. It checks your code before it runs, but tries to figure out most types for you.</p>
 <p>This manual starts with small programs and works up to TalkTalk's more unusual features. The language is experimental and still changes quickly. Source files use <code>.tlk</code>, and the command-line tool is called <code>talk</code>.</p>
 <h2><a href="#start-here" aria-hidden="true" class="anchor" id="start-here"></a>Start here</h2>
@@ -84,8 +89,19 @@
 <li><a href="/manual/toolchain">The Toolchain</a></li>
 <li><a href="/manual/unsafe-and-interop">Unsafe Code and Interop</a></li>
 </ol>
-<h2><a href="#conventions" aria-hidden="true" class="anchor" id="conventions"></a>Conventions</h2>
-<p>Code meant for TalkTalk is fenced as <code>tlk</code>; terminal sessions are fenced as <code>sh</code>. Examples usually rely on the core library, which normal source files import automatically. A first line of <code>// no-core</code> disables that import for compiler and core-library work.</p>
+<h2><a href="#reference-appendices" aria-hidden="true" class="anchor" id="reference-appendices"></a>Reference appendices</h2>
+<ul>
+<li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
+<li><a href="/manual/mir-reference">B. MIR Reference</a></li>
+<li><a href="/manual/bytecode-reference">C. Bytecode Reference</a></li>
+</ul>
+<h2><a href="#reading-the-examples" aria-hidden="true" class="anchor" id="reading-the-examples"></a>Reading the examples</h2>
+<p>TalkTalk source is fenced as <code>tlk</code>; terminal sessions are fenced as <code>sh</code>. On the website, an ordinary <code>tlk</code> block is editable and runnable. Each runnable block is a complete program unless the text says otherwise.</p>
+<p>A block marked <code>norun</code> is displayed as source without interactive controls. It may describe an API boundary, depend on files not shown, or deliberately show only part of a program. A block marked <code>accumulate(name)</code> shares source with earlier blocks in the same named group. Running a later accumulated block also includes those earlier declarations.</p>
+<p>Examples normally use the core library, which source files import automatically. A first line of <code>// no-core</code> disables that import for compiler and core-library work. Standard-library modules such as <code>task</code>, <code>fs</code>, and <code>dict</code> still require an explicit <code>use</code>.</p>
+<p>Comments after expressions sometimes show expected output or explain a compile-time error. Placeholder text such as <code>...</code> is explanatory and is not valid TalkTalk unless the surrounding text explicitly defines it.</p>
+<p>Shell commands that name repository paths assume the repository root. Commands without paths usually assume the current directory is inside a package. The manual calls out commands that behave differently outside a package.</p>
+<p>The language changes quickly. The manual describes the supported source model; editor hover and public declarations in Core or the standard library show the exact current signatures. Compiler implementation documents under <code>docs/</code> explain design decisions but are not a second language specification.</p>
 <p>The short command reference built into the compiler is also useful:</p>
 <pre><code class="language-sh">talk llm
 </code></pre>
@@ -97,9 +113,9 @@
             <a class="manual-next" href="/manual/getting-started">0. Getting Started &rarr;</a>
           </nav>
         </div>
-        <div class="manual-rail" aria-hidden="true"></div>
+        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
       </div>
-      <script type="module" src="/page.js?t=1787039516"></script>
+      <script type="module" src="/page.js?t=1787386812"></script>
     </main>
   </body>
 </html>

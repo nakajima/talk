@@ -1403,8 +1403,8 @@ impl NameResolver {
         found.or_else(|| parent.and_then(|parent| self.lookup_effect_in_scope(name, parent)))
     }
 
-    /// Ticked syntax has its own namespace: a method or local named `recv`
-    /// cannot hide the ambient `'recv` effect. The intrinsic `unsafe`
+    /// Ticked syntax has its own namespace: a method or local named `wait`
+    /// cannot hide the ambient `'wait` effect. The intrinsic `unsafe`
     /// effect remains reserved independently of every source declaration.
     fn lookup_effect(&mut self, name: &Name) -> Option<Name> {
         let text = name.name_str();

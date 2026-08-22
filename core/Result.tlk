@@ -1,12 +1,18 @@
 // no-core
 use package::Operators::{ Equatable }
 
-// A recoverable computation result. Libraries can return this when failure
-// is part of their ordinary API rather than an effect or process failure.
+// A recoverable computation that contains either a success or a failure value.
+//
+// Use `Result` when failure is ordinary data that the caller should inspect;
+// use an effect for dynamically handled control flow, or `Optional` when only
+// presence matters. Exactly one payload is initialized and owned at a time.
 pub enum Result<Success, Failure> {
+	// Contains the operation's successful value.
 	case ok(Success)
+	// Contains the recoverable failure value.
 	case error(Failure)
 
+	// Returns true only for `ok` results.
 	pub func is_ok() -> Bool {
 		match self {
 			.ok(_) -> true,
@@ -14,6 +20,7 @@ pub enum Result<Success, Failure> {
 		}
 	}
 
+	// Returns true only for `error` results.
 	pub func is_error() -> Bool {
 		match self {
 			.ok(_) -> false,
@@ -21,6 +28,9 @@ pub enum Result<Success, Failure> {
 		}
 	}
 
+	// Consumes and transforms an `ok` payload while forwarding `error` unchanged.
+	//
+	// The callback is never invoked for a failure.
 	pub consuming func map<T>(ok: (consume Success) -> T) -> Result<T, Failure> {
 		match self {
 			.ok(val) -> .ok(ok(val)),
@@ -28,6 +38,9 @@ pub enum Result<Success, Failure> {
 		}
 	}
 
+	// Consumes and transforms an `error` payload while forwarding `ok` unchanged.
+	//
+	// The callback is never invoked for a success.
 	pub consuming func map<T>(err: (consume Failure) -> T) -> Result<Success, T> {
 		match self {
 			.ok(ok) -> .ok(ok),
@@ -37,6 +50,7 @@ pub enum Result<Success, Failure> {
 }
 
 extend<Success, Failure> Result<Success, Failure>: Equatable where Success: Equatable<Success> && Failure: Equatable<Failure> {
+	// Requires the same case and equal payloads; `ok` never equals `error`.
 	pub func equals(_ rhs: Self) -> Bool {
 		match self {
 			.ok(left) -> {

@@ -1,25 +1,36 @@
 # 6. Effects
 
-Effects let a function ask the surrounding program to do something, such as provide input, stop early, or pause. A handler decides how to answer that request. TalkTalk keeps track of these requests so callers know what a function may ask for.
+Effects let application code describe what it needs without choosing where that service comes from. A function can request configuration, stop a computation, or pause a task in direct style. A surrounding handler decides what the request means, and the type checker records the possible requests in the function's effect row.
 
-## Declaring and performing an effect
+## Separating a request from its answer
 
-Effect names begin with a tick:
+Suppose a greeting needs the current user's name. The function should not care whether the name comes from a terminal, a test fixture, or an embedding host:
 
-```tlk norun
-effect 'ask(question: String) -> String
+```tlk
+effect 'setting(key: String) -> String?
 
 func greeting() -> String {
-    let name = 'ask(question: "What is your name?")
-    "Hello, " + name
+    match 'setting(key: "user.name") {
+        .some(name) -> "Hello, " + name,
+        .none -> "Hello, stranger"
+    }
 }
+
+#handle 'setting { key in
+    let answer = if key == "user.name" { .some("Ada") } else { .none }
+    'continue answer
+}
+
+greeting()
 ```
 
-Calling an effect is called performing it. A function with no written effect row infers one.
+Calling an effect is called *performing* it. The perform suspends at the request, the nearest handler runs, and `'continue answer` resumes the suspended code with `answer` as the result of the effect call. A test can install a deterministic handler while production code installs one backed by real configuration. `greeting` stays ordinary direct-style code in both cases.
+
+The handler's extent is the code after the `#handle` statement in the same block, including functions called from there. Code before the statement is unaffected. If handlers are nested, the nearest handler for the same effect label wins.
 
 ## Effect rows
 
-A closed function effect can be written in three forms:
+Effects are part of function types. A closed function effect can be written in three forms:
 
 ```tlk
 func pure() '[] -> Int { 42 }
@@ -32,56 +43,53 @@ func both(flag: Bool) '[io, panic] -> Void {
 pure()
 ```
 
-`'[]` is explicitly pure, `'io` names one closed effect, and `'[io, panic]` names several. `'[io, ..]` requires `io` while leaving the rest of the row open for inference.
+`'[]` is explicitly pure, `'io` names one closed effect, and `'[io, panic]` names several. `'[io, ..]` requires `io` while leaving the rest of the row open for inference. A function with no written row receives an open inferred row, so effects normally propagate through callers without annotations.
 
-Effects are part of function values:
+A function value carries the same invocation requirement:
 
 ```tlk
 let action: () 'io -> Void = func() { print("hi") }
 action()
 ```
 
-The row is a requirement of invoking the value. A closure does not freeze the handler that happened to be active when it was created.
+The row says what may happen when the value is invoked. A closure does not freeze the handler active when it was created; performs use the handlers active at the call site. This is what lets a higher-order function install a handler around a callback.
 
-## Handling and continuing
+## Stopping a computation
 
-`#handle` installs a handler for the subsequent part of the current block and for calls made from there:
-
-```tlk
-effect 'ask(value: Int) -> Int
-
-#handle 'ask { value in
-    'continue value * 2
-}
-
-print('ask(value: 21))
-```
-
-`'continue expression` resumes the suspended computation, making the expression the result of the effect call. The nearest handler for the same label wins.
-
-A handler that finishes without continuing aborts the handled computation. That makes effects suitable for exceptions as well as resumable operations:
+A handler does not have to continue. Completing the clause aborts the handled computation and unwinds its frames. This can remove repetitive error plumbing when a whole operation has one failure boundary:
 
 ```tlk
-effect 'stop(message: String) -> Never
+effect 'reject(message: String) -> Never
 
-func guarded(_ body: () -> Void) -> Void {
-    #handle 'stop { message in
-        print("stopped: " + message)
-        return
+func checked_port(_ value: Int) -> Int {
+    if value < 1 || value > 65535 {
+        'reject(message: "port is out of range")
     }
-    body()
+    value
 }
 
-guarded {
-    'stop(message: "done")
+func configured_port(_ value: Int) -> Int {
+    #handle 'reject { message in
+        print("invalid configuration: " + message)
+        return 8080
+    }
+    checked_port(value)
 }
+
+configured_port(70000)
 ```
 
-The handler's extent is the code after the `#handle` statement in the same block, not code before it.
+`checked_port` declares the exceptional operation once. `configured_port` chooses the policy for that boundary. Cleanup still runs while the abandoned frames unwind, so aborting an effect does not skip `Deinit` hooks.
+
+`unreachable` follows this model: it performs the public `'panic` effect and never returns. A program may handle it explicitly; otherwise the outer host reports the panic and terminates.
+
+## Re-performing and delegation
+
+A handler clause runs outside its own search floor. If it performs the same label again, lookup continues with the next outer handler rather than recursively selecting itself. This lets a handler inspect, transform, or log a request and delegate it to the host fallback.
 
 ## Capturing resumptions
 
-A handler may bind the continuation as an additional final parameter. The resumption is a linear, one-shot value:
+Most clauses use `'continue` immediately. A clause may instead bind the suspended continuation as an additional final parameter and store it as a value:
 
 ```tlk norun
 effect 'emit(value: Int) -> ()
@@ -100,7 +108,9 @@ func generate() -> Step {
 }
 ```
 
-Call `resume(k: continuation, value: ())` to continue or `cancel(k: continuation)` to abandon it. Either operation consumes the resumption, and cancellation deterministically runs cleanup for suspended frames.
+The extra binder changes the clause from tail-resumptive to resumption-binding. `resume(k: continuation, value: ())` continues the suspended extent later. `cancel(k: continuation)` abandons it and runs cleanup. A `Resumption` is linear and one-shot: every finite path must consume it exactly once, and two workers cannot resume the same continuation.
+
+This mechanism powers generators and TalkTalk's cooperative scheduler. Waiting on a channel or deadline can store the current task's resumption and run another task without rewriting the waiting function as a state machine.
 
 ## Generic effects
 
@@ -110,11 +120,11 @@ Effects may be generic:
 effect 'echo<T>(value: T) -> T
 ```
 
-Effect rows track separate instantiations. One handler for an effect label covers every generic instantiation in its extent, and the handler body is checked generically.
+Effect rows track separate instantiations. One handler for an effect label covers every generic instantiation in its extent, and the handler body is checked generically. Resumption-binding clauses currently have tighter restrictions than immediate `'continue` clauses: in particular, they cannot bind resumptions for type-generic effects or effects with `mut` parameters.
 
 ## Built-in host effects
 
-Core uses effects for input and output, memory allocation, task suspension, and panic. `unreachable` performs the public `'panic` effect and never returns. A program may handle it explicitly; otherwise the outer host reports the panic and terminates.
+Core uses effects for input and output, memory allocation, task suspension, and panic. They are not compiler-privileged operations: Core installs ordinary outer handlers that connect them to the host. A nearer application handler may intercept the same request.
 
 ## Further reading
 

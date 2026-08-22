@@ -1,0 +1,6 @@
+Package(
+    name: "basic",
+    version: "0.1.0",
+    builds: [.bin(named: "main", from: "src/main.tlk")],
+    dependencies: []
+)

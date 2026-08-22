@@ -75,13 +75,8 @@ fn stamped_path(root: &Path, stem: &str, key: &[u8; 32]) -> PathBuf {
     root.join(format!("{stem}-{short}.bin"))
 }
 
-/// Read a cached payload for `stem` under `key` from the default cache
-/// root. The full key is stored at the payload's head and must match.
-pub fn load(stem: &str, key: &[u8; 32]) -> Option<Vec<u8>> {
-    load_in(&cache_root()?, stem, key)
-}
-
-/// Read a cached payload from an explicit cache root.
+/// Read a cached payload from an explicit cache root. The full key is
+/// stored at the payload's head and must match.
 pub fn load_in(root: &Path, stem: &str, key: &[u8; 32]) -> Option<Vec<u8>> {
     let path = stamped_path(root, stem, key);
     let data = std::fs::read(path).ok()?;
@@ -92,20 +87,11 @@ pub fn load_in(root: &Path, stem: &str, key: &[u8; 32]) -> Option<Vec<u8>> {
     Some(payload.to_vec())
 }
 
-/// Store a payload for `stem` under `key` in the default cache root.
-/// Concurrent processes compute identical bytes: write to a
-/// process-unique sibling and rename atomically.
-pub fn store(stem: &str, key: &[u8; 32], payload: &[u8]) {
-    let Some(root) = cache_root() else {
-        return;
-    };
-    store_in(&root, stem, key, payload);
-}
-
 /// Store a payload in an explicit cache root, then bound the stem's
 /// retained stamps to the newest few (CLEAN-05: several compiler
 /// builds' caches coexist instead of every store deleting its
-/// siblings).
+/// siblings). Concurrent processes compute identical bytes: write to a
+/// process-unique sibling and rename atomically.
 pub fn store_in(root: &Path, stem: &str, key: &[u8; 32], payload: &[u8]) {
     let path = stamped_path(root, stem, key);
     if let Some(parent) = path.parent()

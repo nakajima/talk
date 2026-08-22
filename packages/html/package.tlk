@@ -1,0 +1,13 @@
+Package(
+	name: "html",
+	version: "0.1.0",
+	builds: [
+		.lib(from: "src/Html.tlk")
+	],
+	dependencies: [
+		.path(
+			package: "syntax",
+			path: "../syntax"
+		)
+	]
+)

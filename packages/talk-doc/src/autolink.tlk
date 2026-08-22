@@ -1,0 +1,241 @@
+use talk_md::{ Block, Inline, ListItem, TableCell, parse }
+
+// A package-indexed declaration target used to resolve code spans in comments.
+//
+// Links retain both their simple and owner-qualified names. The resolver uses
+// module and owner context to reject ambiguous references rather than choosing an
+// arbitrary declaration.
+pub struct SymbolLink {
+	let name: String
+	let qualified_name: String
+	let module: String
+	let page: String
+	let anchor: String
+	let owner: String?
+
+	// Creates one target for a rendered top-level or member declaration.
+	pub init(name: String, qualified_name: String, module: String, page: String, anchor: String, owner: String?) {
+		self.name = name
+		self.qualified_name = qualified_name
+		self.module = module
+		self.page = page
+		self.anchor = anchor
+		self.owner = owner
+	}
+}
+
+extend SymbolLink: Clone {}
+
+enum SymbolLookup {
+	case qualified
+	case owner
+	case module
+	case simple
+}
+
+func join_strings(parts: &[String], separator: String) -> String {
+	if parts.is_empty() { return "" }
+	let out = parts[0].to_string()
+	let i = 1
+	loop i < parts.count {
+		out = out + separator + parts[i].to_string()
+		i = i + 1
+	}
+	out
+}
+
+func owner_matches(owner: &String?, expected: &String) -> Bool {
+	match owner {
+		.some(value) -> value == expected,
+		.none -> expected.byte_count == 0
+	}
+}
+
+func symbol_matches(symbol: &SymbolLink, lookup: SymbolLookup, reference: &String, module: &String, owner: &String) -> Bool {
+	match lookup {
+		.qualified -> symbol.qualified_name == reference || symbol.module + "." + symbol.qualified_name == reference,
+		.owner -> symbol.name == reference && owner_matches(owner: symbol.owner, expected: owner),
+		.module -> symbol.name == reference && symbol.module == module && owner_matches(owner: symbol.owner, expected: ""),
+		.simple -> symbol.name == reference
+	}
+}
+
+func find_symbol(symbols: &[SymbolLink], lookup: SymbolLookup, reference: &String, module: &String, owner: &String, current_page: &String) -> String? {
+	let matches = 0
+	let href = ""
+	for symbol in symbols {
+		if symbol_matches(symbol: symbol, lookup: lookup, reference: reference, module: module, owner: owner) {
+			matches = matches + 1
+			href = if symbol.page == current_page {
+				"#" + symbol.anchor
+			} else {
+				symbol.page + "#" + symbol.anchor
+			}
+		}
+	}
+	if matches == 1 { .some(href) } else { .none }
+}
+
+func is_word_byte(value: Int) -> Bool {
+	(value >= 65 && value <= 90)
+		|| (value >= 97 && value <= 122)
+		|| (value >= 48 && value <= 57)
+		|| value == 95
+}
+
+func is_reference_byte(value: Int) -> Bool {
+	is_word_byte(value: value) || value == 46
+}
+
+func slice_bytes(text: &String, start: Int, end: Int) -> String {
+	text.utf8().slice(start: start, byte_count: end - start).to_string()
+}
+
+func normalized_reference(text: &String) -> String? {
+	let bytes = text.utf8()
+	if bytes.count() == 0 { return .none }
+	let start = if bytes.at(index: 0)._toInt() == 39 { 1 } else { 0 }
+	if start == bytes.count() { return .none }
+	let end = bytes.count()
+	let call_start = -1
+	let index = start
+	loop index < bytes.count() {
+		let value = bytes.at(index: index)._toInt()
+		if value == 40 {
+			call_start = index
+			break
+		}
+		if is_reference_byte(value: value) == false { return .none }
+		index = index + 1
+	}
+	if call_start >= 0 {
+		if call_start == start || bytes.at(index: bytes.count() - 1)._toInt() != 41 { return .none }
+		end = call_start
+	}
+	let reference = slice_bytes(text: text, start: start, end: end)
+	if reference == "." { return .none }
+	.some(reference)
+}
+
+func contains_dot(text: &String) -> Bool {
+	let bytes = text.utf8()
+	let index = 0
+	loop index < bytes.count() {
+		if bytes.at(index: index)._toInt() == 46 { return true }
+		index = index + 1
+	}
+	false
+}
+
+func resolve_symbol(text: &String, module: &String, owner: &String, current_page: &String, symbols: &[SymbolLink]) -> String? {
+	if let .some(parsed) = normalized_reference(text: text) {
+		let reference = if parsed.starts_with(needle: ".") {
+			if owner.byte_count == 0 { return .none }
+			owner + parsed
+		} else {
+			parsed
+		}
+		if contains_dot(text: reference) {
+			return find_symbol(symbols: symbols, lookup: .qualified, reference: reference, module: module, owner: owner, current_page: current_page)
+		}
+		if owner.byte_count > 0 {
+			if let .some(href) = find_symbol(symbols: symbols, lookup: .owner, reference: reference, module: module, owner: owner, current_page: current_page) {
+				return .some(href)
+			}
+		}
+		if let .some(href) = find_symbol(symbols: symbols, lookup: .module, reference: reference, module: module, owner: owner, current_page: current_page) {
+			return .some(href)
+		}
+		return find_symbol(symbols: symbols, lookup: .simple, reference: reference, module: module, owner: owner, current_page: current_page)
+	}
+	.none
+}
+
+// Resolves one source-spelled symbol reference to its documentation URL.
+//
+// Owner-local and module-local declarations take precedence over package-wide
+// matches. Ambiguous or syntactically invalid references return `none`.
+pub func symbol_href(reference: &String, module: &String, owner: &String, current_page: &String, symbols: &[SymbolLink]) -> String? {
+	resolve_symbol(text: reference, module: module, owner: owner, current_page: current_page, symbols: symbols)
+}
+
+func linked_inlines(consume values: [Inline], module: &String, owner: &String, current_page: &String, symbols: &[SymbolLink]) -> [Inline] {
+	let linked: [Inline] = []
+	for value in values {
+		linked.push(match value {
+			.text(text) -> .text(text),
+			.emphasis(children) -> .emphasis(linked_inlines(values: children, module: module, owner: owner, current_page: current_page, symbols: symbols)),
+			.strong(children) -> .strong(linked_inlines(values: children, module: module, owner: owner, current_page: current_page, symbols: symbols)),
+			.strikethrough(children) -> .strikethrough(linked_inlines(values: children, module: module, owner: owner, current_page: current_page, symbols: symbols)),
+			.code(text) -> match resolve_symbol(text: text, module: module, owner: owner, current_page: current_page, symbols: symbols) {
+				.some(href) -> .link(href, .none, [.code(text)]),
+				.none -> .code(text)
+			},
+			.link(href, title, children) -> .link(href, title, children),
+			.image(src, title, alt) -> .image(src, title, alt),
+			.softBreak -> .softBreak,
+			.hardBreak -> .hardBreak
+		})
+	}
+	linked
+}
+
+func linked_blocks(consume values: [Block], module: &String, owner: &String, current_page: &String, symbols: &[SymbolLink]) -> [Block] {
+	let linked: [Block] = []
+	for value in values {
+		linked.push(match value {
+			.paragraph(inlines) -> .paragraph(linked_inlines(values: inlines, module: module, owner: owner, current_page: current_page, symbols: symbols)),
+			.heading(level, inlines) -> .heading(level, linked_inlines(values: inlines, module: module, owner: owner, current_page: current_page, symbols: symbols)),
+			.blockQuote(blocks) -> .blockQuote(linked_blocks(values: blocks, module: module, owner: owner, current_page: current_page, symbols: symbols)),
+			.unorderedList(items) -> {
+				let output: [ListItem] = []
+				for item in items {
+					output.push(ListItem(blocks: linked_blocks(values: item.blocks, module: module, owner: owner, current_page: current_page, symbols: symbols), checked: item.checked))
+				}
+				.unorderedList(output)
+			},
+			.orderedList(start, items) -> {
+				let output: [ListItem] = []
+				for item in items {
+					output.push(ListItem(blocks: linked_blocks(values: item.blocks, module: module, owner: owner, current_page: current_page, symbols: symbols), checked: item.checked))
+				}
+				.orderedList(start, output)
+			},
+			.codeBlock(info, code) -> .codeBlock(info, code),
+			.thematicBreak -> .thematicBreak,
+			.table(header, alignments, rows) -> {
+				let linked_header: [TableCell] = []
+				for cell in header {
+					linked_header.push(TableCell(inlines: linked_inlines(values: cell.inlines, module: module, owner: owner, current_page: current_page, symbols: symbols)))
+				}
+				let linked_rows: [[TableCell]] = []
+				for row in rows {
+					let linked_row: [TableCell] = []
+					for cell in row {
+						linked_row.push(TableCell(inlines: linked_inlines(values: cell.inlines, module: module, owner: owner, current_page: current_page, symbols: symbols)))
+					}
+					linked_rows.push(linked_row)
+				}
+				.table(linked_header, alignments, linked_rows)
+			}
+		})
+	}
+	linked
+}
+
+// Parses documentation Markdown, autolinks resolvable code spans, and renders HTML.
+//
+// Explicit links and code blocks are preserved. A code span becomes a link only
+// when owner, module, and package lookup identify exactly one declaration;
+// unresolved or ambiguous spans remain ordinary code.
+pub func render_documentation(documentation: &[String], heading_offset: Int, module: &String, owner: &String, current_page: &String, symbols: &[SymbolLink]) -> String {
+	if documentation.is_empty() { return "" }
+	let markdown = join_strings(parts: documentation, separator: "\n")
+	let document = parse(markdown: markdown, extensions: [])
+	let blocks = linked_blocks(values: document.blocks, module: module, owner: owner, current_page: current_page, symbols: symbols)
+	let output = StringBuilder()
+	for block in blocks {
+		output.append(string: block.to_string_with_heading_offset(heading_offset: heading_offset))
+	}
+	output.finish()
+}

@@ -1,0 +1,12 @@
+use package::documentable::{ DocumentableEntry }
+use package::store::{ DocumentableCollection }
+
+// Parses one source string into the flat documentation graph used by tests and tools.
+//
+// Private declarations are included. The returned array also contains referenced
+// signature components such as parameter and type entries, not only declarations.
+pub func generate(code: String) -> [DocumentableEntry] {
+	let documentables = DocumentableCollection()
+	documentables.collect(source: code)
+	documentables.items
+}

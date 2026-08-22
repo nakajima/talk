@@ -59,9 +59,7 @@ fn anchored_escapes(
         return;
     }
     let events = buckets(blocks, records);
-    let hits = |set: &FxHashSet<LocalId>, op: &Operand| {
-        matches!(op, Operand::Local(local) if set.contains(local))
-    };
+    let hits = |set: &FxHashSet<LocalId>, op: &Operand| matches!(op, Operand::Local(local) if set.contains(local));
 
     let mut in_states: Vec<Option<FxHashSet<LocalId>>> = vec![None; blocks.len()];
     in_states[0] = Some(FxHashSet::default());
@@ -69,9 +67,9 @@ fn anchored_escapes(
     let mut reported: FxHashSet<(BlockId, u32)> = FxHashSet::default();
 
     let join = |target: BlockId,
-                    incoming: &FxHashSet<LocalId>,
-                    in_states: &mut Vec<Option<FxHashSet<LocalId>>>,
-                    worklist: &mut Vec<BlockId>| {
+                incoming: &FxHashSet<LocalId>,
+                in_states: &mut Vec<Option<FxHashSet<LocalId>>>,
+                worklist: &mut Vec<BlockId>| {
         match &mut in_states[target] {
             None => {
                 in_states[target] = Some(incoming.clone());
@@ -94,12 +92,14 @@ fn anchored_escapes(
         let data = &blocks[block];
         let bucket = &events[block];
         let mut cursor = 0usize;
-        let escape = |at: u32, reported: &mut FxHashSet<(BlockId, u32)>,
-                          findings: &mut Vec<((BlockId, u32, usize), BackendError)>| {
-            if reported.insert((block, at)) {
-                findings.push(((block, at, 0), anchored_escape()));
-            }
-        };
+        let escape =
+            |at: u32,
+             reported: &mut FxHashSet<(BlockId, u32)>,
+             findings: &mut Vec<((BlockId, u32, usize), BackendError)>| {
+                if reported.insert((block, at)) {
+                    findings.push(((block, at, 0), anchored_escape()));
+                }
+            };
 
         for (i, inst) in data.insts.iter().enumerate() {
             while cursor < bucket.len() && bucket[cursor].0 <= i as u32 {

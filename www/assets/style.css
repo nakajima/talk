@@ -248,34 +248,11 @@ main {
   padding: 0 clamp(1rem, 4vw, 2.5rem) 7rem;
 }
 
-.page-header {
-  display: flex;
-  align-items: flex-end;
-  min-height: 12rem;
-}
-
-.page-header-content {
-  width: 100%;
-  max-width: 56rem;
-  margin: 0 auto;
-}
-
-.page-header .page-kicker {
-  display: block;
-  margin-bottom: 1rem;
-  color: var(--ink-dim);
-  font-size: 0.75rem;
-}
-
 .page-header-title-row {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   gap: 2rem;
-}
-
-.page-header h1 {
-  margin-bottom: 0;
 }
 
 .page-content {
@@ -284,20 +261,6 @@ main {
 
 .page-content > :last-child {
   margin-bottom: 0;
-}
-
-.page-content h2,
-.page-content h3 {
-  position: static;
-  margin: 3rem 0 1rem;
-  padding: 0;
-  color: var(--accent);
-  background: transparent;
-  font-size: 1.15rem;
-}
-
-.page-content h4:first-child {
-  margin-top: 0;
 }
 
 .page-content .anchor {
@@ -326,47 +289,17 @@ main {
   content: "$ ";
 }
 
-.manual-page {
-  max-width: 92rem;
-}
-
-.manual-layout {
-  display: grid;
-  grid-template-columns: 12rem minmax(0, 56rem) 12rem;
-  justify-content: center;
-  gap: 1.5rem;
-}
-
-.manual-document {
-  min-width: 0;
-}
-
 .manual-outline {
-  min-width: 0;
-  padding-top: 3rem;
+  padding-top: 0;
 }
 
 .manual-outline nav {
-  position: sticky;
-  top: 4.75rem;
-  max-height: calc(100vh - 6.25rem);
-  overflow-y: auto;
-  scrollbar-width: thin;
-}
-
-.manual-outline-title {
-  display: block;
-  margin-bottom: 0.75rem;
-  color: var(--ink-dim);
-  font-size: 0.7rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  position: static;
 }
 
 .manual-outline ol {
   margin: 0;
-  padding: 0 0 0 0.75rem;
-  border-left: 1px solid var(--color-tin-3);
+  padding: 0;
   list-style: none;
 }
 
@@ -385,27 +318,6 @@ main {
   font-size: 0.66rem;
 }
 
-.manual-outline a {
-  display: block;
-  padding: 0.35rem 0.5rem;
-  color: var(--ink-dim);
-  font-size: 0.72rem;
-  line-height: 1.35;
-  text-decoration: none;
-}
-
-.manual-outline a:hover,
-.manual-outline a:focus-visible {
-  color: #fff;
-}
-
-.manual-outline a[aria-current="page"] {
-  margin-left: -0.8rem;
-  padding-left: 1.25rem;
-  color: var(--accent);
-  border-left: 2px solid var(--accent);
-}
-
 .manual-pagination {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
@@ -418,7 +330,7 @@ main {
 }
 
 .manual-pagination-top {
-  margin-top: 3rem;
+  margin-top: 0;
 }
 
 .manual-pagination a {
@@ -446,35 +358,305 @@ main {
   text-align: right;
 }
 
-/* full-bleed bands: element stretches to the viewport edges,
-   its content stays in the column */
+/* Shared Guide/Reference page system. The shell owns structural layout;
+   adapters such as manual-outline and docs-catalog only supply content. */
 
-header,
-main h2,
-main > h1 {
+.site-page {
+  --site-page-columns: 13rem minmax(0, 56rem) 12rem;
+  --site-content-column: 2;
+
+  max-width: 92rem;
+  padding-bottom: 7rem;
+}
+
+.site-page-header,
+.site-page-layout {
+  display: grid;
+  grid-template-columns: var(--site-page-columns, minmax(0, 56rem));
+  justify-content: center;
+  column-gap: 2rem;
+}
+
+.site-page-header {
+  align-items: end;
+  min-height: 8rem;
+  padding: 2rem 0 1.75rem;
+  border-bottom: 1px solid var(--color-tin-3);
+}
+
+.site-page-heading {
+  grid-column: var(--site-content-column, 1);
+  min-width: 0;
+}
+
+.site-page-heading h1 {
+  margin: 0;
+  font-size: clamp(2rem, 4vw, 3rem);
+  letter-spacing: -0.02em;
+}
+
+.site-breadcrumbs {
+  margin: 0 0 0.75rem;
+  color: var(--ink-dim);
+  font-size: 0.72rem;
+}
+
+.site-breadcrumbs a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--color-tin-4);
+  text-underline-offset: 0.2em;
+}
+
+.site-breadcrumbs a:hover,
+.site-breadcrumbs a:focus-visible {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+.site-page-layout {
+  padding-top: 2.5rem;
+}
+
+.site-page-content {
+  min-width: 0;
+}
+
+.site-page-sidebar,
+.site-page-rail {
+  position: sticky;
+  top: 4.75rem;
+  align-self: start;
+  min-width: 0;
+  max-height: calc(100vh - 6rem);
+  overflow-y: auto;
+  font-size: 0.72rem;
+  scrollbar-width: thin;
+}
+
+.site-page-sidebar {
+  grid-column: 1;
+}
+
+.site-page-content {
+  grid-column: 2;
+}
+
+.site-page-rail {
+  grid-column: 3;
+}
+
+.site-nav-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.site-nav-label {
+  display: block;
+  margin-bottom: 0.6rem;
+  color: var(--ink-dim);
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.site-page-sidebar a,
+.site-page-rail a {
+  display: block;
+  padding: 0.32rem 0.5rem;
+  color: var(--ink-dim);
+  border-left: 1px solid var(--color-tin-3);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.site-page-sidebar a:hover,
+.site-page-sidebar a:focus-visible,
+.site-page-rail a:hover,
+.site-page-rail a:focus-visible {
+  color: #fff;
+}
+
+.site-page-sidebar a[aria-current="page"],
+.site-page-sidebar a.active,
+.site-page-rail a[aria-current="page"],
+.site-page-rail a.active {
+  color: var(--accent);
+  border-left: 2px solid var(--accent);
+}
+
+.site-notice {
+  margin: 0 0 2rem;
+  padding: 1rem;
+  color: var(--ink-dim);
+  background: var(--color-tin-1);
+  border: 1px solid var(--color-tin-3);
+  border-left: 3px solid oklch(82% 0.18 80);
+}
+
+.site-notice > strong {
+  display: block;
+  color: oklch(90% 0.18 80);
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.site-notice > .prose {
+  margin-top: 0.45rem;
+}
+
+/* Markdown rendered on Guide pages and inside API documentation shares one
+   local rhythm and cannot inherit the language tour's decorative bands. */
+
+.prose :where(h2, h3, h4, h5, h6, p, ul, ol, blockquote, pre, hr, table, figure) {
+  margin: 0;
+}
+
+.prose > * + * {
+  margin-top: 0.9rem;
+}
+
+.prose :where(h2, h3, h4, h5, h6) {
+  position: static;
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  font-weight: 700;
+  line-height: 1.3;
+  letter-spacing: 0;
+  text-wrap: balance;
+}
+
+.prose h2 { font-size: 1.2rem; }
+.prose h3 { font-size: 1.05rem; }
+.prose h4 { font-size: 1rem; }
+.prose h5 { font-size: 0.9rem; }
+.prose h6 {
+  color: var(--ink-dim);
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.prose > :where(h2, h3, h4, h5, h6):not(:first-child) {
+  margin-top: 2rem;
+}
+
+.prose > :where(h2, h3, h4, h5, h6) + * {
+  margin-top: 0.55rem;
+}
+
+.prose :where(blockquote, li) > * + * { margin-top: 0.65rem; }
+.prose :where(ul, ol) { padding-left: 1.5rem; }
+.prose li + li { margin-top: 0.35rem; }
+
+.prose blockquote {
+  padding: 0.2rem 0 0.2rem 1rem;
+  color: var(--ink-dim);
+  border-left: 2px solid var(--color-tin-3);
+}
+
+.prose code {
+  font-size: 0.92em;
+  font-weight: 400;
+}
+
+.prose :not(pre) > code {
+  padding: 0.1em 0.35em;
+  background: var(--color-tin-1);
+}
+
+.prose pre {
+  max-width: 100%;
+  padding: 1rem;
+  overflow-x: auto;
+  color: var(--ink);
+  background: var(--color-tin-1);
+  border: 1px solid var(--color-tin-3);
+  font-size: 0.85rem;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.prose pre code {
+  padding: 0;
+  background: transparent;
+  font-size: 1em;
+  line-height: inherit;
+}
+
+.prose hr {
+  height: 0;
+  border: 0;
+  border-top: 1px solid var(--color-tin-3);
+}
+
+.prose > * + hr,
+.prose > hr + * { margin-top: 1.5rem; }
+
+.prose table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.prose :where(th, td) {
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid var(--color-tin-3);
+  text-align: left;
+  vertical-align: top;
+}
+
+.prose th {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.prose img {
+  max-width: 100%;
+  height: auto;
+}
+
+.prose a {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.16em;
+}
+
+/* full-bleed bands belong only to the language tour. */
+
+.tour-page > header,
+.tour-page h2,
+.tour-page > h1 {
   margin-inline: calc((100vw - 100%) / -2);
   padding-inline: calc((100vw - 100%) / 2);
 }
 
-header {
+.tour-page > header {
   background: #000;
-  padding-top: 4rem;
-  padding-bottom: 4rem;
+  padding-top: 2rem;
+  padding-bottom: 2rem;
 }
 
-header + p {
+.tour-page > header + p {
   margin-top: 2rem;
   margin-bottom: 2rem;
   max-width: none;
 }
 
-header h1 {
+.tour-page > header h1 {
   font-weight: 700;
   margin: 0 0 2.5rem;
 	font-size: 3rem;
 }
 
-header h1 span {
+.tour-page > header h1 span {
 	letter-spacing: -0.2rem;
 }
 
@@ -522,7 +704,7 @@ main li p { margin: 0; }
 
 /* section bands stick to the top while their section scrolls */
 
-main h2 {
+.tour-page h2 {
   position: sticky;
   top: 3.25rem;
   z-index: 50;
@@ -560,11 +742,11 @@ main h2 {
 
 /* the first band sits closer to the intro than bands sit to each other */
 
-main > section:first-of-type > h2 {
+.tour-page > section:first-of-type > h2 {
   margin-top: 0;
 }
 
-main > h1 {
+.tour-page > h1 {
   background: var(--color-tin-1);
   font-size: 1.4rem;
   font-weight: 700;
@@ -575,20 +757,23 @@ main > h1 {
   margin-bottom: 2rem;
 }
 
-h4 {
+.tour-page h4 {
   font-size: 1rem;
   font-weight: 700;
   color: var(--accent);
   margin: 2.5rem 0 0.6rem;
 }
 
-h5 {
+.tour-page h5 {
   font-size: 1rem;
   font-weight: 700;
   margin: 2rem 0 0.6rem;
 }
 
-p code, li code, h4 code, h5 code {
+.tour-page p code,
+.tour-page li code,
+.tour-page h4 code,
+.tour-page h5 code {
   background: var(--color-tin-1);
   padding: 0.1em 0.35em;
 }
@@ -689,17 +874,18 @@ hr {
 }
 
 @media (max-width: 1100px) {
-  .manual-layout {
-    grid-template-columns: 12rem minmax(0, 56rem);
+  .site-page {
+    --site-page-columns: 13rem minmax(0, 56rem);
   }
 
-  .manual-rail {
+  .site-page-rail {
     display: none;
   }
 }
 
 @media (max-width: 850px) {
-  .manual-layout {
+  .manual-page .site-page-header,
+  .manual-page .site-page-layout {
     display: block;
   }
 
@@ -729,6 +915,18 @@ hr {
 }
 
 @media (max-width: 700px) {
+  .site-page-header,
+  .site-page-layout {
+    display: block;
+  }
+
+  .site-page-sidebar,
+  .site-page-rail {
+    position: static;
+    height: auto;
+    max-height: none;
+  }
+
   .global-nav {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -746,7 +944,7 @@ hr {
 
   .global-nav-links {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     width: 100%;
     min-width: 0;
   }
@@ -790,11 +988,11 @@ hr {
     grid-column: 2;
   }
 
-  header {
+  .tour-page > header {
     padding-top: 2.5rem;
     padding-bottom: 2.5rem;
   }
-  header h1 { letter-spacing: -0.04em; }
+  .tour-page > header h1 { letter-spacing: -0.04em; }
   .intro {
     flex-direction: column;
     align-items: stretch;
@@ -804,7 +1002,7 @@ hr {
 
   /* the band becomes a single row that scrolls sideways */
 
-  main h2 {
+  .tour-page h2 {
     font-size: 0.9rem;
     letter-spacing: 0.02em;
     padding-top: 0.7rem;

@@ -1,0 +1,195 @@
+use package::documentable::{ Documentable, DocumentableID }
+use package::generate::{ generate }
+use package::store::{ DocumentableCollection }
+
+func assert_type_id(_ id: DocumentableID, expected: Int) -> Void {
+	match id {
+		.type(index) -> assert(index == expected),
+		_ -> assert(false)
+	}
+}
+
+func assert_type(_ documentable: &Documentable, expected: String) -> Void {
+	match documentable {
+		.type(value) -> assert(value.name == expected),
+		_ -> assert(false)
+	}
+}
+
+func assert_function_signature(_ documentable: &Documentable) -> Void {
+	match documentable {
+		.function(function) -> {
+			assert(function.name == "transform")
+			assert(function.generics.count == 1)
+			assert(function.params.count == 1)
+			assert(function.effects.count == 1)
+			if let .some(id) = function.returns {
+				assert_type_id(id, expected: 4)
+			} else {
+				assert(false)
+			}
+		},
+		_ -> assert(false)
+	}
+}
+
+func assert_parameter(_ documentable: &Documentable) -> Void {
+	match documentable {
+		.parameter(parameter) -> {
+			assert(parameter.name == "value")
+			if let .some(id) = parameter.type {
+				assert_type_id(id, expected: 1)
+			} else {
+				assert(false)
+			}
+		},
+		_ -> assert(false)
+	}
+}
+
+func assert_effect(_ documentable: &Documentable) -> Void {
+	match documentable {
+		.#"effect"(value) -> assert(value.name == "io"),
+		_ -> assert(false)
+	}
+}
+
+func assert_global(_ documentable: &Documentable) -> Void {
+	match documentable {
+		.global(global) -> {
+			assert(global.name == "answer")
+			if let .some(id) = global.type {
+				assert_type_id(id, expected: 0)
+			} else {
+				assert(false)
+			}
+		},
+		_ -> assert(false)
+	}
+}
+
+func assert_struct(_ documentable: &Documentable) -> Void {
+	match documentable {
+		.nominal(value) -> {
+			match value {
+				.#"struct"(name: name, generics: generics, properties: properties, methods: methods) -> {
+					assert(name == "Box")
+					assert(generics.count == 1)
+					assert(properties.count == 1)
+					assert(methods.count == 1)
+				},
+				_ -> assert(false)
+			}
+		},
+		_ -> assert(false)
+	}
+}
+
+func assert_enum(_ documentable: &Documentable) -> Void {
+	match documentable {
+		.nominal(value) -> {
+			match value {
+				.#"enum"(name: name, generics: generics, variants: variants, methods: methods) -> {
+					assert(name == "Choice")
+					assert(generics.count == 0)
+					assert(variants.count == 1)
+					assert(methods.count == 1)
+				},
+				_ -> assert(false)
+			}
+		},
+		_ -> assert(false)
+	}
+}
+
+test "collects a top-level WIP marker as module metadata" {
+	let module = DocumentableCollection()
+	module.collect(source: "// no-core\n\n// WIP: The API may change.\n// Module overview.\n\nfunc run() {}")
+	match module.module_wip {
+		.some(description) -> assert(description == "The API may change."),
+		.none -> assert(false)
+	}
+	assert(module.module_documentation.count == 1)
+	assert(module.module_documentation[0] == "Module overview.")
+
+	let attached = DocumentableCollection()
+	attached.collect(source: "// WIP: Not stable.\n// Runs the operation.\nfunc run() {}")
+	assert(attached.module_documentation.is_empty())
+	assert(attached.items[0].documentation.count == 1)
+	assert(attached.items[0].documentation[0] == "Runs the operation.")
+}
+
+test "collects a function signature" {
+	let docs = generate(code: "// Transforms a value.\npub func transform<T>(value: T) 'io -> String { \"done\" }")
+	assert(docs.count == 6)
+	assert_function_signature(docs[5].value)
+	assert(docs[5].documentation.count == 1)
+	assert(docs[5].documentation[0] == "Transforms a value.")
+	if let .some(source) = docs[5].source {
+		assert(source == "pub func transform<T>(value: T) 'io -> String { \"done\" }")
+	} else {
+		assert(false)
+	}
+	assert_type(docs[1].value, expected: "T")
+	assert_parameter(docs[2].value)
+	assert_effect(docs[3].value)
+}
+
+test "collects effect declarations as documented top-level entries" {
+	let docs = generate(code: "// Performs I/O.\neffect 'io<T>(value: T) -> T")
+	assert(docs.count == 5)
+	match docs[4].value {
+		.effect_declaration(declaration) -> {
+			assert(declaration.name == "io")
+			assert(declaration.generics.count == 1)
+			assert(declaration.params.count == 1)
+			assert_type_id(declaration.returns, expected: 3)
+		},
+		_ -> assert(false)
+	}
+	assert(docs[4].documentation[0] == "Performs I/O.")
+}
+
+test "collects globals and nominal members" {
+	let code = "// The answer.\npub let answer: Int = 42\n// Stores a value.\nstruct Box<T> {\n\t// The stored value.\n\tlet value: T\n\t// Makes a box.\n\tstatic func make(value: T) -> T { value }\n}\n// A choice.\nenum Choice {\n\t// Contains a value.\n\tcase value(Int)\n\t// Gets a value.\n\tfunc get() -> Int { 0 }\n}"
+	let docs = generate(code: code)
+	assert(docs.count == 15)
+	assert_global(docs[1].value)
+	assert(docs[1].documentation[0] == "The answer.")
+	assert(docs[4].documentation[0] == "The stored value.")
+	assert(docs[8].documentation[0] == "Makes a box.")
+	if let .some(source) = docs[8].source {
+		assert(source == "static func make(value: T) -> T { value }")
+	} else {
+		assert(false)
+	}
+	assert_struct(docs[9].value)
+	assert(docs[9].documentation[0] == "Stores a value.")
+	assert(docs[11].documentation[0] == "Contains a value.")
+	assert(docs[13].documentation[0] == "Gets a value.")
+	assert_enum(docs[14].value)
+	assert(docs[14].documentation[0] == "A choice.")
+}
+
+test "keeps complex type spellings" {
+	let docs = generate(code: "func load(value: &Array<String?>) -> (Int, String) { (0, \"\") }")
+	assert_type(docs[0].value, expected: "&Array<String?>")
+	assert_type(docs[2].value, expected: "(Int, String)")
+}
+
+test "appends documentables from multiple sources" {
+	let documentables = DocumentableCollection()
+	documentables.collect(source: "func first(value: Int) { }")
+	documentables.collect(source: "func second(value: String) { }")
+	assert(documentables.items.count == 6)
+	assert_type(documentables.items[3].value, expected: "String")
+
+	let parameter: &Documentable = documentables.items[4].value
+	match parameter { .parameter(value) -> {
+			if let .some(id) = value.type {
+				assert_type_id(id, expected: 3)
+			} else {
+				assert(false)
+			}
+		}, _ -> assert(false) }
+}

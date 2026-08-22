@@ -12,11 +12,11 @@ use rustc_hash::FxHashMap;
 use crate::compiling::typed_program::TypedProgram;
 use crate::name::Name;
 mod entries;
-mod flow;
-mod ownership;
 pub(crate) mod escape;
+mod flow;
 mod glue;
 pub(crate) mod layout;
+mod ownership;
 mod release;
 mod verify;
 mod visit;
@@ -388,9 +388,7 @@ fn needs_drop_inner(builder: &ProgramBuilder<'_>, ty: &Ty, borrowed: bool) -> bo
         // stored field's hook runs through the container's structural
         // glue, so containment schedules the drop too.
         Ty::Nominal(..) if conforms_to(builder, ty, Symbol::Deinit) => true,
-        Ty::Nominal(_, _) => {
-            contains_buffer(builder, ty) || contains_deinit(builder, ty)
-        }
+        Ty::Nominal(_, _) => contains_buffer(builder, ty) || contains_deinit(builder, ty),
         // Aggregate components own even when borrow-typed (owning
         // stored views); only a top-level borrow is a frame view.
         Ty::Tuple(items) => items
@@ -1839,15 +1837,17 @@ impl<'a> ProgramBuilder<'a> {
         span: Span,
     ) -> Result<FuncId, BackendError> {
         let Some(callable) = self.callables.get(&symbol).copied() else {
-            let name =
-                self.programs
-                    .iter()
-                    .find_map(|input| {
-                        input.program.symbol_names().iter().find_map(
-                            |(candidate, name)| (*candidate == symbol).then(|| name.clone()),
-                        )
-                    })
-                    .unwrap_or_else(|| format!("{symbol:?}"));
+            let name = self
+                .programs
+                .iter()
+                .find_map(|input| {
+                    input
+                        .program
+                        .symbol_names()
+                        .iter()
+                        .find_map(|(candidate, name)| (*candidate == symbol).then(|| name.clone()))
+                })
+                .unwrap_or_else(|| format!("{symbol:?}"));
             return Err(BackendError::unsupported(
                 format!("calls to `{name}` without an available source body are not supported yet"),
                 span,
@@ -2528,6 +2528,7 @@ impl<'a> ProgramBuilder<'a> {
             .as_ref()
             .expect("typed facts invariant: a function body carries frame facts");
         fx.celled = facts.celled.clone();
+        fx.reassigned = facts.assigned.clone();
         fx.nested_refs = facts.nested_refs.clone();
         fx.cell_celled_params(params);
 
@@ -2677,6 +2678,10 @@ struct FunctionBuilder<'p, 'a> {
     uninitialized: rustc_hash::FxHashSet<LocalId>,
     /// Symbols this frame assignment-converts to cells (see `cell_scan`).
     celled: rustc_hash::FxHashSet<Symbol>,
+    /// Symbols assigned anywhere in this frame: a loan binding that is
+    /// later reassigned must own from birth, since the slot receives an
+    /// owned value at the assignment.
+    reassigned: rustc_hash::FxHashSet<Symbol>,
     /// Symbols referenced under a nested function value in this frame —
     /// the letrec test for local function binders.
     nested_refs: rustc_hash::FxHashSet<Symbol>,
@@ -2794,6 +2799,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             captured_locals: rustc_hash::FxHashSet::default(),
             uninitialized: rustc_hash::FxHashSet::default(),
             celled: rustc_hash::FxHashSet::default(),
+            reassigned: rustc_hash::FxHashSet::default(),
             nested_refs: rustc_hash::FxHashSet::default(),
             cell_handles: rustc_hash::FxHashSet::default(),
             borrow_roots: FxHashMap::default(),
@@ -2884,8 +2890,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             let head = next.unwrap_or(self.current);
             if let Inst::Call { unwind, .. }
             | Inst::CallIndirect { unwind, .. }
-            | Inst::Suspend { unwind, .. } =
-                &mut self.blocks[*block].insts[*index as usize]
+            | Inst::Suspend { unwind, .. } = &mut self.blocks[*block].insts[*index as usize]
             {
                 *unwind = Some(head);
             }
@@ -4080,7 +4085,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             _ => None,
         };
         let kept_was_temp = keep.is_some_and(|kept| {
-            self.stmt_temps.get(floor..).is_some_and(|flushed| flushed.contains(&kept))
+            self.stmt_temps
+                .get(floor..)
+                .is_some_and(|flushed| flushed.contains(&kept))
         });
         self.stmt_temps.truncate(floor);
         // A kept TEMP survives to the enclosing statement's boundary. A
@@ -6117,6 +6124,20 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.locals.insert(*symbol, local);
                 self.name_local(local, bind_name);
                 self.frame_entry(local).declared = Some(ty.clone());
+                // A loan binding the frame later reassigns cannot stay a
+                // loan: the slot receives an OWNED value at the
+                // assignment, so the binding must own from birth. Donate
+                // a reference now (the standard borrow-source
+                // materialization); the assignment's displacement then
+                // releases it like any owned local. View tracking does
+                // not apply — the binding is an owner, not a loan.
+                let force_own = self.reassigned.contains(symbol) && matches!(ty, Ty::Borrow(_, _));
+                if force_own {
+                    let inner = strip_borrows(ty.clone());
+                    self.consume_into(value, &inner, pattern.span)?;
+                    self.own_local(local, &inner);
+                    return Ok(());
+                }
                 if contains_borrow_classified(self.program_builder, ty) {
                     self.view_locals.insert(local);
                     // A borrow-typed bind roots at the source even when
@@ -9820,8 +9841,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     layout,
                     args: vec![Operand::Local(local)],
                 });
-                fx.frame_entry(local).declared =
-                    Some(Ty::Nominal(Symbol::Int, Vec::new()));
+                fx.frame_entry(local).declared = Some(Ty::Nominal(Symbol::Int, Vec::new()));
                 fx.frame_entry(wrapped).declared = Some(ty.clone());
                 fx.own_local(wrapped, &ty);
                 if let Name::Resolved(symbol, name) = &param.name {
@@ -9947,9 +9967,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // A clause that finishes without `continue` discontinues:
                 // its value becomes the delimiter frame's return
                 // (CHG-03), after this clause's own cleanup.
-                Some(delimiter) => {
-                    fx.emit_discontinue(Operand::Local(delimiter), value)
-                }
+                Some(delimiter) => fx.emit_discontinue(Operand::Local(delimiter), value),
                 // A resumption-binding clause holds the installer's outward
                 // linkage: completing IS the abort, by plain return.
                 None => fx.emit_frame_return(value),
@@ -10127,6 +10145,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             .as_ref()
             .expect("typed facts invariant: a closure body carries frame facts");
         fx.celled = facts.celled.clone();
+        fx.reassigned = facts.assigned.clone();
         fx.nested_refs = facts.nested_refs.clone();
         let declared_arity = u16::try_from(func.params.len())
             .map_err(|_| BackendError::new("too many parameters".into(), func.body.span))?;

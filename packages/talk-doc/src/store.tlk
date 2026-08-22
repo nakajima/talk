@@ -1,0 +1,664 @@
+use package::documentable::{ Builtin, Documentable, DocumentableEntry, DocumentableID, Effect, EffectDeclaration, Function, Global, Method, Nominal, Parameter, Property, Type, Variant }
+use syntax::{ Body, Comment, Decl, DeclKind, DocIndex, Func, FuncSignature, GenericDecl, Parameter as SyntaxParameter, Pattern, ReceiverMode, TypeAnnotation, collect_doc_comments, parse_file_source }
+
+// A flat, source-ordered graph of declarations and signature components.
+//
+// `DocumentableID` payloads index `items` and carry the expected entry kind.
+// Nested types, parameters, effects, and payload types are separate entries so
+// signatures can reference them without copying source spellings. One collection
+// is reused for only one source string at a time.
+pub struct DocumentableCollection {
+	let source: String
+	let public_only: Bool
+	let module_wip_start: Int
+	// The detached comment group at the beginning of the source file.
+	pub let module_documentation: [String]
+	// The description from a leading `// WIP:` marker, when present.
+	//
+	// Leading whitespace and the `// no-core` pragma may precede the marker. The
+	// marker is metadata and is removed from module and declaration prose.
+	pub let module_wip: String?
+	// Declaration and signature-component entries in insertion order.
+	pub let items: [DocumentableEntry]
+
+	// Creates an empty collection configured to include private declarations.
+	pub init() {
+		self.source = ""
+		self.public_only = false
+		self.module_wip_start = -1
+		self.module_documentation = []
+		self.module_wip = .none
+		self.items = []
+	}
+
+	mut func insert(consume _ documentable: Documentable, documentation: [String]) -> DocumentableID {
+		self.insert_with_source(documentable, documentation: documentation, source: .none)
+	}
+
+	mut func insert_with_source(consume _ documentable: Documentable, documentation: [String], source: String?) -> DocumentableID {
+		let index = self.items.count
+		let id = match documentable {
+			.builtin(_) -> DocumentableID.builtin(index),
+			.function(_) -> DocumentableID.function(index),
+			.global(_) -> DocumentableID.global(index),
+			.method(_) -> DocumentableID.method(index),
+			.nominal(_) -> DocumentableID.nominal(index),
+			.property(_) -> DocumentableID.property(index),
+			.type(_) -> DocumentableID.type(index),
+			.variant(_) -> DocumentableID.variant(index),
+			.effect_declaration(_) -> DocumentableID.effect_declaration(index),
+			.#"effect"(_) -> DocumentableID.#"effect"(index),
+			.parameter(_) -> DocumentableID.parameter(index)
+		}
+		self.items.push(
+			DocumentableEntry(value: documentable, documentation: documentation, source: source)
+		)
+		id
+	}
+
+	// Adds a synthetic compiler-provided type and its Markdown documentation.
+	//
+	// Builtins have no declaration source and therefore do not receive a View
+	// Source disclosure. The caller must use the compiler-recognized type spelling.
+	pub mut func add_builtin(name: String, documentation: [String]) -> Void {
+		self.insert(.builtin(Builtin(name: name)), documentation: documentation)
+		()
+	}
+
+	// Resolves a typed entry ID, returning `none` for an out-of-range index.
+	pub func get(id: DocumentableID) -> DocumentableEntry? {
+		let index = match id {
+			.builtin(value) -> value,
+			.function(value) -> value,
+			.global(value) -> value,
+			.method(value) -> value,
+			.nominal(value) -> value,
+			.property(value) -> value,
+			.type(value) -> value,
+			.variant(value) -> value,
+			.effect_declaration(value) -> value,
+			.#"effect"(value) -> value,
+			.parameter(value) -> value
+		}
+		if index < 0 || index >= self.items.count { return .none }
+		.some(self.items[index])
+	}
+
+	func source_text(start: Int, end: Int) -> String {
+		let view = self.source.utf8()
+		let bytes: [Byte] = []
+		let index = start
+		loop index < end {
+			bytes.push(view.at(index: index))
+			index = index + 1
+		}
+		String.from_bytes(bytes: bytes)
+	}
+
+	func method_prefix(is_static: Bool, receiver: ReceiverMode) -> String {
+		if is_static { return "static " }
+		match receiver {
+			.ref_receiver -> "mut ",
+			.consuming_receiver -> "consuming ",
+			.none_receiver -> ""
+		}
+	}
+
+	func declaration_header(declaration: &Decl, end: Int, prefix: String) -> String {
+		(prefix + self.source_text(start: declaration.start, end: end)).trimmed().to_string()
+	}
+
+	func declaration_source(declaration: &Decl, prefix: String) -> String {
+		let visibility = if declaration.is_public { "pub " } else { "" }
+		visibility + prefix + self.source_text(start: declaration.start, end: declaration.end)
+	}
+
+	func comment_text(comment: Comment) -> String {
+		let start = comment.start + 2
+		if start < comment.end {
+			let first = self.source.utf8().at(index: start)._toInt()
+			if first == 32 || first == 9 { start = start + 1 }
+		}
+		self.source_text(start: start, end: comment.end)
+	}
+
+	func documentation(declaration: &Decl, docs: &DocIndex) -> [String] {
+		let lines: [String] = []
+		for documented in docs.entries {
+			if documented.decl_start == declaration.start && documented.decl_end == declaration.end {
+				for comment in documented.comments {
+					if comment.start != self.module_wip_start {
+						lines.push(self.comment_text(comment: comment))
+					}
+				}
+				return lines
+			}
+		}
+		lines
+	}
+
+	mut func collect_module_wip() -> Void {
+		self.module_wip_start = -1
+		self.module_wip = .none
+		let view = self.source.utf8()
+		let cursor = 0
+		loop cursor < view.count() {
+			let byte = view.at(index: cursor)._toInt()
+			if byte == 32 || byte == 9 || byte == 10 || byte == 13 {
+				cursor = cursor + 1
+				continue
+			}
+			break
+		}
+		if cursor + 10 <= view.count() && self.source_text(start: cursor, end: cursor + 10) == "// no-core" {
+			cursor = cursor + 10
+			loop cursor < view.count() {
+				let byte = view.at(index: cursor)._toInt()
+				if byte == 32 || byte == 9 || byte == 10 || byte == 13 {
+					cursor = cursor + 1
+					continue
+				}
+				break
+			}
+		}
+		if cursor + 7 > view.count() || self.source_text(start: cursor, end: cursor + 7) != "// WIP:" { return () }
+
+		self.module_wip_start = cursor
+		let description_start = cursor + 7
+		loop description_start < view.count() {
+			let byte = view.at(index: description_start)._toInt()
+			if byte == 32 || byte == 9 {
+				description_start = description_start + 1
+				continue
+			}
+			break
+		}
+		let description_end = description_start
+		loop description_end < view.count() {
+			let byte = view.at(index: description_end)._toInt()
+			if byte == 10 || byte == 13 { break }
+			description_end = description_end + 1
+		}
+		self.module_wip = .some(self.source_text(start: description_start, end: description_end))
+	}
+
+	func module_docs(docs: &DocIndex) -> [String] {
+		let view = self.source.utf8()
+		let cursor = 0
+		loop cursor < view.count() {
+			let byte = view.at(index: cursor)._toInt()
+			if byte == 32 || byte == 9 || byte == 10 || byte == 13 {
+				cursor = cursor + 1
+				continue
+			}
+			break
+		}
+		if cursor + 10 <= view.count() && self.source_text(start: cursor, end: cursor + 10) == "// no-core" {
+			cursor = cursor + 10
+			loop cursor < view.count() {
+				let byte = view.at(index: cursor)._toInt()
+				if byte == 32 || byte == 9 || byte == 10 || byte == 13 {
+					cursor = cursor + 1
+					continue
+				}
+				break
+			}
+		}
+
+		let lines: [String] = []
+		let index = 0
+		loop index < docs.orphans.count && docs.orphans[index].end <= cursor {
+			index = index + 1
+		}
+		loop index < docs.orphans.count {
+			let comment = docs.orphans[index]
+			if comment.start != cursor { break }
+			if comment.start != self.module_wip_start {
+				lines.push(self.comment_text(comment: comment))
+			}
+			cursor = comment.end
+			let newlines = 0
+			loop cursor < view.count() {
+				let byte = view.at(index: cursor)._toInt()
+				if byte == 10 {
+					newlines = newlines + 1
+					cursor = cursor + 1
+					continue
+				}
+				if byte == 32 || byte == 9 || byte == 13 {
+					cursor = cursor + 1
+					continue
+				}
+				break
+			}
+			if newlines != 1 { break }
+			index = index + 1
+		}
+		lines
+	}
+
+	mut func insert_type(annotation: TypeAnnotation) -> DocumentableID {
+		self.insert(
+			.type(
+				Type(name: self.source_text(start: annotation.start, end: annotation.end))
+			),
+			documentation: []
+		)
+	}
+
+	mut func insert_generics(generics: &[GenericDecl]) -> [DocumentableID] {
+		let ids: [DocumentableID] = []
+		for generic in generics {
+			ids.push(self.insert(
+				.type(Type(name: self.source_text(start: generic.start, end: generic.end))),
+				documentation: []
+			))
+		}
+		ids
+	}
+
+	mut func make_function(function: Func, signature: String) -> Function {
+		let generics = self.insert_generics(generics: function.generics)
+		let params: [DocumentableID] = []
+		for param in function.params {
+			let type: DocumentableID? = .none
+			if let .some(annotation) = param.annotation {
+				type = .some(self.insert_type(annotation: annotation))
+			}
+			params.push(
+				self.insert(
+					.parameter(Parameter(name: param.name, type: type)),
+					documentation: []
+				)
+			)
+		}
+
+		let effects: [DocumentableID] = []
+		for name in function.effects.names {
+			effects.push(self.insert(.#"effect"(Effect(name: name)), documentation: []))
+		}
+
+		let returns: DocumentableID? = .none
+		if let .some(annotation) = function.ret {
+			returns = .some(self.insert_type(annotation: annotation))
+		}
+
+		Function(
+			signature: signature,
+			name: function.name,
+			generics: generics,
+			params: params,
+			effects: effects,
+			returns: returns
+		)
+	}
+
+	mut func make_function_signature(function: FuncSignature, signature: String) -> Function {
+		let generics = self.insert_generics(generics: function.generics)
+		let params: [DocumentableID] = []
+		for param in function.params {
+			let type: DocumentableID? = .none
+			if let .some(annotation) = param.annotation {
+				type = .some(self.insert_type(annotation: annotation))
+			}
+			params.push(
+				self.insert(
+					.parameter(Parameter(name: param.name, type: type)),
+					documentation: []
+				)
+			)
+		}
+
+		let effects: [DocumentableID] = []
+		for name in function.effects.names {
+			effects.push(self.insert(.#"effect"(Effect(name: name)), documentation: []))
+		}
+
+		let returns: DocumentableID? = .none
+		if let .some(annotation) = function.ret {
+			returns = .some(self.insert_type(annotation: annotation))
+		}
+
+		Function(
+			signature: signature,
+			name: function.name,
+			generics: generics,
+			params: params,
+			effects: effects,
+			returns: returns
+		)
+	}
+
+	mut func insert_effect(name: String, generics: &[GenericDecl], params: &[SyntaxParameter], returns: TypeAnnotation, documentation: [String], declaration: &Decl) -> DocumentableID {
+		let generic_ids = self.insert_generics(generics: generics)
+		let parameter_ids: [DocumentableID] = []
+		for param in params {
+			let type: DocumentableID? = .none
+			if let .some(annotation) = param.annotation {
+				type = .some(self.insert_type(annotation: annotation))
+			}
+			parameter_ids.push(self.insert(.parameter(Parameter(name: param.name, type: type)), documentation: []))
+		}
+		let return_id = self.insert_type(annotation: returns)
+		self.insert_with_source(
+			.effect_declaration(EffectDeclaration(
+				signature: self.declaration_header(declaration: declaration, end: declaration.end, prefix: ""),
+				name: name,
+				generics: generic_ids,
+				params: parameter_ids,
+				returns: return_id
+			)),
+			documentation: documentation,
+			source: .some(self.declaration_source(declaration: declaration, prefix: ""))
+		)
+	}
+
+	mut func insert_property(name: String, is_static: Bool, annotation: TypeAnnotation?, documentation: [String]) -> DocumentableID {
+		let type: DocumentableID? = .none
+		if let .some(value) = annotation {
+			type = .some(self.insert_type(annotation: value))
+		}
+		self.insert(
+			.property(Property(name: name, type: type, is_static: is_static)),
+			documentation: documentation
+		)
+	}
+
+	mut func insert_variant(name: String, payloads: &[TypeAnnotation], documentation: [String]) -> DocumentableID {
+		let payload_ids: [DocumentableID] = []
+		for payload in payloads {
+			payload_ids.push(self.insert_type(annotation: payload))
+		}
+		self.insert(
+			.variant(Variant(name: name, payloads: payload_ids)),
+			documentation: documentation
+		)
+	}
+
+	mut func insert_struct(name: String, generics: &[GenericDecl], body: Body, documentation: [String], docs: &DocIndex) -> DocumentableID {
+		let generic_ids = self.insert_generics(generics: generics)
+		let properties: [DocumentableID] = []
+		let methods: [DocumentableID] = []
+		for declaration in body.decls {
+			if self.public_only && declaration.is_public == false { continue }
+			let member_docs = self.documentation(declaration: declaration, docs: docs)
+			match declaration.kind {
+				.property(member_name, _, _, is_static, annotation, _) -> properties.push(
+					self.insert_property(
+						name: member_name,
+						is_static: is_static,
+						annotation: annotation,
+						documentation: member_docs
+					)
+				),
+				.method(function, is_static, receiver) -> {
+					let prefix = self.method_prefix(is_static: is_static, receiver: receiver)
+					let signature = self.declaration_header(
+						declaration: declaration,
+						end: function.body.start,
+						prefix: prefix.clone()
+					)
+					methods.push(
+						self.insert_with_source(
+							.method(Method(
+								function: self.make_function(function: function, signature: signature),
+								is_static: is_static
+							)),
+							documentation: member_docs,
+							source: .some(self.declaration_source(declaration: declaration, prefix: prefix))
+						)
+					)
+				},
+				_ -> ()
+			}
+		}
+		self.insert(
+			.nominal(
+				.#"struct"(
+					name: name,
+					generics: generic_ids,
+					properties: properties,
+					methods: methods
+				)
+			),
+			documentation: documentation
+		)
+	}
+
+	mut func insert_enum(name: String, generics: &[GenericDecl], body: Body, documentation: [String], docs: &DocIndex) -> DocumentableID {
+		let generic_ids = self.insert_generics(generics: generics)
+		let variants: [DocumentableID] = []
+		let methods: [DocumentableID] = []
+		for declaration in body.decls {
+			// Variants are as public as their enum: they never carry a
+			// `pub` modifier, so they are never filtered.
+			if self.public_only && declaration.is_public == false {
+				let keep = match declaration.kind {
+					.enum_variant(_, _, _, _, _, _, _) -> true,
+					_ -> false
+				}
+				if keep == false { continue }
+			}
+			let member_docs = self.documentation(declaration: declaration, docs: docs)
+			match declaration.kind {
+				.enum_variant(member_name, _, _, _, payloads, _, _) -> variants.push(
+					self.insert_variant(
+						name: member_name,
+						payloads: payloads,
+						documentation: member_docs
+					)
+				),
+				.method(function, is_static, receiver) -> {
+					let prefix = self.method_prefix(is_static: is_static, receiver: receiver)
+					let signature = self.declaration_header(
+						declaration: declaration,
+						end: function.body.start,
+						prefix: prefix.clone()
+					)
+					methods.push(
+						self.insert_with_source(
+							.method(Method(
+								function: self.make_function(function: function, signature: signature),
+								is_static: is_static
+							)),
+							documentation: member_docs,
+							source: .some(self.declaration_source(declaration: declaration, prefix: prefix))
+						)
+					)
+				},
+				_ -> ()
+			}
+		}
+		self.insert(
+			.nominal(
+				.#"enum"(
+					name: name,
+					generics: generic_ids,
+					variants: variants,
+					methods: methods
+				)
+			),
+			documentation: documentation
+		)
+	}
+
+	mut func insert_protocol(name: String, generics: &[GenericDecl], body: Body, documentation: [String], docs: &DocIndex) -> DocumentableID {
+		let generic_ids = self.insert_generics(generics: generics)
+		let properties: [DocumentableID] = []
+		let methods: [DocumentableID] = []
+		for declaration in body.decls {
+			let member_docs = self.documentation(declaration: declaration, docs: docs)
+			match declaration.kind {
+				.property(member_name, _, _, is_static, annotation, _) -> properties.push(
+					self.insert_property(
+						name: member_name,
+						is_static: is_static,
+						annotation: annotation,
+						documentation: member_docs
+					)
+				),
+				.method(function, is_static, receiver) -> {
+					let prefix = self.method_prefix(is_static: is_static, receiver: receiver)
+					let signature = self.declaration_header(
+						declaration: declaration,
+						end: function.body.start,
+						prefix: prefix.clone()
+					)
+					methods.push(self.insert_with_source(
+						.method(Method(
+							function: self.make_function(function: function, signature: signature),
+							is_static: is_static
+						)),
+						documentation: member_docs,
+						source: .some(self.declaration_source(declaration: declaration, prefix: prefix))
+					))
+				},
+				.method_requirement(function, receiver) -> {
+					let prefix = self.method_prefix(is_static: false, receiver: receiver)
+					let signature = self.declaration_header(
+						declaration: declaration,
+						end: declaration.end,
+						prefix: prefix.clone()
+					)
+					methods.push(self.insert_with_source(
+						.method(Method(
+							function: self.make_function_signature(function: function, signature: signature),
+							is_static: false
+						)),
+						documentation: member_docs,
+						source: .some(self.declaration_source(declaration: declaration, prefix: prefix))
+					))
+				},
+				.init_requirement(function) -> {
+					let signature = self.declaration_header(declaration: declaration, end: declaration.end, prefix: "")
+					methods.push(self.insert_with_source(
+						.method(Method(
+							function: self.make_function_signature(function: function, signature: signature),
+							is_static: false
+						)),
+						documentation: member_docs,
+						source: .some(self.declaration_source(declaration: declaration, prefix: ""))
+					))
+				},
+				_ -> ()
+			}
+		}
+		self.insert(
+			.nominal(.#"protocol"(name: name, generics: generic_ids, properties: properties, methods: methods)),
+			documentation: documentation
+		)
+	}
+
+	mut func insert_global(pattern: Pattern, annotation: TypeAnnotation?, documentation: [String]) -> Void {
+		if let .bind(name) = pattern.kind {
+			let type: DocumentableID? = .none
+			if let .some(value) = annotation {
+				type = .some(self.insert_type(annotation: value))
+			}
+			self.insert(
+				.global(Global(name: name, type: type)),
+				documentation: documentation
+			)
+			()
+		}
+	}
+
+	mut func add(declaration: Decl, docs: &DocIndex) -> Void {
+		if self.public_only && declaration.is_public == false { return () }
+		let documentation = self.documentation(declaration: declaration, docs: docs)
+		match declaration.kind {
+			.func_decl(function) -> {
+				let signature = self.declaration_header(
+					declaration: declaration,
+					end: function.body.start,
+					prefix: ""
+				)
+				self.insert_with_source(
+					.function(self.make_function(function: function, signature: signature)),
+					documentation: documentation,
+					source: .some(self.declaration_source(declaration: declaration, prefix: ""))
+				)
+				()
+			},
+			.let_decl(pattern, annotation, _) -> self.insert_global(
+				pattern: pattern,
+				annotation: annotation,
+				documentation: documentation
+			),
+			.struct_decl(name, _, _, generics, _, body, _, _) -> {
+				self.insert_struct(
+					name: name,
+					generics: generics,
+					body: body,
+					documentation: documentation,
+					docs: docs
+				)
+				()
+			},
+			.enum_decl(name, _, _, generics, _, body, _, _) -> {
+				self.insert_enum(
+					name: name,
+					generics: generics,
+					body: body,
+					documentation: documentation,
+					docs: docs
+				)
+				()
+			},
+			.protocol_decl(name, _, _, generics, _, body, _) -> {
+				self.insert_protocol(
+					name: name,
+					generics: generics,
+					body: body,
+					documentation: documentation,
+					docs: docs
+				)
+				()
+			},
+			.effect_decl(name, _, _, generics, _, params, returns) -> {
+				self.insert_effect(
+					name: name,
+					generics: generics,
+					params: params,
+					returns: returns,
+					documentation: documentation,
+					declaration: declaration
+				)
+				()
+			},
+			_ -> ()
+		}
+	}
+
+	// Appends all supported declarations from `source`, including private ones.
+	//
+	// Type spellings, documentation, and function source are copied into owned
+	// entries before the source context changes, so existing IDs remain valid
+	// across later collection passes. Use `collect_public` for the generated API
+	// surface.
+	pub mut func collect(source: String) -> Void {
+		self.collect_in(source: source, public_only: false)
+	}
+
+	// Indexes declarations visible in the module's public interface.
+	//
+	// Private top-level declarations and private members are skipped. Enum variants
+	// remain visible with their public enum even though cases have no `pub` modifier.
+	pub mut func collect_public(source: String) -> Void {
+		self.collect_in(source: source, public_only: true)
+	}
+
+	mut func collect_in(source: String, public_only: Bool) -> Void {
+		self.public_only = public_only
+		self.source = source
+		self.collect_module_wip()
+		let parsed = parse_file_source(source: source)
+		let docs = collect_doc_comments(source: source, outcome: parsed)
+		self.module_documentation = self.module_docs(docs: docs)
+		for item in parsed.items {
+			if let .decl_item(declaration) = item {
+				self.add(declaration: declaration, docs: docs)
+			}
+		}
+	}
+}

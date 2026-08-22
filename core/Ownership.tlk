@@ -1,24 +1,42 @@
 // no-core
 
+// Marks a nominal value as a non-owning view for lowering and drop analysis.
+//
+// Borrowed conformers do not recursively destroy referenced storage and are
+// restricted from escaping into ownership positions that outlive their source.
+// This is a compiler-recognized marker, not a protocol with runtime methods.
 pub protocol Borrowed {}
 
+// Marks a nominal handle as an owner of managed reference-counted storage.
+//
+// The compiler uses this role when inserting retain/release behavior at
+// ownership boundaries. Conformance carries no callable requirement but changes
+// lowering.
 pub protocol Owner {}
 
 // A value that duplicates freely: using it never moves it. Scalars conform
 // intrinsically; a user type may conform when every field is Copy.
 pub protocol Copy {
+	// Produces another independent value using the type's trivial copy
+	// semantics.
 	func clone() -> Self
 }
 
 // A buffer-backed value whose clone is an O(1) refcount bump (copy-on-write).
 // Conformance is legal only when every non-Copy field is itself Clone.
 pub protocol Clone {
+	// Produces a logical copy, retaining shared backing storage when necessary.
 	func clone() -> Self
 }
 
 // A destructor run when an owned value is dropped at scope exit. Linear
 // types may not conform: they must be consumed explicitly.
 pub protocol Deinit {
+	// Runs type-specific cleanup while consuming the final owned value.
+	//
+	// Under implicit sharing the hook can run once per retained copy.
+	// Implementations that require exactly-once logical cleanup must carry and
+	// check a `DropToken`.
 	consuming func deinit() -> Void
 }
 

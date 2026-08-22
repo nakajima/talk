@@ -6,23 +6,24 @@
     <title>talktalk - 13. The Standard Library</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787039529" rel="stylesheet">
+    <link href="/style.css?t=1787386847" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
       <a class="global-nav-brand" href="/">talktalk</a>
       <div class="global-nav-links">
         <a href="/">Language</a>
-        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/manual/" aria-current="page">Guide</a>
+        <a href="/docs/">Docs</a>
         <a href="/playground">Playground</a>
         <a href="/qa">Q/A</a>
         <a href="/philosophy">Philosophy</a>
       </div>
     </nav>
-    <main class="content-page manual-page">
-      <header class="page-header">
-        <div class="page-header-content">
-          <code class="page-kicker">talktalk / docs</code>
+    <main class="site-page manual-page">
+      <header class="site-page-header">
+        <div class="site-page-heading">
+          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/standard-library" aria-current="page">13. The Standard Library</a></nav>
           <div class="page-header-title-row">
             <h1>13. The Standard Library</h1>
             
@@ -30,10 +31,10 @@
         </div>
       </header>
 
-      <div class="manual-layout">
-        <aside class="manual-outline">
+      <div class="site-page-layout manual-layout">
+        <aside class="site-page-sidebar manual-outline">
           <nav aria-label="Manual table of contents">
-            <span class="manual-outline-title">Contents</span>
+            <span class="site-nav-label manual-outline-title">Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -60,16 +61,19 @@
 <li><a href="#reading-the-exact-api">Reading the exact API</a></li></ol></li>
 <li><a href="/manual/toolchain">14. The Toolchain</a></li>
 <li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+<li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
+<li><a href="/manual/mir-reference">B. MIR Reference</a></li>
+<li><a href="/manual/bytecode-reference">C. Bytecode Reference</a></li>
             </ol>
           </nav>
         </aside>
-        <div class="manual-document">
+        <div class="site-page-content manual-document">
           <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
             <a class="manual-previous" href="/manual/testing">&larr; 12. Testing</a>
             <a class="manual-contents" href="/manual/">All chapters</a>
             <a class="manual-next" href="/manual/toolchain">14. The Toolchain &rarr;</a>
           </nav>
-          <article class="page-content">
+          <article class="prose page-content">
             <p>Some useful types and functions are available in every TalkTalk file. Others live in modules that you import when you need them. This chapter shows what is available today; the standard library is still small and changes along with the language.</p>
 <h2><a href="#core-always-in-scope" aria-hidden="true" class="anchor" id="core-always-in-scope"></a>Core, always in scope</h2>
 <p>Core provides:</p>
@@ -77,57 +81,23 @@
 <li><code>String</code>, <code>Substring</code>, <code>Character</code>, Unicode and text operations</li>
 <li><code>Array&lt;T&gt;</code>, <code>InlineArray&lt;T, N&gt;</code>, ranges, iterators, and adapters</li>
 <li><code>Optional&lt;T&gt;</code> and <code>Result&lt;S, F&gt;</code></li>
-<li>arithmetic, comparison, bitwise, conversion, and display protocols</li>
+<li>trapping integer operators, checked and unchecked arithmetic, comparison, bitwise, conversion, and display protocols</li>
 <li><code>Duration</code>, <code>Instant</code>, memory roles, effects, and resumptions</li>
 <li><code>print</code>, <code>unreachable</code>, and host-boundary primitives</li>
 </ul>
 <p>The first line <code>// no-core</code> disables this import for trusted low-level work.</p>
 <h2><a href="#files-and-paths" aria-hidden="true" class="anchor" id="files-and-paths"></a>Files and paths</h2>
 <p>The <code>fs</code> module provides <code>Path</code>, <code>Directory</code>, <code>DirectoryEntry</code>, and <code>File</code>:</p>
-<div class='runnable'>
-            <div class='code-block'>
-                <pre class='code-highlight' aria-hidden='true'><span class="keyword">use</span> fs<span class="operator">::</span>{ File, Path }
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">use</span> fs<span class="operator">::</span>{ File, Path }
 
 <span class="keyword">let</span> path <span class="operator">=</span> <span class="type">Path</span>(<span class="string">"notes.txt"</span>)
-<span class="keyword">match</span> <span class="type">File</span>.<span class="property">open</span>(<span class="parameter">path</span>: <span class="variable">path</span>, <span class="parameter">mode</span>: .<span class="property">r</span>) {
-	.<span class="enum_member">ok</span>(file) <span class="operator">-&gt;</span> {
-		<span class="keyword">match</span> <span class="variable">file</span>.<span class="property">read</span>() {
-			.<span class="enum_member">ok</span>(contents) <span class="operator">-&gt;</span> <span class="variable">print</span>(<span class="variable">contents</span>),
-			.<span class="enum_member">error</span>(_) <span class="operator">-&gt;</span> <span class="variable">print</span>(<span class="string">"read failed"</span>)
-		}
-		<span class="variable">file</span>.<span class="property">close</span>()
-		()
-	},
-	.<span class="enum_member">error</span>(_) <span class="operator">-&gt;</span> <span class="variable">print</span>(<span class="string">"open failed"</span>)
-}</pre>
-                <div class='code-diagnostics' aria-hidden='true'></div>
-                <textarea class='code-editable' rows='14' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>use fs::{ File, Path }
+<span class="keyword">let</span> file <span class="operator">=</span> <span class="type">File</span>.<span class="property">open</span>(<span class="parameter">path</span>: <span class="variable">path</span>, <span class="parameter">mode</span>: .<span class="property">r</span>)<span class="operator">!</span>
+<span class="keyword">let</span> contents <span class="operator">=</span> <span class="variable">file</span>.<span class="property">read</span>()<span class="operator">!</span>
 
-let path = Path(&quot;notes.txt&quot;)
-match File.open(path: path, mode: .r) {
-	.ok(file) -&gt; {
-		match file.read() {
-			.ok(contents) -&gt; print(contents),
-			.error(_) -&gt; print(&quot;read failed&quot;)
-		}
-		file.close()
-		()
-	},
-	.error(_) -&gt; print(&quot;open failed&quot;)
-}</textarea>
-            </div>
-            <div class='actions'>
-                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
-                    <button type='button' class='run' disabled>Run</button>
-                </span>
-                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
-                    <button type='button' class='lower' disabled>Lower</button>
-                </span>
-                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
-                    <button type='button' class='format' disabled>Format</button>
-                </span>
-            </div>
-            <div class='result'></div>
+<span class="variable">print</span>(<span class="variable">contents</span>)
+
+<span class="variable">file</span>.<span class="property">close</span>()</pre>
         </div>
 <p><code>Path.normalized()</code> performs lexical dot-component cleanup. <code>Path.expanded()</code> expands <code>~</code>, prepends the working directory, and normalizes. <code>Path.canonicalized()</code> asks the host to resolve an existing path and symlinks. Directory enumeration returns typed file, directory, or symlink entries.</p>
 <p><code>File</code> reports operation-specific errors through <code>Result</code>. Call <code>close()</code> when you are finished with an open file.</p>
@@ -166,7 +136,6 @@ print(OS.argc())</textarea>
 <div class='code-block no-run'>
             <pre class='code-highlight'><span class="keyword">use</span> net<span class="operator">::</span>{ TcpListener }</pre>
         </div>
-        
 <p>See <code>examples/ChatServer.tlk</code>, <code>examples/ChatClient.tlk</code>, and <code>examples/Http.tlk</code> for complete current programs.</p>
 <h2><a href="#tasks-and-scheduling" aria-hidden="true" class="anchor" id="tasks-and-scheduling"></a>Tasks and scheduling</h2>
 <p><code>task</code> provides:</p>
@@ -177,13 +146,12 @@ print(OS.argc())</textarea>
 <li><code>sleep</code></li>
 <li><code>select_recv</code></li>
 </ul>
-<p>Core automatically runs every executable under a cooperative root scheduler. The <code>coop</code> module provides <code>run</code> for an explicit nested scheduler scope. See <a href="/manual/concurrency">Concurrency</a>.</p>
+<p><code>coop</code> installs cooperative root handlers. See <a href="/manual/concurrency">Concurrency</a>.</p>
 <h2><a href="#dictionaries" aria-hidden="true" class="anchor" id="dictionaries"></a>Dictionaries</h2>
 <p><code>dict</code> provides a growable string-keyed <code>Dict&lt;Value&gt;</code> with insertion and optional lookup. It is explicit rather than part of core:</p>
 <div class='code-block no-run'>
             <pre class='code-highlight'><span class="keyword">use</span> dict<span class="operator">::</span>{ Dict }</pre>
         </div>
-        
 <h2><a href="#html-and-syntax" aria-hidden="true" class="anchor" id="html-and-syntax"></a>HTML and syntax</h2>
 <p>The <code>html</code> package contains the procedural <code>@html</code> macro and its HTML value type. The <code>syntax</code> modules expose typed lexer, parser, AST, documentation, and dump facilities used by self-hosted tools and procedural macro services.</p>
 <h2><a href="#testing" aria-hidden="true" class="anchor" id="testing"></a>Testing</h2>
@@ -202,9 +170,9 @@ talk check your-package/
             <a class="manual-next" href="/manual/toolchain">14. The Toolchain &rarr;</a>
           </nav>
         </div>
-        <div class="manual-rail" aria-hidden="true"></div>
+        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
       </div>
-      <script type="module" src="/page.js?t=1787039529"></script>
+      <script type="module" src="/page.js?t=1787386847"></script>
     </main>
   </body>
 </html>

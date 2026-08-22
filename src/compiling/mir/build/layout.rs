@@ -595,10 +595,8 @@ pub(super) fn collect_case_skolems(
             collect_case_skolems(declared_ret, baked_ret, case_params, skolems);
         }
         (Ty::Record(declared_row), Ty::Record(baked_row)) => {
-            for ((_, declared), (_, baked)) in declared_row
-                .fields
-                .iter()
-                .zip(baked_row.fields.iter())
+            for ((_, declared), (_, baked)) in
+                declared_row.fields.iter().zip(baked_row.fields.iter())
             {
                 collect_case_skolems(declared, baked, case_params, skolems);
             }
@@ -684,10 +682,8 @@ pub(super) fn match_case_params(
             match_case_params(declared_ret, actual_ret, case_params, substitution);
         }
         (Ty::Record(declared_row), Ty::Record(actual_row)) => {
-            for ((_, declared), (_, actual)) in declared_row
-                .fields
-                .iter()
-                .zip(actual_row.fields.iter())
+            for ((_, declared), (_, actual)) in
+                declared_row.fields.iter().zip(actual_row.fields.iter())
             {
                 match_case_params(declared, actual, case_params, substitution);
             }

@@ -1,0 +1,352 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"></meta><meta name="viewport" content="width=device-width, initial-scale=1"></meta><title>scan - syntax</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"></link><link rel="stylesheet" href="/reset.css"></link><link rel="stylesheet" href="/style.css"></link><link rel="stylesheet" href="/docs.css"></link></head><body><nav class="global-nav" aria-label="Global navigation"><a class="global-nav-brand" href="/">talktalk</a><div class="global-nav-links"><a href="/">Language</a><a href="/manual/">Guide</a><a aria-current="page" href="/docs/">Docs</a><a href="/playground">Playground</a><a href="/qa">Q/A</a><a href="/philosophy">Philosophy</a></div></nav><main class="site-page docs-proposal docs-design-1"><header class="site-page-header docs-proposal-header docs-symbol-header"><div class="site-page-heading docs-proposal-heading"><nav class="site-breadcrumbs docs-breadcrumbs docs-header-breadcrumbs" aria-label="Breadcrumb"><a href="../">Docs</a> / <a href="index.html">syntax</a> / <a href="Lexer.html">Lexer</a> / <a href="#func-scan-source-string-scanresult" aria-current="page">scan</a></nav><h1>scan</h1></div></header><div class="site-page-layout docs-proposal-shell"><aside class="site-page-sidebar docs-catalog" aria-label="Documentation sections"><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Libraries</span><a href="/docs/">All libraries</a><a class="" href="/docs/core/">Core</a><a class="active" href="./">syntax</a></div><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Modules</span><a class="" href="Ast.html">Ast</a><a class="" href="Docs.html">Docs</a><a class="" href="Dump.html">Dump</a><a class="active" href="Lexer.html">Lexer</a><a class="" href="Parser.html">Parser</a><a class="" href="Syntax.html">Syntax</a></div></aside><article class="site-page-content docs-reference"><section class="docs-symbol" id="func-scan-source-string-scanresult"><code class="docs-symbol-signature"><span class="keyword">func</span> <span class="function">scan</span>(source: <a class="docs-symbol-link" href="/docs/core/String.symbol-struct-string.html#struct-string"><span class="type">String</span></a>) -&gt; <a class="docs-symbol-link" href="Lexer.symbol-struct-scanresult.html#struct-scanresult"><span class="type">ScanResult</span></a></code><div class="prose docs docs-symbol-documentation"><p>Scans UTF-8 source into canonical tokens and detached line comments.</p><p>Token and comment ranges are half-open byte offsets. The scanner stops at the first malformed token but returns the valid prefix for editor recovery. It does not balance delimiters; <a href="Lexer.symbol-func-capture-token-trees-tokens-token-tokentreeresult.html#func-capture-token-trees-tokens-token-tokentreeresult" title=""><code>capture_token_trees</code></a> performs that second step.</p></div><section class="docs-symbol-source" id="source"><details class="docs-source"><summary>View Source</summary><pre><code><span class="modifier">pub</span> <span class="keyword">func</span> <span class="function">scan</span>(<span class="parameter">source</span>: <span class="type">String</span>) <span class="operator">-&gt;</span> <span class="type">ScanResult</span> {
+	<span class="keyword">let</span> <span class="parameter">tokens</span>: [<span class="type">Token</span>] <span class="operator">=</span> []
+	<span class="keyword">let</span> <span class="parameter">comments</span>: [<span class="type">Comment</span>] <span class="operator">=</span> []
+	<span class="keyword">let</span> <span class="parameter">error</span>: <span class="type">String</span><span class="operator">?</span> <span class="operator">=</span> <span class="type">Optional</span>.<span class="property">none</span>
+	<span class="keyword">let</span> error_pos <span class="operator">=</span> <span class="number">0</span>
+	<span class="keyword">let</span> view <span class="operator">=</span> source.<span class="property">utf8</span>()
+	<span class="keyword">let</span> n <span class="operator">=</span> view.<span class="property">count</span>()
+	<span class="keyword">let</span> i <span class="operator">=</span> <span class="number">0</span>
+	<span class="keyword">loop</span> i <span class="operator">&lt;</span> n {
+		<span class="keyword">let</span> b <span class="operator">=</span> view.<span class="property">at</span>(<span class="parameter">index</span>: i).<span class="property">_toInt</span>()
+		<span class="comment">// Newline runs collapse into one token.</span>
+		<span class="keyword">if</span> b <span class="operator">==</span> newline_byte {
+			<span class="keyword">let</span> start <span class="operator">=</span> i
+			<span class="keyword">loop</span> i <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> view.<span class="property">at</span>(<span class="parameter">index</span>: i).<span class="property">_toInt</span>() <span class="operator">==</span> newline_byte {
+				i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+			}
+			tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: .<span class="property">newline</span>, <span class="parameter">start</span>: start, <span class="parameter">end</span>: i))
+			<span class="keyword">continue</span>
+		}
+		<span class="keyword">if</span> b <span class="operator">==</span> space_byte <span class="operator">||</span> b <span class="operator">==</span> tab_byte <span class="operator">||</span> b <span class="operator">==</span> return_byte {
+			i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+			<span class="keyword">continue</span>
+		}
+		<span class="comment">// Line comments drop from the token stream; their spans are</span>
+		<span class="comment">// preserved for the parse dump&#39;s comments section.</span>
+		<span class="keyword">if</span> b <span class="operator">==</span> slash_byte <span class="operator">&amp;&amp;</span> i <span class="operator">+</span> <span class="number">1</span> <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> view.<span class="property">at</span>(<span class="parameter">index</span>: i <span class="operator">+</span> <span class="number">1</span>).<span class="property">_toInt</span>() <span class="operator">==</span> slash_byte {
+			<span class="keyword">let</span> start <span class="operator">=</span> i
+			<span class="keyword">loop</span> i <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> view.<span class="property">at</span>(<span class="parameter">index</span>: i).<span class="property">_toInt</span>() <span class="operator">!=</span> newline_byte {
+				i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+			}
+			comments.<span class="property">push</span>(<span class="type">Comment</span>(<span class="parameter">start</span>: start, <span class="parameter">end</span>: i))
+			<span class="keyword">continue</span>
+		}
+		<span class="keyword">if</span> is_digit(<span class="parameter">b</span>: b) {
+			<span class="keyword">let</span> start <span class="operator">=</span> i
+			<span class="keyword">loop</span> i <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> (is_digit(<span class="parameter">b</span>: view.<span class="property">at</span>(<span class="parameter">index</span>: i).<span class="property">_toInt</span>()) <span class="operator">||</span> view.<span class="property">at</span>(<span class="parameter">index</span>: i).<span class="property">_toInt</span>() <span class="operator">==</span> underscore_byte) {
+				i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+			}
+			<span class="comment">// One dot then a digit continues a Float; two dots are a</span>
+			<span class="comment">// range operator after an Int. `_` separators ride along.</span>
+			<span class="keyword">let</span> fractional <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span> <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> view.<span class="property">at</span>(<span class="parameter">index</span>: i).<span class="property">_toInt</span>() <span class="operator">==</span> dot_byte <span class="operator">&amp;&amp;</span> is_digit(<span class="parameter">b</span>: view.<span class="property">at</span>(<span class="parameter">index</span>: i <span class="operator">+</span> <span class="number">1</span>).<span class="property">_toInt</span>())
+			<span class="keyword">if</span> fractional {
+				i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+				<span class="keyword">loop</span> i <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> (is_digit(<span class="parameter">b</span>: view.<span class="property">at</span>(<span class="parameter">index</span>: i).<span class="property">_toInt</span>()) <span class="operator">||</span> view.<span class="property">at</span>(<span class="parameter">index</span>: i).<span class="property">_toInt</span>() <span class="operator">==</span> underscore_byte) {
+					i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+				}
+				tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: .<span class="property">float_number</span>, <span class="parameter">start</span>: start, <span class="parameter">end</span>: i))
+			} <span class="keyword">else</span> {
+				tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: .<span class="property">int_number</span>, <span class="parameter">start</span>: start, <span class="parameter">end</span>: i))
+			}
+			<span class="keyword">continue</span>
+		}
+		<span class="keyword">if</span> is_alpha(<span class="parameter">b</span>: b) {
+			<span class="keyword">let</span> start <span class="operator">=</span> i
+			i <span class="operator">=</span> ident_end(<span class="parameter">view</span>: view, <span class="parameter">n</span>: n, <span class="parameter">i</span>: i)
+			<span class="keyword">let</span> word <span class="operator">=</span> view.<span class="property">slice</span>(<span class="parameter">start</span>: start, <span class="parameter">byte_count</span>: i <span class="operator">-</span> start)
+			<span class="keyword">let</span> kind <span class="operator">=</span> <span class="keyword">match</span> word {
+				<span class="string">&quot;_&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">underscore</span>,
+				<span class="string">&quot;any&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_any</span>,
+				<span class="string">&quot;as&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_as</span>,
+				<span class="string">&quot;func&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_func</span>,
+				<span class="string">&quot;let&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_let</span>,
+				<span class="string">&quot;if&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_if</span>,
+				<span class="string">&quot;else&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_else</span>,
+				<span class="string">&quot;true&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_true</span>,
+				<span class="string">&quot;false&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_false</span>,
+				<span class="string">&quot;loop&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_loop</span>,
+				<span class="string">&quot;enum&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_enum</span>,
+				<span class="string">&quot;case&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_case</span>,
+				<span class="string">&quot;match&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_match</span>,
+				<span class="string">&quot;return&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_return</span>,
+				<span class="string">&quot;struct&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_struct</span>,
+				<span class="string">&quot;extend&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_extend</span>,
+				<span class="string">&quot;break&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_break</span>,
+				<span class="string">&quot;init&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_init</span>,
+				<span class="string">&quot;protocol&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_protocol</span>,
+				<span class="string">&quot;import&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_import</span>,
+				<span class="string">&quot;use&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_use</span>,
+				<span class="string">&quot;pub&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_pub</span>,
+				<span class="string">&quot;public&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_public</span>,
+				<span class="string">&quot;linear&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_linear</span>,
+				<span class="string">&quot;macro&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_macro</span>,
+				<span class="string">&quot;static&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_static</span>,
+				<span class="string">&quot;associated&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_associated</span>,
+				<span class="string">&quot;typealias&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_typealias</span>,
+				<span class="string">&quot;effect&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_effect</span>,
+				<span class="string">&quot;handling&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_handling</span>,
+				<span class="string">&quot;in&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_in</span>,
+				<span class="string">&quot;continue&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_continue</span>,
+				<span class="string">&quot;unreachable&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_unreachable</span>,
+				<span class="string">&quot;mut&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_mut</span>,
+				<span class="string">&quot;consuming&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_consuming</span>,
+				<span class="string">&quot;for&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">keyword_for</span>,
+				_ <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">identifier</span>
+			}
+			tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: kind, <span class="parameter">start</span>: start, <span class="parameter">end</span>: i))
+			<span class="keyword">continue</span>
+		}
+		<span class="comment">// String literal: span includes the quotes; escapes stay raw.</span>
+		<span class="keyword">if</span> b <span class="operator">==</span> quote_byte {
+			<span class="keyword">let</span> start <span class="operator">=</span> i
+			i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+			<span class="keyword">let</span> open <span class="operator">=</span> <span class="keyword">true</span>
+			<span class="keyword">let</span> bad <span class="operator">=</span> <span class="keyword">false</span>
+			<span class="keyword">loop</span> i <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> open <span class="operator">&amp;&amp;</span> bad <span class="operator">==</span> <span class="keyword">false</span> {
+				<span class="keyword">let</span> c <span class="operator">=</span> view.<span class="property">at</span>(<span class="parameter">index</span>: i).<span class="property">_toInt</span>()
+				<span class="keyword">if</span> c <span class="operator">==</span> backslash_byte {
+					<span class="keyword">let</span> escape <span class="operator">=</span> scan_escape(<span class="parameter">view</span>: view, <span class="parameter">n</span>: n, <span class="parameter">after</span>: i <span class="operator">+</span> <span class="number">1</span>, <span class="parameter">allow_tick</span>: <span class="keyword">false</span>, <span class="parameter">unterminated</span>: <span class="string">&quot;Unterminated string&quot;</span>)
+					<span class="keyword">if</span> <span class="keyword">let</span> .<span class="property">failed</span>(message, failed_at) <span class="operator">=</span> escape {
+						error <span class="operator">=</span> <span class="type">Optional</span>.<span class="property">some</span>(message)
+						error_pos <span class="operator">=</span> failed_at
+						bad <span class="operator">=</span> <span class="keyword">true</span>
+					}
+					<span class="keyword">if</span> <span class="keyword">let</span> .<span class="property">fine</span>(next) <span class="operator">=</span> escape {
+						i <span class="operator">=</span> next
+					}
+				} <span class="keyword">else</span> {
+					<span class="keyword">if</span> c <span class="operator">==</span> quote_byte {
+						i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+						open <span class="operator">=</span> <span class="keyword">false</span>
+					} <span class="keyword">else</span> {
+						i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+					}
+				}
+			}
+			<span class="keyword">if</span> bad {
+				<span class="keyword">break</span>
+			}
+			<span class="keyword">if</span> open {
+				error <span class="operator">=</span> <span class="type">Optional</span>.<span class="property">some</span>(<span class="string">&quot;Unterminated string&quot;</span>)
+				error_pos <span class="operator">=</span> i
+				<span class="keyword">break</span>
+			}
+			tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: .<span class="property">string_literal</span>, <span class="parameter">start</span>: start, <span class="parameter">end</span>: i))
+			<span class="keyword">continue</span>
+		}
+		<span class="comment">// A tick opens an effect name (`&#39;io`), an effect row (`&#39;[…]`),</span>
+		<span class="comment">// or a character literal (`&#39;a&#39;`). An identifier run not closed</span>
+		<span class="comment">// by another tick commits to an effect name; otherwise a probe</span>
+		<span class="comment">// decides without moving the scan.</span>
+		<span class="keyword">if</span> b <span class="operator">==</span> tick_byte {
+			<span class="keyword">let</span> start <span class="operator">=</span> i
+			<span class="keyword">let</span> effectish <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span> <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> is_alnum(<span class="parameter">b</span>: view.<span class="property">at</span>(<span class="parameter">index</span>: i <span class="operator">+</span> <span class="number">1</span>).<span class="property">_toInt</span>())
+			<span class="keyword">if</span> effectish {
+				<span class="keyword">let</span> run_end <span class="operator">=</span> ident_end(<span class="parameter">view</span>: view, <span class="parameter">n</span>: n, <span class="parameter">i</span>: i <span class="operator">+</span> <span class="number">1</span>)
+				<span class="keyword">let</span> closed <span class="operator">=</span> run_end <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> view.<span class="property">at</span>(<span class="parameter">index</span>: run_end).<span class="property">_toInt</span>() <span class="operator">==</span> tick_byte
+				<span class="keyword">if</span> closed <span class="operator">==</span> <span class="keyword">false</span> {
+					tokens.<span class="property">push</span>(token_with_lexeme(<span class="parameter">kind</span>: .<span class="property">effect_name</span>, <span class="parameter">start</span>: i, <span class="parameter">end</span>: run_end, <span class="parameter">lexeme_start</span>: i <span class="operator">+</span> <span class="number">1</span>, <span class="parameter">lexeme_end</span>: run_end))
+					i <span class="operator">=</span> run_end
+					<span class="keyword">continue</span>
+				}
+			}
+			<span class="keyword">let</span> row_opener <span class="operator">=</span> <span class="keyword">false</span>
+			<span class="keyword">if</span> i <span class="operator">+</span> <span class="number">1</span> <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> view.<span class="property">at</span>(<span class="parameter">index</span>: i <span class="operator">+</span> <span class="number">1</span>).<span class="property">_toInt</span>() <span class="operator">==</span> left_bracket_byte {
+				<span class="keyword">let</span> j <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+				<span class="keyword">loop</span> j <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> row_opener <span class="operator">==</span> <span class="keyword">false</span> {
+					<span class="keyword">let</span> c <span class="operator">=</span> view.<span class="property">at</span>(<span class="parameter">index</span>: j).<span class="property">_toInt</span>()
+					<span class="keyword">if</span> c <span class="operator">==</span> right_bracket_byte {
+						row_opener <span class="operator">=</span> <span class="keyword">true</span>
+					}
+					<span class="keyword">if</span> c <span class="operator">==</span> tick_byte <span class="operator">||</span> c <span class="operator">==</span> newline_byte {
+						j <span class="operator">=</span> n
+					}
+					j <span class="operator">=</span> j <span class="operator">+</span> <span class="number">1</span>
+				}
+			}
+			<span class="keyword">if</span> row_opener {
+				<span class="comment">// The row&#39;s tick stands alone; `[` lexes next round.</span>
+				tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: .<span class="property">single_quote</span>, <span class="parameter">start</span>: i, <span class="parameter">end</span>: i <span class="operator">+</span> <span class="number">1</span>))
+				i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+				<span class="keyword">continue</span>
+			}
+			<span class="keyword">let</span> probe <span class="operator">=</span> probe_character(<span class="parameter">view</span>: view, <span class="parameter">n</span>: n, <span class="parameter">after_tick</span>: i <span class="operator">+</span> <span class="number">1</span>)
+			<span class="keyword">if</span> <span class="keyword">let</span> .<span class="property">failed</span>(message, failed_at) <span class="operator">=</span> probe {
+				error <span class="operator">=</span> <span class="type">Optional</span>.<span class="property">some</span>(message)
+				error_pos <span class="operator">=</span> failed_at
+				<span class="keyword">break</span>
+			}
+			<span class="keyword">if</span> <span class="keyword">let</span> .<span class="property">literal</span>(end) <span class="operator">=</span> probe {
+				tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: .<span class="property">character_literal</span>, <span class="parameter">start</span>: start, <span class="parameter">end</span>: end))
+				i <span class="operator">=</span> end
+				<span class="keyword">continue</span>
+			}
+			<span class="comment">// Not a literal: a bare tick keeps its own span.</span>
+			tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: .<span class="property">single_quote</span>, <span class="parameter">start</span>: i, <span class="parameter">end</span>: i <span class="operator">+</span> <span class="number">1</span>))
+			i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+			<span class="keyword">continue</span>
+		}
+		<span class="comment">// Sigil-prefixed forms keep the complete spelling in span and the</span>
+		<span class="comment">// value after the sigil in lexeme.</span>
+		<span class="keyword">if</span> b <span class="operator">==</span> percent_byte <span class="operator">&amp;&amp;</span> i <span class="operator">+</span> <span class="number">1</span> <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> (is_digit(<span class="parameter">b</span>: view.<span class="property">at</span>(<span class="parameter">index</span>: i <span class="operator">+</span> <span class="number">1</span>).<span class="property">_toInt</span>()) <span class="operator">||</span> view.<span class="property">at</span>(<span class="parameter">index</span>: i <span class="operator">+</span> <span class="number">1</span>).<span class="property">_toInt</span>() <span class="operator">==</span> question_byte) {
+			<span class="keyword">let</span> register_start <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+			<span class="keyword">let</span> j <span class="operator">=</span> register_start
+			<span class="keyword">loop</span> j <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> (is_digit(<span class="parameter">b</span>: view.<span class="property">at</span>(<span class="parameter">index</span>: j).<span class="property">_toInt</span>()) <span class="operator">||</span> view.<span class="property">at</span>(<span class="parameter">index</span>: j).<span class="property">_toInt</span>() <span class="operator">==</span> question_byte) {
+				j <span class="operator">=</span> j <span class="operator">+</span> <span class="number">1</span>
+			}
+			tokens.<span class="property">push</span>(token_with_lexeme(<span class="parameter">kind</span>: .<span class="property">ir_register</span>, <span class="parameter">start</span>: i, <span class="parameter">end</span>: j, <span class="parameter">lexeme_start</span>: register_start, <span class="parameter">lexeme_end</span>: j))
+			i <span class="operator">=</span> j
+			<span class="keyword">continue</span>
+		}
+		<span class="comment">// #&quot;...&quot; spells a literal identifier, letting keywords be used</span>
+		<span class="comment">// as names. Its lexeme excludes the # and the quotes.</span>
+		<span class="keyword">if</span> b <span class="operator">==</span> hash_byte <span class="operator">&amp;&amp;</span> i <span class="operator">+</span> <span class="number">1</span> <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> view.<span class="property">at</span>(<span class="parameter">index</span>: i <span class="operator">+</span> <span class="number">1</span>).<span class="property">_toInt</span>() <span class="operator">==</span> quote_byte {
+			<span class="keyword">let</span> start <span class="operator">=</span> i <span class="operator">+</span> <span class="number">2</span>
+			<span class="keyword">let</span> j <span class="operator">=</span> start
+			<span class="keyword">let</span> open <span class="operator">=</span> <span class="keyword">true</span>
+			<span class="keyword">let</span> bad <span class="operator">=</span> <span class="keyword">false</span>
+			<span class="keyword">loop</span> j <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> open {
+				<span class="keyword">let</span> c <span class="operator">=</span> view.<span class="property">at</span>(<span class="parameter">index</span>: j).<span class="property">_toInt</span>()
+				<span class="keyword">if</span> c <span class="operator">==</span> newline_byte { <span class="keyword">break</span> }
+				<span class="keyword">if</span> c <span class="operator">==</span> backslash_byte {
+					error <span class="operator">=</span> <span class="type">Optional</span>.<span class="property">some</span>(<span class="string">&quot;Invalid escape: &#39;\\\\&#39;&quot;</span>)
+					error_pos <span class="operator">=</span> j
+					bad <span class="operator">=</span> <span class="keyword">true</span>
+					<span class="keyword">break</span>
+				}
+				<span class="keyword">if</span> c <span class="operator">==</span> quote_byte {
+					open <span class="operator">=</span> <span class="keyword">false</span>
+				} <span class="keyword">else</span> {
+					j <span class="operator">=</span> j <span class="operator">+</span> <span class="number">1</span>
+				}
+			}
+			<span class="keyword">if</span> bad { <span class="keyword">break</span> }
+			<span class="keyword">if</span> open {
+				error <span class="operator">=</span> <span class="type">Optional</span>.<span class="property">some</span>(<span class="string">&quot;Unterminated string&quot;</span>)
+				error_pos <span class="operator">=</span> j
+				<span class="keyword">break</span>
+			}
+			<span class="keyword">if</span> j <span class="operator">==</span> start {
+				error <span class="operator">=</span> <span class="type">Optional</span>.<span class="property">some</span>(<span class="string">&quot;Empty quoted identifier&quot;</span>)
+				error_pos <span class="operator">=</span> j
+				<span class="keyword">break</span>
+			}
+			tokens.<span class="property">push</span>(token_with_lexeme(<span class="parameter">kind</span>: .<span class="property">identifier</span>, <span class="parameter">start</span>: i, <span class="parameter">end</span>: j <span class="operator">+</span> <span class="number">1</span>, <span class="parameter">lexeme_start</span>: start, <span class="parameter">lexeme_end</span>: j))
+			i <span class="operator">=</span> j <span class="operator">+</span> <span class="number">1</span>
+			<span class="keyword">continue</span>
+		}
+		<span class="keyword">if</span> b <span class="operator">==</span> at_byte <span class="operator">&amp;&amp;</span> i <span class="operator">+</span> <span class="number">1</span> <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> is_alnum(<span class="parameter">b</span>: view.<span class="property">at</span>(<span class="parameter">index</span>: i <span class="operator">+</span> <span class="number">1</span>).<span class="property">_toInt</span>()) {
+			<span class="keyword">let</span> end <span class="operator">=</span> ident_end(<span class="parameter">view</span>: view, <span class="parameter">n</span>: n, <span class="parameter">i</span>: i <span class="operator">+</span> <span class="number">1</span>)
+			tokens.<span class="property">push</span>(token_with_lexeme(<span class="parameter">kind</span>: .<span class="property">attribute</span>, <span class="parameter">start</span>: i, <span class="parameter">end</span>: end, <span class="parameter">lexeme_start</span>: i <span class="operator">+</span> <span class="number">1</span>, <span class="parameter">lexeme_end</span>: end))
+			i <span class="operator">=</span> end
+			<span class="keyword">continue</span>
+		}
+		<span class="keyword">if</span> b <span class="operator">==</span> dollar_byte <span class="operator">&amp;&amp;</span> i <span class="operator">+</span> <span class="number">1</span> <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> is_alnum(<span class="parameter">b</span>: view.<span class="property">at</span>(<span class="parameter">index</span>: i <span class="operator">+</span> <span class="number">1</span>).<span class="property">_toInt</span>()) {
+			<span class="keyword">let</span> end <span class="operator">=</span> ident_end(<span class="parameter">view</span>: view, <span class="parameter">n</span>: n, <span class="parameter">i</span>: i <span class="operator">+</span> <span class="number">1</span>)
+			tokens.<span class="property">push</span>(token_with_lexeme(<span class="parameter">kind</span>: .<span class="property">bound_var</span>, <span class="parameter">start</span>: i, <span class="parameter">end</span>: end, <span class="parameter">lexeme_start</span>: i <span class="operator">+</span> <span class="number">1</span>, <span class="parameter">lexeme_end</span>: end))
+			i <span class="operator">=</span> end
+			<span class="keyword">continue</span>
+		}
+		<span class="keyword">if</span> b <span class="operator">==</span> dollar_byte {
+			tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: .<span class="property">dollar</span>, <span class="parameter">start</span>: i, <span class="parameter">end</span>: i <span class="operator">+</span> <span class="number">1</span>))
+			i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+			<span class="keyword">continue</span>
+		}
+		<span class="keyword">if</span> b <span class="operator">==</span> hash_byte {
+			tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: .<span class="property">hash</span>, <span class="parameter">start</span>: i, <span class="parameter">end</span>: i <span class="operator">+</span> <span class="number">1</span>))
+			i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+			<span class="keyword">continue</span>
+		}
+		<span class="keyword">if</span> b <span class="operator">==</span> dot_byte {
+			<span class="keyword">if</span> i <span class="operator">+</span> <span class="number">1</span> <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> view.<span class="property">at</span>(<span class="parameter">index</span>: i <span class="operator">+</span> <span class="number">1</span>).<span class="property">_toInt</span>() <span class="operator">==</span> dot_byte {
+				<span class="keyword">if</span> i <span class="operator">+</span> <span class="number">2</span> <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> view.<span class="property">at</span>(<span class="parameter">index</span>: i <span class="operator">+</span> <span class="number">2</span>).<span class="property">_toInt</span>() <span class="operator">==</span> dot_byte {
+					tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: .<span class="property">dot_dot_dot</span>, <span class="parameter">start</span>: i, <span class="parameter">end</span>: i <span class="operator">+</span> <span class="number">3</span>))
+					i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">3</span>
+				} <span class="keyword">else</span> <span class="keyword">if</span> i <span class="operator">+</span> <span class="number">2</span> <span class="operator">&lt;</span> n <span class="operator">&amp;&amp;</span> view.<span class="property">at</span>(<span class="parameter">index</span>: i <span class="operator">+</span> <span class="number">2</span>).<span class="property">_toInt</span>() <span class="operator">==</span> less_byte {
+					tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: .<span class="property">dot_dot_less</span>, <span class="parameter">start</span>: i, <span class="parameter">end</span>: i <span class="operator">+</span> <span class="number">3</span>))
+					i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">3</span>
+				} <span class="keyword">else</span> {
+					tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: .<span class="property">dot_dot</span>, <span class="parameter">start</span>: i, <span class="parameter">end</span>: i <span class="operator">+</span> <span class="number">2</span>))
+					i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">2</span>
+				}
+			} <span class="keyword">else</span> {
+				tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: .<span class="property">dot</span>, <span class="parameter">start</span>: i, <span class="parameter">end</span>: i <span class="operator">+</span> <span class="number">1</span>))
+				i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+			}
+			<span class="keyword">continue</span>
+		}
+		<span class="comment">// Two-character operators, longest spelling first.</span>
+		<span class="keyword">if</span> i <span class="operator">+</span> <span class="number">1</span> <span class="operator">&lt;</span> n {
+			<span class="keyword">let</span> pair <span class="operator">=</span> view.<span class="property">slice</span>(<span class="parameter">start</span>: i, <span class="parameter">byte_count</span>: <span class="number">2</span>)
+			<span class="keyword">let</span> two <span class="operator">=</span> <span class="keyword">match</span> pair {
+				<span class="string">&quot;==&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">equals_equals</span>,
+				<span class="string">&quot;!=&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">bang_equals</span>,
+				<span class="string">&quot;&lt;=&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">less_equals</span>,
+				<span class="string">&quot;&gt;=&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">greater_equals</span>,
+				<span class="string">&quot;+=&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">plus_equals</span>,
+				<span class="string">&quot;-=&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">minus_equals</span>,
+				<span class="string">&quot;*=&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">star_equals</span>,
+				<span class="string">&quot;/=&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">slash_equals</span>,
+				<span class="string">&quot;~=&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">tilde_equals</span>,
+				<span class="string">&quot;^=&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">caret_equals</span>,
+				<span class="string">&quot;&amp;=&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">amp_equals</span>,
+				<span class="string">&quot;-&gt;&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">arrow</span>,
+				<span class="string">&quot;&lt;&lt;&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">less_less</span>,
+				<span class="string">&quot;&gt;&gt;&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">greater_greater</span>,
+				<span class="string">&quot;&amp;&amp;&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">amp_amp</span>,
+				<span class="string">&quot;||&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">pipe_pipe</span>,
+				<span class="string">&quot;::&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">double_colon</span>,
+				_ <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">identifier</span>
+			}
+			<span class="keyword">if</span> is_operator(<span class="parameter">kind</span>: two) {
+				tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: two, <span class="parameter">start</span>: i, <span class="parameter">end</span>: i <span class="operator">+</span> <span class="number">2</span>))
+				i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">2</span>
+				<span class="keyword">continue</span>
+			}
+		}
+		<span class="keyword">let</span> glyph <span class="operator">=</span> view.<span class="property">slice</span>(<span class="parameter">start</span>: i, <span class="parameter">byte_count</span>: <span class="number">1</span>)
+		<span class="keyword">let</span> one <span class="operator">=</span> <span class="keyword">match</span> glyph {
+			<span class="string">&quot;=&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">equals</span>,
+			<span class="string">&quot;,&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">comma</span>,
+			<span class="string">&quot;(&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">left_paren</span>,
+			<span class="string">&quot;)&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">right_paren</span>,
+			<span class="string">&quot;[&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">left_bracket</span>,
+			<span class="string">&quot;]&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">right_bracket</span>,
+			<span class="string">&quot;{&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">left_brace</span>,
+			<span class="string">&quot;}&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">right_brace</span>,
+			<span class="string">&quot;?&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">question_mark</span>,
+			<span class="string">&quot;;&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">semicolon</span>,
+			<span class="string">&quot;@&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">at_sign</span>,
+			<span class="string">&quot;%&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">percent</span>,
+			<span class="string">&quot;+&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">plus</span>,
+			<span class="string">&quot;-&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">minus</span>,
+			<span class="string">&quot;*&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">star</span>,
+			<span class="string">&quot;/&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">slash</span>,
+			<span class="string">&quot;!&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">bang</span>,
+			<span class="string">&quot;&lt;&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">less</span>,
+			<span class="string">&quot;&gt;&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">greater</span>,
+			<span class="string">&quot;&amp;&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">amp</span>,
+			<span class="string">&quot;|&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">pipe</span>,
+			<span class="string">&quot;:&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">colon</span>,
+			<span class="string">&quot;~&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">tilde</span>,
+			<span class="string">&quot;^&quot;</span> <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">caret</span>,
+			_ <span class="operator">-&gt;</span> <span class="type">TokenKind</span>.<span class="property">identifier</span>
+		}
+		<span class="keyword">if</span> is_operator(<span class="parameter">kind</span>: one) {
+			tokens.<span class="property">push</span>(token(<span class="parameter">kind</span>: one, <span class="parameter">start</span>: i, <span class="parameter">end</span>: i <span class="operator">+</span> <span class="number">1</span>))
+			i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+			<span class="keyword">continue</span>
+		}
+		<span class="comment">// Anything else is a lex error, like the reference lexer, which</span>
+		<span class="comment">// consumes the character before erroring.</span>
+		<span class="keyword">let</span> unexpected <span class="operator">=</span> <span class="keyword">if</span> b <span class="operator">&lt;</span> <span class="number">128</span> {
+			glyph.<span class="property">to_string</span>()
+		} <span class="keyword">else</span> {
+			describe_scalar(<span class="parameter">view</span>: view, <span class="parameter">n</span>: n, <span class="parameter">i</span>: i)
+		}
+		error <span class="operator">=</span> <span class="type">Optional</span>.<span class="property">some</span>(<span class="string">&quot;Unexpected character: &#39;&quot;</span> <span class="operator">+</span> unexpected <span class="operator">+</span> <span class="string">&quot;&#39;&quot;</span>)
+		error_pos <span class="operator">=</span> i <span class="operator">+</span> scalar_byte_length(<span class="parameter">b</span>: b)
+		<span class="keyword">break</span>
+	}
+	<span class="type">ScanResult</span>(<span class="parameter">tokens</span>: tokens, <span class="parameter">comments</span>: comments, <span class="parameter">error</span>: error, <span class="parameter">error_pos</span>: error_pos)
+}</code></pre></details></section></section></article><aside class="site-page-rail docs-page-index" aria-label="Sections on this page"><span class="site-nav-label docs-nav-label">On this page</span><a href="#func-scan-source-string-scanresult">Overview</a><a href="#source">Source</a></aside></div></main></body></html>

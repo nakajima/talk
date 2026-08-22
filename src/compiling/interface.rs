@@ -70,7 +70,11 @@ pub(crate) fn module_slice(
         .map(|(id, row)| (row.head, *id))
         .collect();
     for (head, id) in ids {
-        catalog.conformances_by_head.entry(head).or_default().push(id);
+        catalog
+            .conformances_by_head
+            .entry(head)
+            .or_default()
+            .push(id);
     }
 
     // Amendment tables keyed by symbols this module may not own
@@ -84,7 +88,9 @@ pub(crate) fn module_slice(
         }
         members.retain(|_, rows| !rows.is_empty());
     }
-    catalog.extend_members.retain(|_, members| !members.is_empty());
+    catalog
+        .extend_members
+        .retain(|_, members| !members.is_empty());
 
     // Derived indexes re-derive on the receiving side.
     catalog.deinit_rows.clear();

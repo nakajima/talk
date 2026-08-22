@@ -1,0 +1,15 @@
+Lock(
+    format: 1,
+    fingerprint: "6e677170ef55e4229964f1a96d75949471c09c42eabd568baef60dd09b1527ae",
+    root_dependencies: ["ebab7c0f436b9f814f26a5bc07908be942838e199007292ac8646200b17a901e"],
+    packages: [
+        .path(
+            id: "ebab7c0f436b9f814f26a5bc07908be942838e199007292ac8646200b17a901e",
+            package: "os",
+            version: "0.1.0",
+            path: "../os",
+            base: "root",
+            dependencies: [],
+        ),
+    ]
+)

@@ -1,0 +1,215 @@
+use package::autolink::{ SymbolLink }
+use package::documentable::{ Documentable, DocumentableEntry, DocumentableID }
+use package::store::{ DocumentableCollection }
+
+func join_strings(parts: &[String], separator: String) -> String {
+	if parts.is_empty() { return "" }
+	let out = parts[0].to_string()
+	let i = 1
+	loop i < parts.count {
+		let part = parts[i].to_string()
+		out = out + separator + part
+		i = i + 1
+	}
+	out
+}
+
+func type_name(collection: &DocumentableCollection, id: DocumentableID) -> String {
+	let found: DocumentableEntry? = collection.get(id: id)
+	if let .some(entry) = found {
+		if let .type(value) = entry.value { return value.name }
+	}
+	"?"
+}
+
+func generics_text(collection: &DocumentableCollection, generics: &[DocumentableID]) -> String {
+	if generics.is_empty() { return "" }
+	let names: [String] = []
+	for id in generics {
+		names.push(type_name(collection: collection, id: id))
+	}
+	"<" + join_strings(parts: names, separator: ", ") + ">"
+}
+
+// Produces the display signature used in headings and anchors.
+//
+// Function, method, and effect headers preserve their source spelling so ownership,
+// labels, effects, and constraints remain part of the public contract. Other modeled
+// declarations are rendered from their structured entries; missing references use `?`.
+pub func signature_of(collection: &DocumentableCollection, entry: &DocumentableEntry) -> String {
+	match entry.value {
+		.builtin(value) -> "builtin " + value.name,
+		.function(function) -> function.signature.clone(),
+		.global(global) -> {
+			let out = "let " + global.name
+			if let .some(type_id) = global.type {
+				out = out + ": " + type_name(collection: collection, id: type_id)
+			}
+			out
+		},
+		.method(method) -> method.function.signature.clone(),
+		.nominal(nominal) -> match nominal {
+			.#"struct"(name: name, generics: generics, properties: _, methods: _) -> "struct " + name + generics_text(collection: collection, generics: generics),
+			.#"enum"(name: name, generics: generics, variants: _, methods: _) -> "enum " + name + generics_text(collection: collection, generics: generics),
+			.#"protocol"(name: name, generics: generics, properties: _, methods: _) -> "protocol " + name + generics_text(collection: collection, generics: generics)
+		},
+		.property(property) -> {
+			let prefix = if property.is_static { "static let " } else { "let " }
+			let out = prefix + property.name
+			if let .some(type_id) = property.type {
+				out = out + ": " + type_name(collection: collection, id: type_id)
+			}
+			out
+		},
+		.variant(variant) -> {
+			let payloads: [String] = []
+			for id in variant.payloads {
+				payloads.push(type_name(collection: collection, id: id))
+			}
+			if payloads.is_empty() {
+				"case " + variant.name
+			} else {
+				"case " + variant.name + "(" + join_strings(parts: payloads, separator: ", ") + ")"
+			}
+		},
+		.effect_declaration(declaration) -> declaration.signature.clone(),
+		.type(value) -> value.name,
+		.#"effect"(value) -> "'" + value.name,
+		.parameter(parameter) -> parameter.name
+	}
+}
+
+// Converts a rendered declaration signature into its deterministic HTML anchor.
+//
+// ASCII letters are lowercased, runs of other bytes become one hyphen, and
+// leading or trailing separators are omitted.
+pub func anchor_for(signature: String) -> String {
+	let bytes = signature.utf8()
+	let result: [Byte] = []
+	let separating = false
+	let index = 0
+	loop index < bytes.count() {
+		let byte = bytes.at(index: index)
+		let value = byte._toInt()
+		let is_upper = value >= 65 && value <= 90
+		let is_lower = value >= 97 && value <= 122
+		let is_digit = value >= 48 && value <= 57
+		if is_upper || is_lower || is_digit {
+			if separating && result.is_empty() == false { result.push(45._toByte()) }
+			result.push(if is_upper { (value + 32)._toByte() } else { byte })
+			separating = false
+		} else {
+			separating = true
+		}
+		index = index + 1
+	}
+	String.from_bytes(bytes: result)
+}
+
+// Returns the standalone page for a top-level declaration.
+//
+// The declaration anchor remains part of the URL so old in-page anchor semantics
+// continue to identify the exact symbol after declarations move off module pages.
+pub func symbol_page(module_page: &String, signature: String) -> String {
+	if module_page.byte_count == 0 { return "" }
+	let stem = if module_page.ends_with(needle: ".html") {
+		module_page.utf8().slice(start: 0, byte_count: module_page.byte_count - 5).to_string()
+	} else {
+		module_page.to_string()
+	}
+	stem + ".symbol-" + anchor_for(signature: signature) + ".html"
+}
+
+func entry_name(entry: &DocumentableEntry) -> String? {
+	match entry.value {
+		.builtin(value) -> .some(value.name.clone()),
+		.function(value) -> .some(value.name.clone()),
+		.global(value) -> .some(value.name.clone()),
+		.method(value) -> .some(value.function.name.clone()),
+		.nominal(value) -> .some(match value {
+			.#"struct"(name: name, generics: _, properties: _, methods: _) -> name.clone(),
+			.#"enum"(name: name, generics: _, variants: _, methods: _) -> name.clone(),
+			.#"protocol"(name: name, generics: _, properties: _, methods: _) -> name.clone()
+		}),
+		.property(value) -> .some(value.name.clone()),
+		.variant(value) -> .some(value.name.clone()),
+		.effect_declaration(value) -> .some(value.name.clone()),
+		_ -> .none
+	}
+}
+
+func append_symbol(collection: &DocumentableCollection, module: String, page: &String, owner: String, parent_anchor: String, id: DocumentableID, mut symbols: [SymbolLink]) -> Void {
+	if let .some(entry) = collection.get(id: id) {
+		if let .some(name) = entry_name(entry: entry) {
+			let signature = signature_of(collection: collection, entry: entry)
+			symbols.push(SymbolLink(
+				name: name.clone(),
+				qualified_name: owner + "." + name,
+				module: module.clone(),
+				page: page.clone(),
+				anchor: parent_anchor + "-" + anchor_for(signature: signature),
+				owner: .some(owner.clone())
+			))
+		}
+	}
+}
+
+// Builds link targets for a module's standalone declaration pages.
+//
+// Top-level declarations receive separate page URLs; nominal members share their
+// owner's page and retain member anchors. Records can be combined across modules.
+// Signature components such as parameter and type spellings are excluded because
+// they have no independently rendered documentation.
+pub func symbol_links(module: String, page: String, collection: &DocumentableCollection) -> [SymbolLink] {
+	let symbols: [SymbolLink] = []
+	for entry in collection.items {
+		let top_level = match entry.value {
+			.builtin(_) -> true,
+			.nominal(_) -> true,
+			.function(_) -> true,
+			.global(_) -> true,
+			.effect_declaration(_) -> true,
+			_ -> false
+		}
+		if top_level {
+			if let .some(name) = entry_name(entry: entry) {
+				let signature = signature_of(collection: collection, entry: entry)
+				let anchor = anchor_for(signature: signature.clone())
+				symbols.push(SymbolLink(
+					name: name.clone(),
+					qualified_name: name.clone(),
+					module: module.clone(),
+					page: symbol_page(module_page: page, signature: signature),
+					anchor: anchor,
+					owner: .none
+				))
+			}
+		}
+		if let .nominal(nominal) = entry.value {
+			let name = match nominal {
+				.#"struct"(name: name, generics: _, properties: _, methods: _) -> name.clone(),
+				.#"enum"(name: name, generics: _, variants: _, methods: _) -> name.clone(),
+				.#"protocol"(name: name, generics: _, properties: _, methods: _) -> name.clone()
+			}
+			let parent_signature = signature_of(collection: collection, entry: entry)
+			let parent_anchor = anchor_for(signature: parent_signature.clone())
+			let parent_page = symbol_page(module_page: page, signature: parent_signature)
+			match nominal {
+				.#"struct"(name: _, generics: _, properties: properties, methods: methods) -> {
+					for id in properties { append_symbol(collection: collection, module: module, page: parent_page, owner: name.clone(), parent_anchor: parent_anchor.clone(), id: id, symbols: symbols) }
+					for id in methods { append_symbol(collection: collection, module: module, page: parent_page, owner: name.clone(), parent_anchor: parent_anchor.clone(), id: id, symbols: symbols) }
+				},
+				.#"enum"(name: _, generics: _, variants: variants, methods: methods) -> {
+					for id in variants { append_symbol(collection: collection, module: module, page: parent_page, owner: name.clone(), parent_anchor: parent_anchor.clone(), id: id, symbols: symbols) }
+					for id in methods { append_symbol(collection: collection, module: module, page: parent_page, owner: name.clone(), parent_anchor: parent_anchor.clone(), id: id, symbols: symbols) }
+				},
+				.#"protocol"(name: _, generics: _, properties: properties, methods: methods) -> {
+					for id in properties { append_symbol(collection: collection, module: module, page: parent_page, owner: name.clone(), parent_anchor: parent_anchor.clone(), id: id, symbols: symbols) }
+					for id in methods { append_symbol(collection: collection, module: module, page: parent_page, owner: name.clone(), parent_anchor: parent_anchor.clone(), id: id, symbols: symbols) }
+				}
+			}
+		}
+	}
+	symbols
+}
+

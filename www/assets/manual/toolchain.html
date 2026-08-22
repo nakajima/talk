@@ -6,23 +6,24 @@
     <title>talktalk - 14. The Toolchain</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787039529" rel="stylesheet">
+    <link href="/style.css?t=1787386847" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
       <a class="global-nav-brand" href="/">talktalk</a>
       <div class="global-nav-links">
         <a href="/">Language</a>
-        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/manual/" aria-current="page">Guide</a>
+        <a href="/docs/">Docs</a>
         <a href="/playground">Playground</a>
         <a href="/qa">Q/A</a>
         <a href="/philosophy">Philosophy</a>
       </div>
     </nav>
-    <main class="content-page manual-page">
-      <header class="page-header">
-        <div class="page-header-content">
-          <code class="page-kicker">talktalk / docs</code>
+    <main class="site-page manual-page">
+      <header class="site-page-header">
+        <div class="site-page-heading">
+          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/toolchain" aria-current="page">14. The Toolchain</a></nav>
           <div class="page-header-title-row">
             <h1>14. The Toolchain</h1>
             
@@ -30,10 +31,10 @@
         </div>
       </header>
 
-      <div class="manual-layout">
-        <aside class="manual-outline">
+      <div class="site-page-layout manual-layout">
+        <aside class="site-page-sidebar manual-outline">
           <nav aria-label="Manual table of contents">
-            <span class="manual-outline-title">Contents</span>
+            <span class="site-nav-label manual-outline-title">Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -55,20 +56,23 @@
 <li><a href="#bytecode">Bytecode</a></li>
 <li><a href="#mir-and-c">MIR and C</a></li>
 <li><a href="#packages">Packages</a></li>
-<li><a href="#editor-integration">Editor integration</a></li>
+<li><a href="#editor-integration-and-automatic-repairs">Editor integration and automatic repairs</a></li>
 <li><a href="#extending-the-command">Extending the command</a></li>
 <li><a href="#compiler-development-commands">Compiler-development commands</a></li></ol></li>
 <li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+<li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
+<li><a href="/manual/mir-reference">B. MIR Reference</a></li>
+<li><a href="/manual/bytecode-reference">C. Bytecode Reference</a></li>
             </ol>
           </nav>
         </aside>
-        <div class="manual-document">
+        <div class="site-page-content manual-document">
           <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
             <a class="manual-previous" href="/manual/standard-library">&larr; 13. The Standard Library</a>
             <a class="manual-contents" href="/manual/">All chapters</a>
             <a class="manual-next" href="/manual/unsafe-and-interop">15. Unsafe Code and Interop &rarr;</a>
           </nav>
-          <article class="page-content">
+          <article class="prose page-content">
             <p>The <code>talk</code> command checks and runs programs, manages packages, runs tests, talks to editors, and builds files you can inspect or ship.</p>
 <h2><a href="#the-everyday-loop" aria-hidden="true" class="anchor" id="the-everyday-loop"></a>The everyday loop</h2>
 <pre><code class="language-sh">talk check
@@ -83,9 +87,8 @@ talk format --width 100 source.tlk
 <h2><a href="#the-repl-and-queries" aria-hidden="true" class="anchor" id="the-repl-and-queries"></a>The REPL and queries</h2>
 <p>Start the interactive frontend:</p>
 <pre><code class="language-sh">talk repl
-talk repl --package
 </code></pre>
-<p>The package mode imports the current package library's public surface. The REPL supports declarations, type queries, completion, and indentation.</p>
+<p>Inside a package, the REPL imports the current package library's public surface automatically. Outside a package it starts a standalone session; use <code>talk repl --standalone</code> to ignore an enclosing package explicitly. The REPL supports declarations, type queries, completion, and indentation.</p>
 <p>Query source directly with:</p>
 <pre><code class="language-sh">talk hover source.tlk --line 10 --column 5
 talk parse source.tlk
@@ -98,12 +101,13 @@ talk html source.tlk
 talk run-image program.tbc
 talk bytecode source.tlk
 </code></pre>
-<p>Use <code>--entry NAME</code> to choose a public zero-parameter function instead of the script's top-level statements.</p>
+<p>Use <code>--entry NAME</code> to choose a public zero-parameter function instead of the script's top-level statements. <code>talk bytecode</code> prints disassembly; <code>.tbc</code> is the encoded and validated transport format. See the <a href="/manual/bytecode-reference">Bytecode Reference</a> for the image layout, instruction families, validation rules, and version policy.</p>
 <h2><a href="#mir-and-c" aria-hidden="true" class="anchor" id="mir-and-c"></a>MIR and C</h2>
 <p>Inspect the optimized middle representation:</p>
 <pre><code class="language-sh">talk mir source.tlk
 talk mir --no-opt --debug source.tlk
 </code></pre>
+<p><code>--no-opt</code> shows MIR before optimization. <code>--debug</code> annotates instructions with source spans, binding names, and reasons for compiler-generated operations. The dump is an inspection format, not a stable serialization. See the <a href="/manual/mir-reference">MIR Reference</a> for its control flow, layouts, instructions, cleanup, and target contract.</p>
 <p>Emit C or build a native executable:</p>
 <pre><code class="language-sh">talk c source.tlk &gt; program.c
 talk build --native source.tlk -o program
@@ -117,21 +121,22 @@ talk dependencies
 talk update [PACKAGE...]
 </code></pre>
 <p>See <a href="/manual/modules-and-packages">Modules and Packages</a> for manifest and lockfile semantics.</p>
-<h2><a href="#editor-integration" aria-hidden="true" class="anchor" id="editor-integration"></a>Editor integration</h2>
+<h2><a href="#editor-integration-and-automatic-repairs" aria-hidden="true" class="anchor" id="editor-integration-and-automatic-repairs"></a>Editor integration and automatic repairs</h2>
 <pre><code class="language-sh">talk lsp --stdio
 talk setup nvim
 talk completions zsh
 </code></pre>
-<p>The language server provides diagnostics, hover, completion, go-to-definition, rename, semantic tokens, and conservative code actions. <code>talk fix-labels</code> rewrites call sites when argument labels have changed:</p>
-<pre><code class="language-sh">talk fix-labels src/main.tlk
+<p>The language server provides diagnostics, hover, completion, go-to-definition, rename, semantic tokens, and conservative code actions. <code>talk fixit</code> applies the same preferred, compiler-proven quick fixes without an editor:</p>
+<pre><code class="language-sh">talk fixit src/main.tlk
 </code></pre>
+<p>When no path is supplied inside a package, it repairs the package workspace. Ambiguous actions are never chosen automatically. Edits are rechecked between rounds so a repair can reveal another deterministic fix without applying overlapping stale edits.</p>
 <h2><a href="#extending-the-command" aria-hidden="true" class="anchor" id="extending-the-command"></a>Extending the command</h2>
 <p>Unknown commands use Git-style external subcommands. If <code>talk-report</code> is an executable on <code>PATH</code>, this invokes it with inherited standard streams:</p>
 <pre><code class="language-sh">talk report --format json
 </code></pre>
 <p>Built-in commands always take precedence.</p>
 <h2><a href="#compiler-development-commands" aria-hidden="true" class="anchor" id="compiler-development-commands"></a>Compiler-development commands</h2>
-<p><code>talk core-artifact</code> and <code>talk bootstrap</code> regenerate checked-in compiler artifacts. They are maintenance commands, not part of the application build loop. <code>talk llm</code> prints a compact, current language reference suitable for tools and agents.</p>
+<p><code>talk core-artifact</code> and <code>talk bootstrap</code> regenerate checked-in compiler artifacts. They are maintenance commands, not part of the application build loop; the wasm build script runs <code>talk core-artifact</code> itself before embedding the artifact. <code>talk llm</code> prints a compact, current language reference suitable for tools and agents.</p>
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
@@ -140,9 +145,9 @@ talk completions zsh
             <a class="manual-next" href="/manual/unsafe-and-interop">15. Unsafe Code and Interop &rarr;</a>
           </nav>
         </div>
-        <div class="manual-rail" aria-hidden="true"></div>
+        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
       </div>
-      <script type="module" src="/page.js?t=1787039529"></script>
+      <script type="module" src="/page.js?t=1787386847"></script>
     </main>
   </body>
 </html>

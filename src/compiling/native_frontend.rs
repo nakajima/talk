@@ -94,6 +94,11 @@ unsafe extern "C" {
         args: *const NativeValue,
         argc: usize,
     ) -> i32;
+    fn talk_frontend_parse__file__docs__source(
+        out: *mut NativeValue,
+        args: *const NativeValue,
+        argc: usize,
+    ) -> i32;
     fn talk_frontend_parse__lenient(
         out: *mut NativeValue,
         args: *const NativeValue,
@@ -155,6 +160,7 @@ fn export_fn(name: &str) -> Option<ExportFn> {
         "trees" => talk_frontend_trees,
         "parse" => talk_frontend_parse,
         "parse_file_source" => talk_frontend_parse__file__source,
+        "parse_file_docs_source" => talk_frontend_parse__file__docs__source,
         "parse_lenient" => talk_frontend_parse__lenient,
         "parse_block_items" => talk_frontend_parse__block__items,
         "parse_expr" => talk_frontend_parse__expr,

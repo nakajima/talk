@@ -1,0 +1,15 @@
+Lock(
+    format: 1,
+    fingerprint: "7a8b6bc34b1adafefa6c12751b7db91782e3bb54e07080686ef2776b663597dc",
+    root_dependencies: ["111cad3b50fe4213589f28bb909f8c867ed53d326804299f9e1b6b1c1124cf15"],
+    packages: [
+        .path(
+            id: "111cad3b50fe4213589f28bb909f8c867ed53d326804299f9e1b6b1c1124cf15",
+            package: "talk-md",
+            version: "0.1.0",
+            path: "../talk-md",
+            base: "root",
+            dependencies: [],
+        ),
+    ]
+)

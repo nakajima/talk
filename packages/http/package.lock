@@ -1,0 +1,15 @@
+Lock(
+    format: 1,
+    fingerprint: "924c18dd09be8bbdc4fb53125b00fc0ae20dd1bfdfba177ff7f479040b9c8420",
+    root_dependencies: ["00fc09e46018fccde6bdf7458f959e07c920dcaabbc342b77fbdbba4ade26f29"],
+    packages: [
+        .path(
+            id: "00fc09e46018fccde6bdf7458f959e07c920dcaabbc342b77fbdbba4ade26f29",
+            package: "net",
+            version: "0.1.0",
+            path: "../net",
+            base: "root",
+            dependencies: [],
+        ),
+    ]
+)

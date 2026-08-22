@@ -10,24 +10,24 @@
   </head>
   <body>
 {GLOBAL_NAV}
-    <main class="content-page manual-page">
+    <main class="site-page manual-page">
 {PAGE_HEADER}
-      <div class="manual-layout">
-        <aside class="manual-outline">
+      <div class="site-page-layout manual-layout">
+        <aside class="site-page-sidebar manual-outline">
           <nav aria-label="Manual table of contents">
-            <span class="manual-outline-title">Contents</span>
+            <span class="site-nav-label manual-outline-title">Contents</span>
             <ol>
               {MANUAL_OUTLINE}
             </ol>
           </nav>
         </aside>
-        <div class="manual-document">
+        <div class="site-page-content manual-document">
           <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
             {PREVIOUS_LINK}
             <a class="manual-contents" href="/manual/">All chapters</a>
             {NEXT_LINK}
           </nav>
-          <article class="page-content">
+          <article class="prose page-content">
             {CONTENT_GOES_HERE}
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
@@ -36,7 +36,7 @@
             {NEXT_LINK}
           </nav>
         </div>
-        <div class="manual-rail" aria-hidden="true"></div>
+        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
       </div>
       <script type="module" src="/page.js"></script>
     </main>

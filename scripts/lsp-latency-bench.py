@@ -216,8 +216,8 @@ class Benchmark:
             ),
             "core": (self.root / "core", self.root / "core/Array.tlk"),
             "syntax": (
-                self.root / "stdlib/syntax",
-                self.root / "stdlib/syntax/Parser.tlk",
+                self.root / "packages/syntax/src",
+                self.root / "packages/syntax/src/Parser.tlk",
             ),
         }
         for name in self.arguments.case:

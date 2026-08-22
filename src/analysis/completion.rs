@@ -991,7 +991,7 @@ mod tests {
             vec![source],
             DriverConfig::new("Test")
                 .lenient_parsing()
-                .preserve_comments(true),
+                .collect_docs(true),
         );
         let resolved = driver
             .parse()

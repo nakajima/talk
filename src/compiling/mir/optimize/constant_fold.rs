@@ -35,11 +35,10 @@ impl ConstantFolder {
         use ScalarOp::*;
 
         match (op, a, b) {
-            (IntAdd, Int(a), Some(Int(b))) => Some(Int(a.wrapping_add(b))),
-            (IntSub, Int(a), Some(Int(b))) => Some(Int(a.wrapping_sub(b))),
-            (IntMul, Int(a), Some(Int(b))) => Some(Int(a.wrapping_mul(b))),
-            (IntDiv, Int(_), Some(Int(0))) => None,
-            (IntDiv, Int(a), Some(Int(b))) => Some(Int(a.wrapping_div(b))),
+            (IntAdd, Int(a), Some(Int(b))) => a.checked_add(b).map(Int),
+            (IntSub, Int(a), Some(Int(b))) => a.checked_sub(b).map(Int),
+            (IntMul, Int(a), Some(Int(b))) => a.checked_mul(b).map(Int),
+            (IntDiv, Int(a), Some(Int(b))) => a.checked_div(b).map(Int),
             (FloatAdd, Float(a), Some(Float(b))) => Some(Float(a + b)),
             (FloatSub, Float(a), Some(Float(b))) => Some(Float(a - b)),
             (FloatMul, Float(a), Some(Float(b))) => Some(Float(a * b)),
@@ -199,6 +198,35 @@ mod tests {
             function.blocks[0].term,
             Some(Term::Return(Operand::Const(Constant::Int(42))))
         ));
+    }
+
+    #[test]
+    fn does_not_fold_overflowing_integer_addition() {
+        let mut function = Function {
+            debug_names: None,
+            frame_sites: Default::default(),
+            param_reprs: Vec::new(),
+            return_repr: None,
+            name: "overflow".into(),
+            arity: 0,
+            locals: crate::compiling::mir::build::LocalInfo::uniform(1),
+            blocks: vec![BlockData {
+                debug: None,
+                params: Vec::new(),
+                insts: vec![Inst::Scalar {
+                    dest: 0,
+                    op: ScalarOp::IntAdd,
+                    a: Operand::Const(Constant::Int(i64::MAX)),
+                    b: Some(Operand::Const(Constant::Int(1))),
+                }],
+                term: Some(Term::Return(Operand::Local(0))),
+            }],
+        };
+
+        let stats = run(&mut function);
+        assert!(!stats.changed);
+        assert_eq!(stats.applied, 0);
+        assert!(matches!(function.blocks[0].insts[0], Inst::Scalar { .. }));
     }
 
     #[test]

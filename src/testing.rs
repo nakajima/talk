@@ -583,7 +583,7 @@ impl Runner {
     fn compile_config() -> DriverConfig {
         DriverConfig::new("TalkTests")
             .lenient_parsing()
-            .preserve_comments(true)
+            .collect_docs(true)
     }
 
     fn is_test_file(path: &Path) -> bool {

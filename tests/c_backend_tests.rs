@@ -378,6 +378,58 @@ fn scalar_loop_agrees_with_the_interpreter() {
 }
 
 #[test]
+fn checked_and_unchecked_integer_arithmetic_agree_with_the_interpreter() {
+    assert_agrees(
+        "checked_arithmetic",
+        "pub func bench() -> () {\n\tlet max = 9223372036854775807\n\tlet min = -max - 1\n\tprint(max.checked_add(1))\n\tprint(20.checked_mul(2))\n\tprint(max.unchecked_add(1))\n\tprint(min.unchecked_sub(1))\n\tprint(max.unchecked_mul(2))\n\tprint(min.unchecked_div(-1))\n}\n",
+    );
+}
+
+#[test]
+fn native_integer_overflow_traps() {
+    for (name, expression, message) in [
+        ("add", "max + one", "integer overflow in addition"),
+        ("sub", "min - one", "integer overflow in subtraction"),
+        ("mul", "max * two", "integer overflow in multiplication"),
+        ("div", "min / negative_one", "integer overflow in division"),
+    ] {
+        let dir = scratch(&format!("integer_overflow_{name}"));
+        let program = write_program(
+            &dir,
+            &format!(
+                "pub func bench() -> Int {{\n\tlet max = 9223372036854775807\n\tlet min = -max - 1\n\tlet one = 1\n\tlet two = 2\n\tlet negative_one = -1\n\t{expression}\n}}\n"
+            ),
+        );
+        let output = talk(&["c", "--entry", "bench", &program.to_string_lossy()]);
+        assert!(
+            output.status.success(),
+            "`talk c` failed:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let source = dir.join("program.c");
+        std::fs::write(&source, &output.stdout).expect("write emitted C");
+        let binary = dir.join("program.bin");
+        let compile = Command::new("cc")
+            .args(["-O2", "-std=c11", "-Wall", "-Werror"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&binary)
+            .output()
+            .expect("run `cc`");
+        assert!(
+            compile.status.success(),
+            "emitted C did not compile:\n{}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+        let run = Command::new(&binary)
+            .output()
+            .expect("run compiled program");
+        assert!(!run.status.success(), "{name} overflow must fail");
+        assert!(String::from_utf8_lossy(&run.stderr).contains(message));
+    }
+}
+
+#[test]
 fn records_agree_with_the_interpreter() {
     assert_agrees("fields", FIELDS);
 }

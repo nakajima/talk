@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - C. Bytecode Reference</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787386852" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Guide</a>
+        <a href="/docs/">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="site-page manual-page">
+      <header class="site-page-header">
+        <div class="site-page-heading">
+          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/bytecode-reference" aria-current="page">C. Bytecode Reference</a></nav>
+          <div class="page-header-title-row">
+            <h1>C. Bytecode Reference</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="site-page-layout manual-layout">
+        <aside class="site-page-sidebar manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="site-nav-label manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+<li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
+<li><a href="/manual/mir-reference">B. MIR Reference</a></li>
+<li><a href="/manual/bytecode-reference" aria-current="page">C. Bytecode Reference</a><ol class="manual-outline-sections"><li><a href="#compatibility-policy">Compatibility policy</a></li>
+<li><a href="#primitive-encoding">Primitive encoding</a></li>
+<li><a href="#image-order">Image order</a></li>
+<li><a href="#exports">Exports</a></li>
+<li><a href="#chunks-and-registers">Chunks and registers</a></li>
+<li><a href="#constants-and-rk-operands">Constants and RK operands</a></li>
+<li><a href="#shared-pools">Shared pools</a></li>
+<li><a href="#layout-table">Layout table</a></li>
+<li><a href="#instruction-families">Instruction families</a></li>
+<li><a href="#validation">Validation</a></li>
+<li><a href="#execution-model">Execution model</a></li>
+<li><a href="#disassembly-versus-encoded-bytes">Disassembly versus encoded bytes</a></li></ol></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="site-page-content manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/mir-reference">&larr; B. MIR Reference</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <span></span>
+          </nav>
+          <article class="prose page-content">
+            <p>TalkTalk's default executable artifact is a validated register-bytecode image. <code>talk build</code> writes it, <code>talk run-image</code> decodes and validates it, and <code>talk bytecode</code> prints the disassembly produced directly from source.</p>
+<pre><code class="language-sh">talk build program.tlk -o program.tbc
+talk bytecode program.tlk
+talk run-image program.tbc
+</code></pre>
+<p>This page describes bytecode format 11. The exact encoder, decoder, instruction tags, and validator in <code>talk-vm/src/bytecode.rs</code> and <code>talk-vm/src/lib.rs</code> are authoritative.</p>
+<h2><a href="#compatibility-policy" aria-hidden="true" class="anchor" id="compatibility-policy"></a>Compatibility policy</h2>
+<p>Every image begins with the seven bytes <code>TALKBC\0</code>, followed by a 32-bit format version. The current encoder writes version 11, and the current loader accepts version 11. A different magic, unsupported version, truncated field, invalid tag, invalid index, integer overflow, malformed UTF-8 string, or trailing byte rejects the image before execution.</p>
+<p>The format is experimental. Opcode layout can change when the format version changes; producers and consumers should use matching TalkTalk releases rather than treating <code>.tbc</code> as a long-term distribution ABI.</p>
+<p>Version 10 introduced handler clause kind and clause-derived suspension. Version 11 changes Int arithmetic opcodes to trap on overflow. The compatibility floor is version 11, so a runtime never executes older arithmetic under the new semantics.</p>
+<h2><a href="#primitive-encoding" aria-hidden="true" class="anchor" id="primitive-encoding"></a>Primitive encoding</h2>
+<p>Multibyte integers and Float bit patterns are encoded little-endian. Lengths and most table indexes use unsigned 32-bit fields. Registers and compact counts use unsigned 16-bit fields where the validator enforces their range. Booleans use one byte.</p>
+<p>Strings are a 32-bit byte length followed by UTF-8 bytes. Arbitrary static data is length-prefixed bytes and need not be UTF-8.</p>
+<p>Every enum-like field has a one-byte tag. Unknown tags are errors; the decoder never preserves an instruction or constant it does not understand.</p>
+<h2><a href="#image-order" aria-hidden="true" class="anchor" id="image-order"></a>Image order</h2>
+<p>After magic and version, a module is encoded in this order:</p>
+<ol>
+<li>entry chunk index;</li>
+<li>host-callable exports;</li>
+<li>chunks;</li>
+<li>scalar constant pool;</li>
+<li>argument pool;</li>
+<li>switch-target pool;</li>
+<li>trap strings;</li>
+<li>static bytes; and</li>
+<li>aggregate layouts.</li>
+</ol>
+<p>The decoder consumes exactly one value from each section and then requires end of file.</p>
+<h2><a href="#exports" aria-hidden="true" class="anchor" id="exports"></a>Exports</h2>
+<p>Each export is a UTF-8 name followed by a chunk index. Export names are host dispatch identities, unlike diagnostic chunk names. The referenced wrapper chunk must exist and satisfy the generated service convention.</p>
+<p>The entry is a separate chunk index used for ordinary executable evaluation.</p>
+<h2><a href="#chunks-and-registers" aria-hidden="true" class="anchor" id="chunks-and-registers"></a>Chunks and registers</h2>
+<p>A chunk contains:</p>
+<ul>
+<li>diagnostic name;</li>
+<li>source arity;</li>
+<li>register count;</li>
+<li>instruction count and instruction stream; and</li>
+<li>an unwind table.</li>
+</ul>
+<p>A register index is local to one frame. Instructions read and write numbered registers. Calls create new frames; return writes the result to the destination established by the caller.</p>
+<p>The unwind table contains sorted <code>(suspension_pc, cleanup_pc)</code> pairs. When an effect abort or cancelled resumption crosses a frame suspended at that program counter, the VM enters the cleanup code once before removing the frame.</p>
+<h2><a href="#constants-and-rk-operands" aria-hidden="true" class="anchor" id="constants-and-rk-operands"></a>Constants and RK operands</h2>
+<p>The constant pool contains only immutable scalar values:</p>
+<ul>
+<li>signed 64-bit Int;</li>
+<li>64-bit Float bits;</li>
+<li>Bool;</li>
+<li>Byte;</li>
+<li>Void; and</li>
+<li>a pointer offset into module static data.</li>
+</ul>
+<p>Arithmetic operands and argument-pool entries use an RK encoding inspired by Lua. If the high bit of a 16-bit field is clear, the field names a register. If it is set, the low 15 bits index the constant pool. A large constant-pool index is first materialized with <code>Const</code>.</p>
+<p>This keeps common literal arguments and arithmetic constants out of temporary registers.</p>
+<h2><a href="#shared-pools" aria-hidden="true" class="anchor" id="shared-pools"></a>Shared pools</h2>
+<p>Variable-length instruction operands live in module-level pools:</p>
+<ul>
+<li>the argument pool stores RK operands used by calls, closures, aggregate construction, object construction, suspension, and existential packing;</li>
+<li>the switch pool stores branch targets for <code>Switch</code>;</li>
+<li>the trap table stores UTF-8 messages referenced by <code>Trap</code>; and</li>
+<li>static bytes hold literals and immortal data.</li>
+</ul>
+<p>An instruction carries a start and length into its pool. Validation checks the complete half-open range, including overflow.</p>
+<h2><a href="#layout-table" aria-hidden="true" class="anchor" id="layout-table"></a>Layout table</h2>
+<p>Each layout has an optional display symbol, total slot width, and one body:</p>
+<ul>
+<li><code>Product</code>: ordered field offsets and shapes;</li>
+<li><code>Sum</code>: one ordered payload layout per variant; or</li>
+<li><code>Unshaped</code>: an identity not constructed as a flat aggregate.</li>
+</ul>
+<p>A field shape is one slot or a nested layout spliced inline. Sum values reserve slot zero for the variant tag. Products use tag zero.</p>
+<p>Instructions use <code>NO_LAYOUT</code> (<code>u32::MAX</code>) when a member occupies one ordinary slot; any other value identifies the spliced child layout. Validation checks layout references, widths, offsets, and construction arity.</p>
+<h2><a href="#instruction-families" aria-hidden="true" class="anchor" id="instruction-families"></a>Instruction families</h2>
+<p>The bytecode currently has 72 instruction variants. The following groups describe their execution contract; disassembly uses the names shown here.</p>
+<h3><a href="#values-and-scalar-operations" aria-hidden="true" class="anchor" id="values-and-scalar-operations"></a>Values and scalar operations</h3>
+<ul>
+<li><code>Const</code>, <code>Move</code></li>
+<li><code>Add</code>, <code>Sub</code>, <code>Mul</code>, <code>Div</code></li>
+<li><code>And</code>, <code>Or</code>, <code>Xor</code>, <code>Shl</code>, <code>Shr</code>, <code>Not</code></li>
+<li><code>Cmp</code></li>
+<li><code>Trunc</code>, <code>IToF</code>, <code>BToI</code>, <code>IToB</code></li>
+</ul>
+<p>Arithmetic uses RK operands where encoded. Int addition, subtraction, multiplication, and the overflowing division case trap; Float arithmetic follows IEEE 754. Explicit <code>unchecked_*</code> Int methods are Core routines built from bitwise operations rather than separate opcodes. <code>Cmp</code> carries Eq, Ne, Lt, Le, Gt, or Ge selected for the operand representation by MIR lowering.</p>
+<h3><a href="#cells-and-closures" aria-hidden="true" class="anchor" id="cells-and-closures"></a>Cells and closures</h3>
+<ul>
+<li><code>CellNew</code>, <code>CellGet</code>, <code>CellSet</code></li>
+<li><code>MakeClosure</code>, <code>EnvGet</code></li>
+<li><code>Call</code>, <code>CallIndirect</code></li>
+</ul>
+<p>A closure stores a chunk and ordered captured values. Cells provide shared mutable storage for captures whose source binding is assigned.</p>
+<h3><a href="#control-flow" aria-hidden="true" class="anchor" id="control-flow"></a>Control flow</h3>
+<ul>
+<li><code>Jump</code></li>
+<li><code>Branch</code></li>
+<li><code>Switch</code></li>
+<li><code>Ret</code></li>
+<li><code>Trap</code></li>
+</ul>
+<p>Targets are absolute instruction indexes inside the current chunk. <code>Switch</code> indexes its target slice by a nonnegative tag and uses the final encoded default target when no listed target applies. Validation requires every target to land on an instruction boundary in the same chunk.</p>
+<h3><a href="#aggregates-and-existentials" aria-hidden="true" class="anchor" id="aggregates-and-existentials"></a>Aggregates and existentials</h3>
+<ul>
+<li><code>AggNew</code>, <code>StringLit</code></li>
+<li><code>Field</code>, <code>FieldIndex</code>, <code>GetElement</code>, <code>GetTag</code></li>
+<li><code>SetField</code>, <code>SetFieldIndex</code></li>
+<li><code>ExistentialPack</code>, <code>ExistentialWitness</code>, <code>ExistentialPayload</code></li>
+</ul>
+<p>Aggregates are copy-on-write values under published layouts. Offset-addressed field operations use static MIR decisions. Index operations are reserved for dynamically shaped boundaries. <code>StringLit</code> interns a complete immutable String-shaped value over static bytes.</p>
+<h3><a href="#managed-memory" aria-hidden="true" class="anchor" id="managed-memory"></a>Managed memory</h3>
+<ul>
+<li><code>Alloc</code>, <code>Free</code>, <code>Retain</code>, <code>IsUnique</code></li>
+<li><code>Load</code>, <code>CheckedIndexedLoad</code>, <code>Store</code>, <code>Copy</code>, <code>Swap</code></li>
+</ul>
+<p>A memory operation carries Byte, I64, F64, Bool, pointer, or boxed element kind. The VM tracks live allocations and rejects out-of-bounds access, use after free, double free, and incompatible element interpretation. <code>CheckedIndexedLoad</code> branches to compiled TalkTalk failure code instead of turning an ordinary bounds failure into a VM trap.</p>
+<h3><a href="#heap-objects-and-regions" aria-hidden="true" class="anchor" id="heap-objects-and-regions"></a>Heap objects and regions</h3>
+<ul>
+<li><code>ObjectNew</code>, <code>ObjectGet</code>, <code>ObjectSet</code></li>
+<li><code>SetFinalizer</code></li>
+<li><code>RegionAcquire</code>, <code>RegionRelease</code></li>
+</ul>
+<p>Heap objects have identity and participate in merge-only managed regions. Region claims determine teardown; finalizers run through generated typed glue.</p>
+<h3><a href="#effects-continuations-and-resumptions" aria-hidden="true" class="anchor" id="effects-continuations-and-resumptions"></a>Effects, continuations, and resumptions</h3>
+<ul>
+<li><code>MakeCont</code>, <code>CallCont</code>, <code>UnwindRet</code></li>
+<li><code>PushHandler</code>, <code>FindHandler</code></li>
+<li><code>GetFloor</code>, <code>SetFloor</code></li>
+<li><code>Suspend</code>, <code>Resume</code>, <code>Cancel</code></li>
+</ul>
+<p><code>PushHandler</code> records the effect, clause closure, delimiter, and whether the clause binds a resumption. <code>FindHandler</code> searches the nearest live matching entry below the current floor and returns all four routing values.</p>
+<p>Tail-resumptive clauses call and continue in place. A binding clause uses <code>Suspend</code> to store the delimited frame segment in a one-shot slot. <code>Resume</code> consumes that slot and supplies the performed operation's result. <code>Cancel</code> consumes it and runs unwind cleanup. A second use traps even if malformed input evaded source linearity.</p>
+<p><code>CallCont</code> implements abortive return to a delimiter, entering unwind-table cleanup for crossed frames. <code>UnwindRet</code> is valid only while such cleanup is active.</p>
+<h3><a href="#tasks-and-channels" aria-hidden="true" class="anchor" id="tasks-and-channels"></a>Tasks and channels</h3>
+<ul>
+<li><code>TaskSpawn</code>, <code>TaskJoin</code>, <code>TaskWidth</code></li>
+<li><code>ChanSend</code>, <code>ChanTake</code>, <code>ChanCtl</code></li>
+</ul>
+<p>Task handles and channel handles are runtime-minted and generation-checked. They cannot be forged by putting an integer in the bytecode. Spawn and join transfer only layouts admitted by compiler-published <code>Send</code> facts; the VM uses isolated worker machines and structural transfer packets.</p>
+<p><code>ChanCtl</code> multiplexes channel creation, status, endpoint counts, receive and send registration, reservation, deadline registration, and worker parking. The numeric operations are a private Core/runtime protocol, not a source API.</p>
+<h3><a href="#host-io" aria-hidden="true" class="anchor" id="host-io"></a>Host I/O</h3>
+<p><code>Io</code> contains an <code>IoOp</code> and three register operands. The 29 operations, in wire order, are:</p>
+<pre><code class="language-text">Read, Write, Open, Close, Sleep, Poll, Ctl,
+Socket, Bind, Listen, Connect, Accept,
+CwdLen, CwdCopy, GetenvLen, GetenvCopy,
+Argc, ArgLen, ArgCopy,
+DirCount, DirEntryKind, DirEntryLen, DirEntryCopy,
+Exit, RealpathLen, RealpathCopy, Seek, FileSize,
+MonotonicNanos
+</code></pre>
+<p>This order matches Core's <code>IORequest</code> cases and the host operation table. Unknown indexes reject during decoding.</p>
+<h2><a href="#validation" aria-hidden="true" class="anchor" id="validation"></a>Validation</h2>
+<p>Decoding is followed by whole-module validation. Among other invariants, validation checks:</p>
+<ul>
+<li>entry and export chunk indexes;</li>
+<li>chunk arity and register operands;</li>
+<li>constant, pool, string, static, layout, and trap indexes;</li>
+<li>RK constant bounds;</li>
+<li>jump and switch targets;</li>
+<li>argument ranges and callable arity;</li>
+<li>memory kinds and layout shape;</li>
+<li>handler and effect operands;</li>
+<li>legal unwind-table ordering and cleanup instructions;</li>
+<li>task, channel, continuation, and resumption operand forms; and</li>
+<li>absence of integer overflow while computing any encoded range.</li>
+</ul>
+<p>The VM executes only a validated module. Compiler-produced invalid bytecode is a backend bug; malformed external bytes are an input error.</p>
+<h2><a href="#execution-model" aria-hidden="true" class="anchor" id="execution-model"></a>Execution model</h2>
+<p>The machine owns module-immutable tables and one worker state per running task worker. A frame contains its chunk, program counter, registers, return destination, closure environment, and handler/unwind state. Values include scalars, aggregates, closures, cells, objects, pointers, continuations, and resumption slots.</p>
+<p>The interpreter checks runtime invariants that remain dynamic: allocation liveness, object and handle generation, channel readiness, continuation lifetime, one-shot resumption use, and trap conditions. Source-level type and ownership checking normally prevents these failures; validation and runtime checks defend the untrusted bytecode boundary.</p>
+<h2><a href="#disassembly-versus-encoded-bytes" aria-hidden="true" class="anchor" id="disassembly-versus-encoded-bytes"></a>Disassembly versus encoded bytes</h2>
+<p><code>talk bytecode</code> compiles source and renders the in-memory module. It shows chunk names, arity, register count, program counters, and readable operands. Pool contents and numeric opcode tags are intentionally abstracted.</p>
+<p>A <code>.tbc</code> file contains the exact wire representation described above. There is no command that treats disassembly text as input, and editing the text cannot create a bytecode image.</p>
+<p>For compiler debugging, inspect MIR first when the question is semantic selection, ownership, cleanup, or layout. Inspect bytecode when the question is register lowering, pool use, concrete VM control flow, encoded validation, or interpreter behavior.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/mir-reference">&larr; B. MIR Reference</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <span></span>
+          </nav>
+        </div>
+        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787386852"></script>
+    </main>
+  </body>
+</html>

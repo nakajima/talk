@@ -2,7 +2,7 @@
 set -euo pipefail
 
 pushd ..
-cargo build
+cargo build --release
 popd
 ./wasm.sh
-cargo run -- build
+TALK_COMPILER=../target/release/talk cargo run -- build

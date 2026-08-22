@@ -1,0 +1,145 @@
+// Host socket domain for IPv4 addresses.
+pub let AF_INET: Int = 2
+// Host socket type for reliable byte streams.
+pub let SOCK_STREAM: Int = 1
+// IPv4 wildcard address used to bind all local interfaces.
+pub let INADDR_ANY: Int = 0
+// IPv4 loopback address in host integer form.
+pub let LOCALHOST: Int = 2130706433
+
+// Creates a host socket; returns its descriptor or a negative errno.
+pub func _io_socket(domain: Int, socktype: Int, proto: Int) 'io -> Int {
+	'io(request: .socket(domain, socktype, proto))
+}
+
+// Binds `fd` to an IPv4 address and port; returns zero or a negative errno.
+pub func _io_bind(fd: Int, addr: Int, port: Int) 'io -> Int {
+	'io(request: .bind(fd, addr, port))
+}
+
+// Starts listening on `fd` with the requested pending-connection backlog.
+pub func _io_listen(fd: Int, backlog: Int) 'io -> Int {
+	'io(request: .listen(fd, backlog))
+}
+
+// Connects `fd` to an IPv4 address and port; returns zero or a negative errno.
+pub func _io_connect(fd: Int, addr: Int, port: Int) 'io -> Int {
+	'io(request: .connect(fd, addr, port))
+}
+
+// Accepts one pending connection; returns its descriptor or a negative errno.
+pub func _io_accept(fd: Int) 'io -> Int {
+	'io(request: .accept(fd))
+}
+
+// A thin synchronous wrapper around a connected TCP file descriptor.
+//
+// Construction and I/O expose raw host success or negative errno integers;
+// unlike `fs.File`, this type does not wrap failures in `Result`. Callers must
+// check `is_valid` after `connect` and inspect read/write return values.
+pub struct TcpStream {
+	// The host file descriptor.
+	pub let fd: Int
+
+	// Creates an IPv4 stream socket and attempts to connect it to `addr:port`.
+	//
+	// The current API discards the connect result and always wraps the socket
+	// descriptor. `is_valid` detects socket-creation failure only; it does not prove
+	// that the connection succeeded.
+	pub func connect(addr: Int, port: Int) -> TcpStream {
+		let fd = _io_socket(domain: AF_INET, socktype: SOCK_STREAM, proto: 0)
+		_io_connect(fd: fd, addr: addr, port: port)
+		TcpStream(fd: fd)
+	}
+
+	// Performs one socket read into caller-owned raw storage.
+	//
+	// The caller must provide at least `count` writable bytes. The result can be a
+	// short byte count, zero at EOF, or a negative errno; no retry is attempted.
+	pub func read(buf: RawPtr, count: Int) -> Int {
+		_io_read(fd: self.fd, buf: buf, count: count)
+	}
+
+	// Performs one read into a newly allocated buffer of `max` bytes.
+	//
+	// `max` must be non-negative. Short reads are returned immediately. Negative
+	// or dishonest host counts are clamped to zero or `max`; this is byte transport
+	// and does not validate UTF-8.
+	pub func read_string(max: Int) -> String {
+		#unsafe {
+			let buf = _alloc<Byte>(count: max)
+			let n = _io_clamp(
+				count: _io_read(fd: self.fd, buf: buf, count: max),
+				capacity: max
+			)
+			String(base: ByteStorage(base: buf), byte_count: n, capacity: max)
+		}
+	}
+
+	// Performs one socket write from caller-owned raw storage.
+	//
+	// The result can be a short count or negative errno; callers requiring a full
+	// write must loop over the unwritten suffix.
+	pub func write(buf: RawPtr, count: Int) -> Int {
+		_io_write(fd: self.fd, buf: buf, count: count)
+	}
+
+	// Requests one socket write for the complete string buffer.
+	//
+	// The host may report a short write; this convenience method does not retry.
+	pub func write_string(s: String) -> Int {
+		_io_write(fd: self.fd, buf: s.storage.base, count: s.byte_count)
+	}
+
+	// Requests one host close and returns zero or a negative errno.
+	//
+	// The stored descriptor is not invalidated, so callers must avoid repeated
+	// closes and later I/O through this value.
+	pub func close() -> Int {
+		_io_close(fd: self.fd)
+	}
+
+	// Returns whether socket creation produced a non-negative descriptor.
+	//
+	// A true result does not prove that `connect` succeeded because that reply is
+	// not retained by the current constructor.
+	pub func is_valid() -> Bool { self.fd >= 0 }
+}
+
+// A blocking IPv4 TCP listener backed by a host file descriptor.
+//
+// `bind` listens on all interfaces with backlog 128. Setup failures remain in
+// the descriptor value rather than a `Result`, and `accept` may therefore
+// return an invalid `TcpStream` that callers should check.
+pub struct TcpListener {
+	// The host file descriptor.
+	pub let fd: Int
+
+	// Creates an IPv4 socket, binds all interfaces on `port`, and starts listening.
+	//
+	// Bind and listen replies are currently discarded. The returned descriptor may
+	// therefore be non-negative even when setup did not complete successfully.
+	pub func bind(port: Int) -> TcpListener {
+		let fd = _io_socket(domain: AF_INET, socktype: SOCK_STREAM, proto: 0)
+		_io_bind(fd: fd, addr: 0, port: port)
+		_io_listen(fd: fd, backlog: 128)
+		TcpListener(fd: fd)
+	}
+
+	// Performs one blocking accept and wraps its returned descriptor.
+	//
+	// A host error becomes a `TcpStream` with a negative descriptor; check
+	// `is_valid` before using it.
+	pub func accept() -> TcpStream {
+		let client_fd = _io_accept(fd: self.fd)
+		TcpStream(fd: client_fd)
+	}
+
+	// Requests one host close and returns zero or a negative errno.
+	//
+	// The stored descriptor is not invalidated, so callers must avoid repeated
+	// closes and later accepts through this value.
+	pub func close() -> Int {
+		_io_close(fd: self.fd)
+	}
+}

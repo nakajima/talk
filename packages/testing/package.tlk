@@ -1,0 +1,13 @@
+Package(
+	name: "testing",
+	version: "0.1.0",
+	builds: [
+		.lib(from: "src/testing.tlk")
+	],
+	dependencies: [
+		.path(
+			package: "ansi",
+			path: "../ansi"
+		)
+	]
+)

@@ -6,23 +6,24 @@
     <title>talktalk - 7. Ownership and Memory</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787039525" rel="stylesheet">
+    <link href="/style.css?t=1787386837" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
       <a class="global-nav-brand" href="/">talktalk</a>
       <div class="global-nav-links">
         <a href="/">Language</a>
-        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/manual/" aria-current="page">Guide</a>
+        <a href="/docs/">Docs</a>
         <a href="/playground">Playground</a>
         <a href="/qa">Q/A</a>
         <a href="/philosophy">Philosophy</a>
       </div>
     </nav>
-    <main class="content-page manual-page">
-      <header class="page-header">
-        <div class="page-header-content">
-          <code class="page-kicker">talktalk / docs</code>
+    <main class="site-page manual-page">
+      <header class="site-page-header">
+        <div class="site-page-heading">
+          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/ownership-and-memory" aria-current="page">7. Ownership and Memory</a></nav>
           <div class="page-header-title-row">
             <h1>7. Ownership and Memory</h1>
             
@@ -30,10 +31,10 @@
         </div>
       </header>
 
-      <div class="manual-layout">
-        <aside class="manual-outline">
+      <div class="site-page-layout manual-layout">
+        <aside class="site-page-sidebar manual-outline">
           <nav aria-label="Manual table of contents">
-            <span class="manual-outline-title">Contents</span>
+            <span class="site-nav-label manual-outline-title">Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -43,13 +44,15 @@
 <li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
 <li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
 <li><a href="/manual/effects">6. Effects</a></li>
-<li><a href="/manual/ownership-and-memory" aria-current="page">7. Ownership and Memory</a><ol class="manual-outline-sections"><li><a href="#value-snapshots">Value snapshots</a></li>
-<li><a href="#borrowing-and-mutation">Borrowing and mutation</a></li>
-<li><a href="#consuming-values">Consuming values</a></li>
+<li><a href="/manual/ownership-and-memory" aria-current="page">7. Ownership and Memory</a><ol class="manual-outline-sections"><li><a href="#bindings-hold-values">Bindings hold values</a></li>
+<li><a href="#reading-values-through-parameters">Reading values through parameters</a></li>
+<li><a href="#changing-a-callers-value">Changing a caller&#39;s value</a></li>
+<li><a href="#giving-ownership-to-a-function">Giving ownership to a function</a></li>
 <li><a href="#linear-values">Linear values</a></li>
-<li><a href="#heap-declarations">Heap declarations</a></li>
-<li><a href="#destruction">Destruction</a></li>
+<li><a href="#heap-values-and-identity">Heap values and identity</a></li>
+<li><a href="#deterministic-cleanup">Deterministic cleanup</a></li>
 <li><a href="#ownership-marker-protocols">Ownership marker protocols</a></li>
+<li><a href="#what-the-compiler-still-rejects">What the compiler still rejects</a></li>
 <li><a href="#further-reading">Further reading</a></li></ol></li>
 <li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
 <li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
@@ -59,19 +62,23 @@
 <li><a href="/manual/standard-library">13. The Standard Library</a></li>
 <li><a href="/manual/toolchain">14. The Toolchain</a></li>
 <li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+<li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
+<li><a href="/manual/mir-reference">B. MIR Reference</a></li>
+<li><a href="/manual/bytecode-reference">C. Bytecode Reference</a></li>
             </ol>
           </nav>
         </aside>
-        <div class="manual-document">
+        <div class="site-page-content manual-document">
           <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
             <a class="manual-previous" href="/manual/effects">&larr; 6. Effects</a>
             <a class="manual-contents" href="/manual/">All chapters</a>
             <a class="manual-next" href="/manual/collections-and-text">8. Collections and Text &rarr;</a>
           </nav>
-          <article class="page-content">
-            <p>Most TalkTalk values behave like independent copies. You can save an array, change the original, and the saved value stays the same. The compiler shares storage behind the scenes when it can and cleans values up when they are no longer needed.</p>
-<h2><a href="#value-snapshots" aria-hidden="true" class="anchor" id="value-snapshots"></a>Value snapshots</h2>
-<p>Assigning an array, string, struct, enum, tuple, record, or function creates an independent value snapshot. The implementation may share storage until one copy changes:</p>
+          <article class="prose page-content">
+            <p>TalkTalk starts from a simple observable rule: ordinary values behave as independent values. Saving an array and later changing the original does not change the saved value. The compiler may share storage internally, but that optimization is not visible in the result of a correct program.</p>
+<p>Ownership rules answer three practical questions: who may read a value, who may change it, and who is responsible for cleaning it up.</p>
+<h2><a href="#bindings-hold-values" aria-hidden="true" class="anchor" id="bindings-hold-values"></a>Bindings hold values</h2>
+<p><code>let</code> introduces a binding. Bindings can be assigned again, but assigning one value to another name does not create a permanently shared variable:</p>
 <div class='runnable'>
             <div class='code-block'>
                 <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> current <span class="operator">=</span> [<span class="number">1</span>, <span class="number">2</span>, <span class="number">3</span>]
@@ -103,26 +110,27 @@ print(snapshot) // [1, 2, 3]</textarea>
             </div>
             <div class='result'></div>
         </div>
-<p>The same rule applies when a value escapes through a return, global store, or closure capture: the compiler retains what is needed so the escaped value owns its snapshot.</p>
-<h2><a href="#borrowing-and-mutation" aria-hidden="true" class="anchor" id="borrowing-and-mutation"></a>Borrowing and mutation</h2>
-<p>Plain parameters and methods borrow by default. Shared borrows do not prevent later value-semantic mutation; copy-on-write preserves the reader's snapshot. A live <code>&amp;mut</code> loan is different: it promises exclusive in-place access, so an overlapping outside access is an error.</p>
+<p><code>current</code> and <code>snapshot</code> may initially point at the same internal array buffer. Before mutation, the implementation separates them if necessary. This copy-on-write optimization preserves the source-level snapshot rule.</p>
+<p>Strings, arrays, structs, enums, tuples, records, and functions follow value semantics. Scalars such as <code>Int</code> are already small independent values. Returning a value, storing it globally, or capturing it in a closure also preserves the snapshot that escaped.</p>
+<h2><a href="#reading-values-through-parameters" aria-hidden="true" class="anchor" id="reading-values-through-parameters"></a>Reading values through parameters</h2>
+<p>A plain parameter borrows its argument for the duration of the call. Borrowing lets the function read without taking responsibility for the caller's value:</p>
 <div class='runnable'>
             <div class='code-block'>
-                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">read</span>(<span class="parameter">_</span> <span class="parameter">value</span>: <span class="type">String</span>) <span class="operator">-&gt;</span> <span class="type">Int</span> {
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">length</span>(<span class="parameter">_</span> <span class="parameter">value</span>: <span class="type">String</span>) <span class="operator">-&gt;</span> <span class="type">Int</span> {
 	<span class="variable">value</span>.<span class="property">count</span>()
 }
 
 <span class="keyword">let</span> text <span class="operator">=</span> <span class="string">"hello"</span>
-<span class="variable">print</span>(<span class="variable">read</span>(<span class="variable">text</span>))
-<span class="variable">print</span>(<span class="variable">read</span>(<span class="variable">text</span>))</pre>
+<span class="variable">print</span>(<span class="variable">length</span>(<span class="variable">text</span>))
+<span class="variable">print</span>(<span class="variable">length</span>(<span class="variable">text</span>))</pre>
                 <div class='code-diagnostics' aria-hidden='true'></div>
-                <textarea class='code-editable' rows='7' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func read(_ value: String) -&gt; Int {
+                <textarea class='code-editable' rows='7' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func length(_ value: String) -&gt; Int {
 	value.count()
 }
 
 let text = &quot;hello&quot;
-print(read(text))
-print(read(text))</textarea>
+print(length(text))
+print(length(text))</textarea>
             </div>
             <div class='actions'>
                 <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
@@ -137,12 +145,77 @@ print(read(text))</textarea>
             </div>
             <div class='result'></div>
         </div>
-<p><code>mut func</code> and <code>mut</code> parameters express writable access. See <a href="/manual/bindings-and-functions">Bindings and Functions</a> for call syntax.</p>
-<h2><a href="#consuming-values" aria-hidden="true" class="anchor" id="consuming-values"></a>Consuming values</h2>
-<p><code>consume</code> is a callee-side ownership contract. The callee receives ownership, but a caller may still use a shareable value afterward: the compiler retains a copy before the call when needed. The last use can move without a retain.</p>
-<p>This is different from a linear value, which cannot be duplicated.</p>
+<p>The caller can use <code>text</code> again because <code>length</code> only borrowed it. Most parameters and methods should use this default.</p>
+<p>Several shared reads may overlap. A later value-semantic mutation is also fine: if a saved reader still needs the old snapshot, copy-on-write keeps that snapshot intact.</p>
+<h2><a href="#changing-a-callers-value" aria-hidden="true" class="anchor" id="changing-a-callers-value"></a>Changing a caller's value</h2>
+<p>A <code>mut</code> parameter requests exclusive writable access to one caller-owned place. The caller marks that place with <code>mut</code>:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">bump</span>(<span class="modifier">mut</span> <span class="parameter">value</span>: <span class="type">Int</span>) {
+	<span class="variable">value</span> <span class="operator">=</span> <span class="variable">value</span> <span class="operator">+</span> <span class="number">1</span>
+}
+
+<span class="keyword">let</span> count <span class="operator">=</span> <span class="number">1</span>
+<span class="variable">bump</span>(<span class="parameter">value</span>: <span class="modifier">mut</span> <span class="variable">count</span>)
+<span class="variable">print</span>(<span class="variable">count</span>) <span class="comment">// 2</span></pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='7' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func bump(mut value: Int) {
+	value = value + 1
+}
+
+let count = 1
+bump(value: mut count)
+print(count) // 2</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>During the call, no overlapping access may use the same place. This exclusivity is what makes in-place writeback predictable. A <code>mut</code> argument must therefore be a writable binding, field, tuple position, or supported subscript rather than an arbitrary temporary.</p>
+<p>Methods follow the same rule. A plain method reads <code>self</code>; <code>mut func</code> may update it; <code>consuming func</code> takes responsibility for it.</p>
+<h2><a href="#giving-ownership-to-a-function" aria-hidden="true" class="anchor" id="giving-ownership-to-a-function"></a>Giving ownership to a function</h2>
+<p>A <code>consume</code> parameter says the callee receives an owned value rather than a temporary read:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">func</span> <span class="function">store</span>(consume <span class="parameter">value</span>: <span class="type">String</span>) <span class="operator">-&gt;</span> <span class="type">String</span> {
+	<span class="variable">value</span>
+}
+
+<span class="variable">store</span>(<span class="parameter">value</span>: <span class="string">"saved"</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='5' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>func store(consume value: String) -&gt; String {
+	value
+}
+
+store(value: &quot;saved&quot;)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>For an ordinary shareable value, <code>consume</code> is a callee-side contract, not always a promise that the caller's binding becomes unusable. If the caller uses its value later, the compiler may retain an independent snapshot before the call. If the call is the last use, ownership can move directly without that retain.</p>
+<p>Use <code>consume</code> when the callee stores, returns, transfers, or dismantles the value. Use <code>consume mut</code> when it also needs to modify its owned local copy.</p>
+<p>This repair is not available for every kind of value. Exclusive borrows, unique values, and linear resources cannot be duplicated merely to preserve a later use.</p>
 <h2><a href="#linear-values" aria-hidden="true" class="anchor" id="linear-values"></a>Linear values</h2>
-<p>A declaration marked <code>'linear</code> must be consumed exactly once on every finite path. It cannot be implicitly copied or dropped:</p>
+<p>A declaration marked <code>'linear</code> creates values that must be consumed exactly once on every finite path. They cannot be implicitly copied or silently dropped:</p>
 <div class='runnable'>
             <div class='code-block'>
                 <pre class='code-highlight' aria-hidden='true'><span class="keyword">struct</span> <span class="type">Ticket</span> <span class="effect">'linear</span> {
@@ -184,9 +257,10 @@ attend()</textarea>
             </div>
             <div class='result'></div>
         </div>
-<p>Calling <code>tear</code> twice is a compile error, as is reaching the end of <code>attend</code> without consuming the ticket. Linear types are for one-shot capabilities and resources where duplication or silent abandonment would be incorrect.</p>
-<h2><a href="#heap-declarations" aria-hidden="true" class="anchor" id="heap-declarations"></a>Heap declarations</h2>
-<p><code>struct Name 'heap</code> and <code>enum Name 'heap</code> opt into aliased, region-allocated reference semantics. They provide identity, shared mutation, and cycles:</p>
+<p>Calling <code>tear</code> twice is a compile error. Reaching the end of <code>attend</code> without consuming <code>ticket</code> is also an error. Linear types represent one-shot capabilities such as resumptions and resources whose abandonment would be incorrect.</p>
+<p><code>*T</code> is a statically unique owned value. Unique values likewise rule out implicit sharing while that uniqueness is required. Most application code encounters these types through an API rather than writing them directly.</p>
+<h2><a href="#heap-values-and-identity" aria-hidden="true" class="anchor" id="heap-values-and-identity"></a>Heap values and identity</h2>
+<p>Ordinary values are snapshots, so mutating one value never gives another saved value observable shared mutation. <code>struct Name 'heap</code> and <code>enum Name 'heap</code> deliberately choose a different model: aliased identity, shared mutation, and cycles.</p>
 <div class='runnable'>
             <div class='code-block'>
                 <pre class='code-highlight' aria-hidden='true'><span class="keyword">struct</span> <span class="type">Node</span> <span class="effect">'heap</span> {
@@ -224,9 +298,10 @@ first.value + second.value</textarea>
             </div>
             <div class='result'></div>
         </div>
-<p>Recursive nominal layouts infer heap indirection where it is required. Heap values are the explicit escape hatch from ordinary snapshot semantics.</p>
-<h2><a href="#destruction" aria-hidden="true" class="anchor" id="destruction"></a>Destruction</h2>
-<p>A type can conform to <code>Deinit</code> to run deterministic cleanup:</p>
+<p>Every alias to one heap object observes its field changes. Heap declarations live in managed regions so connected cycles can be reclaimed together. Recursive nominal layouts infer heap indirection where recursion requires it, but an explicit <code>'heap</code> declaration is the clear API signal that identity and shared mutation are intentional.</p>
+<p>Choose heap semantics for graphs and identity-bearing objects, not merely to avoid thinking about value copies.</p>
+<h2><a href="#deterministic-cleanup" aria-hidden="true" class="anchor" id="deterministic-cleanup"></a>Deterministic cleanup</h2>
+<p>TalkTalk destroys owned values when their lifetime ends. Stored fields are torn down with their owner. A type can conform to <code>Deinit</code> when it also needs a cleanup action:</p>
 <div class='runnable'>
             <div class='code-block'>
                 <pre class='code-highlight' aria-hidden='true'><span class="keyword">struct</span> <span class="type">Guard</span> {
@@ -274,10 +349,29 @@ use_guard()</textarea>
             </div>
             <div class='result'></div>
         </div>
-<p>Stored fields are torn down as their owner is destroyed. Cleanup also runs when control leaves through an effect abort or when a suspended resumption is cancelled.</p>
+<p>Cleanup runs on ordinary scope exit, early return, effect abort, and cancellation of a suspended resumption. A <code>Deinit</code> hook runs once for each independently owned value, followed by structural cleanup of its fields.</p>
 <h2><a href="#ownership-marker-protocols" aria-hidden="true" class="anchor" id="ownership-marker-protocols"></a>Ownership marker protocols</h2>
-<p>Core defines <code>Copy</code>, <code>Clone</code>, <code>Borrowed</code>, <code>Owner</code>, <code>Deinit</code>, <code>Send</code>, and <code>Sync</code> to state representation and transfer roles. Payload-free enums are <code>Copy</code> automatically. Most application code observes their constraints rather than implementing low-level storage behavior directly.</p>
-<p>The remaining ownership errors cover cases the compiler cannot safely repair by making another shared copy: overlapping exclusive access, misuse of linear or unique values, uninitialized data, invalid declarations, unsupported heap placement, and unsafe operations outside an unsafe block.</p>
+<p>Core defines protocols including <code>Copy</code>, <code>Clone</code>, <code>Borrowed</code>, <code>Owner</code>, <code>Deinit</code>, <code>Send</code>, and <code>Sync</code>.</p>
+<ul>
+<li><code>Copy</code> permits a trivial independent copy.</li>
+<li><code>Clone</code> supplies an explicit way to create another owned value.</li>
+<li><code>Borrowed</code> and <code>Owner</code> describe storage roles used by low-level APIs.</li>
+<li><code>Deinit</code> supplies deterministic cleanup.</li>
+<li><code>Send</code> permits ownership transfer to another worker.</li>
+<li><code>Sync</code> permits safe shared access across workers.</li>
+</ul>
+<p>Payload-free enums are <code>Copy</code> automatically. Aggregates can satisfy transfer and sharing requirements structurally when all of their contents do. Most application code relies on these constraints through generic APIs instead of implementing low-level storage behavior itself.</p>
+<h2><a href="#what-the-compiler-still-rejects" aria-hidden="true" class="anchor" id="what-the-compiler-still-rejects"></a>What the compiler still rejects</h2>
+<p>Implicit sharing repairs ordinary value duplication, but it cannot make every operation safe. Errors remain for overlapping exclusive access, use after moving a non-shareable value, failure to consume a linear value, uninitialized data, invalid heap placement, and unsafe operations outside <code>#unsafe</code>.</p>
+<p>The useful mental model is:</p>
+<ol>
+<li>ordinary values are independent snapshots;</li>
+<li>plain calls borrow;</li>
+<li><code>mut</code> temporarily grants exclusive write access;</li>
+<li><code>consume</code> gives the callee ownership;</li>
+<li>linear and unique values cannot be repaired by copying; and</li>
+<li><code>'heap</code> is the explicit opt-in to shared identity.</li>
+</ol>
 <h2><a href="#further-reading" aria-hidden="true" class="anchor" id="further-reading"></a>Further reading</h2>
 <p>TalkTalk's automatic sharing and cleanup are influenced by:</p>
 <ul>
@@ -294,9 +388,9 @@ use_guard()</textarea>
             <a class="manual-next" href="/manual/collections-and-text">8. Collections and Text &rarr;</a>
           </nav>
         </div>
-        <div class="manual-rail" aria-hidden="true"></div>
+        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
       </div>
-      <script type="module" src="/page.js?t=1787039525"></script>
+      <script type="module" src="/page.js?t=1787386837"></script>
     </main>
   </body>
 </html>

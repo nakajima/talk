@@ -6,21 +6,42 @@ use package::Memory::{ replace }
 use package::Operators::{ Add, Subtract, Comparable, Equatable }
 use package::Ownership::{ Borrowed }
 
+// A stateful, single-pass source of values.
+//
+// `next` mutates traversal state and returns `none` permanently after
+// exhaustion. Iterator adapters consume their source, unlike `Iterable`, which
+// borrows a reusable collection to create a fresh iterator.
 pub protocol Iterator {
+	// The value type produced by each successful `next` call.
 	associated Element
+	// Advances once, yielding the next element or permanent exhaustion.
 	mut func next() -> Element?
 
+	// Treats this iterator as its own iteration source.
 	consuming func iter() -> Self { self }
+	// Consumes this value and returns an iterator over its elements.
 	consuming func into_iter() -> Self { self }
 
+	// Returns a lazy adapter that applies `fn` as each source element is
+	// requested.
+	//
+	// The source iterator and callback are consumed into the adapter; no
+	// element is read and no callback is invoked until `next`.
 	consuming func map<U>(consume fn: (Self.Element) -> U) -> Map<Self, U> {
 		Map(inner: self, map: fn)
 	}
 
+	// Wraps this iterator with one-element lookahead.
 	consuming func peekable() -> Peek<Self> {
 		Peek(inner: self)
 	}
 
+	// Eagerly consumes and discards up to `count` elements, then returns the
+	// iterator.
+	//
+	// Counts at or below zero leave the iterator unchanged. Exhaustion before
+	// the requested count is not an error; the returned iterator remains
+	// exhausted.
 	consuming func skip(count: Int) -> Self {
 		let i = 0
 		loop i < count {
@@ -30,10 +51,14 @@ pub protocol Iterator {
 		self
 	}
 
+	// Optional in-place reordering hook; the default iterator has nothing to
+	// swap.
 	mut func swap(i: Int, j: Int) {}
 }
 
 extend Iterator {
+	// Consumes values through the first one equal to `needle` and returns its
+	// zero-based index.
 	pub mut func index(needle: Element) -> Int? where Element: Equatable<Element> {
 		let i = 0
 		loop {
@@ -47,6 +72,7 @@ extend Iterator {
 		}
 	}
 
+	// Drains the iterator into a newly allocated array.
 	pub consuming func to_array() -> [Element] {
 		let result = []
 
@@ -63,6 +89,7 @@ extend Iterator {
 }
 
 extend Iterator: Into<[Element]> {
+	// Drains the remaining iterator elements into a new array in yield order.
 	pub consuming func into() -> [Element] {
 		let result = Array<Element>(capacity: 0)
 		loop {
@@ -77,26 +104,48 @@ extend Iterator: Into<[Element]> {
 
 // MARK: Iterable
 
+// A collection that transfers ownership of its elements into an iterator.
+//
+// Use this when iteration should move values out of the source. `Iterable`
+// instead borrows its source and generally yields borrowed elements.
 pub protocol IntoIterator {
+	// The owned element type transferred out of the consumed source.
 	associated Element
+	// The concrete iterator produced by consuming `Self`.
 	associated IntoIter: Iterator where IntoIter.Element == Element
+	// Consumes this value and returns an iterator over its elements.
 	consuming func into_iter() -> IntoIter
 }
 
+// A reusable collection that can produce a fresh borrowed iterator.
+//
+// Calling `iter` does not consume the collection. Implement `IntoIterator`
+// separately when callers should be able to move owned elements out.
 pub protocol Iterable {
+	// The element type observed through the borrowed iterator.
 	associated Element
-	associated T: Iterator where T.Element == Element
-	func iter() -> T
+	// The concrete borrowed iterator returned by `iter`.
+	associated Iter: Iterator where Iter.Element == Element
+	// Creates a fresh iterator borrowing this collection's current snapshot.
+	func iter() -> Iter
 }
 
 // MARK: Map
 
+// A lazy transformation over a consumed source iterator.
+//
+// `map` is invoked exactly once for each source value requested through `next`.
+// Dropping the adapter drops the source iterator and any values it still owns.
 pub struct Map<I, U> where I: Iterator {
+	// The source iterator being transformed.
 	pub let inner: I
+	// The transformation applied to each input element.
 	pub let map: (I.Element) -> U
 }
 
 extend<I, U> Map<I, U>: Iterator where I: Iterator {
+	// Pulls one source element and transforms it; source exhaustion bypasses
+	// `map`.
 	pub mut func next() -> U? {
 		if let .some(elem) = self.inner.next() {
 			return .some(self.map(elem))
@@ -108,26 +157,46 @@ extend<I, U> Map<I, U>: Iterator where I: Iterator {
 
 // MARK: Skip
 
+// A storage wrapper for an iterator after prefix removal.
+//
+// The current `Iterator.skip` implementation returns the source iterator
+// directly; this type has no public constructor or iterator conformance and is
+// retained only as an API placeholder for a future lazy skip adapter.
 pub struct Skip<I: Iterator> {
+	// The iterator after its skipped prefix has been consumed.
 	pub let inner: I
 }
 
 // MARK: IndexIterable
 
+// Adapts a finite index-addressable collection to `IndexIterator`.
 pub protocol IndexIterable {
+	// The element yielded for each valid index.
 	associated Element
+	// Returns the number of indices available to the adapter.
 	func _index_iterable_count() -> Int
+	// Returns the element at `i`.
+	//
+	// Implementations must return `some` for every `0 <= i < count`; returning
+	// `none` early leaves `IndexIterator` unable to advance past that position.
 	func _index_iterable_get(i: Int) -> Element?
 }
 
+// Walks an `IndexIterable` from index zero to its reported count.
 pub struct IndexIterator<T: IndexIterable> {
+	// The borrowed collection supplying indexed elements.
 	pub let inner: &T
+	// The current position.
 	pub let position: Int
 }
 
 extend<T: IndexIterable> IndexIterator<T>: Borrowed {}
 
 extend<T: IndexIterable> IndexIterator<T>: Iterator {
+	// Yields the current indexed element and increments the position.
+	//
+	// `none` means either reported exhaustion or a violated `IndexIterable`
+	// invariant; in the latter case the position is intentionally not advanced.
 	pub mut func next() -> T.Element? {
 		if self.position > self.inner._index_iterable_count() - 1 { return Optional.none }
 
@@ -142,17 +211,30 @@ extend<T: IndexIterable> IndexIterator<T>: Iterator {
 
 // MARK: Peek!
 
+// A single-pass iterator with a one-element lookahead buffer.
+//
+// `has_peeked` distinguishes an unfilled buffer from a buffered `none` at
+// exhaustion. Repeated `peek` calls do not advance the underlying iterator;
+// the next `next` returns the buffered result exactly once.
 pub struct Peek<T: Iterator> {
+	// The source iterator advanced to fill the lookahead buffer.
 	pub let inner: T
+	// The buffered next element, when one has been read ahead.
 	pub let peeked: T.Element?
 	let has_peeked: Bool
 
+	// Wraps `inner` with an initially empty lookahead buffer.
 	pub init(inner: T) {
 		self.inner = inner
 		self.peeked = .none
 		self.has_peeked = false
 	}
 
+	// Fills and borrows the one-element lookahead buffer without advancing
+	// again.
+	//
+	// A buffered `none` records permanent source exhaustion, so repeated peeks
+	// do not repeatedly call the source iterator.
 	pub mut func peek() -> &T.Element? {
 		if self.has_peeked { return self.peeked }
 
@@ -164,6 +246,11 @@ pub struct Peek<T: Iterator> {
 }
 
 extend<T: Iterator> Peek<T>: Iterator {
+	// Returns the buffered value when present and refills lookahead from the
+	// source.
+	//
+	// Before the first `peek`, this delegates directly to the source.
+	// Afterwards it maintains a one-element lead while preserving source order.
 	pub mut func next() -> T.Element? {
 		if self.has_peeked {
 			let next = self.inner.next()

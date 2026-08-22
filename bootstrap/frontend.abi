@@ -52,7 +52,7 @@ struct CaptureSpec @ struct:65535.17
 	start: Int
 	end: Int
 
-struct Comment @ struct:65535.52
+struct Comment @ struct:65535.55
 	start: Int
 	end: Int
 
@@ -83,6 +83,11 @@ enum DeclKind @ enum:65535.45
 	macro_decl(String, Int, Int, [MacroParam], Int, Int, [MacroToken])
 	macro_call_decl(String, Int, Int, Int, Int, [MacroToken], [Expr])
 	wrapper_decl(String, Int, Int, Int, Int, [MacroToken], [MacroToken], [Decl])
+
+struct DocumentedDecl @ struct:65535.73
+	decl_start: Int
+	decl_end: Int
+	comments: [Comment]
 
 struct EffectSet @ struct:65535.4
 	names: [String]
@@ -127,7 +132,7 @@ enum ExprKind @ enum:65535.30
 	macro_call(String, Int, Int, Int, Int, [MacroToken], [Expr])
 	syntax_quote(String, [MacroToken], [String], Int)
 
-struct Fail @ struct:65535.69
+struct Fail @ struct:65535.72
 	code: String
 	message: String
 	start: Int
@@ -275,12 +280,13 @@ struct Parameter @ struct:65535.15
 	start: Int
 	end: Int
 
-struct ParseOutcome @ struct:65535.70
+struct ParseOutcome @ struct:65535.74
 	items: [Item]
 	failure: Fail?
 	diags: [Fail]
 	comments: [Comment]
 	metas: [NodeMeta]
+	docs: [DocumentedDecl]
 
 struct Pattern @ struct:65535.38
 	kind: PatternKind
@@ -371,7 +377,7 @@ enum StmtKind @ enum:65535.47
 	resume_stmt(Expr?)
 	handle_stmt(String, Int, Int, Block)
 
-enum TokenKind @ enum:65535.50
+enum TokenKind @ enum:65535.53
 	identifier
 	int_number
 	float_number

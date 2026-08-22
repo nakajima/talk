@@ -6,23 +6,24 @@
     <title>talktalk - 5. Generics and Protocols</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787039523" rel="stylesheet">
+    <link href="/style.css?t=1787386833" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
       <a class="global-nav-brand" href="/">talktalk</a>
       <div class="global-nav-links">
         <a href="/">Language</a>
-        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/manual/" aria-current="page">Guide</a>
+        <a href="/docs/">Docs</a>
         <a href="/playground">Playground</a>
         <a href="/qa">Q/A</a>
         <a href="/philosophy">Philosophy</a>
       </div>
     </nav>
-    <main class="content-page manual-page">
-      <header class="page-header">
-        <div class="page-header-content">
-          <code class="page-kicker">talktalk / docs</code>
+    <main class="site-page manual-page">
+      <header class="site-page-header">
+        <div class="site-page-heading">
+          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/generics-and-protocols" aria-current="page">5. Generics and Protocols</a></nav>
           <div class="page-header-title-row">
             <h1>5. Generics and Protocols</h1>
             
@@ -30,10 +31,10 @@
         </div>
       </header>
 
-      <div class="manual-layout">
-        <aside class="manual-outline">
+      <div class="site-page-layout manual-layout">
+        <aside class="site-page-sidebar manual-outline">
           <nav aria-label="Manual table of contents">
-            <span class="manual-outline-title">Contents</span>
+            <span class="site-nav-label manual-outline-title">Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -58,16 +59,19 @@
 <li><a href="/manual/standard-library">13. The Standard Library</a></li>
 <li><a href="/manual/toolchain">14. The Toolchain</a></li>
 <li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+<li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
+<li><a href="/manual/mir-reference">B. MIR Reference</a></li>
+<li><a href="/manual/bytecode-reference">C. Bytecode Reference</a></li>
             </ol>
           </nav>
         </aside>
-        <div class="manual-document">
+        <div class="site-page-content manual-document">
           <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
             <a class="manual-previous" href="/manual/data-and-patterns">&larr; 4. Data and Patterns</a>
             <a class="manual-contents" href="/manual/">All chapters</a>
             <a class="manual-next" href="/manual/effects">6. Effects &rarr;</a>
           </nav>
-          <article class="page-content">
+          <article class="prose page-content">
             <p>Generics let one function or data type work with many kinds of value. Protocols say what those values must be able to do. Together, they let you reuse code without giving up type checking.</p>
 <h2><a href="#generic-functions-and-types" aria-hidden="true" class="anchor" id="generic-functions-and-types"></a>Generic functions and types</h2>
 <p>Type parameters use angle brackets:</p>
@@ -178,7 +182,6 @@ protocol Pet {
 	}
 }</pre>
         </div>
-        
 <p><code>Self</code> names the conforming type.</p>
 <h2><a href="#extensions-and-conformances" aria-hidden="true" class="anchor" id="extensions-and-conformances"></a>Extensions and conformances</h2>
 <p>An extension adds methods or declares conformance:</p>
@@ -268,7 +271,6 @@ Box(value: 42).get()</textarea>
 	<span class="keyword">func</span> equals(<span class="parameter">_</span> <span class="parameter">other</span>: <span class="type">RHS</span>) <span class="operator">-&gt;</span> <span class="type">Bool</span>
 }</pre>
         </div>
-        
 <h2><a href="#existentials" aria-hidden="true" class="anchor" id="existentials"></a>Existentials</h2>
 <p><code>any P</code> stores a value behind an object-safe protocol interface:</p>
 <div class='runnable'>
@@ -296,7 +298,6 @@ print(item)</textarea>
 <div class='code-block no-run'>
             <pre class='code-highlight'><span class="keyword">typealias</span> <span class="type">IntIterator</span> <span class="operator">=</span> <span class="modifier">any</span> <span class="type">Iterator</span><span class="operator">&lt;</span><span class="type">Element</span> <span class="operator">=</span> <span class="type">Int</span><span class="operator">&gt;</span></pre>
         </div>
-        
 <p>A protocol is object-safe when its requirements keep <code>Self</code> in receiver position in the ways supported by the compiler. Use a generic parameter when the concrete type should remain known; use <code>any P</code> when different conforming types must share one runtime representation.</p>
 <h2><a href="#static-value-generics" aria-hidden="true" class="anchor" id="static-value-generics"></a>Static value generics</h2>
 <p>A <code>static</code> generic parameter is a compile-time value and participates in type identity:</p>
@@ -346,9 +347,9 @@ print(length(pair))</textarea>
             <a class="manual-next" href="/manual/effects">6. Effects &rarr;</a>
           </nav>
         </div>
-        <div class="manual-rail" aria-hidden="true"></div>
+        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
       </div>
-      <script type="module" src="/page.js?t=1787039523"></script>
+      <script type="module" src="/page.js?t=1787386833"></script>
     </main>
   </body>
 </html>

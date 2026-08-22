@@ -101,7 +101,7 @@ pub(super) fn auto_import_edit(
     Some(TextEdit::new(range, std::mem::take(&mut new_text)))
 }
 
-pub(super) fn compute_code_actions(
+pub(crate) fn compute_code_actions(
     workspace: &AnalysisWorkspace,
     document_id: &DocumentId,
     uri: &Url,

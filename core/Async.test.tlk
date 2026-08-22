@@ -71,3 +71,77 @@ test "the monotonic clock advances" {
 	let after = _chan_ctl(handle: 0, op: 13)
 	assert(after >= before)
 }
+
+// === Unified wait ====================================================
+//
+// The unified 'wait effect (core Async): an array of WaitReason values
+// survives the perform, decodes in one handler, and drives the runtime's
+// register/park/unregister ops. The
+// local handler shadows the ambient blocking fallback so the test can
+// observe the registration counts.
+
+func drive_unified_wait() -> Int {
+	#handle 'wait { reasons in
+		let i = 0
+		loop i < reasons.count {
+			match reasons.get(i) {
+				.recv(handle) -> {
+					let registered = _chan_ctl(handle: handle, op: 4)
+					()
+				},
+				.send(handle) -> {
+					let registered = _chan_ctl(handle: handle, op: 11)
+					()
+				},
+				.deadline(instant) -> {
+					let registered = _chan_ctl(handle: instant._nanoseconds(), op: 14)
+					()
+				}
+			}
+			i = i + 1
+		}
+		// Every reason routed to its registration op: waits + deadlines.
+		assert(_chan_ctl(handle: 0, op: 8) == reasons.count)
+		let parked = _chan_ctl(handle: 0, op: 6)
+		let j = 0
+		loop j < reasons.count {
+			match reasons.get(j) {
+				.recv(handle) -> {
+					let released = _chan_ctl(handle: handle, op: 5)
+					()
+				},
+				.send(handle) -> {
+					let released = _chan_ctl(handle: handle, op: 12)
+					()
+				},
+				.deadline(instant) -> {
+					let released = _chan_ctl(handle: instant._nanoseconds(), op: 15)
+					()
+				}
+			}
+			j = j + 1
+		}
+		assert(_chan_ctl(handle: 0, op: 8) == 0)
+		'continue
+	}
+	// A ready channel wakes a mixed wait before its far deadline.
+	let handle = _chan_ctl(handle: 0, op: 7)
+	_chan_send(handle: handle, value: 7)
+	let far = Instant.now().adding(Duration.hours(1))
+	'wait(reasons: [WaitReason.recv(handle), WaitReason.deadline(far)])
+	let first = _chan_take<Int>(handle: handle)
+	let sender_gone = _chan_ctl(handle: handle, op: 2)
+	let receiver_gone = _chan_ctl(handle: handle, op: 3)
+	// A bounded channel with room wakes a send wait immediately.
+	let bounded = _chan_ctl(handle: 1, op: 7)
+	'wait(reasons: [WaitReason.send(bounded)])
+	let bounded_sender_gone = _chan_ctl(handle: bounded, op: 2)
+	let bounded_receiver_gone = _chan_ctl(handle: bounded, op: 3)
+	// An elapsed deadline wakes alone.
+	'wait(reasons: [WaitReason.deadline(Instant.now())])
+	first
+}
+
+test "one 'wait effect decodes mixed reasons" {
+	assert(drive_unified_wait() == 7)
+}

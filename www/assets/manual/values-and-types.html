@@ -6,23 +6,24 @@
     <title>talktalk - 2. Values and Types</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787039520" rel="stylesheet">
+    <link href="/style.css?t=1787386821" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
       <a class="global-nav-brand" href="/">talktalk</a>
       <div class="global-nav-links">
         <a href="/">Language</a>
-        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/manual/" aria-current="page">Guide</a>
+        <a href="/docs/">Docs</a>
         <a href="/playground">Playground</a>
         <a href="/qa">Q/A</a>
         <a href="/philosophy">Philosophy</a>
       </div>
     </nav>
-    <main class="content-page manual-page">
-      <header class="page-header">
-        <div class="page-header-content">
-          <code class="page-kicker">talktalk / docs</code>
+    <main class="site-page manual-page">
+      <header class="site-page-header">
+        <div class="site-page-heading">
+          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/values-and-types" aria-current="page">2. Values and Types</a></nav>
           <div class="page-header-title-row">
             <h1>2. Values and Types</h1>
             
@@ -30,15 +31,16 @@
         </div>
       </header>
 
-      <div class="manual-layout">
-        <aside class="manual-outline">
+      <div class="site-page-layout manual-layout">
+        <aside class="site-page-sidebar manual-outline">
           <nav aria-label="Manual table of contents">
-            <span class="manual-outline-title">Contents</span>
+            <span class="site-nav-label manual-outline-title">Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
 <li><a href="/manual/syntax">1. Syntax</a></li>
 <li><a href="/manual/values-and-types" aria-current="page">2. Values and Types</a><ol class="manual-outline-sections"><li><a href="#primitive-types">Primitive types</a></li>
+<li><a href="#integer-overflow">Integer overflow</a></li>
 <li><a href="#strings-and-characters">Strings and characters</a></li>
 <li><a href="#arrays-inline-arrays-tuples-and-records">Arrays, inline arrays, tuples, and records</a></li>
 <li><a href="#optional-and-result-values">Optional and result values</a></li>
@@ -57,16 +59,19 @@
 <li><a href="/manual/standard-library">13. The Standard Library</a></li>
 <li><a href="/manual/toolchain">14. The Toolchain</a></li>
 <li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+<li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
+<li><a href="/manual/mir-reference">B. MIR Reference</a></li>
+<li><a href="/manual/bytecode-reference">C. Bytecode Reference</a></li>
             </ol>
           </nav>
         </aside>
-        <div class="manual-document">
+        <div class="site-page-content manual-document">
           <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
             <a class="manual-previous" href="/manual/syntax">&larr; 1. Syntax</a>
             <a class="manual-contents" href="/manual/">All chapters</a>
             <a class="manual-next" href="/manual/bindings-and-functions">3. Bindings and Functions &rarr;</a>
           </nav>
-          <article class="page-content">
+          <article class="prose page-content">
             <p>TalkTalk checks that values are used consistently, but it usually figures out their types for you. It's kind of a joke around these parts that you should never have to annotate a type if you don't want to. Ok maybe not a joke. A goal? Sure.</p>
 <p>You can still write a type when it makes the code clearer or when you want the compiler to check for one specific type.</p>
 <h2><a href="#primitive-types" aria-hidden="true" class="anchor" id="primitive-types"></a>Primitive types</h2>
@@ -110,6 +115,61 @@ let nothing: () = ()
             <div class='result'></div>
         </div>
 <p>Integer and floating-point arithmetic do not mix implicitly.</p>
+<h2><a href="#integer-overflow" aria-hidden="true" class="anchor" id="integer-overflow"></a>Integer overflow</h2>
+<p><code>Int</code> is a signed 64-bit two's-complement integer with values from <code>-9223372036854775808</code> through <code>9223372036854775807</code>. Ordinary <code>+</code>, <code>-</code>, <code>*</code>, and unary <code>-</code> trap when their mathematical result is outside that range. Division traps on zero and on the one overflowing case, the minimum value divided by <code>-1</code>.</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="comment">// This traps instead of silently changing sign.</span>
+<span class="number">9223372036854775807</span> <span class="operator">+</span> <span class="number">1</span></pre>
+        </div>
+<p>When overflow is an expected validation result, the checked methods return <code>.none</code> instead of trapping:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> max <span class="operator">=</span> <span class="number">9223372036854775807</span>
+
+(<span class="variable">max</span>.<span class="property">checked_add</span>(<span class="number">1</span>), <span class="number">20</span>.<span class="property">checked_mul</span>(<span class="number">2</span>), <span class="number">1</span>.<span class="property">checked_div</span>(<span class="number">0</span>))</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='3' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let max = 9223372036854775807
+
+(max.checked_add(1), 20.checked_mul(2), 1.checked_div(0))</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>This evaluates to <code>(Optional.none, Optional.some(40), Optional.none)</code>. The checked family is <code>checked_add(_:)</code>, <code>checked_sub(_:)</code>, <code>checked_mul(_:)</code>, <code>checked_div(_:)</code>, and <code>checked_neg()</code>.</p>
+<p>Low-level code that deliberately needs arithmetic modulo <code>2^64</code> can opt out explicitly:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> max <span class="operator">=</span> <span class="number">9223372036854775807</span>
+<span class="variable">max</span>.<span class="property">unchecked_add</span>(<span class="number">1</span>)</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='2' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let max = 9223372036854775807
+max.unchecked_add(1)</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>This evaluates to <code>-9223372036854775808</code>. The wrapping family is <code>unchecked_add(_:)</code>, <code>unchecked_sub(_:)</code>, <code>unchecked_mul(_:)</code>, <code>unchecked_div(_:)</code>, and <code>unchecked_neg()</code>. <code>unchecked_div</code> wraps the minimum-value divided by <code>-1</code> case, but division by zero still traps because it has no modular result.</p>
+<p>Use ordinary operators by default, checked methods when failure should be data, and <code>unchecked_*</code> only when modular arithmetic is intentional.</p>
 <h2><a href="#strings-and-characters" aria-hidden="true" class="anchor" id="strings-and-characters"></a>Strings and characters</h2>
 <p>Strings are UTF-8. A character literal uses single quotes and produces a <code>Character</code>:</p>
 <div class='runnable'>
@@ -291,7 +351,6 @@ maybe_count</textarea>
 	<span class="keyword">return</span> .<span class="property">some</span>(<span class="variable">n</span> <span class="operator">+</span> <span class="number">1</span>)
 }</pre>
         </div>
-        
 <p>Prefer <code>match</code>, <code>if let</code>, or <code>let ... else</code> when the two outcomes need local, explicit handling.</p>
 <h2><a href="#function-and-borrow-types" aria-hidden="true" class="anchor" id="function-and-borrow-types"></a>Function and borrow types</h2>
 <p>A function type is <code>(A, B) -&gt; R</code>. Effects, when written, appear before the arrow:</p>
@@ -300,14 +359,12 @@ maybe_count</textarea>
 <span class="keyword">let</span> writes: (String) <span class="effect">'io</span> <span class="operator">-&gt;</span> <span class="type">Void</span>
 <span class="keyword">let</span> fallible: () '[<span class="effect">io</span>, <span class="effect">panic</span>] <span class="operator">-&gt;</span> <span class="type">String</span></pre>
         </div>
-        
 <p><code>&amp;T</code> is a shared borrow, <code>&amp;mut T</code> an exclusive borrow, and <code>*T</code> a statically unique owned value. Most ordinary code does not write these types because parameters borrow and values share implicitly. Basically if you have to write these, it's either a talktalk bug or a you bug.</p>
 <h2><a href="#type-aliases" aria-hidden="true" class="anchor" id="type-aliases"></a>Type aliases</h2>
 <p>Aliases give another name to an existing type:</p>
 <div class='code-block no-run'>
             <pre class='code-highlight'><span class="keyword">typealias</span> <span class="type">Coordinate</span> <span class="operator">=</span> (<span class="type">Int</span>, <span class="type">Int</span>)</pre>
         </div>
-        
 <p>Aliases do not create a distinct nominal type; use a <code>struct</code> when identity and an API boundary matter.</p>
 
           </article>
@@ -317,9 +374,9 @@ maybe_count</textarea>
             <a class="manual-next" href="/manual/bindings-and-functions">3. Bindings and Functions &rarr;</a>
           </nav>
         </div>
-        <div class="manual-rail" aria-hidden="true"></div>
+        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
       </div>
-      <script type="module" src="/page.js?t=1787039520"></script>
+      <script type="module" src="/page.js?t=1787386821"></script>
     </main>
   </body>
 </html>

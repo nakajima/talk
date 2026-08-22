@@ -171,6 +171,7 @@ fn frame_facts(block: &typed_ast::Block, params: &[typed_ast::Parameter]) -> typ
             .collect(),
         celled: scan.assigned.intersection(&scan.nested).copied().collect(),
         nested_refs: scan.nested,
+        assigned: scan.assigned,
     }
 }
 
@@ -301,10 +302,11 @@ impl TypedTreeBuilder<'_> {
                 return self.graft(e, &items[0]);
             }
             expr::ExprKind::Propagate(_) | expr::ExprKind::ForceUnwrap(..) => {
-                let plan =
-                    self.elaboration.propagation_plans.get(&e.id).unwrap_or_else(|| {
-                        panic!("checked postfix expression {:?} has no plan", e.id)
-                    });
+                let plan = self
+                    .elaboration
+                    .propagation_plans
+                    .get(&e.id)
+                    .unwrap_or_else(|| panic!("checked postfix expression {:?} has no plan", e.id));
                 return self.graft(e, &plan.lowered);
             }
             // Variant construction: the checker resolves `.some(x)` at the
@@ -332,9 +334,9 @@ impl TypedTreeBuilder<'_> {
                     // The construction IS the member resolution; the callee
                     // node it was recorded at has no tree counterpart, so
                     // editor queries there alias to this node.
-                    built.member_resolution = Some(
-                        crate::types::output::MemberResolution::Direct(variant_symbol),
-                    );
+                    built.member_resolution = Some(crate::types::output::MemberResolution::Direct(
+                        variant_symbol,
+                    ));
                     self.grafted.borrow_mut().push((callee.id, e.id));
                     return built;
                 }
@@ -409,7 +411,9 @@ impl TypedTreeBuilder<'_> {
             // nothing), so it bakes as the poison type rather than a panic.
             // `erase_eff_args`: effect args on nominal heads are
             // type-checker internals and are not part of TypedProgram.
-            ty: self.elaboration.node_types
+            ty: self
+                .elaboration
+                .node_types
                 .get(&e.id)
                 .map(|ty| ty.erase_eff_args())
                 .unwrap_or(crate::types::ty::Ty::Error),
@@ -461,7 +465,9 @@ impl TypedTreeBuilder<'_> {
             expr::ExprKind::InlineIR(ir) => {
                 // Typing validated the instruction and published its
                 // checked op; an invalid instruction blocked the file.
-                let kind = self.elaboration.checked_ir
+                let kind = self
+                    .elaboration
+                    .checked_ir
                     .get(&e.id)
                     .expect("typed facts invariant: inline IR carries its checked operation")
                     .clone();
@@ -484,7 +490,9 @@ impl TypedTreeBuilder<'_> {
                 effect_name: effect_name.clone(),
                 type_args: type_args.clone(),
                 args: args.iter().map(|a| self.call_arg(a)).collect(),
-                contract: self.elaboration.effect_contracts
+                contract: self
+                    .elaboration
+                    .effect_contracts
                     .get(&e.id)
                     .expect("typed facts invariant: a perform carries its effect contract")
                     .clone(),
@@ -646,16 +654,21 @@ impl TypedTreeBuilder<'_> {
         // plain `let` binders skip `check_pattern` (they bind through the
         // monomorphic environment or a top-level scheme), so a bare Bind
         // falls back to its symbol's published type.
-        let ty = self.elaboration.pattern_tys.get(&p.id).cloned().or_else(|| {
-            let pattern::PatternKind::Bind(name) = &p.kind else {
-                return None;
-            };
-            let symbol = name.symbol().ok()?;
-            self.types
-                .binder_ty(symbol)
-                .cloned()
-                .or_else(|| self.types.schemes.get(&symbol).map(|s| s.ty.clone()))
-        });
+        let ty = self
+            .elaboration
+            .pattern_tys
+            .get(&p.id)
+            .cloned()
+            .or_else(|| {
+                let pattern::PatternKind::Bind(name) = &p.kind else {
+                    return None;
+                };
+                let symbol = name.symbol().ok()?;
+                self.types
+                    .binder_ty(symbol)
+                    .cloned()
+                    .or_else(|| self.types.schemes.get(&symbol).map(|s| s.ty.clone()))
+            });
         typed_ast::Pattern {
             id: p.id,
             kind: self.pattern_kind(p),
@@ -712,16 +725,20 @@ impl TypedTreeBuilder<'_> {
                     .collect();
                 // Slot field references arrive as node ids; translate to
                 // indices into `fields` for direct access.
-                let slots = self.elaboration.record_pattern_slots.get(&p.id).map(|slots| {
-                    slots
-                        .iter()
-                        .map(|(ty, sub)| {
-                            let index =
-                                sub.and_then(|id| built.iter().position(|field| field.id == id));
-                            (ty.clone(), index)
-                        })
-                        .collect()
-                });
+                let slots = self
+                    .elaboration
+                    .record_pattern_slots
+                    .get(&p.id)
+                    .map(|slots| {
+                        slots
+                            .iter()
+                            .map(|(ty, sub)| {
+                                let index = sub
+                                    .and_then(|id| built.iter().position(|field| field.id == id));
+                                (ty.clone(), index)
+                            })
+                            .collect()
+                    });
                 typed_ast::PatternKind::Record {
                     fields: built,
                     slots,
@@ -744,7 +761,9 @@ impl TypedTreeBuilder<'_> {
                     .collect();
                 // Slot sub-pattern references arrive as node ids;
                 // translate to indices into `fields` for direct access.
-                let slots = self.elaboration.struct_pattern_slots
+                let slots = self
+                    .elaboration
+                    .struct_pattern_slots
                     .get(&p.id)
                     .map(|slots| {
                         slots
@@ -857,7 +876,9 @@ impl TypedTreeBuilder<'_> {
                 effect_name: effect_name.clone(),
                 // A clause is a frame; its parameters are the block's args.
                 body: self.frame_block(body, &[]),
-                contract: self.elaboration.effect_contracts
+                contract: self
+                    .elaboration
+                    .effect_contracts
                     .get(&stmt_id)
                     .expect("typed facts invariant: a handler carries its effect contract")
                     .clone(),
@@ -1148,7 +1169,8 @@ impl TypedTreeBuilder<'_> {
         args: Vec<typed_ast::CallArg>,
     ) -> typed_ast::Expr {
         let baked_ty = |id: &crate::node_id::NodeID| {
-            self.elaboration.node_types
+            self.elaboration
+                .node_types
                 .get(id)
                 .map(|ty| ty.erase_eff_args())
                 .unwrap_or(crate::types::ty::Ty::Error)
@@ -1223,7 +1245,9 @@ impl TypedTreeBuilder<'_> {
             name_span: p.name_span,
             type_annotation: p.type_annotation.clone(),
             span: p.span,
-            ty: self.elaboration.node_types
+            ty: self
+                .elaboration
+                .node_types
                 .get(&p.id)
                 .map(|ty| ty.erase_eff_args()),
         }
@@ -1241,7 +1265,8 @@ impl TypedTreeBuilder<'_> {
             .and_then(|symbol| self.types.schemes.get(&symbol))
             .cloned()
             .or_else(|| {
-                self.elaboration.node_types
+                self.elaboration
+                    .node_types
                     .get(&f.id)
                     .cloned()
                     .map(|ty| match ty {

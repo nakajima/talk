@@ -1,4 +1,4 @@
 pub mod diagnostics;
-pub mod fix_labels;
+pub mod fixit;
 pub mod package;
 pub mod repl;

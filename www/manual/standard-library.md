@@ -9,7 +9,7 @@ Core provides:
 - `String`, `Substring`, `Character`, Unicode and text operations
 - `Array<T>`, `InlineArray<T, N>`, ranges, iterators, and adapters
 - `Optional<T>` and `Result<S, F>`
-- arithmetic, comparison, bitwise, conversion, and display protocols
+- trapping integer operators, checked and unchecked arithmetic, comparison, bitwise, conversion, and display protocols
 - `Duration`, `Instant`, memory roles, effects, and resumptions
 - `print`, `unreachable`, and host-boundary primitives
 
@@ -19,21 +19,16 @@ The first line `// no-core` disables this import for trusted low-level work.
 
 The `fs` module provides `Path`, `Directory`, `DirectoryEntry`, and `File`:
 
-```tlk
+```tlk norun
 use fs::{ File, Path }
 
 let path = Path("notes.txt")
-match File.open(path: path, mode: .r) {
-    .ok(file) -> {
-        match file.read() {
-            .ok(contents) -> print(contents),
-            .error(_) -> print("read failed")
-        }
-        file.close()
-        ()
-    },
-    .error(_) -> print("open failed")
-}
+let file = File.open(path: path, mode: .r)!
+let contents = file.read()!
+
+print(contents)
+
+file.close()
 ```
 
 `Path.normalized()` performs lexical dot-component cleanup. `Path.expanded()` expands `~`, prepends the working directory, and normalizes. `Path.canonicalized()` asks the host to resolve an existing path and symlinks. Directory enumeration returns typed file, directory, or symlink entries.
@@ -74,7 +69,7 @@ See `examples/ChatServer.tlk`, `examples/ChatClient.tlk`, and `examples/Http.tlk
 - `sleep`
 - `select_recv`
 
-Core automatically runs every executable under a cooperative root scheduler. The `coop` module provides `run` for an explicit nested scheduler scope. See [Concurrency](concurrency.md).
+`coop` installs cooperative root handlers. See [Concurrency](concurrency.md).
 
 ## Dictionaries
 

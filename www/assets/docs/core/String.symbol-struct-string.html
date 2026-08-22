@@ -1,0 +1,107 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"></meta><meta name="viewport" content="width=device-width, initial-scale=1"></meta><title>String - Core</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"></link><link rel="stylesheet" href="/reset.css"></link><link rel="stylesheet" href="/style.css"></link><link rel="stylesheet" href="/docs.css"></link></head><body><nav class="global-nav" aria-label="Global navigation"><a class="global-nav-brand" href="/">talktalk</a><div class="global-nav-links"><a href="/">Language</a><a href="/manual/">Guide</a><a aria-current="page" href="/docs/">Docs</a><a href="/playground">Playground</a><a href="/qa">Q/A</a><a href="/philosophy">Philosophy</a></div></nav><main class="site-page docs-proposal docs-design-1"><header class="site-page-header docs-proposal-header docs-symbol-header"><div class="site-page-heading docs-proposal-heading"><nav class="site-breadcrumbs docs-breadcrumbs docs-header-breadcrumbs" aria-label="Breadcrumb"><a href="../">Docs</a> / <a href="index.html">Core</a> / <a href="String.html">String</a> / <a href="#struct-string" aria-current="page">String</a></nav><h1>String</h1></div></header><div class="site-page-layout docs-proposal-shell"><aside class="site-page-sidebar docs-catalog" aria-label="Documentation sections"><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Libraries</span><a href="/docs/">All libraries</a><a class="active" href="/docs/core/">Core</a></div><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Modules</span><a class="" href="Array.html">Array</a><a class="" href="Async.html">Async</a><a class="" href="Convert.html">Convert</a><a class="" href="Host.html">Host</a><a class="" href="IO.html">IO</a><a class="" href="InlineArray.html">InlineArray</a><a class="" href="Iterable.html">Iterable</a><a class="" href="Memory.html">Memory</a><a class="" href="Operators.html">Operators</a><a class="" href="Optional.html">Optional</a><a class="" href="Ownership.html">Ownership</a><a class="" href="Range.html">Range</a><a class="" href="Result.html">Result</a><a class="" href="Showable.html">Showable</a><a class="active" href="String.html">String</a><a class="" href="StringBuilder.html">StringBuilder</a><a class="" href="Text.html">Text</a><a class="" href="TextUnicodeData.html">TextUnicodeData</a><a class="" href="Time.html">Time</a><a class="" href="Unicode.html">Unicode</a><a class="" href="UnicodeData.html">UnicodeData</a><a class="" href="Builtins.html">Builtins</a></div></aside><article class="site-page-content docs-reference"><section class="docs-symbol" id="struct-string"><code class="docs-symbol-signature"><span class="keyword">struct</span> <span class="type">String</span></code><div class="prose docs docs-symbol-documentation"><p>An owned Unicode string with copy-on-write UTF-8 storage.</p><p>Bytes in <code>storage[0..&lt;byte_count]</code> are valid UTF-8 and <code>byte_count &lt;= capacity</code>. Byte-oriented access lives on <a href="String.symbol-struct-utf8view.html#struct-utf8view" title=""><code>UTF8View</code></a>; ordinary iteration and the deep text APIs operate on extended grapheme clusters.</p></div></section><section class="docs-symbol-member-group" id="members-properties"><h2>Properties</h2><article class="docs-member" id="struct-string-let-storage-bytestorage"><h3><code><span class="keyword">let</span> storage: <a class="docs-symbol-link" href="Memory.symbol-struct-bytestorage.html#struct-bytestorage"><span class="type">ByteStorage</span></a></code></h3><div class="prose docs"><p>The backing storage.</p></div></article><article class="docs-member" id="struct-string-let-byte-count-int"><h3><code><span class="keyword">let</span> byte_count: <a class="docs-symbol-link" href="Builtins.symbol-builtin-int.html#builtin-int"><span class="type">Int</span></a></code></h3><div class="prose docs"><p>The number of bytes in the encoded representation.</p></div></article><article class="docs-member" id="struct-string-let-capacity-int"><h3><code><span class="keyword">let</span> capacity: <a class="docs-symbol-link" href="Builtins.symbol-builtin-int.html#builtin-int"><span class="type">Int</span></a></code></h3><div class="prose docs"><p>The number of bytes that fit without reallocating.</p></div></article></section><section class="docs-symbol-member-group" id="members-methods"><h2>Methods</h2><article class="docs-member" id="struct-string-func-to-string-string"><h3><code><span class="keyword">func</span> <span class="function">to_string</span>() -&gt; <a class="docs-symbol-link" href="String.symbol-struct-string.html#struct-string"><span class="type">String</span></a></code></h3><div class="prose docs"><p>Returns an independent owned copy of this string.</p><p>The copy receives exactly <a href="String.symbol-struct-string.html#struct-string-let-byte-count-int" title=""><code>byte_count</code></a> capacity and does not share the original buffer, unlike ordinary implicit copy-on-write sharing.</p></div><details class="docs-source"><summary>View Source</summary><pre><code><span class="modifier">pub</span> <span class="keyword">func</span> <span class="function">to_string</span>() <span class="operator">-&gt;</span> <span class="type">String</span> {
+	<span class="keyword">let</span> <span class="parameter">base</span>: <span class="type">RawPtr</span> <span class="operator">=</span> _alloc<span class="operator">&lt;</span><span class="type">Byte</span><span class="operator">&gt;</span>(<span class="parameter">count</span>: self.<span class="property">byte_count</span>)
+	_copy(<span class="parameter">from</span>: self.<span class="property">storage</span>.<span class="property">base</span>, <span class="parameter">to</span>: base, <span class="parameter">length</span>: self.<span class="property">byte_count</span>)
+	<span class="type">String</span>(
+		<span class="parameter">base</span>: <span class="type">ByteStorage</span>(<span class="parameter">base</span>: base),
+		<span class="parameter">byte_count</span>: self.<span class="property">byte_count</span>,
+		<span class="parameter">capacity</span>: self.<span class="property">byte_count</span>
+	)
+}</code></pre></details></article><article class="docs-member" id="struct-string-static-func-from-bytes-bytes-byte-string"><h3><code><span class="keyword">static</span> <span class="keyword">func</span> <span class="function">from_bytes</span>(bytes: &amp;[<a class="docs-symbol-link" href="Builtins.symbol-builtin-byte.html#builtin-byte"><span class="type">Byte</span></a>]) -&gt; <a class="docs-symbol-link" href="String.symbol-struct-string.html#struct-string"><span class="type">String</span></a></code></h3><div class="prose docs"><p>The bytes are copied into a fresh buffer, so byte-level string building needs no raw allocation at the call site (ADR 0043 stage 0: the frontend source set may not use <code>#_ir</code>).</p></div><details class="docs-source"><summary>View Source</summary><pre><code><span class="modifier">pub</span> <span class="modifier">static</span> <span class="keyword">func</span> <span class="function">from_bytes</span>(<span class="parameter">bytes</span>: <span class="operator">&amp;</span>[<span class="type">Byte</span>]) <span class="operator">-&gt;</span> <span class="type">String</span> {
+	<span class="keyword">let</span> <span class="parameter">count</span>: <span class="type">Int</span> <span class="operator">=</span> bytes.<span class="property">count</span>
+	<span class="keyword">let</span> <span class="parameter">base</span>: <span class="type">RawPtr</span> <span class="operator">=</span> _alloc<span class="operator">&lt;</span><span class="type">Byte</span><span class="operator">&gt;</span>(<span class="parameter">count</span>: count)
+	<span class="keyword">let</span> i <span class="operator">=</span> <span class="number">0</span>
+	<span class="keyword">loop</span> i <span class="operator">&lt;</span> count {
+		<span class="keyword">let</span> <span class="parameter">ptr</span>: <span class="type">RawPtr</span> <span class="operator">=</span> _ptr_add(<span class="parameter">ptr</span>: base, <span class="parameter">offset</span>: i)
+		_store<span class="operator">&lt;</span><span class="type">Byte</span><span class="operator">&gt;</span>(<span class="parameter">ptr</span>: ptr, <span class="parameter">value</span>: bytes.<span class="property">get</span>(i))
+		i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+	}
+	<span class="type">String</span>(<span class="parameter">base</span>: <span class="type">ByteStorage</span>(<span class="parameter">base</span>: base), <span class="parameter">byte_count</span>: count, <span class="parameter">capacity</span>: count)
+}</code></pre></details></article><article class="docs-member" id="struct-string-static-func-decoding-utf8-bytes-byte-result-string-utf8error"><h3><code><span class="keyword">static</span> <span class="keyword">func</span> <span class="function">decoding_utf8</span>(_ bytes: [<a class="docs-symbol-link" href="Builtins.symbol-builtin-byte.html#builtin-byte"><span class="type">Byte</span></a>]) -&gt; <a class="docs-symbol-link" href="Result.symbol-enum-result-success-failure.html#enum-result-success-failure"><span class="type">Result</span></a>&lt;<a class="docs-symbol-link" href="String.symbol-struct-string.html#struct-string"><span class="type">String</span></a>, <a class="docs-symbol-link" href="String.symbol-struct-utf8error.html#struct-utf8error"><span class="type">UTF8Error</span></a>&gt;</code></h3><div class="prose docs"><p>Validates an entire byte array and copies it into an owned string.</p><p>The first malformed subsequence returns <a href="Result.symbol-enum-result-success-failure.html#enum-result-success-failure-case-error-failure" title=""><code>error</code></a> with its starting byte offset; no partial string escapes. Compare with <a href="String.symbol-struct-string.html#struct-string-static-func-decoding-utf8-lossy-bytes-byte-string" title=""><code>decoding_utf8_lossy</code></a>, which always succeeds by inserting U+FFFD.</p></div><details class="docs-source"><summary>View Source</summary><pre><code><span class="modifier">pub</span> <span class="modifier">static</span> <span class="keyword">func</span> <span class="function">decoding_utf8</span>(_ <span class="parameter">bytes</span>: [<span class="type">Byte</span>]) <span class="operator">-&gt;</span> <span class="type">Result</span><span class="operator">&lt;</span><span class="type">String</span>, <span class="type">UTF8Error</span><span class="operator">&gt;</span> {
+	<span class="keyword">let</span> <span class="parameter">output</span>: [<span class="type">Byte</span>] <span class="operator">=</span> []
+	<span class="keyword">let</span> i <span class="operator">=</span> <span class="number">0</span>
+	<span class="keyword">loop</span> i <span class="operator">&lt;</span> bytes.<span class="property">count</span> {
+		<span class="keyword">let</span> remaining <span class="operator">=</span> bytes.<span class="property">count</span> <span class="operator">-</span> i
+		<span class="keyword">let</span> b0 <span class="operator">=</span> bytes.<span class="property">get</span>(i).<span class="property">_toInt</span>()
+		<span class="keyword">let</span> b1 <span class="operator">=</span> <span class="keyword">if</span> remaining <span class="operator">&gt;</span> <span class="number">1</span> {
+			bytes.<span class="property">get</span>(i <span class="operator">+</span> <span class="number">1</span>).<span class="property">_toInt</span>()
+		} <span class="keyword">else</span> {
+			<span class="number">0</span> <span class="operator">-</span> <span class="number">1</span>
+		}
+		<span class="keyword">let</span> b2 <span class="operator">=</span> <span class="keyword">if</span> remaining <span class="operator">&gt;</span> <span class="number">2</span> {
+			bytes.<span class="property">get</span>(i <span class="operator">+</span> <span class="number">2</span>).<span class="property">_toInt</span>()
+		} <span class="keyword">else</span> {
+			<span class="number">0</span> <span class="operator">-</span> <span class="number">1</span>
+		}
+		<span class="keyword">let</span> b3 <span class="operator">=</span> <span class="keyword">if</span> remaining <span class="operator">&gt;</span> <span class="number">3</span> {
+			bytes.<span class="property">get</span>(i <span class="operator">+</span> <span class="number">3</span>).<span class="property">_toInt</span>()
+		} <span class="keyword">else</span> {
+			<span class="number">0</span> <span class="operator">-</span> <span class="number">1</span>
+		}
+		<span class="keyword">let</span> size <span class="operator">=</span> _valid_utf8_values(
+			<span class="parameter">b0</span>: b0,
+			<span class="parameter">b1</span>: b1,
+			<span class="parameter">b2</span>: b2,
+			<span class="parameter">b3</span>: b3,
+			<span class="parameter">remaining</span>: remaining
+		)
+		<span class="keyword">if</span> size <span class="operator">&lt;</span> <span class="number">1</span> { <span class="keyword">return</span> .<span class="property">error</span>(<span class="type">UTF8Error</span>(<span class="parameter">offset</span>: i)) }
+		<span class="keyword">let</span> j <span class="operator">=</span> <span class="number">0</span>
+		<span class="keyword">loop</span> j <span class="operator">&lt;</span> size {
+			output.<span class="property">push</span>(bytes.<span class="property">get</span>(i <span class="operator">+</span> j))
+			j <span class="operator">=</span> j <span class="operator">+</span> <span class="number">1</span>
+		}
+		i <span class="operator">=</span> i <span class="operator">+</span> size
+	}
+	.<span class="property">ok</span>(_copy_byte_array(<span class="parameter">bytes</span>: output))
+}</code></pre></details></article><article class="docs-member" id="struct-string-static-func-decoding-utf8-lossy-bytes-byte-string"><h3><code><span class="keyword">static</span> <span class="keyword">func</span> <span class="function">decoding_utf8_lossy</span>(_ bytes: [<a class="docs-symbol-link" href="Builtins.symbol-builtin-byte.html#builtin-byte"><span class="type">Byte</span></a>]) -&gt; <a class="docs-symbol-link" href="String.symbol-struct-string.html#struct-string"><span class="type">String</span></a></code></h3><div class="prose docs"><p>Decodes all bytes, replacing each maximal malformed subsequence with U+FFFD.</p><p>The returned string is always valid UTF-8. Use <a href="String.symbol-struct-string.html#struct-string-static-func-decoding-utf8-bytes-byte-result-string-utf8error" title=""><code>decoding_utf8</code></a> when the caller needs to reject input or report the exact failing byte offset.</p></div><details class="docs-source"><summary>View Source</summary><pre><code><span class="modifier">pub</span> <span class="modifier">static</span> <span class="keyword">func</span> <span class="function">decoding_utf8_lossy</span>(_ <span class="parameter">bytes</span>: [<span class="type">Byte</span>]) <span class="operator">-&gt;</span> <span class="type">String</span> {
+	<span class="keyword">let</span> <span class="parameter">output</span>: [<span class="type">Byte</span>] <span class="operator">=</span> []
+	<span class="keyword">let</span> i <span class="operator">=</span> <span class="number">0</span>
+	<span class="keyword">loop</span> i <span class="operator">&lt;</span> bytes.<span class="property">count</span> {
+		<span class="keyword">let</span> remaining <span class="operator">=</span> bytes.<span class="property">count</span> <span class="operator">-</span> i
+		<span class="keyword">let</span> b0 <span class="operator">=</span> bytes.<span class="property">get</span>(i).<span class="property">_toInt</span>()
+		<span class="keyword">let</span> b1 <span class="operator">=</span> <span class="keyword">if</span> remaining <span class="operator">&gt;</span> <span class="number">1</span> {
+			bytes.<span class="property">get</span>(i <span class="operator">+</span> <span class="number">1</span>).<span class="property">_toInt</span>()
+		} <span class="keyword">else</span> {
+			<span class="number">0</span> <span class="operator">-</span> <span class="number">1</span>
+		}
+		<span class="keyword">let</span> b2 <span class="operator">=</span> <span class="keyword">if</span> remaining <span class="operator">&gt;</span> <span class="number">2</span> {
+			bytes.<span class="property">get</span>(i <span class="operator">+</span> <span class="number">2</span>).<span class="property">_toInt</span>()
+		} <span class="keyword">else</span> {
+			<span class="number">0</span> <span class="operator">-</span> <span class="number">1</span>
+		}
+		<span class="keyword">let</span> b3 <span class="operator">=</span> <span class="keyword">if</span> remaining <span class="operator">&gt;</span> <span class="number">3</span> {
+			bytes.<span class="property">get</span>(i <span class="operator">+</span> <span class="number">3</span>).<span class="property">_toInt</span>()
+		} <span class="keyword">else</span> {
+			<span class="number">0</span> <span class="operator">-</span> <span class="number">1</span>
+		}
+		<span class="keyword">let</span> size <span class="operator">=</span> _valid_utf8_values(
+			<span class="parameter">b0</span>: b0,
+			<span class="parameter">b1</span>: b1,
+			<span class="parameter">b2</span>: b2,
+			<span class="parameter">b3</span>: b3,
+			<span class="parameter">remaining</span>: remaining
+		)
+		<span class="keyword">if</span> size <span class="operator">&gt;</span> <span class="number">0</span> {
+			<span class="keyword">let</span> j <span class="operator">=</span> <span class="number">0</span>
+			<span class="keyword">loop</span> j <span class="operator">&lt;</span> size {
+				output.<span class="property">push</span>(bytes.<span class="property">get</span>(i <span class="operator">+</span> j))
+				j <span class="operator">=</span> j <span class="operator">+</span> <span class="number">1</span>
+			}
+			i <span class="operator">=</span> i <span class="operator">+</span> size
+		} <span class="keyword">else</span> {
+			output.<span class="property">push</span>(<span class="number">239</span>.<span class="property">_toByte</span>())
+			output.<span class="property">push</span>(<span class="number">191</span>.<span class="property">_toByte</span>())
+			output.<span class="property">push</span>(<span class="number">189</span>.<span class="property">_toByte</span>())
+			i <span class="operator">=</span> i <span class="operator">+</span> (<span class="number">0</span> <span class="operator">-</span> size)
+		}
+	}
+	_copy_byte_array(<span class="parameter">bytes</span>: output)
+}</code></pre></details></article><article class="docs-member" id="struct-string-func-encoded-utf8-byte"><h3><code><span class="keyword">func</span> <span class="function">encoded_utf8</span>() -&gt; [<a class="docs-symbol-link" href="Builtins.symbol-builtin-byte.html#builtin-byte"><span class="type">Byte</span></a>]</code></h3><div class="prose docs"><p>Copies the string&#39;s initialized UTF-8 bytes into an array.</p><p>This is the owned counterpart to the borrowed <a href="String.symbol-protocol-stringmethods.html#protocol-stringmethods-func-utf8-utf8view" title=""><code>utf8()</code></a> view; modifying the returned array cannot affect the string.</p></div><details class="docs-source"><summary>View Source</summary><pre><code><span class="modifier">pub</span> <span class="keyword">func</span> <span class="function">encoded_utf8</span>() <span class="operator">-&gt;</span> [<span class="type">Byte</span>] {
+	<span class="keyword">let</span> <span class="parameter">result</span>: [<span class="type">Byte</span>] <span class="operator">=</span> []
+	<span class="keyword">let</span> i <span class="operator">=</span> <span class="number">0</span>
+	<span class="keyword">loop</span> i <span class="operator">&lt;</span> self.<span class="property">byte_count</span> {
+		result.<span class="property">push</span>(self.<span class="property">storage</span>.<span class="property">get</span>(i))
+		i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+	}
+	result
+}</code></pre></details></article></section></article><aside class="site-page-rail docs-page-index" aria-label="Sections on this page"><span class="site-nav-label docs-nav-label">On this page</span><a href="#struct-string">Overview</a><a href="#members-properties">Properties</a><a href="#members-methods">Methods</a></aside></div></main></body></html>

@@ -1,0 +1,937 @@
+// The self-hosted parser's typed AST (ADR 0043 stage 2). Parse results
+// are the frontend's real product — the dump renderer in Dump.tlk is
+// only the validation view of this tree. Nodes carry byte spans; kinds
+// and child field order mirror the reference node kinds so the rendered
+// tree lines up with the frozen dump format. Coverage grows with the
+// parser: kinds appear here as their grammar lands.
+//
+// Nodes are plain values ('heap references cannot sit in array storage),
+// so self-recursive expression links go through arrays, exactly like
+// the lexer's token trees: `binary` carries `[lhs, rhs]`, `call`
+// carries its callee as a one-element array.
+
+use package::Lexer::{ Token, TokenKind }
+
+// A token carried in node meta (ADR 0043 option A): the reference
+// token shape with line/col stamped at the token's END (0-based line,
+// character-counted column, reset on newline).
+pub struct MetaToken {
+	// The token's lexical category.
+	pub let kind: TokenKind
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+	// The zero-based source line.
+	pub let line: Int
+	// The zero-based source column.
+	pub let col: Int
+}
+
+// The reference NodeMeta: a node's first and last tokens plus the
+// identifier tokens consumed while the node's frame was open. A
+// start < 0 on `start` marks a synthesized node carrying no meta.
+pub struct NodeMeta {
+	// The first token covered by the node.
+	pub let start: MetaToken
+	// The last token covered by the node.
+	pub let end: MetaToken
+	// Identifier tokens consumed while this node's metadata frame was active.
+	pub let identifiers: [MetaToken]
+}
+
+// Identifies a member selected after `.`.
+pub enum MemberLabel {
+	// A source-spelled member name.
+	case named(String)
+	// A zero-based tuple field number.
+	case positional(Int)
+}
+
+// A function type's declared effect row (`'[io]`, `'io`, or the open
+// default). Not rendered in the dump; carried for the real product.
+pub struct EffectSet {
+	// Effect names without quote sigils, in declaration order.
+	pub let names: [String]
+	// Per-name token spans, parallel to `names`.
+	pub let name_starts: [Int]
+	// Exclusive token ends parallel to `name_starts`.
+	pub let name_ends: [Int]
+	// Whether additional effects may be added to the row.
+	pub let open: Bool
+}
+
+// A type-level or static-value argument in a generic application.
+pub enum GenericArg {
+	// A type annotation supplied to a type parameter.
+	case type_arg(TypeAnnotation)
+	// A compile-time value supplied to a static parameter.
+	case static_arg(StaticExpr)
+}
+
+// The arithmetic operators permitted in static-value expressions.
+pub enum StaticOpKind {
+	// Integer addition.
+	case add
+	// Integer subtraction.
+	case sub
+	// Integer multiplication.
+	case mul
+}
+
+// The ADR 0035 static index language (`16`, `N + 1`, `(M) * 2`, `.on`).
+// Not a dump-visited node: only nested Path annotations render, at the
+// surrounding depth.
+pub enum StaticExprKind {
+	// An integer literal preserved in source spelling.
+	case int_literal(String)
+	// A Boolean literal.
+	case bool_literal(Bool)
+	// A fieldless enum case whose owner is inferred from the static
+	// parameter's declared value type; the name and its token span.
+	case unqualified_case(String, Int, Int)
+	// A name-like operand — a static parameter reference or a fieldless
+	// enum case path — kept as an annotation so name resolution visits
+	// it like every other type reference.
+	case static_path(TypeAnnotation)
+	// Parenthesized grouping; the inner expression as a one-element array.
+	case static_group([StaticExpr])
+	// `[lhs, rhs]`.
+	case static_op(StaticOpKind, [StaticExpr])
+}
+
+// A static-value expression and its source range.
+pub struct StaticExpr {
+	// The literal, path, grouping, or arithmetic form.
+	pub let kind: StaticExprKind
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// A labeled field in a record type annotation.
+pub struct RecordFieldTypeAnnotation {
+	// The field name.
+	pub let label: String
+	// The inclusive starting byte offset of the label.
+	pub let label_start: Int
+	// The exclusive ending byte offset of the label.
+	pub let label_end: Int
+	// The field's annotated type.
+	pub let value: TypeAnnotation
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// An associated-type binding in an existential type.
+pub struct AnyAssocBinding {
+	// The associated type name being constrained.
+	pub let name: String
+	// The inclusive starting byte offset of the name.
+	pub let name_start: Int
+	// The exclusive ending byte offset of the name.
+	pub let name_end: Int
+	// The type assigned to the associated type.
+	pub let value: TypeAnnotation
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// The grammar form and recursively parsed components of a type annotation.
+//
+// Recursive single children use one-element arrays to keep plain-value layouts
+// finite. Name and member cases retain token spans and explicit generic arguments;
+// no name resolution or alias expansion has happened yet.
+pub enum TypeAnnotationKind {
+	// mutable, inner as a one-element array.
+	case borrow(Bool, [TypeAnnotation])
+	// `*T`: a uniquely-owned value; inner as a one-element array.
+	case unique([TypeAnnotation])
+	// Parameters (borrow-by-default already applied), effects, and the
+	// return type as a one-element array.
+	case func_type([TypeAnnotation], EffectSet, [TypeAnnotation])
+	// A quantified function type `<T, U: Bound>(params) -> Ret` (rank-N
+	// field types): declared generics, the optional where clause, and
+	// the inner function type as a one-element array.
+	case quantified_type([GenericDecl], WhereClause?, [TypeAnnotation])
+	// The base as a one-element array, then the member name, its token
+	// span, and its explicit generic arguments.
+	case nominal_path([TypeAnnotation], String, Int, Int, [GenericArg])
+	// The name, its token span (-1 = implied, e.g. the `[T]` sugar's
+	// Array head), and the generic arguments.
+	case nominal(String, Int, Int, [GenericArg])
+	// An ordered tuple of element types.
+	case tuple([TypeAnnotation])
+	// A structural record type with labeled fields.
+	case record_type([RecordFieldTypeAnnotation])
+	// The protocol head as a one-element array, then `Assoc = T` bindings.
+	case any_type([TypeAnnotation], [AnyAssocBinding])
+	// An @macro invocation in type position: name + its token span, the
+	// input extent, and canonical tokens (outer delimiters included).
+	case macro_call_type(String, Int, Int, Int, Int, [MacroToken])
+}
+
+// A parsed type annotation with a half-open UTF-8 byte range.
+//
+// Recursive children live in `kind`; array indirection is used where necessary
+// to keep plain-value layouts finite. Names retain their own token spans for
+// diagnostics and later resolution rather than being resolved during parsing.
+pub struct TypeAnnotation {
+	// The parsed type grammar and child annotations.
+	pub let kind: TypeAnnotationKind
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// A parameter's ownership mode (ADR 0018); none = unadorned (defaulting
+// is decided during desugaring).
+pub enum ParamMode {
+	// An explicitly shared-borrowed parameter.
+	case borrow_param
+	// An exclusively borrowed parameter written `mut`.
+	case mut_param
+	// An owned parameter written `consume`.
+	case consume_param
+	// An owned mutable parameter written `consume mut`.
+	case consume_mut_param
+}
+
+// A parameter's external argument label (ADR 0041); none = a bare,
+// positional binder. A one-name colon form stores named(binder).
+pub enum ParamLabel {
+	// A required external argument label.
+	case named(String)
+	// An explicit `_` that suppresses the external label.
+	case omitted
+}
+
+// A declared parameter — function, init, effect, or block argument.
+// Mirrors the reference quirk: the span starts AFTER the name (the
+// reference pushes its source location once the name is consumed); the
+// name's own span rides along for the for-loop block-arg replacement.
+pub struct Parameter {
+	// The source-level label.
+	pub let label: ParamLabel?
+	// The label token's span (the binder for `name:`, the underscore for
+	// `_ name`, or the external name for `foo name`); -1 = no label.
+	pub let label_start: Int
+	// The exclusive ending byte offset of the label.
+	pub let label_end: Int
+	// The local binder name.
+	pub let name: String
+	// The inclusive starting byte offset of the name.
+	pub let name_start: Int
+	// The exclusive ending byte offset of the name.
+	pub let name_end: Int
+	// The ownership or access mode, when explicitly written.
+	pub let mode: ParamMode?
+	// The mode marker's span (`consume mut` spans both words); -1 = none.
+	pub let mode_start: Int
+	// The exclusive ending byte offset of the mode.
+	pub let mode_end: Int
+	// The type annotation, when present.
+	pub let annotation: TypeAnnotation?
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// How an explicit closure capture obtains access to its source binding.
+pub enum CaptureMode {
+	// Copies a `Copy` value into the closure.
+	case copy_capture
+	// Transfers ownership into the closure.
+	case move_capture
+	// Captures a shared borrow.
+	case borrow_shared
+	// Captures an exclusive mutable borrow.
+	case borrow_mut
+}
+
+// One explicitly declared closure capture.
+pub struct CaptureSpec {
+	// How the closure obtains the captured binding.
+	pub let mode: CaptureMode
+	// The captured local binding name.
+	pub let name: String
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// A declared generic parameter (`T: Proto = Default`, or the ADR 0035
+// static form `static N: Int` whose declared value type is static_ty).
+pub struct GenericDecl {
+	// The type or static parameter name.
+	pub let name: String
+	// The inclusive starting byte offset of the name.
+	pub let name_start: Int
+	// The exclusive ending byte offset of the name.
+	pub let name_end: Int
+	// The generic parameters in declaration order.
+	pub let generics: [GenericDecl]
+	// Protocol bounds joined on this parameter.
+	pub let conformances: [TypeAnnotation]
+	// The generic parameter default, when present.
+	pub let default_value: GenericArg?
+	// The value type of a static parameter, when applicable.
+	pub let static_ty: TypeAnnotation?
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// A constraint admitted in a generic `where` clause.
+pub enum WherePredicateKind {
+	// Requires two type or static arguments to be equal.
+	case type_eq(GenericArg, GenericArg)
+	// `N < M` (strict) or `N <= M` (ADR 0035).
+	case static_cmp(Bool, GenericArg, GenericArg)
+	// The conforming type, then its `&`-joined protocols.
+	case conforms(TypeAnnotation, [TypeAnnotation])
+}
+
+// A generic constraint and its source range.
+pub struct WherePredicate {
+	// The equality, ordering, or conformance constraint.
+	pub let kind: WherePredicateKind
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// The ordered generic constraints in a `where` clause.
+pub struct WhereClause {
+	// Comma-separated constraints in source order.
+	pub let predicates: [WherePredicate]
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// A named function used by declarations, methods, and function expressions.
+//
+// The node's primary span is its body; `meta_start..<meta_end` preserves the
+// complete token extent used by diagnostics and dumps. Parameter ownership and
+// effect rows are still source declarations here, not inferred types.
+pub struct Func {
+	// The source-spelled function name.
+	pub let name: String
+	// The inclusive starting byte offset of the name.
+	pub let name_start: Int
+	// The exclusive ending byte offset of the name.
+	pub let name_end: Int
+	// The declared effects.
+	pub let effects: EffectSet
+	// The generic parameters in declaration order.
+	pub let generics: [GenericDecl]
+	// Explicit closure captures in declaration order.
+	pub let captures: [CaptureSpec]
+	// The declaration constraints, when present.
+	pub let where_clause: WhereClause?
+	// The parameters in declaration order.
+	pub let params: [Parameter]
+	// The executable function body.
+	pub let body: Block
+	// The declared return type, when present.
+	pub let ret: TypeAnnotation?
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+	// The inclusive starting byte offset of the meta.
+	pub let meta_start: Int
+	// The exclusive ending byte offset of the meta.
+	pub let meta_end: Int
+}
+
+// A bodyless function-shaped requirement.
+//
+// Protocol methods and initializer requirements share this representation. It
+// retains declared parameters, effects, generics, constraints, return type, and
+// source extent but no executable block.
+pub struct FuncSignature {
+	// The source-spelled requirement name.
+	pub let name: String
+	// The parameters in declaration order.
+	pub let params: [Parameter]
+	// The declared effects.
+	pub let effects: EffectSet
+	// The generic parameters in declaration order.
+	pub let generics: [GenericDecl]
+	// The declaration constraints, when present.
+	pub let where_clause: WhereClause?
+	// The declared return type, when present.
+	pub let ret: TypeAnnotation?
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// A nominal declaration's member list.
+pub struct Body {
+	// Member declarations between the nominal body's braces.
+	pub let decls: [Decl]
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// An extension head (`extend Name<Args>`): a name plus arguments only.
+pub struct TypeApplication {
+	// The nominal name at the extension head.
+	pub let name: String
+	// The first path segment's token span.
+	pub let name_start: Int
+	// The exclusive ending byte offset of the name.
+	pub let name_end: Int
+	// Explicit generic arguments applied to the nominal head.
+	pub let args: [GenericArg]
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// How a method receives `self`.
+pub enum ReceiverMode {
+	// The declaration has no instance receiver, as for a static method.
+	case none_receiver
+	// The method borrows its receiver.
+	case ref_receiver
+	// The method consumes its receiver.
+	case consuming_receiver
+}
+
+// An ownership marker on a for-loop's iterable (ADR 0021): `consume xs`
+// iterates by moving, `mut xs` by exclusive borrow.
+pub enum ArgMode {
+	// Pass or iterate through an exclusive mutable borrow.
+	case mut_mode
+	// Transfer ownership to the callee or iterator.
+	case consume_mode
+	// Copy the value at the call boundary.
+	case copy_mode
+	// Pass through a shared borrow.
+	case borrow_mode
+}
+
+// One `pattern -> body` arm of a match. Desugared conditionals (if-let)
+// synthesize arms with no source span.
+pub struct MatchArm {
+	// The pattern that selects this arm.
+	pub let pattern: Pattern
+	// The block evaluated after a successful match.
+	pub let body: Block
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// An executable block with optional leading parameters and ordered items.
+//
+// Parameters model trailing closures and loop binders. `copied` marks a
+// desugaring duplicate that intentionally carries no independent node metadata.
+pub struct Block {
+	// Trailing-closure or loop parameters declared before `in`.
+	pub let params: [Parameter]
+	// Declarations and statements in evaluation order.
+	pub let body: [Item]
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+	// A desugaring copy (the reference freshens node ids when a
+	// multi-clause `if` duplicates a block): carries no node meta.
+	pub let copied: Bool
+}
+
+// The grammar form and child nodes of a parsed expression.
+//
+// Recursive operands use arrays for finite value layout, with comments documenting
+// positional payload conventions. Recovery nodes such as `incomplete_member`
+// remain in the tree for editor tooling. All names and effects are unresolved.
+pub enum ExprKind {
+	// An integer literal preserved in source spelling.
+	case literal_int(String)
+	// A floating-point literal preserved in source spelling.
+	case literal_float(String)
+	// The Boolean literal `true`.
+	case literal_true
+	// The Boolean literal `false`.
+	case literal_false
+	// A decoded string literal.
+	case literal_string(String)
+	// A decoded character literal.
+	case literal_character(String)
+	// A reference to a source-spelled binding name.
+	case variable(String)
+	// The operand, as a one-element array.
+	case unary(TokenKind, [Expr])
+	// `[lhs, rhs]`.
+	case binary(TokenKind, [Expr])
+	// The callee as a one-element array, explicit generic arguments,
+	// the arguments, then a trailing block closure as a zero- or
+	// one-element array.
+	case call([Expr], [GenericArg], [CallArg], [Block])
+	// A specialized type reference (`Opt<Int>`, `Res<Int>.A<Bool>`):
+	// the dotted path and one generic-argument list per path segment.
+	case constructor(String, [[GenericArg]])
+	// The receiver as a zero- (leading dot) or one-element array. The
+	// label span mirrors the reference: an identifier label's own token,
+	// a positional label the FOLLOWING token (quirk), a float-split
+	// member its digits' sub-span.
+	case member(MemberLabel, Int, Int, [Expr])
+	// A dot with no member name after it: LSP-supporting recovery node,
+	// receiver as a zero- or one-element array.
+	case incomplete_member([Expr])
+	// An ordered tuple of element expressions.
+	case tuple([Expr])
+	// A block used in expression position.
+	case block(Block)
+	// An array literal's element expressions.
+	case literal_array([Expr])
+	// `[lhs, index]`.
+	case subscript_expr([Expr])
+	// A `func` literal in expression position.
+	case func_expr(Func)
+	// `#unsafe { … }`.
+	case unsafe_expr(Block)
+	// A conditional in expression position (and the desugared form of
+	// pattern-bearing if statements): condition as a one-element array,
+	// then the success and failure blocks.
+	case if_expr([Expr], Block, Block)
+	// The scrutinee as a one-element array, then the arms.
+	case match_expr([Expr], [MatchArm])
+	// `expr as Type`: the operand as a one-element array.
+	case as_cast([Expr], TypeAnnotation)
+	// Postfix `?` early propagation; the operand as a one-element array.
+	case propagate([Expr])
+	// Postfix `!`: the operand, then the hidden failure expression —
+	// `unreachable` spanning the bang until desugaring sends it to 'panic.
+	case force_unwrap([Expr])
+	// The bottom-valued `unreachable` expression.
+	case unreachable_expr
+	// `'effect(args) { ... }`: the effect name (sigil excluded) and its
+	// lexeme span, explicit generic arguments, arguments, then a trailing
+	// block closure as a zero- or one-element array.
+	case call_effect(String, Int, Int, [GenericArg], [CallArg], [Block])
+	// `{ label: value, ...spread }`: the fields, then the spread
+	// expression as a zero- or one-element array.
+	case record_literal([RecordField], [Expr])
+	// `#_ir(binds…) { %d = instr … }`: the bind expressions, then the
+	// instruction. Only the binds render in the dump.
+	case inline_ir([Expr], IRInstruction)
+	// `@name(...)`, `@name[...]`, or `@name {...}`: the name and its
+	// lexeme span, the complete delimited input span, its canonical tokens,
+	// and legacy expression arguments when the parenthesized payload consists
+	// only of expressions.
+	case macro_call(String, Int, Int, Int, Int, [MacroToken], [Expr])
+	// `quote { ... }` in a macro unit: the original source, canonical group
+	// tokens, and the named expression antiquotations encountered in the tree.
+	// The trailing Int is the quoted category: 0 for an expression
+	// quotation (`quote { ... }`), 1 for a declaration quotation
+	// (`quote decl { ... }`, ADR 0026 wrapper macros).
+	case syntax_quote(String, [MacroToken], [String], Int)
+}
+
+// A flattened canonical token carried by a macro invocation. Flattening the
+// ranges keeps the parse-result ABI simple; no token text is reconstructed.
+pub struct MacroToken {
+	// The stable lexical category crossing the macro-service boundary.
+	pub let kind: TokenKind
+	// The inclusive starting byte offset of the span.
+	pub let span_start: Int
+	// The exclusive ending byte offset of the span.
+	pub let span_end: Int
+	// The inclusive starting byte offset of the lexeme.
+	pub let lexeme_start: Int
+	// The exclusive ending byte offset of the lexeme.
+	pub let lexeme_end: Int
+}
+
+// Flattens a lexer token into the macro-service ABI representation.
+//
+// Kind and both source ranges are preserved exactly; token text remains in the
+// accompanying source and is not copied into the record.
+pub func macro_token(token: Token) -> MacroToken {
+	MacroToken(
+		kind: token.kind,
+		span_start: token.span.lower,
+		span_end: token.span.upper,
+		lexeme_start: token.lexeme.lower,
+		lexeme_end: token.lexeme.upper
+	)
+}
+
+// An inline-IR value operand.
+pub enum IRValue {
+	// A numbered inline-IR register.
+	case reg(Int)
+	// An immediate integer operand.
+	case int_value(Int)
+	// An immediate float preserved in source spelling.
+	case float_value(String)
+	// An immediate Boolean operand.
+	case bool_value(Bool)
+	// The immediate unit value.
+	case void_value
+	// `$N`: a reference to the Nth bind expression.
+	case bind(Int)
+}
+
+// One #_ir instruction: its name, optional destination register lexeme
+// (`?` requests a fresh one), optional operand type, value operands in
+// instruction order, and the `cmp` comparator.
+pub struct IRInstruction {
+	// The inline-IR opcode spelling.
+	pub let name: String
+	// The inclusive starting byte offset of the name.
+	pub let name_start: Int
+	// The exclusive ending byte offset of the name.
+	pub let name_end: Int
+	// The destination register, when the instruction produces one.
+	pub let dest: String?
+	// The instruction type, when one was written.
+	pub let ty: TypeAnnotation?
+	// Immediate, register, and bind operands in instruction order.
+	pub let values: [IRValue]
+	// The inline IR operator, when one was written.
+	pub let op: TokenKind?
+}
+
+// A labeled field in a record expression.
+pub struct RecordField {
+	// The record field name.
+	pub let label: String
+	// The inclusive starting byte offset of the label.
+	pub let label_start: Int
+	// The exclusive ending byte offset of the label.
+	pub let label_end: Int
+	// The expression assigned to this field.
+	pub let value: Expr
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// A parsed expression with unresolved names and a half-open byte range.
+//
+// Recursive operands are array-indirected so the AST remains a plain value.
+// The parser records syntax only: typing, ownership adaptation, and effect
+// resolution happen in later compiler phases.
+pub struct Expr {
+	// The parsed expression grammar and child nodes.
+	pub let kind: ExprKind
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// A call argument with source label, ownership mode, and expression value.
+//
+// Missing spans use -1 sentinels. `bare_string` records the paren-less leading
+// string form separately because it changes trailing-block call parsing.
+pub struct CallArg {
+	// The source-level label.
+	pub let label: String?
+	// The label token's span (the underscore for `_:`); -1 = positional
+	// (the reference then uses the argument's own span).
+	pub let label_start: Int
+	// The exclusive ending byte offset of the label.
+	pub let label_end: Int
+	// The ownership or access mode, when explicitly written.
+	pub let mode: ArgMode?
+	// The inclusive starting byte offset of the mode.
+	pub let mode_start: Int
+	// The exclusive ending byte offset of the mode.
+	pub let mode_end: Int
+	// The paren-less leading string argument (`expect "..." { }`).
+	pub let bare_string: Bool
+	// The argument expression.
+	pub let value: Expr
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// The grammar form and child nodes of a parsed pattern.
+//
+// Variant and struct paths retain explicit generic arguments and source labels;
+// exhaustiveness, binding agreement, and nominal resolution are later typing
+// responsibilities rather than parser invariants.
+pub enum PatternKind {
+	// Binds the matched value to a local name.
+	case bind(String)
+	// Matches any value without binding it.
+	case wildcard
+	// Matches an integer literal preserved in source spelling.
+	case literal_int(String)
+	// Matches a floating-point literal preserved in source spelling.
+	case literal_float(String)
+	// Matches a decoded character literal.
+	case literal_character(String)
+	// Matches a decoded string literal.
+	case literal_string(String)
+	// Matches the Boolean value `true`.
+	case literal_true
+	// Matches the Boolean value `false`.
+	case literal_false
+	// Matches tuple elements positionally.
+	case tuple([Pattern])
+	// Matches when any alternative pattern matches.
+	case or_pattern([Pattern])
+	// Enum path (none for a leading dot), one explicit generic-argument
+	// list per path segment, variant name and its token span, field
+	// patterns, and one label per field (labels select fixed payload
+	// slots).
+	case variant(String?, [[GenericArg]], String, Int, Int, [Pattern], [String?])
+	// Dotted struct path, per-segment generic arguments, field patterns,
+	// parallel field names, and whether a `..` rest closed the list.
+	case struct_pattern(String, [[GenericArg]], [Pattern], [String], Bool)
+	// Matches fields in a structural record value.
+	case record([RecordFieldPattern])
+	// An @macro invocation in pattern position: name + its token span, the
+	// input extent, and canonical tokens (outer delimiters included).
+	case macro_call_pattern(String, Int, Int, Int, Int, [MacroToken])
+}
+
+// A parsed binding or matching pattern with unresolved names.
+//
+// `start..<end` covers the written pattern. The optional meta override is used
+// only by desugared for-loop parameters whose diagnostic token extent differs
+// from their inherited pattern span.
+pub struct Pattern {
+	// The parsed pattern grammar and child patterns.
+	pub let kind: PatternKind
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+	// Node-meta token extents, where they diverge from the span (-1 =
+	// same). Only the for-loop block-arg replacement produces this: the
+	// pattern inherits the Parameter's meta, which starts after the name.
+	pub let meta_start: Int
+	// The exclusive ending byte offset of the meta.
+	pub let meta_end: Int
+}
+
+// The syntax accepted for one field in a record pattern.
+pub enum RecordFieldPatternKind {
+	// Shorthand that binds a field to a local of the same name.
+	case bind_field(String)
+	// The field name, its token span, then the sub-pattern.
+	case equals_field(String, Int, Int, Pattern)
+	// `..`, allowing fields not named by the pattern.
+	case rest_field
+}
+
+// A labeled field in a record pattern.
+pub struct RecordFieldPattern {
+	// The shorthand, explicit subpattern, or rest form.
+	pub let kind: RecordFieldPatternKind
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// A macro's `$param`; the span includes the sigil.
+pub struct MacroParam {
+	// The parameter name without its `$` sigil.
+	pub let name: String
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// A symbol selected by an import and its optional local alias.
+pub struct ImportedSymbol {
+	// The exported symbol selected from the module.
+	pub let name: String
+	// The inclusive starting byte offset of the name.
+	pub let name_start: Int
+	// The exclusive ending byte offset of the name.
+	pub let name_end: Int
+	// The local alias written after `as`, when present.
+	pub let alias: String?
+}
+
+// Selects which symbols an import introduces into local scope.
+pub enum ImportedSymbols {
+	// Imports the module itself without a named selection list.
+	case all
+	// Imports only the listed symbols and aliases.
+	case named([ImportedSymbol])
+	// use package::foo::* : the module's public symbols plus, recursively,
+	// every submodule under its directory.
+	case glob
+}
+
+// A parsed module import.
+pub struct Import {
+	// Whether the import selects a list, the module, or a recursive glob.
+	pub let symbols: ImportedSymbols
+	// The normalized module path without the selection suffix.
+	pub let path: String
+	// The reference quirk: the span runs from the path's first token to
+	// the START of the token after the path.
+	pub let path_start: Int
+	// The exclusive ending byte offset of the path.
+	pub let path_end: Int
+	// Whether this is a local rather than package-qualified import.
+	pub let local: Bool
+}
+
+// The grammar form and children of a parsed declaration.
+//
+// Nominal payloads retain names, spans, generics, constraints, and member bodies.
+// Context-sensitive parser entry points decide whether a `func`, `init`, or
+// property is a member; visibility and type validity are checked later.
+pub enum DeclKind {
+	// A `let` pattern with optional type annotation and initializer.
+	case let_decl(Pattern, TypeAnnotation?, Expr?)
+	// A module import declaration.
+	case import_decl(Import)
+	// A function declaration with a body.
+	case func_decl(Func)
+	// A bodyless function requirement.
+	case func_signature(FuncSignature)
+	// name + its token span, generics, where, body, 'linear, 'heap.
+	case struct_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, Bool, Bool)
+	// name + its token span, generics, where, body, 'linear, 'heap.
+	case enum_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, Bool, Bool)
+	// name + its token span, generics, where, body, conformances.
+	case protocol_decl(String, Int, Int, [GenericDecl], WhereClause?, Body, [TypeAnnotation])
+	// name + its token span, generics, payloads, per-payload labels,
+	// GADT result.
+	case enum_variant(String, Int, Int, [GenericDecl], [TypeAnnotation], [String?], TypeAnnotation?)
+	// binders, head, conformances, where, body.
+	case extend_decl([GenericDecl], TypeApplication, [TypeAnnotation], WhereClause?, Body)
+	// An initializer's parameters and body.
+	case init_decl([Parameter], Block)
+	// name + its token span, is_static, annotation, default value.
+	case property(String, Int, Int, Bool, TypeAnnotation?, Expr?)
+	// A function member, whether it is static, and its receiver mode.
+	case method(Func, Bool, ReceiverMode)
+	// A bodyless method requirement and its receiver mode.
+	case method_requirement(FuncSignature, ReceiverMode)
+	// A bodyless initializer requirement.
+	case init_requirement(FuncSignature)
+	// A type alias name, name span, and target annotation.
+	case typealias_decl(String, Int, Int, TypeAnnotation)
+	// name + its token span, generics, where, params, return type.
+	case effect_decl(String, Int, Int, [GenericDecl], WhereClause?, [Parameter], TypeAnnotation)
+	// An associated type declaration and its optional constraints.
+	case associated_decl(GenericDecl, WhereClause?)
+	// name + its token span, parameters, template body range + canonical tokens.
+	// The body is an unparsed token template: the invocation position's
+	// category decides how it parses (ADR 0026's unified template model).
+	case macro_decl(String, Int, Int, [MacroParam], Int, Int, [MacroToken])
+	// An @macro invocation in declaration position: name + its token span,
+	// the input extent, canonical tokens (outer delimiters included), and
+	// the parsed arguments when the input is a parenthesized expression list
+	// (used by the compiler-provided @assert).
+	case macro_call_decl(String, Int, Int, Int, Int, [MacroToken], [Expr])
+	// A `#[name]` / `#[name(tokens)]` declaration wrapper marker attached to
+	// the following declaration (ADR 0026): name + its token span, the
+	// argument extent and canonical argument tokens (outer parentheses
+	// included; empty for the bare `#[name]` form), the target's canonical
+	// tokens, and the parsed target declaration. The single-element array
+	// supplies the indirection the recursive payload needs; adjacent markers
+	// nest, innermost closest to the declaration.
+	case wrapper_decl(String, Int, Int, Int, Int, [MacroToken], [MacroToken], [Decl])
+}
+
+// A parsed declaration with file-interface visibility and source range.
+//
+// `is_public` records the written modifier before type checking verifies that
+// the public contract exposes only public types. Nested members and variants use
+// the same representation as top-level declarations.
+pub struct Decl {
+	// The parsed declaration grammar and child nodes.
+	pub let kind: DeclKind
+	// Whether the declaration is publicly visible.
+	pub let is_public: Bool
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// The grammar form and child nodes of a parsed statement.
+//
+// Some surface constructs are already normalized: pattern-bearing conditionals
+// become match expressions, while ownership modes on `for` remain explicit for
+// later lowering.
+pub enum StmtKind {
+	// An expression evaluated for its value or effects.
+	case expr_stmt(Expr)
+	// A boolean-only if statement; pattern-bearing ifs desugar to a
+	// match in `expr_stmt` (matching the reference).
+	case if_stmt(Expr, Block, Block?)
+	// Returns an optional value from the enclosing function.
+	case return_stmt(Expr?)
+	// Exits the nearest loop.
+	case break_stmt
+	// `[lhs, rhs]`.
+	case assignment([Expr])
+	// A loop with an optional condition and its body.
+	case loop_stmt(Expr?, Block)
+	// An iterable expression, element pattern, body, and ownership mode.
+	case for_stmt(Expr, Pattern, Block, ArgMode?)
+	// Starts the next iteration of the nearest loop.
+	case continue_stmt
+	// `'continue expr?` — resumes the enclosing effect handler.
+	case resume_stmt(Expr?)
+	// `#handle 'effect { body }` — the effect name (sigil excluded), its
+	// lexeme span, and the handler block.
+	case handle_stmt(String, Int, Int, Block)
+}
+
+// A parsed statement and its source range.
+pub struct Stmt {
+	// The parsed statement grammar and child nodes.
+	pub let kind: StmtKind
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The exclusive ending byte offset in the source.
+	pub let end: Int
+}
+
+// A root or block child produced by one parser category.
+//
+// File and block parses contain declaration/statement items; category-specific
+// entry points wrap their single expression, pattern, or type root here so every
+// `ParseOutcome` has one uniform item array.
+pub enum Item {
+	// Wraps a declaration node.
+	case decl_item(Decl)
+	// Wraps a statement node.
+	case stmt_item(Stmt)
+	// A bare expression root (the expr category parse).
+	case expr_item(Expr)
+	// A bare pattern root (the pattern category parse).
+	case pattern_item(Pattern)
+	// A bare type-annotation root (the type category parse).
+	case type_item(TypeAnnotation)
+}

@@ -1339,30 +1339,49 @@ static inline TalkValue talk_closure(uint32_t function, uint32_t captured) {
 
 /* ---- integer operations -------------------------------------------- */
 
-/* Talk `Int` wraps (the VM uses `i64::wrapping_*`); signed overflow is
- * undefined in C, so every wrapping operation goes through `uint64_t`. */
+/* Bitwise operations and shifts reinterpret their result bits as Int. */
 static inline int64_t talk_wrap(uint64_t bits) { return (int64_t)bits; }
 
+/* Talk `Int` arithmetic traps before a signed operation can overflow.
+ * C signed overflow is undefined, so each guard uses only in-range
+ * subtraction, addition, comparison, or division. */
 static inline TalkValue talk_add(TalkValue a, TalkValue b) {
-    return talk_int(talk_wrap((uint64_t)a.v.i + (uint64_t)b.v.i));
+    if ((b.v.i > 0 && a.v.i > INT64_MAX - b.v.i) ||
+        (b.v.i < 0 && a.v.i < INT64_MIN - b.v.i)) {
+        talk_trap("integer overflow in addition");
+    }
+    return talk_int(a.v.i + b.v.i);
 }
 
 static inline TalkValue talk_sub(TalkValue a, TalkValue b) {
-    return talk_int(talk_wrap((uint64_t)a.v.i - (uint64_t)b.v.i));
+    if ((b.v.i > 0 && a.v.i < INT64_MIN + b.v.i) ||
+        (b.v.i < 0 && a.v.i > INT64_MAX + b.v.i)) {
+        talk_trap("integer overflow in subtraction");
+    }
+    return talk_int(a.v.i - b.v.i);
 }
 
 static inline TalkValue talk_mul(TalkValue a, TalkValue b) {
-    return talk_int(talk_wrap((uint64_t)a.v.i * (uint64_t)b.v.i));
+    if (a.v.i != 0 && b.v.i != 0) {
+        if (a.v.i > 0) {
+            if ((b.v.i > 0 && a.v.i > INT64_MAX / b.v.i) ||
+                (b.v.i < 0 && b.v.i < INT64_MIN / a.v.i)) {
+                talk_trap("integer overflow in multiplication");
+            }
+        } else if ((b.v.i > 0 && a.v.i < INT64_MIN / b.v.i) ||
+                   (b.v.i < 0 && a.v.i < INT64_MAX / b.v.i)) {
+            talk_trap("integer overflow in multiplication");
+        }
+    }
+    return talk_int(a.v.i * b.v.i);
 }
 
-/* `wrapping_div`: division by zero traps, and INT64_MIN / -1 wraps to
- * INT64_MIN rather than trapping the process. */
 static inline TalkValue talk_div(TalkValue a, TalkValue b) {
     if (b.v.i == 0) {
         talk_trap("division by zero");
     }
     if (a.v.i == INT64_MIN && b.v.i == -1) {
-        return talk_int(INT64_MIN);
+        talk_trap("integer overflow in division");
     }
     return talk_int(a.v.i / b.v.i);
 }

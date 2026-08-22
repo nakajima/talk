@@ -1,0 +1,28 @@
+// WIP: This was just as much as we needed for `talk test` to work. We need more.
+// Renders a `Showable` value inside ANSI SGR styling and a trailing reset.
+//
+// These helpers always emit escape sequences; they do not detect terminal
+// capabilities or whether output is redirected. The receiver is consumed only
+// to obtain its display string and no nested-style state is preserved.
+pub protocol ColorfulString where Self: Showable {
+	// Prefixes SGR 1 and appends SGR 0 around the receiver's display text.
+	consuming func bold() -> String {
+		wrap(string: self.show(), code: "1")
+	}
+
+	// Prefixes SGR 32 and appends SGR 0 around the receiver's display text.
+	consuming func green() -> String {
+		wrap(string: self.show(), code: "32")
+	}
+
+	// Prefixes SGR 31 and appends SGR 0 around the receiver's display text.
+	consuming func red() -> String {
+		wrap(string: self.show(), code: "31")
+	}
+}
+
+extend String: ColorfulString {}
+
+func wrap(string: String, code: String) -> String {
+	"\u{1B}[" + code + "m" + string + "\u{1B}[0m"
+}

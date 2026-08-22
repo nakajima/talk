@@ -53,7 +53,19 @@ fn removable(inst: &Inst) -> Option<LocalId> {
         // instructions. Chain folding (ADR 0046) bypasses intermediate
         // reads and relies on this pass to collect them.
         Inst::Field { dest, .. } => Some(*dest),
-        Inst::Scalar { dest, op, .. } if !matches!(op, ScalarOp::IntDiv | ScalarOp::IntToByte) => {
+        // Trapping operations remain observable even when their result is
+        // dead. Float, bitwise, comparison, and in-range conversion ops are
+        // total and may be removed.
+        Inst::Scalar { dest, op, .. }
+            if !matches!(
+                op,
+                ScalarOp::IntAdd
+                    | ScalarOp::IntSub
+                    | ScalarOp::IntMul
+                    | ScalarOp::IntDiv
+                    | ScalarOp::IntToByte
+            ) =>
+        {
             Some(*dest)
         }
         _ => None,
@@ -102,13 +114,13 @@ mod tests {
                 insts: vec![
                     Inst::Copy {
                         dest: 0,
-                        src: Operand::Const(Constant::Int(1)),
+                        src: Operand::Const(Constant::Float(1.0)),
                     },
                     Inst::Scalar {
                         dest: 1,
-                        op: ScalarOp::IntAdd,
+                        op: ScalarOp::FloatAdd,
                         a: Operand::Local(0),
-                        b: Some(Operand::Const(Constant::Int(2))),
+                        b: Some(Operand::Const(Constant::Float(2.0))),
                     },
                 ],
                 term: Some(Term::Return(Operand::Const(Constant::Unit))),
@@ -156,21 +168,29 @@ mod tests {
             return_repr: None,
             name: "trap".into(),
             arity: 0,
-            locals: crate::compiling::mir::build::LocalInfo::uniform(1),
+            locals: crate::compiling::mir::build::LocalInfo::uniform(2),
             blocks: vec![BlockData {
                 debug: None,
                 params: Vec::new(),
-                insts: vec![Inst::Scalar {
-                    dest: 0,
-                    op: ScalarOp::IntDiv,
-                    a: Operand::Const(Constant::Int(1)),
-                    b: Some(Operand::Const(Constant::Int(0))),
-                }],
+                insts: vec![
+                    Inst::Scalar {
+                        dest: 0,
+                        op: ScalarOp::IntAdd,
+                        a: Operand::Const(Constant::Int(i64::MAX)),
+                        b: Some(Operand::Const(Constant::Int(1))),
+                    },
+                    Inst::Scalar {
+                        dest: 1,
+                        op: ScalarOp::IntDiv,
+                        a: Operand::Const(Constant::Int(1)),
+                        b: Some(Operand::Const(Constant::Int(0))),
+                    },
+                ],
                 term: Some(Term::Return(Operand::Const(Constant::Unit))),
             }],
         };
 
         assert_eq!(run(&mut function).applied, 0);
-        assert_eq!(function.blocks[0].insts.len(), 1);
+        assert_eq!(function.blocks[0].insts.len(), 2);
     }
 }

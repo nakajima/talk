@@ -24,7 +24,9 @@ test "duration accessors convert units" {
 	@assert(Duration.nanoseconds(1234567890).as_milliseconds() == 1234)
 	@assert(Duration.nanoseconds(1234567890).as_seconds() == 1)
 	// Truncation is toward zero, not down.
-	@assert((Duration.nanoseconds(0) - .nanoseconds(1500)).as_microseconds() == 0 - 1)
+	@assert(
+		(Duration.nanoseconds(0) - .nanoseconds(1500)).as_microseconds() == 0 - 1
+	)
 }
 
 test "duration show formats as h:mm:ss" {
@@ -32,7 +34,9 @@ test "duration show formats as h:mm:ss" {
 	@assert(Duration.nanoseconds(5).show() == "0:00:00.000000005")
 	@assert(Duration.milliseconds(123).show() == "0:00:00.123")
 	@assert(Duration.seconds(5).show() == "0:00:05")
-	@assert((Duration.hours(1) + .minutes(2) + .seconds(3) + .nanoseconds(456789000)).show() == "1:02:03.456789")
+	@assert(
+		(Duration.hours(1) + .minutes(2) + .seconds(3) + .nanoseconds(456789000)).show() == "1:02:03.456789"
+	)
 	@assert((Duration.nanoseconds(0) - .milliseconds(1500)).show() == "-0:00:01.5")
 	// Hours run past 24 rather than rolling into days.
 	@assert(Duration.hours(25).show() == "25:00:00")
@@ -65,7 +69,11 @@ test "instant adding moves by a duration" {
 	@assert(now == Instant.now())
 	@assert(now.since(now) == .nanoseconds(0))
 	@assert(now.adding(.nanoseconds(4000)).since(now) == .nanoseconds(4000))
-	@assert(now.adding(Duration.nanoseconds(0) - .nanoseconds(4000)).since(now) == .nanoseconds(0 - 4000))
+	@assert(
+		now.adding(Duration.nanoseconds(0) - .nanoseconds(4000)).since(now) == .nanoseconds(
+			0 - 4000
+		)
+	)
 	@assert(now.adding(.seconds(2)) > now)
 	@assert(now < now.adding(.seconds(2)))
 }

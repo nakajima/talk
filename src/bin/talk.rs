@@ -57,16 +57,10 @@ async fn main() {
             #[arg(long)]
             json: bool,
         },
-        /// Rewrite call sites to match declared argument labels (ADR 0041).
-        FixLabels {
+        /// Apply preferred compiler-proven quick fixes.
+        Fixit {
             #[arg(value_hint = ValueHint::FilePath)]
-            filenames: Vec<std::path::PathBuf>,
-            /// Treat the given directory as the core corpus and fix it.
-            #[arg(long, value_name = "DIR")]
-            core: Option<std::path::PathBuf>,
-            /// Fix each file as its own standalone program.
-            #[arg(long)]
-            each: bool,
+            paths: Vec<std::path::PathBuf>,
         },
         /// Compile and execute the input (or the current package's binary
         /// when no filenames are given inside a package).
@@ -224,9 +218,9 @@ async fn main() {
         },
         /// Interactive frontend for declarations, type queries, and completion.
         Repl {
-            /// Import the current package library's public surface.
+            /// Ignore an enclosing package and start an isolated session.
             #[arg(long)]
-            package: bool,
+            standalone: bool,
         },
         /// Print a dense Talk language reference for LLMs.
         Llm,
@@ -295,7 +289,7 @@ async fn main() {
             column,
             node_id,
         } => {
-            use talk::analysis::{DocumentInput, Workspace, hover_at};
+            use talk::analysis::{DocumentInput, Workspace};
 
             let (module_name, text) = match filename.as_deref() {
                 Some(name) if name != "-" => match std::fs::read_to_string(name) {
@@ -318,6 +312,15 @@ async fn main() {
                 eprintln!("error: failed to build workspace");
                 std::process::exit(1);
             };
+            // Core and stdlib doc comments resolve through their own
+            // workspaces, built in place (one-shot tooling; the LSP
+            // shares its module cache instead).
+            let core = Workspace::core();
+            let stdlib = |module_id| {
+                workspace
+                    .stdlib_workspace_for_module_id(module_id)
+                    .map(std::borrow::Cow::Owned)
+            };
             let hover = match (byte_offset, line, column, node_id) {
                 (_, _, _, Some(node_id)) => {
                     let Some(node_id) = talk::analysis::hover::parse_node_id(node_id) else {
@@ -326,12 +329,24 @@ async fn main() {
                     };
                     talk::analysis::hover::hover_for_node_id(&workspace, &doc_id, node_id)
                 }
-                (Some(offset), None, None, None) => hover_at(&workspace, &doc_id, *offset),
+                (Some(offset), None, None, None) => talk::analysis::hover::hover_at_with(
+                    &workspace,
+                    core.as_ref(),
+                    Some(&stdlib),
+                    &doc_id,
+                    *offset,
+                ),
                 (None, Some(line), Some(column), None) => {
                     match talk::common::text::byte_offset_for_line_column_utf8(
                         &text, *line, *column,
                     ) {
-                        Some(offset) => hover_at(&workspace, &doc_id, offset),
+                        Some(offset) => talk::analysis::hover::hover_at_with(
+                            &workspace,
+                            core.as_ref(),
+                            Some(&stdlib),
+                            &doc_id,
+                            offset,
+                        ),
                         None => {
                             eprintln!("error: line/column is past end of document");
                             std::process::exit(1);
@@ -344,7 +359,12 @@ async fn main() {
                 }
             };
             match hover {
-                Some(hover) => println!("{}", hover.contents),
+                Some(hover) => {
+                    println!("{}", hover.contents);
+                    if let Some(documentation) = &hover.documentation {
+                        println!("\n{documentation}");
+                    }
+                }
                 None => {
                     eprintln!("no hover information at that position");
                     std::process::exit(1);
@@ -371,8 +391,8 @@ async fn main() {
             let bin_name = cmd.get_name().to_string();
             generate(*shell, &mut cmd, bin_name, &mut std::io::stdout());
         }
-        Commands::Repl { package } => {
-            if let Err(err) = talk::cli::repl::run(*package) {
+        Commands::Repl { standalone } => {
+            if let Err(err) = talk::cli::repl::run(*standalone) {
                 eprintln!("error: {err}");
                 std::process::exit(1);
             }
@@ -588,12 +608,8 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::FixLabels {
-            filenames,
-            core,
-            each,
-        } => match talk::cli::fix_labels::run(core.as_deref(), filenames, *each) {
-            Ok(applied) => println!("applied {applied} label fixes"),
+        Commands::Fixit { paths } => match talk::cli::fixit::run(paths) {
+            Ok(applied) => println!("applied {applied} fixes"),
             Err(err) => {
                 eprintln!("{err}");
                 std::process::exit(1);
@@ -1221,8 +1237,8 @@ Talk is a statically typed, Swift-flavored language with local type inference, g
         emit C; repeated `--export` plus `--header`/`--manifest` emits a host-callable library
     talk bootstrap [DIR] [-o FILE] [--export NAME] [--allow-effect EFFECT] [--check]
         build or verify a fixed-point service artifact; no DIR targets the self-hosted frontend
-    talk fix-labels [--core DIR | --each] files
-        rewrite call sites to match declared argument labels
+    talk fixit [files]
+        apply preferred compiler-proven quick fixes; no files means the current package
     talk new NAME / talk install / talk update [packages]
         create and resolve packages (`--offline` is available for install/update)
     talk repl
@@ -1364,6 +1380,8 @@ Record patterns use `{ x, y: pattern, .. }`. Enum cases may have labeled payload
 ## Types, generics, and protocols
 
 Builtin scalar/value types include `Int`, `Float`, `Bool`, `Byte`, `RawPtr`, `Void`/`()`, and `Never`. Core nominal types include `Character`, `String`, `Substring`, `Array<T>`, `InlineArray<T, N>`, `Optional<T>`, `Result<S, F>`, and range types. `[T]` is `Array<T>`, `[T; N]` is exact-size `InlineArray<T, N>`, and `T?` is optional. Tuples use `(A, B)` and structural records use `{ field: Type }`. Nested/module types use paths such as `graph::Node` and `Array<Int>.Iterator`.
+
+`Int` is signed 64-bit. Ordinary integer add, subtract, multiply, negate, and the `Int::MIN / -1` case trap on overflow; division by zero also traps. `checked_add`, `checked_sub`, `checked_mul`, `checked_div`, and `checked_neg` return `Int?`. The corresponding `unchecked_*` methods wrap modulo 2^64, except that unchecked division still traps on zero.
 
 Function types are `(A, B) -> R`. Parameter ownership can appear in them, for example `(mut [Byte], consume String) -> Void`. Effect rows precede the arrow: `(A) 'io -> R`, `(A) '[io, panic] -> R`, or pure `(A) '[] -> R`. A rank-N/quantified function type is `<T, U: Bound>(T, U) -> T`.
 

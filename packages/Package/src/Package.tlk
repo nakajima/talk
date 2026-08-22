@@ -1,0 +1,33 @@
+// A package dependency source recorded in `package.tlk`.
+pub enum PackageDependency {
+	// A package fetched from `url` and pinned to Git revision `rev`.
+	case git(package: String, url: String, rev: String)
+	// A package downloaded from `url` and verified against `sha256`.
+	case tar(package: String, url: String, sha256: String)
+	// A package loaded from a local file-system path.
+	case path(package: String, path: String)
+}
+
+// A library or executable target built by a package.
+pub enum PackageArtifact {
+	// The package library rooted at the source file `from`.
+	case lib(from: String)
+	// An executable named `named` and rooted at the source file `from`.
+	case bin(named: String, from: String)
+}
+
+// The declarative value returned by a `package.tlk` manifest.
+//
+// `builds` names library and executable roots; `dependencies` names external
+// package sources. The toolchain interprets this value during package resolution
+// rather than linking the struct into the program.
+pub struct Package {
+	// The package name used by dependency declarations and tooling.
+	pub let name: String
+	// The package's declared semantic version.
+	pub let version: String
+	// The library and executable artifacts produced by the package.
+	pub let builds: Array<PackageArtifact>
+	// The package's direct dependencies in manifest order.
+	pub let dependencies: Array<PackageDependency>
+}

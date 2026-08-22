@@ -1003,9 +1003,19 @@ let value = Foo()";
     #[test]
     fn core_smoke_test() {
         // Make sure core is the same before and after formatting
+        // (skipping core/builtins/, the builtin-type Markdown docs).
         for path in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/../core")).unwrap() {
-            let code = std::fs::read_to_string(path.unwrap().path()).unwrap();
-            assert_eq!(code, format_string(&code));
+            let path = path.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) != Some("tlk") {
+                continue;
+            }
+            let code = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(
+                code,
+                format_string(&code),
+                "formatter changed {}",
+                path.display()
+            );
         }
     }
 

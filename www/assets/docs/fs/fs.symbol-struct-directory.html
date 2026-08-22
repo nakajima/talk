@@ -1,0 +1,65 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"></meta><meta name="viewport" content="width=device-width, initial-scale=1"></meta><title>Directory - fs</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"></link><link rel="stylesheet" href="/reset.css"></link><link rel="stylesheet" href="/style.css"></link><link rel="stylesheet" href="/docs.css"></link></head><body><nav class="global-nav" aria-label="Global navigation"><a class="global-nav-brand" href="/">talktalk</a><div class="global-nav-links"><a href="/">Language</a><a href="/manual/">Guide</a><a aria-current="page" href="/docs/">Docs</a><a href="/playground">Playground</a><a href="/qa">Q/A</a><a href="/philosophy">Philosophy</a></div></nav><main class="site-page docs-proposal docs-design-1"><header class="site-page-header docs-proposal-header docs-symbol-header"><div class="site-page-heading docs-proposal-heading"><nav class="site-breadcrumbs docs-breadcrumbs docs-header-breadcrumbs" aria-label="Breadcrumb"><a href="../">Docs</a> / <a href="index.html">fs</a> / <a href="fs.html">fs</a> / <a href="#struct-directory" aria-current="page">Directory</a></nav><h1>Directory</h1></div></header><div class="site-page-layout docs-proposal-shell"><aside class="site-page-sidebar docs-catalog" aria-label="Documentation sections"><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Libraries</span><a href="/docs/">All libraries</a><a class="" href="/docs/core/">Core</a><a class="active" href="./">fs</a></div><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Modules</span><a class="active" href="fs.html">fs</a></div></aside><article class="site-page-content docs-reference"><section class="docs-symbol" id="struct-directory"><code class="docs-symbol-signature"><span class="keyword">struct</span> <span class="type">Directory</span></code><div class="prose docs docs-symbol-documentation"><p>A lightweight directory path, not an open directory handle.</p><p>Each call to <a href="fs.symbol-struct-directory.html#struct-directory-func-entries-directoryentry" title=""><code>entries</code></a> asks the host to enumerate the path afresh. Enumeration failures are represented as an empty or partial array rather than <a href="/docs/core/Result.symbol-enum-result-success-failure.html#enum-result-success-failure" title=""><code>Result</code></a>; use this API for traversal where best-effort behavior is acceptable.</p></div></section><section class="docs-symbol-member-group" id="members-properties"><h2>Properties</h2><article class="docs-member" id="struct-directory-let-path-path"><h3><code><span class="keyword">let</span> path: <a class="docs-symbol-link" href="fs.symbol-struct-path.html#struct-path"><span class="type">Path</span></a></code></h3><div class="prose docs"><p>The directory path passed to host enumeration operations.</p></div></article></section><section class="docs-symbol-member-group" id="members-methods"><h2>Methods</h2><article class="docs-member" id="struct-directory-func-entries-directoryentry"><h3><code><span class="keyword">func</span> <span class="function">entries</span>() -&gt; [<a class="docs-symbol-link" href="fs.symbol-enum-directoryentry.html#enum-directoryentry"><span class="type">DirectoryEntry</span></a>]</code></h3><div class="prose docs"><p>Enumerates immediate children and classifies directories, files, and symlinks.</p><p>Names are appended to <a href="fs.symbol-struct-directory.html#struct-directory-let-path-path" title=""><code>path</code></a> without canonicalizing symlinks. Failure to open the directory returns an empty array; an error during iteration returns entries collected before the error.</p></div><details class="docs-source"><summary>View Source</summary><pre><code><span class="modifier">pub</span> <span class="keyword">func</span> <span class="function">entries</span>() <span class="operator">-&gt;</span> [<span class="type">DirectoryEntry</span>] {
+	<span class="operator">#</span>unsafe {
+		<span class="keyword">let</span> path_string <span class="operator">=</span> self.<span class="property">path</span>.<span class="property">to_string</span>()
+		<span class="keyword">let</span> path_buf <span class="operator">=</span> _alloc<span class="operator">&lt;</span><span class="type">Byte</span><span class="operator">&gt;</span>(<span class="parameter">count</span>: path_string.<span class="property">byte_count</span> <span class="operator">+</span> <span class="number">1</span>)
+		_copy(
+			<span class="parameter">from</span>: path_string.<span class="property">storage</span>.<span class="property">base</span>,
+			<span class="parameter">to</span>: path_buf,
+			<span class="parameter">length</span>: path_string.<span class="property">byte_count</span>
+		)
+		<span class="keyword">let</span> real_count <span class="operator">=</span> _io_dir_count(<span class="parameter">path</span>: path_buf)
+		<span class="keyword">if</span> real_count <span class="operator">&lt;</span> <span class="number">0</span> {
+			_free(<span class="parameter">ptr</span>: path_buf)
+			<span class="keyword">return</span> []
+		}
+		<span class="keyword">let</span> capacity <span class="operator">=</span> real_count
+		<span class="keyword">let</span> storage <span class="operator">=</span> _storage<span class="operator">&lt;</span><span class="type">DirectoryEntry</span><span class="operator">&gt;</span>(<span class="parameter">capacity</span>: capacity)
+		<span class="keyword">let</span> i <span class="operator">=</span> <span class="number">0</span>
+		<span class="keyword">let</span> out <span class="operator">=</span> <span class="number">0</span>
+		<span class="keyword">loop</span> i <span class="operator">&lt;</span> real_count {
+			<span class="keyword">let</span> name_len <span class="operator">=</span> _io_dir_entry_len(<span class="parameter">path</span>: path_buf, <span class="parameter">index</span>: i)
+			<span class="keyword">if</span> name_len <span class="operator">&lt;</span> <span class="number">0</span> {
+				<span class="keyword">break</span>
+			}
+			<span class="keyword">let</span> name_buf <span class="operator">=</span> _alloc<span class="operator">&lt;</span><span class="type">Byte</span><span class="operator">&gt;</span>(<span class="parameter">count</span>: name_len)
+			<span class="keyword">let</span> copied <span class="operator">=</span> _io_dir_entry_copy(<span class="parameter">path</span>: path_buf, <span class="parameter">index</span>: i, <span class="parameter">buf</span>: name_buf)
+			<span class="keyword">if</span> copied <span class="operator">&lt;</span> <span class="number">0</span> {
+				_free(<span class="parameter">ptr</span>: name_buf)
+				<span class="keyword">break</span>
+			}
+			<span class="keyword">let</span> name <span class="operator">=</span> <span class="type">String</span>(
+				<span class="parameter">base</span>: <span class="type">ByteStorage</span>(<span class="parameter">base</span>: name_buf),
+				<span class="parameter">byte_count</span>: copied,
+				<span class="parameter">capacity</span>: copied
+			)
+			<span class="keyword">let</span> entry_path <span class="operator">=</span> self.<span class="property">path</span>.<span class="property">appending</span>(<span class="parameter">component</span>: name)
+			<span class="keyword">let</span> kind <span class="operator">=</span> _io_dir_entry_kind(<span class="parameter">path</span>: path_buf, <span class="parameter">index</span>: i)
+			<span class="keyword">if</span> kind <span class="operator">==</span> _directory_entry_directory {
+				storage.<span class="property">set</span>(
+					<span class="parameter">index</span>: out,
+					<span class="parameter">value</span>: <span class="type">DirectoryEntry</span>.<span class="property">directory</span>(<span class="type">Directory</span>(<span class="parameter">path</span>: entry_path))
+				)
+			} <span class="keyword">else</span> {
+				<span class="keyword">if</span> kind <span class="operator">==</span> _directory_entry_symlink {
+					storage.<span class="property">set</span>(<span class="parameter">index</span>: out, <span class="parameter">value</span>: <span class="type">DirectoryEntry</span>.<span class="property">symlink</span>(entry_path))
+				} <span class="keyword">else</span> {
+					storage.<span class="property">set</span>(<span class="parameter">index</span>: out, <span class="parameter">value</span>: <span class="type">DirectoryEntry</span>.<span class="property">file</span>(<span class="type">FsFile</span>(<span class="parameter">path</span>: entry_path)))
+				}
+			}
+			i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+			out <span class="operator">=</span> out <span class="operator">+</span> <span class="number">1</span>
+		}
+		_free(<span class="parameter">ptr</span>: path_buf)
+		<span class="type">Array</span><span class="operator">&lt;</span><span class="type">DirectoryEntry</span><span class="operator">&gt;</span>(<span class="parameter">storage</span>: storage, <span class="parameter">count</span>: out, <span class="parameter">capacity</span>: capacity)
+	}
+}</code></pre></details></article><article class="docs-member" id="struct-directory-func-walk-fn-directoryentry"><h3><code><span class="keyword">func</span> <span class="function">walk</span>(fn: (<a class="docs-symbol-link" href="fs.symbol-enum-directoryentry.html#enum-directoryentry"><span class="type">DirectoryEntry</span></a>) -&gt; ())</code></h3><div class="prose docs"><p>Performs a depth-first pre-order traversal beneath this directory.</p><p><code>fn</code> sees a child directory before its descendants. Symbolic links are reported but never followed, avoiding link cycles; enumeration errors use the same best-effort behavior as <a href="fs.symbol-struct-directory.html#struct-directory-func-entries-directoryentry" title=""><code>entries</code></a>.</p></div><details class="docs-source"><summary>View Source</summary><pre><code><span class="modifier">pub</span> <span class="keyword">func</span> <span class="function">walk</span>(<span class="parameter">fn</span>: (<span class="type">DirectoryEntry</span>) <span class="operator">-&gt;</span> ()) {
+	<span class="keyword">for</span> entry <span class="keyword">in</span> self.<span class="property">entries</span>() {
+		<span class="keyword">match</span> entry {
+			.<span class="property">directory</span>(directory) <span class="operator">-&gt;</span> {
+				fn(entry)
+				directory.<span class="property">walk</span>(<span class="parameter">fn</span>: fn)
+			},
+			other <span class="operator">-&gt;</span> fn(other)
+		}
+	}
+}</code></pre></details></article></section></article><aside class="site-page-rail docs-page-index" aria-label="Sections on this page"><span class="site-nav-label docs-nav-label">On this page</span><a href="#struct-directory">Overview</a><a href="#members-properties">Properties</a><a href="#members-methods">Methods</a></aside></div></main></body></html>

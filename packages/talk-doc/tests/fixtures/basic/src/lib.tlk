@@ -1,0 +1,20 @@
+// This is a function
+pub func fizz() {}
+
+// It's a struct
+pub struct Buzz {
+	// It's a name
+	let name: String
+
+	// It's a method
+	func foo(a, b:) -> String { "sup" }
+}
+
+// It's an enum
+pub enum Fizz {
+	// It's a variant
+	case foo
+	// It's another variant
+	// With multiline comment
+	case bar
+}

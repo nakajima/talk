@@ -1,20 +1,21 @@
 # cargo-make tasks for the Talk compiler.
 #
-# The compiled-stdlib cache (target/.talk-cache) keys on the compiler
-# binary's identity, so every rebuild leaves the next `talk` invocation
-# compiling core and stdlib from source (~40s in debug). `cargo make`
-# after a build keeps the cache warm instead of discovering the cold
-# start inside a test run or a REPL session.
+# The compiled-module cache keys on the compiler's content identity, so
+# every rebuild leaves the next `talk` invocation compiling core and the
+# builtin packages from source (~40s in debug). `cargo make` after a
+# build keeps the cache warm instead of discovering the cold start
+# inside a test run or a REPL session.
 #
-# The TALK_*_PATH pins matter in linked worktrees: direnv from another
-# checkout otherwise points stdlib resolution at that checkout's sources.
+# The TALK_CORE_PATH pin matters in linked worktrees: direnv from
+# another checkout otherwise points core resolution at that checkout's
+# sources. Builtin packages resolve against this checkout's packages/
+# tree on their own.
 
 [env]
-TALK_STDLIB_PATH = "${CARGO_MAKE_WORKING_DIRECTORY}/stdlib"
 TALK_CORE_PATH = "${CARGO_MAKE_WORKING_DIRECTORY}/core"
 
 [tasks.default]
-description = "Build the debug compiler and warm the compiled-stdlib cache"
+description = "Build the debug compiler and warm the compiled-module cache"
 clear = true
 workspace = false
 dependencies = ["build", "warm"]
@@ -25,12 +26,12 @@ command = "cargo"
 args = ["build", "--locked"]
 
 [tasks.warm]
-description = "Warm the compiled-stdlib cache for the current binary"
+description = "Warm the compiled-module cache for the current binary"
 command = "target/debug/talk"
 args = ["run", "examples/HelloWorld.tlk"]
 
 [tasks.warm-release]
-description = "Warm the compiled-stdlib cache for the release binary"
+description = "Warm the compiled-module cache for the release binary"
 dependencies = ["build-release"]
 command = "target/release/talk"
 args = ["run", "examples/HelloWorld.tlk"]

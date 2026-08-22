@@ -5,59 +5,89 @@ use package::Operators::{ Add, Comparable, Equatable }
 use package::Iterable::{ Iterable, Iterator }
 use package::Array::{ Array }
 
-/// A half-open interval: `lower` is included, `upper` is not.
-/// `a..<b` desugars to `Range(lower: a, upper: b)`.
+// A half-open interval: `lower` is included and `upper` is excluded.
+//
+// `a..<b` desugars to this type. Half-open bounds compose without overlap and
+// make an empty range representable as `lower == upper`; prefer `ClosedRange`
+// when the upper endpoint must participate.
 pub struct Range<T: Comparable<T>> {
+	// The inclusive lower bound.
 	pub let lower: T
+	// The exclusive upper bound.
 	pub let upper: T
 
+	// Tests `lower <= element < upper`.
 	pub func contains(element: T) -> Bool {
 		element >= self.lower && element < self.upper
 	}
 }
 
-/// An inclusive interval: both bounds are included.
-/// `a..b` desugars to `ClosedRange(lower: a, upper: b)`.
+// An inclusive interval containing both `lower` and `upper`.
+//
+// `a..b` desugars to this type. Unlike `Range`, equal bounds contain one value.
+// Integer iteration explicitly tracks exhaustion so a range ending at the
+// maximum integer never needs an overflowing past-the-end sentinel.
 pub struct ClosedRange<T: Comparable<T>> {
+	// The inclusive lower bound.
 	pub let lower: T
+	// The inclusive upper bound.
 	pub let upper: T
 
+	// Tests `lower <= element <= upper`.
 	pub func contains(element: T) -> Bool {
 		element >= self.lower && element <= self.upper
 	}
 }
 
 extend Range<Int>: Iterable {
+	// Iterates from `lower` up to but excluding `upper`.
 	pub func iter() -> RangeIterator {
-		RangeIterator(lower: self.lower, upper: self.upper, closed: false)
+		RangeIterator(lower: self.lower, upper: self.upper, inclusive_upper: false)
 	}
 }
 
 extend ClosedRange<Int>: Iterable {
+	// Iterates from `lower` through `upper`, including both endpoints.
 	pub func iter() -> RangeIterator {
-		RangeIterator(lower: self.lower, upper: self.upper, closed: true)
+		RangeIterator(lower: self.lower, upper: self.upper, inclusive_upper: true)
 	}
 }
 
+// The shared integer iterator for half-open and closed ranges.
+//
+// `inclusive_upper` controls whether equality with `upper` yields one final
+// value. `done` records exhaustion explicitly so `Int.max` can be a closed
+// endpoint without incrementing to an unrepresentable sentinel.
 pub struct RangeIterator {
+	// The inclusive lower bound.
 	pub let lower: Int
+	// The terminal bound shared by half-open and inclusive iteration.
 	pub let upper: Int
-	pub let closed: Bool
+	// Whether equality with `upper` still yields one final value.
+	pub let inclusive_upper: Bool
+	// The current value.
 	pub let current: Int
 	// Explicit exhaustion: a closed range ending at Int's maximum has no
 	// out-of-range sentinel to advance to (incrementing would wrap).
 	pub let done: Bool
 
-	pub init(lower: Int, upper: Int, closed: Bool) {
+	// Starts iteration at `lower`, optionally yielding `upper` before
+	// exhaustion.
+	pub init(lower: Int, upper: Int, inclusive_upper: Bool) {
 		self.lower = lower
 		self.upper = upper
-		self.closed = closed
+		self.inclusive_upper = inclusive_upper
 		self.current = lower
 		self.done = false
 	}
 }
 
 extend RangeIterator: Iterator<Int> {
+	// Yields the current integer and advances until the configured upper-bound
+	// policy ends.
+	//
+	// Exhaustion is explicit, so a closed range ending at `Int.max` never
+	// increments past the representable domain.
 	pub mut func next() -> Int? {
 		if self.done { return .none }
 		let value = self.current
@@ -66,12 +96,13 @@ extend RangeIterator: Iterator<Int> {
 			return .some(value)
 		}
 		self.done = true
-		if self.closed && value == self.upper { return .some(value) }
+		if self.inclusive_upper && value == self.upper { return .some(value) }
 		.none
 	}
 }
 
 extend Int {
+	// Calls `fn` for each integer from zero up to this value.
 	pub func times<T>(fn: (Int) -> T) -> [T] {
 		(0..<self).iter().map { fn($0) }.to_array()
 	}

@@ -1,0 +1,87 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"></meta><meta name="viewport" content="width=device-width, initial-scale=1"></meta><title>html - html</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"></link><link rel="stylesheet" href="/reset.css"></link><link rel="stylesheet" href="/style.css"></link><link rel="stylesheet" href="/docs.css"></link></head><body><nav class="global-nav" aria-label="Global navigation"><a class="global-nav-brand" href="/">talktalk</a><div class="global-nav-links"><a href="/">Language</a><a href="/manual/">Guide</a><a aria-current="page" href="/docs/">Docs</a><a href="/playground">Playground</a><a href="/qa">Q/A</a><a href="/philosophy">Philosophy</a></div></nav><main class="site-page docs-proposal docs-design-1"><header class="site-page-header docs-proposal-header docs-symbol-header"><div class="site-page-heading docs-proposal-heading"><nav class="site-breadcrumbs docs-breadcrumbs docs-header-breadcrumbs" aria-label="Breadcrumb"><a href="../">Docs</a> / <a href="index.html">html</a> / <a href="html.macro.html">html.macro</a> / <a href="#func-html-input-macroinput-use-site-syntaxcontext-context-quotecontext-syntaxresult-expr" aria-current="page">html</a></nav><h1>html</h1></div></header><div class="site-page-layout docs-proposal-shell"><aside class="site-page-sidebar docs-catalog" aria-label="Documentation sections"><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Libraries</span><a href="/docs/">All libraries</a><a class="" href="/docs/core/">Core</a><a class="active" href="./">html</a></div><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Modules</span><a class="" href="Html.html">Html</a><a class="active" href="html.macro.html">html.macro</a></div></aside><article class="site-page-content docs-reference"><section class="docs-symbol" id="func-html-input-macroinput-use-site-syntaxcontext-context-quotecontext-syntaxresult-expr"><code class="docs-symbol-signature"><span class="keyword">func</span> <span class="function">html</span>(input: <span class="type">MacroInput</span>, use_site: <span class="type">SyntaxContext</span>, context: <span class="type">QuoteContext</span>) -&gt; <span class="type">SyntaxResult</span>&lt;<span class="type">Expr</span>&gt;</code><div class="prose docs docs-symbol-documentation"><p>Expands an HTML template into a category-checked <a href="Html.symbol-struct-markup.html#struct-markup" title=""><code>Markup</code></a> expression.</p><p>Import the macro and place its template in braces:</p><pre><code>use html::{ html }
+
+let page = @html {
+    main #content .page {
+        h1 { &quot;Hello&quot; }
+    }
+}</code></pre><p>The result is trusted <a href="Html.symbol-struct-markup.html#struct-markup" title=""><code>Markup</code></a>. Call <a href="Html.symbol-struct-markup.html#struct-markup-consuming-func-into-string-string" title=""><code>Markup.into_string()</code></a> to transfer its rendered string, interpolate it into another template to compose fragments, or return it from an API that retains the trust boundary.</p><h3>Template grammar</h3><p>The complete template grammar is:</p><pre><code>template       := node*
+node           := string | &quot;(&quot; expression &quot;)&quot; | element | control
+element        := name shortcut* attribute* (&quot;;&quot; | &quot;{&quot; template &quot;}&quot;)
+name           := word (&quot;-&quot; word)*
+shortcut       := &quot;.&quot; shortcut-value [&quot;[&quot; expression &quot;]&quot;]
+                | &quot;#&quot; shortcut-value
+shortcut-value := name | string | &quot;(&quot; expression &quot;)&quot; | &quot;{&quot; template &quot;}&quot;
+attribute      := name
+                | name &quot;?&quot;
+                | name &quot;[&quot; expression &quot;]&quot;
+                | name &quot;=&quot; rendered-value
+                | name &quot;=[&quot; expression &quot;]&quot;
+rendered-value := string | &quot;(&quot; expression &quot;)&quot; | &quot;{&quot; template &quot;}&quot;
+control        := @if | @for | @let | @match</code></pre><p>A <code>word</code> starts with an ASCII letter or underscore. Hyphenated element and attribute names such as <code>data-user-id</code> are accepted. The macro does not keep layout whitespace between nodes; include whitespace in a string literal when the output requires it.</p><h3>Text and interpolation</h3><p>String literals and parenthesized expressions are content nodes:</p><pre><code>@html {
+    p { &quot;Hello, &quot; (user.name) &quot;!&quot; }
+}</code></pre><p>Every expression is captured in the caller&#39;s syntax context, evaluated in source order, and rendered through <a href="Html.symbol-protocol-renderhtml.html#protocol-renderhtml" title=""><code>RenderHtml</code></a>. String literals use the same rendering path, so literal <code>&amp;</code>, <code>&lt;</code>, <code>&gt;</code>, double quotes, and single quotes are escaped rather than treated as markup.</p><p>A braced template is accepted where a rendered value is expected. This is useful for constructing a dynamic attribute or shortcut from several pieces:</p><pre><code>@html {
+    a href={ &quot;/users/&quot; (user.id) } { (user.name) }
+}</code></pre><h3>Elements</h3><p>Braces render an explicit closing tag. A semicolon renders only the opening tag and is the appropriate spelling for HTML void elements:</p><pre><code>@html {
+    section { &quot;content&quot; }
+    br;
+    input type=&quot;checkbox&quot; checked?;
+}</code></pre><p><code>DOCTYPE;</code> is the one special element spelling and emits <code>&lt;!DOCTYPE html&gt;</code>. It is case-sensitive and must use the semicolon form.</p><p>Element and attribute names are syntactic names, not expressions. The macro accepts custom-element names but does not validate the HTML vocabulary, void element rules, nesting, duplicate attributes, URL schemes, ARIA constraints, or other document semantics.</p><h3>ID and class shortcuts</h3><p><code>#name</code> sets an ID and <code>.name</code> appends a class. A template beginning with a shortcut implicitly uses <code>div</code>:</p><pre><code>@html {
+    #dialog .modal { &quot;implicit div&quot; }
+    article #entry .card.featured { &quot;explicit article&quot; }
+}</code></pre><p>Shortcut values may be names, strings, parenthesized expressions, or braced templates. Adjacent classes are combined into one space-separated <code>class</code> attribute in source order:</p><pre><code>@html {
+    div #(identifier) .base.&quot;quoted-class&quot;.{ &quot;severity-&quot; (severity) } {}
+}</code></pre><p>A class shortcut followed by <code>[condition]</code> is included only when the Boolean condition is true. ID shortcuts cannot be conditional. When several ID shortcuts are written, the last shortcut supplies the generated ID; an explicit <code>id=</code> attribute is separate and can therefore produce a duplicate.</p><h3>Attributes</h3><p>The supported attribute forms are:</p><ul><li><p><code>name=value</code> always emits a quoted value rendered through <a href="Html.symbol-protocol-renderhtml.html#protocol-renderhtml" title=""><code>RenderHtml</code></a>.</p></li><li><p><code>name=[optional]</code> omits the attribute for <a href="/docs/core/Optional.symbol-enum-optional-wrapped.html#enum-optional-wrapped-case-none" title=""><code>none</code></a> and renders the payload for <a href="/docs/core/Optional.symbol-enum-optional-wrapped.html#enum-optional-wrapped-case-some-wrapped" title=""><code>some</code></a>.</p></li><li><p><code>name[condition]</code> emits a valueless Boolean attribute only when true.</p></li><li><p>Bare <code>name</code> always emits a valueless Boolean attribute.</p></li><li><p><code>name?</code> is the Maud-compatible spelling for an unconditional valueless attribute.</p></li></ul><p>Attribute values must be string literals, parenthesized expressions, braced templates, or bracketed optional expressions. Examples:</p><pre><code>@html {
+    input
+        type=&quot;text&quot;
+        value=(current_value)
+        title=[optional_title]
+        disabled[is_disabled]
+        required?;
+}</code></pre><p>Attribute values are HTML-escaped, but escaping is not application-level validation: callers must still enforce policies for links, script sources, CSS, and other context-sensitive values.</p><h3>Conditional templates</h3><p><code>@if</code> accepts an ordinary Boolean condition, <code>@else if</code>, and <code>@else</code>:</p><pre><code>@html {
+    @if signed_in {
+        p { &quot;Welcome&quot; }
+    } @else if registration_open {
+        a href=&quot;/register&quot; { &quot;Register&quot; }
+    } @else {
+        p { &quot;Closed&quot; }
+    }
+}</code></pre><p>Pattern conditions use <code>@if let pattern = expression</code>:</p><pre><code>@html {
+    @if let .some(title) = optional_title {
+        h1 { (title) }
+    }
+}</code></pre><p>A missing branch contributes an empty string. Conditions and selected branch expressions follow ordinary Talk evaluation and ownership rules.</p><h3>Iteration</h3><p><code>@for pattern in expression</code> renders its body once per element in iteration order. The pattern may destructure each element:</p><pre><code>@html {
+    ul {
+        @for (name, href) in links {
+            li { a href=(href) { (name) } }
+        }
+    }
+}</code></pre><p>The sequence must conform to <a href="/docs/core/Iterable.symbol-protocol-iterable.html#protocol-iterable" title=""><code>Iterable</code></a>. Each body result is already-safe macro output and is concatenated directly without another escaping pass.</p><h3>Local bindings</h3><p><code>@let</code> introduces a pattern binding for the remainder of the current template. It requires a terminating semicolon and may include a type annotation:</p><pre><code>@html {
+    @let heading: String = page.title;
+    h1 { (heading) }
+    title { (heading) }
+}</code></pre><p>The initializer is evaluated once. The binding&#39;s scope includes subsequent sibling nodes but not content that precedes the declaration.</p><h3>Pattern matching</h3><p><code>@match</code> captures normal Talk patterns. Each arm uses <code>-&gt;</code>; braced arm bodies are recommended, and commas may separate arms:</p><pre><code>@html {
+    @match state {
+        .ready(message) -&gt; { strong { (message) } },
+        .waiting -&gt; { em { &quot;waiting&quot; } }
+    }
+}</code></pre><p>At least one complete arm is required. Pattern binding, exhaustiveness, and ownership behavior are checked as part of the generated Talk expression.</p><h3>Escaping and trusted markup</h3><p>The default <a href="Html.symbol-protocol-renderhtml.html#protocol-renderhtml" title=""><code>RenderHtml</code></a> implementation escapes a value&#39;s <a href="/docs/core/Showable.symbol-protocol-showable.html#protocol-showable" title=""><code>Showable</code></a> text. Built-in conformances cover strings, numbers, Booleans, and characters. <a href="Html.symbol-struct-markup.html#struct-markup" title=""><code>Markup</code></a> and <a href="Html.symbol-struct-preescaped.html#struct-preescaped" title=""><code>PreEscaped</code></a> deliberately bypass escaping:</p><pre><code>use html::{ html, PreEscaped }
+
+@html {
+    (untrusted_text)                         // escaped
+    (PreEscaped(value: trusted_fragment))    // inserted unchanged
+}</code></pre><p>Constructing <a href="Html.symbol-struct-markup.html#struct-markup" title=""><code>Markup</code></a> or <a href="Html.symbol-struct-preescaped.html#struct-preescaped" title=""><code>PreEscaped</code></a> is an explicit trust boundary. Never wrap untrusted input merely to preserve tags. Prefer a <a href="Html.symbol-protocol-renderhtml.html#protocol-renderhtml" title=""><code>RenderHtml</code></a> conformance when a domain value has one well-defined safe representation.</p><p>Escaping protects HTML syntax only. It does not make JavaScript, CSS, URLs, or arbitrary browser-active content safe for their own sublanguages.</p><h3>Output and evaluation</h3><p>The expansion is an expression returning one <a href="Html.symbol-struct-markup.html#struct-markup" title=""><code>Markup</code></a>. Static fragments and rendered expressions are concatenated without indentation or pretty-printing. Interpolations, conditions, loop sequences, and attribute expressions retain use-site hygiene and normal Talk effects. Definition-site references to macro runtime helpers cannot be captured by caller bindings.</p><h3>Compile-time failures</h3><p>Invalid templates fail during macro expansion with a source span and a stable <code>html.*</code> diagnostic code. Diagnosed errors include unknown controls, missing conditions or bodies, malformed <code>@if let</code>, missing <code>in</code>, missing <code>@let</code> semicolons or values, incomplete match arms, invalid shortcut toggles, missing attribute values, unclosed elements, and macro invocations without a delimited body. Captured Talk expressions, patterns, and types report their normal parser diagnostics.</p></div><section class="docs-symbol-source" id="source"><details class="docs-source"><summary>View Source</summary><pre><code><span class="modifier">pub</span> <span class="keyword">func</span> <span class="function">html</span>(<span class="parameter">input</span>: <span class="type">MacroInput</span>, <span class="parameter">use_site</span>: <span class="type">SyntaxContext</span>, <span class="parameter">context</span>: <span class="type">QuoteContext</span>) <span class="operator">-&gt;</span> <span class="type">SyntaxResult</span><span class="operator">&lt;</span><span class="type">Expr</span><span class="operator">&gt;</span> {
+	<span class="keyword">match</span> input.<span class="property">tree</span> {
+		.<span class="property">group</span>(group) <span class="operator">-&gt;</span> {
+			<span class="keyword">let</span> parser <span class="operator">=</span> <span class="type">HtmlParser</span>(<span class="parameter">source_id</span>: input.<span class="property">source_id</span>, <span class="parameter">source</span>: input.<span class="property">source</span>.<span class="property">to_string</span>(), <span class="parameter">trees</span>: copy_trees(<span class="parameter">trees</span>: group.<span class="property">children</span>), <span class="parameter">index</span>: <span class="number">0</span>, <span class="parameter">use_site</span>: copy_syntax_context(<span class="parameter">context</span>: use_site), <span class="parameter">context</span>: copy_quote_context(<span class="parameter">context</span>: context))
+			<span class="keyword">let</span> parsed <span class="operator">=</span> parser.<span class="property">parse_all</span>()
+			<span class="keyword">if</span> <span class="keyword">let</span> .<span class="property">some</span>(failure) <span class="operator">=</span> parsed.<span class="property">failure</span> {
+				<span class="keyword">return</span> <span class="type">SyntaxResult</span><span class="operator">&lt;</span><span class="type">Expr</span><span class="operator">&gt;</span>(<span class="parameter">value</span>: .<span class="property">none</span>, <span class="parameter">failure</span>: .<span class="property">some</span>(failure))
+			}
+			<span class="keyword">if</span> <span class="keyword">let</span> .<span class="property">some</span>(value) <span class="operator">=</span> parsed.<span class="property">value</span> {
+				<span class="keyword">return</span> quote { <span class="type">Markup</span>(<span class="parameter">value</span>: <span class="variable">$value</span>) }
+			}
+			<span class="type">SyntaxResult</span><span class="operator">&lt;</span><span class="type">Expr</span><span class="operator">&gt;</span>(<span class="parameter">value</span>: .<span class="property">none</span>, <span class="parameter">failure</span>: .<span class="property">some</span>(<span class="type">SyntaxFailure</span>(<span class="parameter">code</span>: <span class="string">&quot;html.empty&quot;</span>, <span class="parameter">message</span>: <span class="string">&quot;HTML macro produced no output&quot;</span>, <span class="parameter">span</span>: group.<span class="property">open</span>.<span class="property">span</span>.<span class="property">lower</span>..&lt;group.<span class="property">close</span>.<span class="property">span</span>.<span class="property">upper</span>)))
+		},
+		.<span class="property">leaf</span>(token) <span class="operator">-&gt;</span> <span class="type">SyntaxResult</span><span class="operator">&lt;</span><span class="type">Expr</span><span class="operator">&gt;</span>(<span class="parameter">value</span>: .<span class="property">none</span>, <span class="parameter">failure</span>: .<span class="property">some</span>(<span class="type">SyntaxFailure</span>(<span class="parameter">code</span>: <span class="string">&quot;html.expected-group&quot;</span>, <span class="parameter">message</span>: <span class="string">&quot;HTML macro requires a delimited body&quot;</span>, <span class="parameter">span</span>: token.<span class="property">span</span>)))
+	}
+}</code></pre></details></section></section></article><aside class="site-page-rail docs-page-index" aria-label="Sections on this page"><span class="site-nav-label docs-nav-label">On this page</span><a href="#func-html-input-macroinput-use-site-syntaxcontext-context-quotecontext-syntaxresult-expr">Overview</a><a href="#source">Source</a></aside></div></main></body></html>

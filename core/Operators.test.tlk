@@ -12,6 +12,39 @@ test "integer shifts mask the amount" {
 	assert((8 >> 67) == 1)
 }
 
+test "checked integer arithmetic" {
+	let max = 9223372036854775807
+	let min = -max - 1
+
+	assert(max.checked_add(0)! == max)
+	assert(max.checked_add(1) == .none)
+	assert(min.checked_add(-1) == .none)
+	assert(min.checked_add(1)! == min + 1)
+
+	assert(min.checked_sub(1) == .none)
+	assert(max.checked_sub(-1) == .none)
+	assert(max.checked_sub(1)! == max - 1)
+
+	assert(max.checked_mul(2) == .none)
+	assert(min.checked_mul(-1) == .none)
+	assert(min.checked_mul(1)! == min)
+	assert((-3).checked_mul(-4)! == 12)
+	assert(0.checked_mul(min)! == 0)
+
+	assert(1.checked_div(0) == .none)
+	assert(min.checked_div(-1) == .none)
+	assert(min.checked_div(1)! == min)
+
+	assert(min.checked_neg() == .none)
+	assert((-1).checked_neg()! == 1)
+
+	assert(max.unchecked_add(1) == min)
+	assert(min.unchecked_sub(1) == max)
+	assert(max.unchecked_mul(2) == -2)
+	assert(min.unchecked_div(-1) == min)
+	assert(min.unchecked_neg() == min)
+}
+
 test "bitwise operators use Rust-like precedence" {
 	assert((1 | 2 ^ 3 & 6 << 1 + 1) == 3)
 	assert(1 | 2 == 3)

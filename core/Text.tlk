@@ -14,6 +14,11 @@ use package::String::{ String, StringMethods, Substring, UTF8View }
 use package::StringBuilder::{ StringBuilder }
 use package::Unicode::{ Character, _WB_ALETTER, _WB_CR, _WB_DOUBLE_QUOTE, _WB_EXTEND, _WB_EXTENDED_PICTOGRAPHIC, _WB_EXTENDNUMLET, _WB_FORMAT, _WB_HEBREW_LETTER, _WB_KATAKANA, _WB_LF, _WB_MIDLETTER, _WB_MIDNUM, _WB_MIDNUMLET, _WB_NEWLINE, _WB_NUMERIC, _WB_REGIONAL_INDICATOR, _WB_SINGLE_QUOTE, _WB_WSEGSPACE, _WB_ZWJ, _case_mapping, _combining_class, _compose_pair, _decomposition, _next_boundary, _utf8_decode, _word_break_category, scalar_is_alphanumeric, scalar_is_case_ignorable, scalar_is_cased, scalar_is_extended_pictographic }
 
+// An opaque grapheme-boundary position tied to one string snapshot.
+//
+// Besides the byte offset, an index records the backing allocation and view
+// bounds. APIs reject indices from another string or substring even when the
+// numeric offsets match, preventing accidental cross-snapshot slicing.
 pub struct StringIndex {
 	let storage: ByteStorage
 	let lower: Int
@@ -25,13 +30,22 @@ extend StringIndex: Borrowed {}
 extend StringIndex: Clone {}
 
 extend StringIndex: Equatable<StringIndex> {
+	// Requires both indices to name the same storage snapshot, bounds, and
+	// offset.
 	pub func equals(_ rhs: StringIndex) -> Bool {
 		_same_allocation(lhs: self.storage.base, rhs: rhs.storage.base) && self.lower == rhs.lower && self.upper == rhs.upper && self.offset == rhs.offset
 	}
 }
 
+// A half-open pair of `StringIndex` values for grapheme-safe slicing.
+//
+// Both endpoints must belong to the same storage snapshot and bounded view,
+// and `start` must not follow `end`. `StringMethods.slice` validates those
+// invariants before constructing a borrowed `Substring`.
 pub struct StringRange {
+	// The inclusive starting position.
 	pub let start: StringIndex
+	// The exclusive ending position.
 	pub let end: StringIndex
 }
 
@@ -137,6 +151,7 @@ extend StringMethods {
 		_character_at(view: view, offset: view.start)
 	}
 
+	// Returns the final value, or `none` when the collection is empty.
 	pub func last() -> Character? {
 		let view = self.as_substring()
 		match _boundary_before(view: view, offset: view.start + view.byte_count) {
@@ -145,6 +160,7 @@ extend StringMethods {
 		}
 	}
 
+	// Returns the number of Unicode scalar values.
 	pub func scalar_count() -> Int {
 		let count = 0
 		for _ in self.as_substring().scalars() {
@@ -153,16 +169,22 @@ extend StringMethods {
 		count
 	}
 
+	// Returns the first valid index.
 	pub func start_index() -> StringIndex {
 		let view = self.as_substring()
 		_index(view: view, offset: view.start)
 	}
 
+	// Returns the past-the-end index.
 	pub func end_index() -> StringIndex {
 		let view = self.as_substring()
 		_index(view: view, offset: view.start + view.byte_count)
 	}
 
+	// Advances by one extended grapheme cluster.
+	//
+	// `index` must belong to this exact storage snapshot and bounded view.
+	// Returns `none` at the past-the-end index; a foreign index is rejected.
 	pub func index(after index: StringIndex) -> StringIndex? {
 		let view = self.as_substring()
 		if _belongs(index: index, view: view) == false || index.offset >= index.upper { return .none }
@@ -178,6 +200,10 @@ extend StringMethods {
 		)
 	}
 
+	// Moves backward by one extended grapheme cluster.
+	//
+	// `index` must belong to this snapshot. Returns `none` at `start_index`;
+	// finding the previous boundary scans from the view's start.
 	pub func index(before index: StringIndex) -> StringIndex? {
 		let view = self.as_substring()
 		if _belongs(index: index, view: view) == false { return .none }
@@ -187,6 +213,11 @@ extend StringMethods {
 		}
 	}
 
+	// Moves an index by a signed number of extended grapheme clusters.
+	//
+	// Positive distances repeatedly use `index(after:)`; negative distances use
+	// `index(before:)`. Returns `none` if movement crosses either view
+	// boundary.
 	pub func index(_ index: StringIndex, offset_by distance: Int) -> StringIndex? {
 		let current = index
 		let remaining = distance
@@ -210,6 +241,10 @@ extend StringMethods {
 		.some(current)
 	}
 
+	// Counts the signed number of grapheme clusters from `start` to `end`.
+	//
+	// Both indices must belong to this snapshot. The operation is linear in the
+	// traversed text because UTF-8 grapheme boundaries are variable-width.
 	pub func distance(from start: StringIndex, to end: StringIndex) -> Int {
 		let view = self.as_substring()
 		if _belongs(index: start, view: view) == false || _belongs(
@@ -236,12 +271,17 @@ extend StringMethods {
 		0 - self.distance(from: end, to: start)
 	}
 
+	// Returns the character at the requested index, or `none` when invalid.
 	pub func character(at index: StringIndex) -> Character? {
 		let view = self.as_substring()
 		if _belongs(index: index, view: view) == false { return .none }
 		_character_at(view: view, offset: index.offset)
 	}
 
+	// Borrows the bytes between a validated half-open pair of string indices.
+	//
+	// Both endpoints must belong to this exact snapshot and view; otherwise the
+	// operation performs `'panic`. Successful slicing is O(1).
 	pub func slice(_ range: StringRange) -> Substring {
 		let view = self.as_substring()
 		if _range_belongs(range: range, view: view) == false { 'panic(
@@ -269,6 +309,7 @@ extend StringMethods {
 		_slice_absolute(view: view, start: view.start, end: scan)
 	}
 
+	// Returns the suffix containing at most `count` characters.
 	pub func suffix(_ count: Int) -> Substring {
 		let view = self.as_substring()
 		if count <= 0 {
@@ -280,10 +321,12 @@ extend StringMethods {
 		self.drop_first(total - count)
 	}
 
+	// Returns this text without its first `count` characters.
 	pub func drop_first() -> Substring {
 		self.drop_first(1)
 	}
 
+	// Returns this text without its first `count` characters.
 	pub func drop_first(_ count: Int) -> Substring {
 		let view = self.as_substring()
 		if count <= 0 { return view }
@@ -297,10 +340,16 @@ extend StringMethods {
 		_slice_absolute(view: view, start: scan, end: end)
 	}
 
+	// Borrows the text without its final grapheme cluster, or returns empty
+	// text unchanged.
 	pub func drop_last() -> Substring {
 		self.drop_last(1)
 	}
 
+	// Borrows the text after removing up to `count` trailing grapheme clusters.
+	//
+	// Non-positive counts return the complete view; oversized counts return an
+	// empty substring.
 	pub func drop_last(_ count: Int) -> Substring {
 		let view = self.as_substring()
 		if count <= 0 { return view }
@@ -308,6 +357,11 @@ extend StringMethods {
 		self.prefix(total - count)
 	}
 
+	// Returns the longest leading run whose grapheme clusters satisfy
+	// `predicate`.
+	//
+	// Evaluation stops at the first false result. The returned substring
+	// borrows the original storage and ends on a grapheme boundary.
 	pub func prefix(while predicate: (Character) -> Bool) -> Substring {
 		let view = self.as_substring()
 		let scan = view.start
@@ -327,6 +381,10 @@ extend StringMethods {
 		_slice_absolute(view: view, start: view.start, end: scan)
 	}
 
+	// Returns the suffix after the longest leading run accepted by `predicate`.
+	//
+	// The result borrows the source and starts on the first rejected grapheme
+	// boundary.
 	pub func drop(while predicate: (Character) -> Bool) -> Substring {
 		let head = self.prefix(while: predicate)
 		let view = self.as_substring()
@@ -337,6 +395,7 @@ extend StringMethods {
 		)
 	}
 
+	// Compares the first grapheme cluster with `value` by exact UTF-8 bytes.
 	pub func starts_with_character(_ value: Character) -> Bool {
 		match self.first() {
 			.some(first) -> first == value,
@@ -344,11 +403,16 @@ extend StringMethods {
 		}
 	}
 
+	// Tests for a byte-exact prefix whose end is also a grapheme boundary.
+	//
+	// The empty string always matches; no Unicode normalization or case folding
+	// occurs.
 	pub func starts_with_text(_ value: String) -> Bool {
 		let view = self.as_substring()
 		_matches(view: view, needle: value, offset: view.start)
 	}
 
+	// Compares the final grapheme cluster with `value` by exact UTF-8 bytes.
 	pub func ends_with_character(_ value: Character) -> Bool {
 		match self.last() {
 			.some(last) -> last == value,
@@ -356,6 +420,10 @@ extend StringMethods {
 		}
 	}
 
+	// Tests for a byte-exact suffix whose start is a grapheme boundary.
+	//
+	// The empty string always matches; no Unicode normalization or case folding
+	// occurs.
 	pub func ends_with_text(_ value: String) -> Bool {
 		let view = self.as_substring()
 		_matches(
@@ -365,6 +433,8 @@ extend StringMethods {
 		)
 	}
 
+	// Returns the text after a matching prefix, or `none` when it does not
+	// match.
 	pub func stripping_prefix(_ prefix: String) -> Substring? {
 		if self.starts_with_text(prefix) {
 			.some(
@@ -378,6 +448,8 @@ extend StringMethods {
 		}
 	}
 
+	// Returns the text before a matching suffix, or `none` when it does not
+	// match.
 	pub func stripping_suffix(_ suffix: String) -> Substring? {
 		if self.ends_with_text(suffix) {
 			.some(
@@ -391,6 +463,10 @@ extend StringMethods {
 		}
 	}
 
+	// Returns an owned copy with one byte-exact, grapheme-aligned prefix
+	// removed.
+	//
+	// A nonmatching prefix leaves the copied content unchanged.
 	pub func removing_prefix(_ prefix: String) -> String {
 		match self.stripping_prefix(prefix) {
 			.some(rest) -> rest.to_string(),
@@ -398,6 +474,10 @@ extend StringMethods {
 		}
 	}
 
+	// Returns an owned copy with one byte-exact, grapheme-aligned suffix
+	// removed.
+	//
+	// A nonmatching suffix leaves the copied content unchanged.
 	pub func removing_suffix(_ suffix: String) -> String {
 		match self.stripping_suffix(suffix) {
 			.some(rest) -> rest.to_string(),
@@ -405,8 +485,10 @@ extend StringMethods {
 		}
 	}
 
-	// Grapheme-safe search. Substring matches are leftmost and non-overlapping;
-	// an empty needle matches every grapheme boundary, including end.
+	// Returns true when any grapheme cluster is byte-equal to `value`.
+	//
+	// Search is left-to-right and does not normalize canonically equivalent
+	// text.
 	pub func contains(character value: Character) -> Bool {
 		match self.first_index(of: value) {
 			.some(_) -> true,
@@ -414,6 +496,9 @@ extend StringMethods {
 		}
 	}
 
+	// Tests for a byte-exact occurrence bounded by grapheme boundaries.
+	//
+	// An empty string matches every text, including empty text.
 	pub func contains(text value: String) -> Bool {
 		match self.first_range(of: value) {
 			.some(_) -> true,
@@ -421,6 +506,10 @@ extend StringMethods {
 		}
 	}
 
+	// Returns true when any grapheme cluster satisfies `predicate`.
+	//
+	// Evaluation stops at the first match and never calls the predicate for
+	// empty text.
 	pub func contains(where predicate: (Character) -> Bool) -> Bool {
 		match self.first_index(where: predicate) {
 			.some(_) -> true,
@@ -428,6 +517,11 @@ extend StringMethods {
 		}
 	}
 
+	// Finds the first grapheme cluster byte-equal to `value`.
+	//
+	// Search proceeds only at grapheme boundaries and returns an opaque index
+	// tied to this snapshot. Canonically equivalent clusters are not
+	// normalized.
 	pub func first_index(of value: Character) -> StringIndex? {
 		let view = self.as_substring()
 		let scan = view.start
@@ -445,6 +539,11 @@ extend StringMethods {
 		.none
 	}
 
+	// Finds the leftmost byte-exact occurrence that starts at a grapheme
+	// boundary.
+	//
+	// An empty needle matches the start boundary. The returned range belongs to
+	// this snapshot and can be passed directly to `slice` or `replacing_range`.
 	pub func first_range(of value: String) -> StringRange? {
 		let view = self.as_substring()
 		let scan = view.start
@@ -465,6 +564,10 @@ extend StringMethods {
 		.none
 	}
 
+	// Returns the snapshot-bound index of the first cluster accepted by
+	// `predicate`.
+	//
+	// Evaluation is left-to-right and stops at the first match.
 	pub func first_index(where predicate: (Character) -> Bool) -> StringIndex? {
 		let view = self.as_substring()
 		let scan = view.start
@@ -479,6 +582,10 @@ extend StringMethods {
 		.none
 	}
 
+	// Finds the final grapheme cluster byte-equal to `value`.
+	//
+	// The implementation scans forward while retaining the latest match, so it
+	// is O(grapheme count). The resulting index is tied to this snapshot.
 	pub func last_index(of value: Character) -> StringIndex? {
 		let found: StringIndex? = .none
 		let view = self.as_substring()
@@ -497,6 +604,11 @@ extend StringMethods {
 		found
 	}
 
+	// Finds the rightmost byte-exact occurrence that starts at a grapheme
+	// boundary.
+	//
+	// An empty needle matches the end boundary. Search scans the complete view
+	// and returns a snapshot-bound range.
 	pub func last_range(of value: String) -> StringRange? {
 		let found: StringRange? = .none
 		let view = self.as_substring()
@@ -518,6 +630,11 @@ extend StringMethods {
 		found
 	}
 
+	// Returns the snapshot-bound index of the final cluster accepted by
+	// `predicate`.
+	//
+	// Every cluster is evaluated because the last match is not known in
+	// advance.
 	pub func last_index(where predicate: (Character) -> Bool) -> StringIndex? {
 		let found: StringIndex? = .none
 		let view = self.as_substring()
@@ -533,6 +650,11 @@ extend StringMethods {
 		found
 	}
 
+	// Returns left-to-right, non-overlapping byte-exact matches.
+	//
+	// Candidate starts are grapheme boundaries. An empty needle matches every
+	// boundary, including the past-the-end boundary; non-empty matches advance
+	// past the complete match before searching again.
 	pub func ranges(of value: String) -> [StringRange] {
 		let result: [StringRange] = []
 		let view = self.as_substring()
@@ -565,6 +687,10 @@ extend StringMethods {
 		result
 	}
 
+	// Counts the same non-overlapping matches returned by `ranges(of:)`.
+	//
+	// In particular, an empty needle occurs once at every grapheme boundary,
+	// so the answer is `count() + 1`.
 	pub func occurrences(of value: String) -> Int {
 		let view = self.as_substring()
 		let scan = view.start
@@ -582,6 +708,11 @@ extend StringMethods {
 		count
 	}
 
+	// Returns the longest grapheme-aligned prefix shared byte-for-byte with
+	// `other`.
+	//
+	// The result borrows this value's storage, not `other`'s. Comparison stops
+	// before a partially matching grapheme cluster.
 	pub func common_prefix(with other: String) -> Substring {
 		let view = self.as_substring()
 		let left = view.start
@@ -617,6 +748,12 @@ extend StringMethods {
 		_slice_absolute(view: view, start: view.start, end: left)
 	}
 
+	// Returns the longest grapheme-aligned suffix shared byte-for-byte with
+	// `other`.
+	//
+	// The result borrows this value's storage. Both texts are scanned backward
+	// by grapheme boundary, so canonically equivalent but differently encoded
+	// text differs.
 	pub func common_suffix(with other: String) -> Substring {
 		let view = self.as_substring()
 		let left = view.start + view.byte_count
@@ -658,33 +795,44 @@ extend StringMethods {
 // Public overload adapters stay concrete because protocol extensions cannot
 // currently publish overloaded members. Their algorithms remain shared above.
 extend String {
+	// Tests whether the first grapheme cluster is byte-equal to `value`.
 	pub func starts_with(character value: Character) -> Bool {
 		self.starts_with_character(value)
 	}
+	// Tests for a byte-exact, grapheme-aligned text prefix.
 	pub func starts_with(text value: String) -> Bool {
 		self.starts_with_text(value)
 	}
+	// Alias of the text-prefix overload, retaining the `needle` argument label.
 	pub func starts_with(needle value: String) -> Bool {
 		self.starts_with_text(value)
 	}
+	// Tests whether the final grapheme cluster is byte-equal to `value`.
 	pub func ends_with(character value: Character) -> Bool {
 		self.ends_with_character(value)
 	}
+	// Tests for a byte-exact, grapheme-aligned text suffix.
 	pub func ends_with(text value: String) -> Bool {
 		self.ends_with_text(value)
 	}
+	// Alias of the text-suffix overload, retaining the `needle` argument label.
 	pub func ends_with(needle value: String) -> Bool {
 		self.ends_with_text(value)
 	}
+	// Splits at byte-equal grapheme clusters and omits empty fields.
 	pub func split(character value: Character) -> [Substring] {
 		self.split_character(value)
 	}
+	// Splits at non-overlapping text separators and omits empty fields.
 	pub func split(separator value: String) -> [Substring] {
 		self.split_text(value)
 	}
+	// Splits at grapheme clusters accepted by `predicate`, omitting empty
+	// fields.
 	pub func split(where_separator predicate: (Character) -> Bool) -> [Substring] {
 		self.split_where_separator(predicate)
 	}
+	// Splits this text with explicit limits and empty-field handling.
 	pub func split(
 		separator value: String,
 		maximum_splits: Int,
@@ -696,45 +844,61 @@ extend String {
 			omitting_empty: omitting_empty
 		)
 	}
+	// Splits at the first byte-equal grapheme cluster and excludes it from both
+	// results.
 	pub func split_once(character value: Character) -> (Substring, Substring)? {
 		self.split_once_character(value)
 	}
+	// Splits at the first grapheme-aligned text match and excludes the
+	// separator.
 	pub func split_once(separator value: String) -> (Substring, Substring)? {
 		self.split_once_text(value)
 	}
+	// Replaces a validated range from this snapshot in a new owned string.
 	pub func replacing(_ range: StringRange, with replacement: String) -> String {
 		self.replacing_range(range, with: replacement)
 	}
 }
 
 extend Substring {
+	// Tests whether the first grapheme cluster is byte-equal to `value`.
 	pub func starts_with(character value: Character) -> Bool {
 		self.starts_with_character(value)
 	}
+	// Tests for a byte-exact, grapheme-aligned text prefix.
 	pub func starts_with(text value: String) -> Bool {
 		self.starts_with_text(value)
 	}
+	// Alias of the text-prefix overload, retaining the `needle` argument label.
 	pub func starts_with(needle value: String) -> Bool {
 		self.starts_with_text(value)
 	}
+	// Tests whether the final grapheme cluster is byte-equal to `value`.
 	pub func ends_with(character value: Character) -> Bool {
 		self.ends_with_character(value)
 	}
+	// Tests for a byte-exact, grapheme-aligned text suffix.
 	pub func ends_with(text value: String) -> Bool {
 		self.ends_with_text(value)
 	}
+	// Alias of the text-suffix overload, retaining the `needle` argument label.
 	pub func ends_with(needle value: String) -> Bool {
 		self.ends_with_text(value)
 	}
+	// Splits at byte-equal grapheme clusters and omits empty fields.
 	pub func split(character value: Character) -> [Substring] {
 		self.split_character(value)
 	}
+	// Splits at non-overlapping text separators and omits empty fields.
 	pub func split(separator value: String) -> [Substring] {
 		self.split_text(value)
 	}
+	// Splits at grapheme clusters accepted by `predicate`, omitting empty
+	// fields.
 	pub func split(where_separator predicate: (Character) -> Bool) -> [Substring] {
 		self.split_where_separator(predicate)
 	}
+	// Splits this text with explicit limits and empty-field handling.
 	pub func split(
 		separator value: String,
 		maximum_splits: Int,
@@ -746,22 +910,32 @@ extend Substring {
 			omitting_empty: omitting_empty
 		)
 	}
+	// Splits at the first byte-equal grapheme cluster and excludes it from both
+	// results.
 	pub func split_once(character value: Character) -> (Substring, Substring)? {
 		self.split_once_character(value)
 	}
+	// Splits at the first grapheme-aligned text match and excludes the
+	// separator.
 	pub func split_once(separator value: String) -> (Substring, Substring)? {
 		self.split_once_text(value)
 	}
+	// Replaces a validated range from this snapshot in a new owned string.
 	pub func replacing(_ range: StringRange, with replacement: String) -> String {
 		self.replacing_range(range, with: replacement)
 	}
 }
 
-// CharacterSet keeps reusable policies local without exposing representation.
+// A reusable character-membership policy for trimming and classification.
+//
+// Explicit sets compare complete grapheme clusters from `characters`;
+// predefined sets dispatch to Unicode properties without materializing their
+// members. This is a policy object, not a mutable collection.
 pub struct CharacterSet {
 	let kind: Int
 	let members: String
 
+	// Creates a set containing the grapheme clusters found in `characters`.
 	pub init(characters: String) {
 		self.kind = 0
 		self.members = characters
@@ -772,19 +946,28 @@ pub struct CharacterSet {
 		self.members = members
 	}
 
+	// Matches clusters whose first scalar has Unicode `White_Space`.
 	pub static func whitespace() -> CharacterSet {
 		CharacterSet(kind: 1, members: "")
 	}
+	// Matches LF, CR, NEL, LINE SEPARATOR, and PARAGRAPH SEPARATOR clusters.
 	pub static func newlines() -> CharacterSet {
 		CharacterSet(kind: 2, members: "")
 	}
+	// Matches clusters whose first scalar is Unicode alphabetic or numeric.
 	pub static func alphanumerics() -> CharacterSet {
 		CharacterSet(kind: 3, members: "")
 	}
+	// Matches clusters whose first scalar belongs to a Unicode punctuation
+	// category.
 	pub static func punctuation() -> CharacterSet {
 		CharacterSet(kind: 4, members: "")
 	}
 
+	// Applies the predefined Unicode policy or searches explicit members.
+	//
+	// Explicit sets compare complete grapheme clusters byte-for-byte.
+	// Predefined sets classify the candidate's first scalar.
 	pub func contains(_ character: Character) -> Bool {
 		if self.kind == 1 { return character.is_whitespace() }
 		if self.kind == 2 {
@@ -986,6 +1169,10 @@ func _split_text(
 }
 
 extend StringMethods {
+	// Splits at grapheme clusters byte-equal to `value`.
+	//
+	// Empty fields are omitted, including leading and trailing ones. Every
+	// result borrows this text's storage; no field bytes are copied.
 	pub func split_character(_ value: Character) -> [Substring] {
 		let result: [Substring] = []
 		let view = self.as_substring()
@@ -1013,6 +1200,11 @@ extend StringMethods {
 		result
 	}
 
+	// Splits at non-overlapping text matches, omitting empty fields.
+	//
+	// Matches begin at grapheme boundaries; an empty separator yields
+	// individual grapheme clusters. Use the overload with `maximum_splits` and
+	// `omitting_empty` when empty fields are significant.
 	pub func split_text(_ value: String) -> [Substring] {
 		_split_text(
 			view: self.as_substring(),
@@ -1022,6 +1214,10 @@ extend StringMethods {
 		)
 	}
 
+	// Splits wherever a grapheme cluster satisfies `predicate`.
+	//
+	// The separator cluster is excluded and empty fields are omitted. Returned
+	// substrings borrow the original storage and remain in source order.
 	pub func split_where_separator(_ predicate: (Character) -> Bool) -> [Substring] {
 		let result: [Substring] = []
 		let view = self.as_substring()
@@ -1049,6 +1245,11 @@ extend StringMethods {
 		result
 	}
 
+	// Splits at most `maximum_splits` non-overlapping separator matches.
+	//
+	// A negative maximum means unlimited splitting. `omitting_empty` controls
+	// leading, trailing, and adjacent empty fields. An empty separator splits
+	// by grapheme cluster. Results borrow the source.
 	pub func split_text(_ value: String, maximum_splits: Int, omitting_empty: Bool) -> [Substring] {
 		_split_text(
 			view: self.as_substring(),
@@ -1058,6 +1259,10 @@ extend StringMethods {
 		)
 	}
 
+	// Splits around the first grapheme cluster byte-equal to `value`.
+	//
+	// The separator is excluded; either side may be empty. Returns `none` when
+	// no cluster matches, and both results borrow the original storage.
 	pub func split_once_character(_ value: Character) -> (Substring, Substring)? {
 		let view = self.as_substring()
 		match self.first_index(of: value) {
@@ -1076,6 +1281,10 @@ extend StringMethods {
 		}
 	}
 
+	// Splits around the first grapheme-aligned occurrence of `value`.
+	//
+	// The separator is excluded and the two borrowed results preserve empty
+	// leading or trailing fields. An empty separator matches at the start.
 	pub func split_once_text(_ value: String) -> (Substring, Substring)? {
 		let view = self.as_substring()
 		match self.first_range(of: value) {
@@ -1091,6 +1300,10 @@ extend StringMethods {
 		}
 	}
 
+	// Splits around the last grapheme-aligned occurrence of `value`.
+	//
+	// The separator is excluded; an empty separator matches at the end. This is
+	// the reverse-search counterpart to `split_once_text`.
 	pub func split_once_from_end(separator value: String) -> (Substring, Substring)? {
 		let view = self.as_substring()
 		match self.last_range(of: value) {
@@ -1106,6 +1319,10 @@ extend StringMethods {
 		}
 	}
 
+	// Partitions at the first match into prefix, separator, and suffix.
+	//
+	// Unlike `split_once_text`, the middle borrowed substring preserves the
+	// matched separator. Returns `none` when no occurrence exists.
 	pub func partition(separator value: String) -> (Substring, Substring, Substring)? {
 		let view = self.as_substring()
 		match self.first_range(of: value) {
@@ -1122,6 +1339,10 @@ extend StringMethods {
 		}
 	}
 
+	// Partitions at the last match into prefix, separator, and suffix.
+	//
+	// The middle borrowed substring preserves the separator; this is the
+	// reverse-search counterpart to `partition`.
 	pub func partition_from_end(separator value: String) -> (Substring, Substring, Substring)? {
 		let view = self.as_substring()
 		match self.last_range(of: value) {
@@ -1138,11 +1359,18 @@ extend StringMethods {
 		}
 	}
 
+	// Splits at Unicode line boundaries and excludes every terminator.
+	//
+	// This delegates to `lines(keeping_terminators: false)`.
 	pub func lines() -> [Substring] {
 		self.lines(keeping_terminators: false)
 	}
 
-	// Recognizes LF, CRLF, CR, NEL, LINE SEPARATOR, and PARAGRAPH SEPARATOR.
+	// Splits at LF, CRLF, CR, NEL, LINE SEPARATOR, and PARAGRAPH SEPARATOR.
+	//
+	// CRLF is one terminator. When `keep` is true each line includes its
+	// terminator; otherwise it does not. Returned substrings borrow the source,
+	// and a final terminator does not add a trailing empty line.
 	pub func lines(keeping_terminators keep: Bool) -> [Substring] {
 		let result: [Substring] = []
 		let view = self.as_substring()
@@ -1181,26 +1409,41 @@ extend StringMethods {
 		_unicode_words(view: self.as_substring())
 	}
 
+	// Splits at Unicode whitespace grapheme clusters and omits empty fields.
+	//
+	// Returned substrings borrow the original storage.
 	pub func split_whitespace() -> [Substring] {
 		self.split_where_separator(_is_whitespace_character)
 	}
 
+	// Borrows the text after removing leading and trailing Unicode whitespace.
 	pub func trimmed() -> Substring {
 		self.trimmed(where: _is_whitespace_character)
 	}
 
+	// Borrows the text after removing its leading Unicode whitespace run.
 	pub func trimmed_start() -> Substring {
 		self.trimmed_start(where: _is_whitespace_character)
 	}
 
+	// Borrows the text after removing its trailing Unicode whitespace run.
 	pub func trimmed_end() -> Substring {
 		self.trimmed_end(where: _is_whitespace_character)
 	}
 
+	// Trims the longest leading and trailing runs contained in `characters`.
+	//
+	// Membership is tested per grapheme cluster. The returned substring borrows
+	// the original storage and may be empty.
 	pub func trimmed(_ characters: CharacterSet) -> Substring {
 		self.trimmed_start(characters).trimmed_end(characters)
 	}
 
+	// Removes the longest leading run contained in `characters`.
+	//
+	// Membership is tested by grapheme cluster and the result borrows the
+	// source. An all-matching input produces an empty range at the end
+	// boundary.
 	pub func trimmed_start(_ characters: CharacterSet) -> Substring {
 		let view = self.as_substring()
 		let scan = view.start
@@ -1220,6 +1463,10 @@ extend StringMethods {
 		_slice_absolute(view: view, start: scan, end: end)
 	}
 
+	// Removes the longest trailing run contained in `characters`.
+	//
+	// The scan retains the end of the last non-member cluster, producing a
+	// borrowed grapheme-aligned range without reversing the source.
 	pub func trimmed_end(_ characters: CharacterSet) -> Substring {
 		let view = self.as_substring()
 		let scan = view.start
@@ -1238,14 +1485,20 @@ extend StringMethods {
 		_slice_absolute(view: view, start: view.start, end: last_kept_end)
 	}
 
+	// Removes leading and trailing characters that satisfy `predicate`.
 	pub func trimmed(where predicate: (Character) -> Bool) -> Substring {
 		self.trimmed_start(where: predicate).trimmed_end(where: predicate)
 	}
 
+	// Borrows the suffix after the longest leading run accepted by `predicate`.
 	pub func trimmed_start(where predicate: (Character) -> Bool) -> Substring {
 		self.drop(while: predicate)
 	}
 
+	// Removes the longest trailing run accepted by `predicate`.
+	//
+	// Every grapheme is visited once to remember the end of the last rejected
+	// cluster. The result borrows the original storage.
 	pub func trimmed_end(where predicate: (Character) -> Bool) -> Substring {
 		let view = self.as_substring()
 		let scan = view.start
@@ -1264,6 +1517,11 @@ extend StringMethods {
 		_slice_absolute(view: view, start: view.start, end: last_kept_end)
 	}
 
+	// Joins owned strings with this text between adjacent values.
+	//
+	// The exact byte capacity is computed first, then one builder allocation is
+	// filled. Empty input returns an empty string and no trailing separator is
+	// added.
 	pub func join(strings values: [String]) -> String {
 		let capacity = 0
 		let i = 0
@@ -1282,6 +1540,10 @@ extend StringMethods {
 		builder.finish()
 	}
 
+	// Joins borrowed substrings with this text between adjacent values.
+	//
+	// Input ranges are copied into one newly allocated owned string. Empty
+	// input returns an empty string and no trailing separator is added.
 	pub func join(substrings values: [Substring]) -> String {
 		let capacity = 0
 		let i = 0
@@ -1312,6 +1574,7 @@ extend StringMethods {
 		true
 	}
 
+	// Returns true for a non-empty string made entirely of Unicode whitespace.
 	pub func is_whitespace() -> Bool {
 		if self.is_empty() { return false }
 		for character in self.as_substring() {
@@ -1320,6 +1583,8 @@ extend StringMethods {
 		true
 	}
 
+	// Returns true for a non-empty string whose characters are all Unicode
+	// alphabetic.
 	pub func is_alphabetic() -> Bool {
 		if self.is_empty() { return false }
 		for character in self.as_substring() {
@@ -1328,6 +1593,8 @@ extend StringMethods {
 		true
 	}
 
+	// Returns true for a non-empty string whose characters are all Unicode
+	// numeric.
 	pub func is_numeric() -> Bool {
 		if self.is_empty() { return false }
 		for character in self.as_substring() {
@@ -1336,6 +1603,8 @@ extend StringMethods {
 		true
 	}
 
+	// Returns true for a non-empty string whose characters are all alphabetic
+	// or numeric.
 	pub func is_alphanumeric() -> Bool {
 		if self.is_empty() { return false }
 		for character in self.as_substring() {
@@ -1344,6 +1613,8 @@ extend StringMethods {
 		true
 	}
 
+	// Returns true for a non-empty string made entirely of Unicode decimal
+	// digits.
 	pub func is_decimal() -> Bool {
 		if self.is_empty() { return false }
 		for character in self.as_substring() {
@@ -1352,6 +1623,8 @@ extend StringMethods {
 		true
 	}
 
+	// Requires at least one cased character and no uppercase or titlecase
+	// characters.
 	pub func is_lowercase() -> Bool {
 		let saw_cased = false
 		for character in self.as_substring() {
@@ -1361,6 +1634,8 @@ extend StringMethods {
 		saw_cased
 	}
 
+	// Requires at least one cased character and no lowercase or titlecase
+	// characters.
 	pub func is_uppercase() -> Bool {
 		let saw_cased = false
 		for character in self.as_substring() {
@@ -1370,6 +1645,8 @@ extend StringMethods {
 		saw_cased
 	}
 
+	// Returns whether titlecasing leaves this text unchanged and it contains a
+	// cased scalar.
 	pub func is_titlecase() -> Bool {
 		let saw_cased = false
 		for scalar in self.as_substring().scalars() {
@@ -1379,6 +1656,8 @@ extend StringMethods {
 		self.as_substring().equals_string(self.titlecase())
 	}
 
+	// Returns whether every character is printable; the empty string is
+	// printable.
 	pub func is_printable() -> Bool {
 		for character in self.as_substring() {
 			if character.is_printable() == false { return false }
@@ -1386,6 +1665,7 @@ extend StringMethods {
 		true
 	}
 
+	// Checks the same start and continuation rules used by the Talk lexer.
 	pub func is_identifier() -> Bool {
 		let first = true
 		for character in self.as_substring() {
@@ -1399,7 +1679,11 @@ extend StringMethods {
 		first == false
 	}
 
-	// Owned transformations use exactly one growable builder.
+	// Replaces every left-to-right, non-overlapping occurrence of `target`.
+	//
+	// Matching follows `ranges(of:)`: starts are grapheme boundaries and bytes
+	// are compared exactly. The transformation builds one new owned string; the
+	// receiver is unchanged.
 	pub func replacing(_ target: String, with replacement: String) -> String {
 		let view = self.as_substring()
 		let matches = self.ranges(of: target)
@@ -1422,6 +1706,11 @@ extend StringMethods {
 		builder.finish()
 	}
 
+	// Replaces only the first grapheme-aligned, byte-exact occurrence of
+	// `target`.
+	//
+	// No match returns an owned copy unchanged; an empty target inserts at the
+	// start.
 	pub func replacing_first(_ target: String, with replacement: String) -> String {
 		match self.first_range(of: target) {
 			.some(range) -> self.replacing_range(range, with: replacement),
@@ -1429,6 +1718,10 @@ extend StringMethods {
 		}
 	}
 
+	// Replaces one validated grapheme-safe range with `replacement`.
+	//
+	// `range` must belong to this exact storage snapshot and view; a foreign or
+	// invalid range performs `'panic`. The result is a new owned string.
 	pub func replacing_range(_ range: StringRange, with replacement: String) -> String {
 		let view = self.as_substring()
 		if _range_belongs(range: range, view: view) == false { 'panic(
@@ -1455,10 +1748,14 @@ extend StringMethods {
 		builder.finish()
 	}
 
+	// Removes every left-to-right, non-overlapping occurrence of `target`.
+	//
+	// Matching follows `replacing`; an empty target removes no bytes.
 	pub func removing(_ target: String) -> String {
 		self.replacing(target, with: "")
 	}
 
+	// Returns a string without characters that satisfy `predicate`.
 	pub func removing(where predicate: (Character) -> Bool) -> String {
 		let builder = StringBuilder(capacity: self.utf8_count())
 		for character in self.as_substring() {
@@ -1467,6 +1764,10 @@ extend StringMethods {
 		builder.finish()
 	}
 
+	// Concatenates `count` copies of this text into a new string.
+	//
+	// Non-positive counts return an empty string. Capacity multiplication uses
+	// trapping integer arithmetic.
 	pub func repeated(_ count: Int) -> String {
 		if count <= 0 { return "" }
 		let view = self.as_substring()
@@ -1479,6 +1780,11 @@ extend StringMethods {
 		builder.finish()
 	}
 
+	// Reverses extended grapheme clusters while preserving bytes within each
+	// cluster.
+	//
+	// This differs from scalar or byte reversal: combining sequences and emoji
+	// clusters remain intact. The operation allocates one new string.
 	pub func reversed() -> String {
 		let offsets: [Int] = []
 		let view = self.as_substring()
@@ -1499,6 +1805,10 @@ extend StringMethods {
 		builder.finish()
 	}
 
+	// Eagerly transforms each grapheme cluster and concatenates the results.
+	//
+	// This differs from `Iterator.map`: the callback runs immediately and the
+	// returned value is a newly allocated string.
 	pub func map(_ transform: (Character) -> Character) -> String {
 		let builder = StringBuilder(capacity: self.utf8_count())
 		for character in self.as_substring() {
@@ -1507,6 +1817,7 @@ extend StringMethods {
 		builder.finish()
 	}
 
+	// Transforms each character and concatenates the resulting strings.
 	pub func flat_map(_ transform: (Character) -> String) -> String {
 		let builder = StringBuilder(capacity: self.utf8_count())
 		for character in self.as_substring() {
@@ -1515,6 +1826,7 @@ extend StringMethods {
 		builder.finish()
 	}
 
+	// Returns a string containing only characters that satisfy `predicate`.
 	pub func filter(_ predicate: (Character) -> Bool) -> String {
 		let builder = StringBuilder(capacity: self.utf8_count())
 		for character in self.as_substring() {
@@ -1523,6 +1835,10 @@ extend StringMethods {
 		builder.finish()
 	}
 
+	// Left-pads to a minimum extended-grapheme count using `fill`.
+	//
+	// Text already at least `length` clusters is copied unchanged. A
+	// multi-scalar fill cluster still contributes one unit of requested length.
 	pub func padded_start(to length: Int, with fill: Character) -> String {
 		let needed = length - self.as_substring().count()
 		if needed <= 0 { return self.as_substring().to_string() }
@@ -1538,6 +1854,10 @@ extend StringMethods {
 		builder.finish()
 	}
 
+	// Right-pads to a minimum extended-grapheme count using `fill`.
+	//
+	// Text already at least `length` clusters is copied unchanged. A
+	// multi-scalar fill cluster still contributes one unit of requested length.
 	pub func padded_end(to length: Int, with fill: Character) -> String {
 		let needed = length - self.as_substring().count()
 		if needed <= 0 { return self.as_substring().to_string() }
@@ -1553,7 +1873,10 @@ extend StringMethods {
 		builder.finish()
 	}
 
-	// Odd padding puts the extra fill at the end.
+	// Pads both sides to center the text at a minimum grapheme count.
+	//
+	// When an odd number of fill clusters is needed, the extra one goes on the
+	// right. Text already at least `length` clusters is copied unchanged.
 	pub func centered(to length: Int, with fill: Character) -> String {
 		let needed = length - self.as_substring().count()
 		if needed <= 0 { return self.as_substring().to_string() }
@@ -1576,6 +1899,10 @@ extend StringMethods {
 		builder.finish()
 	}
 
+	// Replaces tab characters with spaces up to the next tab stop.
+	//
+	// Columns count extended grapheme clusters and reset after line breaks. A
+	// non-positive `tab_width` removes tab characters without inserting spaces.
 	pub func expanding_tabs(tab_width: Int) -> String {
 		let builder = StringBuilder(capacity: self.utf8_count())
 		let column = 0
@@ -1648,16 +1975,34 @@ func _case_text(view: Substring, kind: Int) -> String {
 }
 
 extend StringMethods {
+	// Applies Unicode lowercase mappings to every scalar.
+	//
+	// Mappings may expand one scalar into several; the result is newly
+	// allocated and is not normalized automatically.
 	pub func lowercase() -> String {
 		_case_text(view: self.as_substring(), kind: 0)
 	}
+	// Applies Unicode uppercase mappings to every scalar.
+	//
+	// Mappings may expand one scalar into several; the result is newly
+	// allocated and is not normalized automatically.
 	pub func uppercase() -> String {
 		_case_text(view: self.as_substring(), kind: 1)
 	}
+	// Applies the full Unicode default case-fold mapping for caseless
+	// comparison.
+	//
+	// Case folding is more stable for comparison than lowercase conversion and
+	// may expand scalars. It does not normalize the result.
 	pub func casefolded() -> String {
 		_case_text(view: self.as_substring(), kind: 3)
 	}
 
+	// Applies Unicode titlecasing independently at each UAX #29 word boundary.
+	//
+	// The first cased scalar of each word is titlecased and later cased scalars
+	// are lowercased. Case-ignorable scalars do not consume the first-cased
+	// slot.
 	pub func titlecase() -> String {
 		let view = self.as_substring()
 		let words = _unicode_words(view: view)
@@ -1696,6 +2041,10 @@ extend StringMethods {
 		builder.finish()
 	}
 
+	// Titlecases the first cased grapheme cluster and preserves the remainder.
+	//
+	// Unlike `titlecase`, this does not restart at each Unicode word boundary
+	// and does not lowercase later characters.
 	pub func capitalized() -> String {
 		let builder = StringBuilder(capacity: self.utf8_count())
 		let changed = false
@@ -1714,12 +2063,16 @@ extend StringMethods {
 }
 
 extend Character {
+	// Applies full Unicode lowercase mappings to every scalar in this cluster.
 	pub func lowercase() -> String {
 		self.as_substring().lowercase()
 	}
+	// Applies full Unicode uppercase mappings to every scalar in this cluster.
 	pub func uppercase() -> String {
 		self.as_substring().uppercase()
 	}
+	// Titlecases this cluster as one text span, allowing multi-scalar
+	// expansion.
 	pub func titlecase() -> String {
 		self.as_substring().titlecase()
 	}
@@ -1850,28 +2203,50 @@ func _normalize(view: Substring, compatibility: Bool, compose: Bool) -> String {
 }
 
 extend StringMethods {
+	// Returns canonical decomposition followed by canonical composition (NFC).
+	//
+	// Use NFC for ordinary normalized interchange while preserving
+	// compatibility distinctions.
 	pub func normalized_nfc() -> String {
 		_normalize(view: self.as_substring(), compatibility: false, compose: true)
 	}
+	// Returns fully canonically decomposed and combining-class-ordered text
+	// (NFD).
+	//
+	// Unlike NFC, this leaves composable scalar sequences decomposed.
 	pub func normalized_nfd() -> String {
 		_normalize(view: self.as_substring(), compatibility: false, compose: false)
 	}
+	// Applies compatibility decomposition and then canonical composition
+	// (NFKC).
+	//
+	// This may erase formatting distinctions; use NFC when those distinctions
+	// matter.
 	pub func normalized_nfkc() -> String {
 		_normalize(view: self.as_substring(), compatibility: true, compose: true)
 	}
+	// Returns fully compatibility-decomposed, combining-class-ordered text
+	// (NFKD).
+	//
+	// It is the decomposed counterpart to NFKC and may erase formatting
+	// distinctions.
 	pub func normalized_nfkd() -> String {
 		_normalize(view: self.as_substring(), compatibility: true, compose: false)
 	}
 
+	// Returns whether this text is already in Unicode Normalization Form C.
 	pub func is_normalized_nfc() -> Bool {
 		self.as_substring().equals_string(self.normalized_nfc())
 	}
+	// Returns whether this text is already in Unicode Normalization Form D.
 	pub func is_normalized_nfd() -> Bool {
 		self.as_substring().equals_string(self.normalized_nfd())
 	}
+	// Returns whether this text is already in Unicode Normalization Form KC.
 	pub func is_normalized_nfkc() -> Bool {
 		self.as_substring().equals_string(self.normalized_nfkc())
 	}
+	// Returns whether this text is already in Unicode Normalization Form KD.
 	pub func is_normalized_nfkd() -> Bool {
 		self.as_substring().equals_string(self.normalized_nfkd())
 	}
@@ -1879,6 +2254,7 @@ extend StringMethods {
 
 // Byte-lexicographic ordering and byte hashing deliberately match equality.
 extend String: Comparable<String> {
+	// Performs lexicographic ordering over the strings' UTF-8 bytes.
 	pub func gt(_ rhs: String) -> Bool {
 		let limit = if self.byte_count < rhs.byte_count {
 			self.byte_count
@@ -1897,6 +2273,7 @@ extend String: Comparable<String> {
 }
 
 extend Substring: Comparable<Substring> {
+	// Performs lexicographic ordering over the substrings' UTF-8 bytes.
 	pub func gt(_ rhs: Substring) -> Bool {
 		let limit = if self.byte_count < rhs.byte_count {
 			self.byte_count
@@ -1914,7 +2291,9 @@ extend Substring: Comparable<Substring> {
 	}
 }
 
+// A value with a deterministic integer hash suitable for keyed collections.
 pub protocol Hashable {
+	// Computes a hash consistent with the type's equality semantics.
 	func hash_value() -> Int
 }
 
@@ -1923,12 +2302,14 @@ func _text_hash(view: Substring) -> Int {
 }
 
 extend String: Hashable {
+	// Hashes exact UTF-8 bytes, matching `String` byte equality.
 	pub func hash_value() -> Int {
 		_text_hash(view: self.as_substring())
 	}
 }
 
 extend Substring: Hashable {
+	// Hashes only this range's UTF-8 bytes, matching substring equality.
 	pub func hash_value() -> Int {
 		_text_hash(view: self)
 	}
@@ -1937,10 +2318,16 @@ extend Substring: Hashable {
 // Explicit byte search stays on UTF8View. Results are byte offsets relative
 // to the view and may be used directly with UTF8View.slice.
 extend UTF8View {
+	// Returns the first byte offset at which the needle occurs.
 	pub func find_bytes(_ needle: String) -> Int? {
 		self.find_bytes_from(needle, start: 0)
 	}
 
+	// Finds raw UTF-8 bytes at or after the relative byte offset `start`.
+	//
+	// This deliberately ignores scalar and grapheme boundaries and may return
+	// an offset inside a multi-byte character. Use text search APIs for safe
+	// indices.
 	pub func find_bytes_from(_ needle: String, start: Int) -> Int? {
 		if start < 0 || start > self.byte_count { return .none }
 		if needle.byte_count == 0 { return .some(start) }
@@ -1964,37 +2351,50 @@ extend UTF8View {
 	}
 }
 
-// Parser-facing cursor: lookahead, marks, restoration, and source slices all
-// share StringIndex validation and preserve the source snapshot.
+// A grapheme-aware cursor over an immutable string or substring snapshot.
+//
+// Marks are opaque `StringIndex` values tied to that snapshot. `restore`
+// rejects marks from another source, while slices borrow the original storage.
+// Advancing and predicate consumption operate on extended grapheme clusters.
 pub struct TextCursor {
 	let source: Substring
 	let position: StringIndex
 
+	// Creates a cursor at the start of a string snapshot.
 	pub init(text: String) {
 		self.source = text.as_substring()
 		self.position = self.source.start_index()
 	}
 
+	// Creates a cursor at the start of a borrowed substring.
 	pub init(substring: Substring) {
 		self.source = substring
 		self.position = substring.start_index()
 	}
 
+	// Returns whether the cursor is positioned at the past-the-end index.
 	pub func is_at_end() -> Bool {
 		self.position == self.source.end_index()
 	}
+	// Captures the current snapshot-bound position for later `restore` or
+	// slicing.
 	pub func mark() -> StringIndex {
 		self.position
 	}
+	// Borrows the grapheme cluster at the cursor without advancing.
 	pub func peek() -> Character? {
 		self.source.character(at: self.position)
 	}
+	// Borrows the unconsumed suffix from the cursor through the end boundary.
 	pub func remaining() -> Substring {
 		self.source.slice(
 			StringRange(start: self.position, end: self.source.end_index())
 		)
 	}
 
+	// Yields the current grapheme cluster and advances to its next boundary.
+	//
+	// At the end boundary this returns `none` and leaves the cursor unchanged.
 	pub mut func advance() -> Character? {
 		match self.peek() {
 			.some(character) -> {
@@ -2007,6 +2407,10 @@ pub struct TextCursor {
 		}
 	}
 
+	// Restores a previously captured position from this exact source snapshot.
+	//
+	// A mark at the past-the-end index is valid. Marks from other strings,
+	// substrings, or bounds return false and leave the cursor unchanged.
 	pub mut func restore(to mark: StringIndex) -> Bool {
 		match self.source.character(at: mark) {
 			.some(_) -> {
@@ -2024,10 +2428,19 @@ pub struct TextCursor {
 		}
 	}
 
+	// Borrows the half-open range from `mark` to the current cursor position.
+	//
+	// `mark` must belong to this cursor's source snapshot and must not follow
+	// the current position; invalid ranges perform `'panic` through string
+	// slicing.
 	pub func slice(from mark: StringIndex) -> Substring {
 		self.source.slice(StringRange(start: mark, end: self.position))
 	}
 
+	// Advances while `predicate` accepts successive grapheme clusters.
+	//
+	// The returned substring borrows the consumed range. The first rejected
+	// cluster remains unconsumed, and exhaustion returns the remaining suffix.
 	pub mut func consume(while predicate: (Character) -> Bool) -> Substring {
 		let start = self.position
 		loop {
@@ -2046,6 +2459,10 @@ pub struct TextCursor {
 		self.source.slice(StringRange(start: start, end: self.position))
 	}
 
+	// Atomically consumes `text` when it matches at the current position.
+	//
+	// Matching is byte-exact and grapheme-aligned through the remaining
+	// substring. On failure the cursor does not move.
 	pub mut func consume(text: String) -> Bool {
 		let remaining = self.remaining()
 		if remaining.starts_with_text(text) == false { return false }

@@ -3,10 +3,12 @@
 This directory provides editor-facing frontend analysis without LSP protocol
 types. `Workspace` runs parsing, name resolution, and type checking leniently
 over open documents while retaining source-faithful ASTs, text, resolved names,
-types, and structured diagnostics.
+types, and structured diagnostics. Workspaces parse through the frontend's
+documenting entry (`collect_docs`), so each document also carries its
+declarations' doc-comment attachments for hover.
 
-Modules provide type and scheme hover, scope- and type-backed completion,
-go-to-definition, and rename. The same interface serves the LSP, C/Swift
+Modules provide type and scheme hover with doc comments, scope- and
+type-backed completion, go-to-definition, and rename. The same interface serves the LSP, C/Swift
 embedding, wasm tooling, REPL completion, and tests.
 
 Ownership-flow facts and ownership inlay hints are intentionally absent while

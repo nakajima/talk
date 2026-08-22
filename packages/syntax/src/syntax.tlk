@@ -1,0 +1,6 @@
+// The library root: every public surface of the syntax package hangs
+// off one of these files (each pulls Lexer, Parser, and Ast in turn),
+// so importing them here spans the whole compile closure.
+use package::Dump
+use package::Docs
+use package::Syntax

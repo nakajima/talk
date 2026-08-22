@@ -22,7 +22,9 @@ pub(crate) fn verify_structure(module: &Module) -> Vec<String> {
     }
     for (name, func) in &module.exports {
         if *func >= module.functions.len() {
-            findings.push(format!("export `{name}` names out-of-bounds function f{func}"));
+            findings.push(format!(
+                "export `{name}` names out-of-bounds function f{func}"
+            ));
         }
     }
     for (id, function) in module.functions.iter().enumerate() {
@@ -53,9 +55,8 @@ fn verify_function(module: &Module, id: usize, function: &Function, findings: &m
     let func_ok = |func: FuncId| func < module.functions.len();
 
     for (block_id, block) in function.blocks.iter().enumerate() {
-        let mut fail = |message: String| {
-            findings.push(format!("{name} (f{id}) block b{block_id}: {message}"))
-        };
+        let mut fail =
+            |message: String| findings.push(format!("{name} (f{id}) block b{block_id}: {message}"));
         for param in &block.params {
             if !local_ok(*param) {
                 fail(format!("block parameter L{param} out of bounds"));
@@ -332,7 +333,9 @@ fn verify_function(module: &Module, id: usize, function: &Function, findings: &m
             if let Some(unwind) = unwind
                 && unwind >= n_blocks
             {
-                fail(format!("inst {index}: unwind target b{unwind} out of bounds"));
+                fail(format!(
+                    "inst {index}: unwind target b{unwind} out of bounds"
+                ));
             }
             if let Some(global) = global
                 && global >= module.global_slots

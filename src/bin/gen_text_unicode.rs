@@ -642,29 +642,47 @@ impl Renderer {
         output
     }
 
-    fn table(&mut self, name: &str, bytes: &[u8]) {
+    fn table(&mut self, name: &str, documentation: &str, bytes: &[u8]) {
         let literal = Self::escape_bytes(bytes);
         writeln!(
             self.output,
-            "pub func {name}() -> String {{\n\t\"{literal}\"\n}}\n"
+            "// {documentation}\npub func {name}() -> String {{\n\t\"{literal}\"\n}}\n"
         )
         .expect("write table");
     }
 
-    fn boundary_table(&mut self, name: &str, values: &[u16], radix: u64, width: usize) {
+    fn boundary_table(
+        &mut self,
+        name: &str,
+        documentation: &str,
+        values: &[u16],
+        radix: u64,
+        width: usize,
+    ) {
         let mut bytes = Vec::new();
         for (scalar, value) in Self::boundaries(values) {
             bytes.extend(Self::septets(scalar as u64 * radix + value as u64, width));
         }
-        self.table(name, &bytes);
+        self.table(name, documentation, &bytes);
     }
 
-    fn byte_boundary_table(&mut self, name: &str, values: &[u8], radix: u64, width: usize) {
+    fn byte_boundary_table(
+        &mut self,
+        name: &str,
+        documentation: &str,
+        values: &[u8],
+        radix: u64,
+        width: usize,
+    ) {
         let widened: Vec<u16> = values.iter().map(|value| *value as u16).collect();
-        self.boundary_table(name, &widened, radix, width);
+        self.boundary_table(name, documentation, &widened, radix, width);
     }
 
     fn mapping_table(&mut self, name: &str, mappings: &BTreeMap<u32, Vec<u32>>) {
+        let display_name = match name {
+            "casefold" => "case-fold".to_string(),
+            _ => name.replace('_', " "),
+        };
         let mut index = Vec::new();
         let mut payload = String::new();
         for (&scalar, mapping) in mappings {
@@ -677,11 +695,18 @@ impl Renderer {
             index.extend(Self::septets(offset as u64, 3));
             index.extend(Self::septets(length as u64, 1));
         }
-        self.table(&format!("_{name}_index"), &index);
+        self.table(
+            &format!("_{name}_index"),
+            &format!(
+                "Packed scalar-to-{display_name} offsets into the corresponding payload table."
+            ),
+            &index,
+        );
         let literal = Self::escape_text(&payload);
         writeln!(
             self.output,
-            "pub func _{name}_payload() -> String {{\n\t\"{literal}\"\n}}\n"
+            "// Concatenated Unicode {display_name} mappings addressed by the index table.\n\
+             pub func _{name}_payload() -> String {{\n\t\"{literal}\"\n}}\n"
         )
         .expect("write payload");
     }
@@ -693,12 +718,28 @@ impl Renderer {
             bytes.extend(Self::septets(combining as u64, 3));
             bytes.extend(Self::septets(result as u64, 3));
         }
-        self.table("_composition_table", &bytes);
+        self.table(
+            "_composition_table",
+            "Packed canonical composition triples: starter, combining scalar, and result.",
+            &bytes,
+        );
     }
 
     fn finish(mut self, ucd: &Ucd) -> String {
-        self.boundary_table("_text_property_table", &ucd.property_flags(), 4096, 5);
-        self.byte_boundary_table("_word_break_table", &ucd.word_categories(), 32, 4);
+        self.boundary_table(
+            "_text_property_table",
+            "Packed scalar boundaries for Unicode text-classification property flags.\n// Each five-septet entry encodes `start * 4096 + flags` in ascending order.",
+            &ucd.property_flags(),
+            4096,
+            5,
+        );
+        self.byte_boundary_table(
+            "_word_break_table",
+            "Packed scalar boundaries for Unicode word-break categories.\n// Each four-septet entry encodes `start * 32 + category` in ascending order.",
+            &ucd.word_categories(),
+            32,
+            4,
+        );
         let [lower, upper, title, fold] = ucd.case_maps();
         self.mapping_table("lowercase", &lower);
         self.mapping_table("uppercase", &upper);
@@ -707,7 +748,13 @@ impl Renderer {
         let (canonical, compatibility, combining, composition) = ucd.normalization_maps();
         self.mapping_table("canonical_decomposition", &canonical);
         self.mapping_table("compatibility_decomposition", &compatibility);
-        self.byte_boundary_table("_combining_class_table", &combining, 256, 5);
+        self.byte_boundary_table(
+            "_combining_class_table",
+            "Packed scalar boundaries for canonical combining classes.\n// Each five-septet entry encodes `start * 256 + class` in ascending order.",
+            &combining,
+            256,
+            5,
+        );
         self.composition_table(&composition);
         self.output.pop();
         self.output

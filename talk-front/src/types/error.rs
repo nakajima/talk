@@ -320,6 +320,13 @@ pub enum TypeError {
     BareVariantReference {
         variant: String,
     },
+    /// An effect operation referenced as an ordinary variable. Effects are
+    /// performed with the quoted form (`'name(...)`) and named in rows and
+    /// `#handle`s; a bare reference names no value, so typing owns the
+    /// rejection — this must never surface as a lowerer error.
+    BareEffectReference {
+        effect: String,
+    },
     /// A `linear` declaration claiming a conformance that would defeat
     /// linearity (`Copy` duplicates it, `Deinit` silently discards it).
     LinearConformance {
@@ -434,6 +441,7 @@ impl TypeError {
             Self::NonConformingField { .. } => "type.non-conforming-field",
             Self::MethodReference { .. } => "type.method-reference",
             Self::BareVariantReference { .. } => "type.bare-variant-reference",
+            Self::BareEffectReference { .. } => "type.bare-effect-reference",
             Self::LinearConformance { .. } => "type.linear-conformance",
             Self::HeapConformance { .. } => "type.heap-conformance",
             Self::DeinitEffectRow { .. } => "type.deinit-effect-row",
@@ -913,6 +921,12 @@ impl Display for TypeError {
                 write!(
                     f,
                     "Enum case `{variant}` cannot be used as a bare name; write `.{variant}` or qualify it with the enum type"
+                )
+            }
+            TypeError::BareEffectReference { effect } => {
+                write!(
+                    f,
+                    "Effect '{effect} cannot be used as a value; perform it with `'{effect}(...)`"
                 )
             }
             TypeError::LinearConformance { ty, protocol } => {

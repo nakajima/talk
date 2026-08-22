@@ -1,0 +1,195 @@
+use syntax::{ TokenKind, kind_name, scan }
+
+func byte_slice(text: &String, start: Int, end: Int) -> String {
+	text.utf8().slice(start: start, byte_count: end - start).to_string()
+}
+
+func leading_indent(line: &String) -> Int {
+	let bytes = line.utf8()
+	let index = 0
+	loop index < bytes.count() {
+		let value = bytes.at(index: index)._toInt()
+		if value != 32 && value != 9 { break }
+		index = index + 1
+	}
+	index
+}
+
+func trim_trailing_space(line: &String) -> String {
+	let bytes = line.utf8()
+	let end = bytes.count()
+	loop end > 0 {
+		let value = bytes.at(index: end - 1)._toInt()
+		if value != 32 && value != 9 && value != 13 { break }
+		end = end - 1
+	}
+	byte_slice(text: line, start: 0, end: end)
+}
+
+// Normalizes a declaration extracted from a nested source range.
+//
+// Extraction removes the declaration's first-line indentation but retains its
+// owner's indentation on later lines. This removes that common closing-line
+// indent and trailing horizontal whitespace while preserving the source's token
+// spacing and line breaks.
+pub func format_source_snippet(source: &String) -> String {
+	let lines: [String] = []
+	for line in source.split(character: '\n').into_iter() {
+		lines.push(trim_trailing_space(line: line.to_string()))
+	}
+	let indent = 0
+	let index = lines.count - 1
+	loop index > 0 {
+		if lines[index].byte_count > 0 {
+			indent = leading_indent(line: lines[index])
+			break
+		}
+		index = index - 1
+	}
+	let output = StringBuilder()
+	let line_index = 0
+	loop line_index < lines.count {
+		let line: &String = lines[line_index]
+		let remove = if line_index > 0 && leading_indent(line: line) >= indent { indent } else { 0 }
+		output.append(string: byte_slice(text: line, start: remove, end: line.byte_count))
+		if line_index + 1 < lines.count { output.append(character: '\n') }
+		line_index = line_index + 1
+	}
+	output.finish()
+}
+
+func is_keyword(name: &String) -> Bool {
+	name == "Let" || name == "If" || name == "Else" || name == "Loop"
+		|| name == "For" || name == "Return" || name == "Unreachable"
+		|| name == "True" || name == "False" || name == "Enum"
+		|| name == "Case" || name == "Match" || name == "Import"
+		|| name == "Use" || name == "Linear" || name == "Macro"
+		|| name == "Func" || name == "Struct" || name == "Break"
+		|| name == "Init" || name == "Protocol" || name == "Typealias"
+		|| name == "Effect" || name == "In" || name == "Continue"
+}
+
+func is_modifier(name: &String) -> Bool {
+	name == "Pub" || name == "Public" || name == "Any" || name == "As"
+		|| name == "Handling" || name == "Static" || name == "Associated"
+		|| name == "Mut" || name == "Consuming" || name == "Extend"
+}
+
+func is_operator(name: &String) -> Bool {
+	name == "Arrow" || name == "Plus" || name == "PlusEquals"
+		|| name == "Minus" || name == "MinusEquals" || name == "Star"
+		|| name == "StarEquals" || name == "Slash" || name == "SlashEquals"
+		|| name == "Percent" || name == "Bang" || name == "BangEquals"
+		|| name == "Equals" || name == "EqualsEquals" || name == "Less"
+		|| name == "LessEquals" || name == "LessLess" || name == "Greater"
+		|| name == "GreaterEquals" || name == "GreaterGreater" || name == "Amp"
+		|| name == "AmpAmp" || name == "AmpEquals" || name == "Pipe"
+		|| name == "PipePipe" || name == "Tilde" || name == "TildeEquals"
+		|| name == "Caret" || name == "CaretEquals" || name == "DoubleColon"
+		|| name == "QuestionMark" || name == "Hash" || name == "Dollar"
+}
+
+func starts_upper(text: &String) -> Bool {
+	if text.byte_count == 0 { return false }
+	let first = text.utf8().at(index: 0)._toInt()
+	first >= 65 && first <= 90
+}
+
+func token_class(kind: TokenKind, spelling: &String, previous: &String, next: &String) -> String {
+	let name = kind_name(kind: kind)
+	if is_keyword(name: name) { return "keyword" }
+	if is_modifier(name: name) { return "modifier" }
+	if is_operator(name: name) { return "operator" }
+	if name == "Int" || name == "Float" { return "number" }
+	if name == "StringLiteral" || name == "CharacterLiteral" { return "string" }
+	if name == "EffectName" { return "effect" }
+	if name == "Attribute" { return "decorator" }
+	if name == "BoundVar" { return "variable" }
+	if name == "IRRegister" { return "parameter" }
+	if name == "Identifier" {
+		if previous == "Func" { return "function" }
+		if previous == "Struct" || previous == "Enum" || previous == "Protocol" || previous == "Typealias" || starts_upper(text: spelling) { return "type" }
+		if previous == "Dot" { return "property" }
+		if next == "Colon" { return "parameter" }
+	}
+	""
+}
+
+func escaped_html(text: &String) -> String {
+	let output = StringBuilder(capacity: text.byte_count)
+	let bytes = text.utf8()
+	let chunk_start = 0
+	let index = 0
+	loop index < bytes.count() {
+		let value = bytes.at(index: index)._toInt()
+		let entity = if value == 38 {
+			"&amp;"
+		} else if value == 60 {
+			"&lt;"
+		} else if value == 62 {
+			"&gt;"
+		} else if value == 34 {
+			"&quot;"
+		} else if value == 39 {
+			"&#39;"
+		} else {
+			""
+		}
+		if entity.byte_count > 0 {
+			if chunk_start < index { output.append(string: byte_slice(text: text, start: chunk_start, end: index)) }
+			output.append(string: entity)
+			chunk_start = index + 1
+		}
+		index = index + 1
+	}
+	if chunk_start < bytes.count() { output.append(string: byte_slice(text: text, start: chunk_start, end: bytes.count())) }
+	output.finish()
+}
+
+func highlighted(text: String, class_name: String) -> String {
+	let escaped = escaped_html(text: text)
+	if class_name.byte_count == 0 { return escaped }
+	let output = StringBuilder(capacity: escaped.byte_count + class_name.byte_count + 22)
+	output.append(string: "<span class=\"")
+	output.append(string: class_name)
+	output.append(string: "\">")
+	output.append(string: escaped)
+	output.append(string: "</span>")
+	output.finish()
+}
+
+// Formats and syntax-highlights one Talk declaration as escaped HTML.
+//
+// Highlight ranges come from the self-hosted Talk scanner. Trivia and any
+// unscanned suffix are escaped directly, so malformed input cannot inject markup.
+pub func highlight_source(source: &String) -> String {
+	let formatted = format_source_snippet(source: source)
+	let scanned = scan(source: formatted)
+	let output = StringBuilder()
+	let cursor = 0
+	let token_index = 0
+	let comment_index = 0
+	let previous = ""
+	loop token_index < scanned.tokens.count || comment_index < scanned.comments.count {
+		let token_start = if token_index < scanned.tokens.count { scanned.tokens[token_index].span.lower } else { formatted.byte_count + 1 }
+		let comment_start = if comment_index < scanned.comments.count { scanned.comments[comment_index].start } else { formatted.byte_count + 1 }
+		if comment_start < token_start {
+			let comment = scanned.comments[comment_index]
+			if cursor < comment.start { output.append(string: escaped_html(text: byte_slice(text: formatted, start: cursor, end: comment.start))) }
+			output.append(string: highlighted(text: byte_slice(text: formatted, start: comment.start, end: comment.end), class_name: "comment"))
+			cursor = comment.end
+			comment_index = comment_index + 1
+			continue
+		}
+		let token = scanned.tokens[token_index]
+		if cursor < token.span.lower { output.append(string: escaped_html(text: byte_slice(text: formatted, start: cursor, end: token.span.lower))) }
+		let spelling = byte_slice(text: formatted, start: token.span.lower, end: token.span.upper)
+		let next = if token_index + 1 < scanned.tokens.count { kind_name(kind: scanned.tokens[token_index + 1].kind) } else { "" }
+		output.append(string: highlighted(text: spelling, class_name: token_class(kind: token.kind, spelling: spelling, previous: previous, next: next)))
+		previous = kind_name(kind: token.kind)
+		cursor = token.span.upper
+		token_index = token_index + 1
+	}
+	if cursor < formatted.byte_count { output.append(string: escaped_html(text: byte_slice(text: formatted, start: cursor, end: formatted.byte_count))) }
+	output.finish()
+}

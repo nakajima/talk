@@ -29,11 +29,24 @@ pub struct BridgedFail {
     pub expected: Option<TokenKind>,
 }
 
+/// One declaration's attached doc-comment group: the declaration's
+/// byte span (the join key back to the AST) and the byte spans of the
+/// comment lines documenting it, in source order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BridgedDoc {
+    pub decl_start: u32,
+    pub decl_end: u32,
+    pub comments: Vec<(u32, u32)>,
+}
+
 /// A decoded parse result from the self-hosted frontend.
 pub struct BridgedParse {
     pub roots: Vec<Node>,
     pub meta: NodeMetaStorage,
     pub comments: Vec<(u32, u32)>,
+    /// Doc-comment attachments; empty unless the parse ran through the
+    /// frontend's documenting entry point (`parse_file_docs_source`).
+    pub docs: Vec<BridgedDoc>,
     pub failure: Option<BridgedFail>,
     pub diags: Vec<BridgedFail>,
     /// The highest node id minted; consumers continue their own

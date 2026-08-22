@@ -196,7 +196,7 @@ impl ProceduralMacroService {
         }
         names.sort();
 
-        let mut sources = crate::compiling::stdlib::source_documents("syntax")
+        let mut sources = crate::compiling::builtin_packages::source_documents("syntax")
             .ok_or_else(|| "the syntax standard library is unavailable".to_string())?
             .into_iter()
             .map(|(path, text)| {
@@ -387,8 +387,7 @@ impl ProceduralMacroService {
     }
 
     pub fn contains(&self, name: &str) -> bool {
-        self.artifact.wrappers.contains_key(name)
-            || self.artifact.decl_wrappers.contains_key(name)
+        self.artifact.wrappers.contains_key(name) || self.artifact.decl_wrappers.contains_key(name)
     }
 
     fn is_expression_macro(&self, name: &str) -> bool {

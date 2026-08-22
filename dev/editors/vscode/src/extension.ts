@@ -158,10 +158,7 @@ function serverOptions(): ServerOptions {
     transport: TransportKind.stdio,
     args: ["lsp"],
     options: {
-      env: {
-        ...configuredEnvironment(),
-        RUST_LOG: process.env.RUST_LOG ?? "debug",
-      },
+      env: configuredEnvironment(),
     },
   };
 }
@@ -271,6 +268,9 @@ async function clearStdlibPath() {
 }
 
 export function activate(context: ExtensionContext) {
+  const fileEvents = workspace.createFileSystemWatcher("**/*.tlk");
+  context.subscriptions.push(fileEvents);
+
   // Options to control the language client
   const clientOptions: LanguageClientOptions = {
     // Register the server for plain text documents
@@ -279,8 +279,8 @@ export function activate(context: ExtensionContext) {
       { scheme: "untitled", language: "talktalk" },
     ],
     synchronize: {
-      // Notify the server about file changes to '.clientrc files contained in the workspace
-      fileEvents: workspace.createFileSystemWatcher("**/*.tlk"),
+      // Notify the server about .tlk file changes in the workspace
+      fileEvents,
     },
   };
 

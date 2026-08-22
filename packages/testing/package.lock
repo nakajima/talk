@@ -1,0 +1,15 @@
+Lock(
+    format: 1,
+    fingerprint: "fd6fcc07592e17d4371982624af80fba1cb0772de3ff103f13dc045c8ca63a6a",
+    root_dependencies: ["328ffd42558d5b4badd80c37f8cdaab8a6e8b842d5499406a1314d12b2ad7d7a"],
+    packages: [
+        .path(
+            id: "328ffd42558d5b4badd80c37f8cdaab8a6e8b842d5499406a1314d12b2ad7d7a",
+            package: "ansi",
+            version: "0.1.0",
+            path: "../ansi",
+            base: "root",
+            dependencies: [],
+        ),
+    ]
+)

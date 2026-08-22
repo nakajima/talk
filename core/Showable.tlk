@@ -3,7 +3,13 @@ use package::String::{ Static, String }
 use package::StringBuilder::{ StringBuilder }
 use package::Operators::{ Add, Subtract, Multiply, Divide, Comparable, Equatable, Negatable }
 
+// A value with a user-facing textual representation.
+//
+// `Showable` powers interpolation-like library APIs such as `print`; it is not
+// a stable serialization format and implementations may allocate. Sensitive
+// types should avoid exposing raw representation details.
 pub protocol Showable {
+	// Produces the value's human-readable display text.
 	func show() -> String
 }
 
@@ -23,6 +29,7 @@ func _digit(d: Int) -> String {
 }
 
 extend Float {
+	// Truncates toward zero when converting this float to an integer.
 	pub func _trunc() -> Int {
 		#_ir { %? = trunc %0 }
 	}
@@ -40,6 +47,11 @@ extend Int {
 }
 
 extend Int: Showable {
+	// Formats a signed integer in base ten without allocation-sized
+	// intermediates.
+	//
+	// The algorithm keeps the magnitude negative so `Int.min`, whose positive
+	// magnitude is not representable, formats correctly.
 	pub func show() -> String {
 		if self == 0 { return "0" }
 		// Keep the magnitude negative so the minimum Int never overflows.
@@ -80,6 +92,12 @@ extend Int: Showable {
 }
 
 extend Float: Showable {
+	// Formats a finite float in fixed-point notation with at most 15 fractional
+	// digits.
+	//
+	// This is a display formatter rather than a shortest-round-trip serializer:
+	// it uses no exponent form and trims when the remaining fraction is below
+	// the implementation threshold.
 	pub func show() -> String {
 		if self == 0.0 { return "0.0" }
 		if self < 0.0 {
@@ -111,6 +129,7 @@ extend Float: Showable {
 }
 
 extend Bool: Showable {
+	// Returns the source spelling `true` or `false`.
 	pub func show() -> String {
 		if self.equals(true) {
 			"true"
@@ -121,21 +140,25 @@ extend Bool: Showable {
 }
 
 extend Void: Showable {
+	// Represents the unit value as `void`.
 	pub func show() -> String { "void" }
 }
 
 extend String: Showable {
+	// Returns an owned copy of the string's text without quotes or escaping.
 	pub func show() -> String {
 		self.to_string()
 	}
 }
 
 extend Static<String>: Showable {
+	// Copies the program-lifetime text into an owned display string.
 	pub func show() -> String {
 		self.to_string()
 	}
 }
 
 extend RawPtr: Showable {
+	// Redacts the numeric address and returns the stable placeholder `<ptr>`.
 	pub func show() -> String { "<ptr>" }
 }

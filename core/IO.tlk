@@ -4,91 +4,169 @@ use package::Operators::{ Add, Comparable, Equatable }
 use package::String::{ String }
 use package::Showable::{ Showable }
 
+// A low-level operation sent through the ambient `'io` effect.
+//
+// Payloads intentionally mirror the runtime's scalar ABI: descriptors, raw
+// pointers, lengths, and flags. Variant order is an ABI operation table and new
+// cases must be appended. Public high-level modules validate lengths and wrap
+// negative errno results; direct callers must do so themselves.
 pub enum IORequest {
+	// Reads bytes from a host file descriptor into a buffer.
 	case read(Int, RawPtr, Int)
+	// Writes bytes from a buffer to a host file descriptor.
 	case write(Int, RawPtr, Int)
+	// Opens a NUL-terminated host path with the supplied flags and mode.
 	case open(RawPtr, Int, Int)
+	// Closes a host file descriptor.
 	case close(Int)
+	// Sleeps the current worker for a number of milliseconds.
 	case sleep(Int)
+	// Polls host file descriptors for readiness.
 	case poll(RawPtr, Int, Int)
+	// Sends a runtime control operation and integer argument to a descriptor.
 	case ctl(Int, Int, Int)
+	// Creates a host socket.
 	case socket(Int, Int, Int)
+	// Binds a host socket to an address and port.
 	case bind(Int, Int, Int)
+	// Marks a host socket as a listener.
 	case listen(Int, Int)
+	// Connects a host socket to an address and port.
 	case connect(Int, Int, Int)
+	// Accepts one connection from a host listener.
 	case accept(Int)
+	// Returns the byte length required to store the current working directory.
 	case cwd_len
+	// Copies the current working directory into the supplied buffer.
 	case cwd_copy(RawPtr)
+	// Returns the byte length of an environment variable's value.
 	case getenv_len(RawPtr, Int)
+	// Copies an environment variable's value into the supplied buffer.
 	case getenv_copy(RawPtr, Int, RawPtr)
+	// Returns the process argument count.
 	case argc
+	// Returns the byte length of the process argument at an index.
 	case arg_len(Int)
+	// Copies the process argument at an index into the supplied buffer.
 	case arg_copy(Int, RawPtr)
+	// Returns the number of entries in a NUL-terminated directory path.
 	case dir_count(RawPtr)
+	// Returns the file-type code of an indexed directory entry.
 	case dir_entry_kind(RawPtr, Int)
+	// Returns the byte length of an indexed directory entry's name.
 	case dir_entry_len(RawPtr, Int)
+	// Copies an indexed directory entry's name into the supplied buffer.
 	case dir_entry_copy(RawPtr, Int, RawPtr)
+	// Terminates the process with the supplied status.
 	case exit(Int)
-	// Appended after exit so every pre-existing request keeps its slot in
-	// the runtime's operation table; exit stays at index 23.
+	// Returns the byte length of a canonicalized path, or a negative errno.
+	// Its position preserves the runtime operation-table ABI.
 	case realpath_len(RawPtr)
+	// Resolves a path and copies its canonical spelling into a buffer.
 	case realpath_copy(RawPtr, RawPtr)
-	// Appended after realpath_copy for the same reason: seek is 26,
-	// file_size 27.
+	// Moves a file descriptor's offset and returns its absolute position.
 	case seek(Int, Int, Int)
+	// Returns the byte size of the file behind a descriptor.
 	case file_size(Int)
-	// Appended after file_size so every pre-existing request keeps its
-	// slot in the runtime's operation table: monotonic_nanos is 28.
+	// Reads a monotonic clock as nanoseconds from a process-local anchor.
 	case monotonic_nanos
 }
 
+// Sends one low-level request to the nearest I/O handler and returns its
+// integer reply.
+//
+// Reply meaning depends on the variant: counts and descriptors are
+// non-negative, while host failures use negative errno values. Because user
+// handlers may return arbitrary integers, safe wrappers must clamp any reply
+// used as a memory bound.
 pub effect 'io(request: IORequest) -> Int
 
+// Operation was not permitted by the host.
 pub let EPERM: Int = -1
+// The requested file or directory does not exist.
 pub let ENOENT: Int = -2
+// The host reported a generic I/O failure.
 pub let EIO: Int = -5
+// The supplied file descriptor is invalid.
 pub let EBADF: Int = -9
+// The non-blocking operation would need to wait.
 pub let EAGAIN: Int = -11
+// Access to the requested resource was denied.
 pub let EACCES: Int = -13
+// Creation failed because the path already exists.
 pub let EEXIST: Int = -17
+// A path component expected to be a directory was not one.
 pub let ENOTDIR: Int = -20
+// The operation is invalid for a directory.
 pub let EISDIR: Int = -21
+// An argument was outside the host operation's valid domain.
 pub let EINVAL: Int = -22
+// The process has too many open file descriptors.
 pub let EMFILE: Int = -24
+// The target device has no space remaining.
 pub let ENOSPC: Int = -28
+// A write targeted a pipe or socket with no reader.
 pub let EPIPE: Int = -32
+// The host operation timed out.
 pub let ETIMEDOUT: Int = -110
+// The remote endpoint refused the connection.
 pub let ECONNREFUSED: Int = -111
 
+// Poll interest bit for data available to read.
 pub let POLLIN: Int = 1
+// Poll interest bit for capacity available to write.
 pub let POLLOUT: Int = 4
+// Poll result bit for an asynchronous descriptor error.
 pub let POLLERR: Int = 8
+// Poll result bit for a peer hangup.
 pub let POLLHUP: Int = 16
 
+// Opens a file descriptor for reading only.
 pub let O_RDONLY: Int = 0
+// Opens a file descriptor for writing only.
 pub let O_WRONLY: Int = 1
+// Opens a file descriptor for both reading and writing.
 pub let O_RDWR: Int = 2
+// Creates the file when it does not exist.
 pub let O_CREAT: Int = 64
+// Truncates an existing file to zero bytes when opened.
 pub let O_TRUNC: Int = 512
+// Directs writes to the end of the file.
 pub let O_APPEND: Int = 1024
+// Makes operations return rather than block waiting for readiness.
 pub let O_NONBLOCK: Int = 2048
 
+// Interprets a seek offset relative to the start of the file.
 pub let SEEK_SET: Int = 0
+// Interprets a seek offset relative to the current file position.
 pub let SEEK_CUR: Int = 1
+// Interprets a seek offset relative to the end of the file.
 pub let SEEK_END: Int = 2
 
+// Grants the owning user permission to read the file.
 pub let S_IRUSR: Int = 256
+// Grants the owning user permission to write the file.
 pub let S_IWUSR: Int = 128
+// Grants the owning user permission to execute the file.
 pub let S_IXUSR: Int = 64
+// Grants the owning group permission to read the file.
 pub let S_IRGRP: Int = 32
+// Grants the owning group permission to write the file.
 pub let S_IWGRP: Int = 16
+// Grants the owning group permission to execute the file.
 pub let S_IXGRP: Int = 8
+// Grants other users permission to read the file.
 pub let S_IROTH: Int = 4
+// Grants other users permission to write the file.
 pub let S_IWOTH: Int = 2
+// Grants other users permission to execute the file.
 pub let S_IXOTH: Int = 1
 
+// The process's standard-input file descriptor.
 pub let STDIN_FD: Int = 0
+// The process's standard-output file descriptor.
 pub let STDOUT_FD: Int = 1
+// The process's standard-error file descriptor.
 pub let STDERR_FD: Int = 2
 
 // Low-level open for raw pointers. `path` is expected to point to a
@@ -108,58 +186,82 @@ pub func open_path(path: String, flags: Int, mode: Int) '[io, alloc] -> Int {
 	fd
 }
 
+// Reads up to `count` bytes from `fd` into `buf`; returns a count or negative
+// errno.
 pub func _io_read(fd: Int, buf: RawPtr, count: Int) 'io -> Int {
 	'io(request: .read(fd, buf, count))
 }
 
+// Writes up to `count` bytes from `buf` to `fd`; returns a count or negative
+// errno.
 pub func _io_write(fd: Int, buf: RawPtr, count: Int) 'io -> Int {
 	'io(request: .write(fd, buf, count))
 }
 
+// Closes `fd`; returns zero or a negative errno.
 pub func _io_close(fd: Int) 'io -> Int {
 	'io(request: .close(fd))
 }
 
+// Returns the byte length of the current working directory, or a negative
+// errno.
 pub func _io_cwd_len() 'io -> Int {
 	'io(request: .cwd_len)
 }
 
+// Copies the current working directory into `buf`; returns bytes copied or a
+// negative errno.
 pub func _io_cwd_copy(buf: RawPtr) 'io -> Int {
 	'io(request: .cwd_copy(buf))
 }
 
+// Returns an environment value's byte length, or a negative errno when
+// unavailable.
 pub func _io_getenv_len(name: RawPtr, name_len: Int) 'io -> Int {
 	'io(request: .getenv_len(name, name_len))
 }
 
+// Copies an environment value into `buf`; returns bytes copied or a negative
+// errno.
 pub func _io_getenv_copy(name: RawPtr, name_len: Int, buf: RawPtr) 'io -> Int {
 	'io(request: .getenv_copy(name, name_len, buf))
 }
 
+// Returns the number of process arguments supplied by the host.
 pub func _io_argc() 'io -> Int {
 	'io(request: .argc)
 }
 
+// Returns the byte length of argument `index`, or a negative errno.
 pub func _io_arg_len(index: Int) 'io -> Int {
 	'io(request: .arg_len(index))
 }
 
+// Copies argument `index` into `buf`; returns bytes copied or a negative errno.
 pub func _io_arg_copy(index: Int, buf: RawPtr) 'io -> Int {
 	'io(request: .arg_copy(index, buf))
 }
 
+// Counts entries in the NUL-terminated directory `path`, or returns a negative
+// errno.
 pub func _io_dir_count(path: RawPtr) 'io -> Int {
 	'io(request: .dir_count(path))
 }
 
+// Returns the file-type code for directory entry `index`, or a negative errno.
 pub func _io_dir_entry_kind(path: RawPtr, index: Int) 'io -> Int {
 	'io(request: .dir_entry_kind(path, index))
 }
 
+// Returns the name length of directory entry `index`, or a negative errno.
 pub func _io_dir_entry_len(path: RawPtr, index: Int) 'io -> Int {
 	'io(request: .dir_entry_len(path, index))
 }
 
+// Copies the name of directory entry `index` into `buf`.
+//
+// The caller must allocate the length returned by `_io_dir_entry_len`. The
+// reply is the copied byte count or a negative errno and remains untrusted.
 pub func _io_dir_entry_copy(path: RawPtr, index: Int, buf: RawPtr) 'io -> Int {
 	'io(request: .dir_entry_copy(path, index, buf))
 }
@@ -171,6 +273,8 @@ pub func _io_realpath_len(path: RawPtr) 'io -> Int {
 	'io(request: .realpath_len(path))
 }
 
+// Copies the canonicalized spelling of `path` into `buf`, or returns a negative
+// errno.
 pub func _io_realpath_copy(path: RawPtr, buf: RawPtr) 'io -> Int {
 	'io(request: .realpath_copy(path, buf))
 }
@@ -195,19 +299,23 @@ pub func _io_monotonic_nanos() 'io -> Int {
 	'io(request: .monotonic_nanos)
 }
 
+// Terminates the process with `code`; this operation never resumes.
 pub func _io_exit(code: Int) 'io -> Never {
 	'io(request: .exit(code))
 	loop {}
 }
 
+// Sends runtime control operation `op` and integer `arg` to `fd`.
 pub func _io_ctl(fd: Int, op: Int, arg: Int) 'io -> Int {
 	'io(request: .ctl(fd, op, arg))
 }
 
+// Polls `count` descriptor records until readiness or `timeout` milliseconds.
 pub func _io_poll(fds: RawPtr, count: Int, timeout: Int) 'io -> Int {
 	'io(request: .poll(fds, count, timeout))
 }
 
+// Returns whether a host result is a negative errno value.
 pub func is_error(result: Int) -> Bool {
 	result < 0
 }
@@ -223,10 +331,18 @@ pub func _io_clamp(count: Int, capacity: Int) -> Int {
 	count
 }
 
+// Requests one host write of the string's complete UTF-8 buffer.
+//
+// The return value is the host's byte count or negative errno; partial writes
+// are not retried. Use `fs.File.write` when the complete string must be
+// written.
 pub func write_string(fd: Int, s: String) 'io -> Int {
 	#_ir(fd, s.storage.base, s.byte_count) { %? = io 1 $0 $1 $2 }
 }
 
+// Performs one write of `s` to standard output without a newline.
+//
+// The returned count can be short or negative and no retry is attempted.
 pub func print_raw(_ s: String) 'io -> Int {
 	write_string(fd: STDOUT_FD, s: s)
 }
@@ -238,6 +354,11 @@ func _print_line(s: String) 'io -> () {
 	()
 }
 
+// Displays `value` on standard output followed by a newline.
+//
+// Rendering uses `Showable`; both writes intentionally ignore short counts and
+// host errors, making this a convenience API rather than reliable stream
+// output.
 pub func print<T: Showable>(_ value: T) -> () {
 	_print_line(s: value.show())
 }

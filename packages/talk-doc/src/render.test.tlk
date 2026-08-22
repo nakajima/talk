@@ -1,0 +1,343 @@
+use package::autolink::{ SymbolLink }
+use package::documentable::{ Documentable }
+use package::highlight::{ highlight_source }
+use package::render::{ ModuleLink, render_entries, render_index_page_with_symbols, render_module_page, render_symbol_page, symbol_file }
+use package::store::{ DocumentableCollection }
+use package::symbols::{ signature_of, symbol_links }
+
+func contains_sub(haystack: &String, needle: &String) -> Bool {
+	let h = haystack.utf8()
+	let n = needle.utf8()
+	if n.count() == 0 { return true }
+	if h.count() < n.count() { return false }
+	let i = 0
+	loop i <= h.count() - n.count() {
+		let j = 0
+		let matches = true
+		loop j < n.count() {
+			if h.at(index: i + j)._toInt() != n.at(index: j)._toInt() {
+				matches = false
+				break
+			}
+			j = j + 1
+		}
+		if matches { return true }
+		i = i + 1
+	}
+	false
+}
+
+func count_sub(haystack: &String, needle: &String) -> Int {
+	let h = haystack.utf8()
+	let n = needle.utf8()
+	if n.count() == 0 || h.count() < n.count() { return 0 }
+	let count = 0
+	let i = 0
+	loop i <= h.count() - n.count() {
+		let j = 0
+		let matches = true
+		loop j < n.count() {
+			if h.at(index: i + j)._toInt() != n.at(index: j)._toInt() {
+				matches = false
+				break
+			}
+			j = j + 1
+		}
+		if matches { count = count + 1 }
+		i = i + 1
+	}
+	count
+}
+
+func collect(source: String) -> DocumentableCollection {
+	let collection = DocumentableCollection()
+	collection.collect_public(source: source)
+	collection
+}
+
+test "signature rendering covers the declaration kinds" {
+	let docs = collect(source: "// Adds.\npub func add<T>(a: T, b: Int) 'io -> T { a }\n\n// The answer.\npub let answer: Int = 42")
+	assert(docs.items.count > 1)
+	let rendered = render_entries(collection: docs)
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">func</span>"))
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"function\">add</span>"))
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">let</span> answer"))
+	assert(contains_sub(haystack: rendered, needle: "Adds."))
+}
+
+test "effect declarations render documentation, signatures, source, and links" {
+	let docs = collect(source: "// Performs `'io` requests.\npub effect 'io<T>(value: T) -> T")
+	let rendered = render_entries(collection: docs)
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">effect</span> &#39;<span class=\"effect\">io</span>"))
+	assert(contains_sub(haystack: rendered, needle: "Performs <a href=\"#effect-io-t-value-t-t\" title=\"\"><code>&#39;io</code></a> requests."))
+	assert(contains_sub(haystack: rendered, needle: "<summary>View Source</summary>"))
+}
+
+test "nominal pages render members and skip private ones" {
+	let docs = collect(source: "pub struct Box<T> {\n\t// The stored value.\n\tpub let value: T\n\tlet secret: Int\n\t// Makes one.\n\tpub static func make(value: T) -> Box<T> { Box(value: value) }\n}")
+	let rendered = render_entries(collection: docs)
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">struct</span> <span class=\"type\">Box</span>"))
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">let</span> value"))
+	assert(contains_sub(haystack: rendered, needle: "The stored value."))
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">static</span> <span class=\"keyword\">func</span> <span class=\"function\">make</span>"))
+	assert(contains_sub(haystack: rendered, needle: "secret") == false)
+}
+
+test "enum pages render variants even though variants carry no pub" {
+	let docs = collect(source: "// A choice.\npub enum Choice {\n\t// Has one.\n\tcase some(Int)\n\tcase none\n}")
+	let rendered = render_entries(collection: docs)
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">enum</span> <span class=\"type\">Choice</span>"))
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">case</span> some(<span class=\"type\">Int</span>)"))
+	assert(contains_sub(haystack: rendered, needle: "Has one."))
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">case</span> none"))
+}
+
+test "doc comments are html escaped" {
+	let docs = collect(source: "// Uses <T> & \"quotes\".\npub func f() {}")
+	let rendered = render_entries(collection: docs)
+	assert(contains_sub(haystack: rendered, needle: "Uses &lt;T&gt; &amp; &quot;quotes&quot;."))
+}
+
+test "doc comments render markdown within the declaration hierarchy" {
+	let docs = collect(source: "// Uses **bold** text.\n//\n// ## Details\npub func f() {}")
+	let rendered = render_entries(collection: docs)
+	assert(contains_sub(haystack: rendered, needle: "<b>bold</b>"))
+	assert(contains_sub(haystack: rendered, needle: "<h5>Details</h5>"))
+	assert(contains_sub(haystack: rendered, needle: "<h2>Details</h2>") == false)
+}
+
+test "declarations are grouped by kind without a primary entry" {
+	let docs = collect(source: "pub func run() {}\npub struct Box {}\npub effect 'stop() -> ()\npub let answer: Int = 42")
+	let rendered = render_entries(collection: docs)
+	assert(contains_sub(haystack: rendered, needle: "<section class=\"docs-declaration-group\"><h2>Structs</h2>"))
+	assert(contains_sub(haystack: rendered, needle: "<section class=\"docs-declaration-group\"><h2>Effects</h2>"))
+	assert(contains_sub(haystack: rendered, needle: "<section class=\"docs-declaration-group\"><h2>Globals</h2>"))
+	assert(contains_sub(haystack: rendered, needle: "<section class=\"docs-declaration-group\"><h2>Functions</h2>"))
+	assert(contains_sub(haystack: rendered, needle: "docs-primary") == false)
+
+	let links = [ModuleLink(name: "main", file: "main.html", declarations: 4)]
+	let symbols = symbol_links(module: "main", page: "main.html", collection: docs)
+	let page = render_module_page(package: "pkg", module: "main", collection: docs, modules: links, symbols: symbols)
+	assert(contains_sub(haystack: page, needle: "href=\"#group-structs\">Structs</a>"))
+	assert(contains_sub(haystack: page, needle: "href=\"#group-effects\">Effects</a>"))
+	assert(contains_sub(haystack: page, needle: "href=\"#group-globals\">Globals</a>"))
+	assert(contains_sub(haystack: page, needle: "href=\"#group-functions\">Functions</a>"))
+}
+
+test "private top level declarations are skipped" {
+	let docs = collect(source: "func hidden() {}\npub func shown() {}")
+	let rendered = render_entries(collection: docs)
+	assert(contains_sub(haystack: rendered, needle: "hidden") == false)
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"function\">shown</span>"))
+}
+
+test "module and index pages link each other" {
+	let docs = collect(source: "// Adds.\npub func add(a: Int) -> Int { a }")
+	let links = [ModuleLink(name: "lib", file: "lib.html", declarations: 1, documentation: ["Utilities built around `add`."])]
+	let symbols = symbol_links(module: "lib", page: "lib.html", collection: docs)
+	let page = render_module_page(package: "pkg", module: "lib", collection: docs, modules: links, symbols: symbols)
+	assert(contains_sub(haystack: page, needle: "<title>lib - pkg</title>"))
+	assert(contains_sub(haystack: page, needle: "<main class=\"site-page docs-proposal docs-design-1\">"))
+	assert(contains_sub(haystack: page, needle: "class=\"site-page-layout docs-proposal-shell\""))
+	assert(contains_sub(haystack: page, needle: "class=\"site-page-sidebar docs-catalog\""))
+	assert(contains_sub(haystack: page, needle: "class=\"site-page-content docs-reference\""))
+	assert(contains_sub(haystack: page, needle: "href=\"index.html\""))
+	assert(contains_sub(haystack: page, needle: "href=\"lib.html\" aria-current=\"page\">lib</a>"))
+	assert(count_sub(haystack: page, needle: "docs-breadcrumbs") == 1)
+	let index = render_index_page_with_symbols(package: "pkg", modules: links, symbols: symbols)
+	assert(contains_sub(haystack: index, needle: "href=\"index.html\" aria-current=\"page\">pkg</a>"))
+	assert(contains_sub(haystack: index, needle: "class=\"docs-module-summary\""))
+	assert(contains_sub(haystack: index, needle: "Utilities built around <a href=\"lib.symbol-func-add-a-int-int.html#func-add-a-int-int\" title=\"\"><code>add</code></a>."))
+	assert(count_sub(haystack: index, needle: "docs-breadcrumbs") == 1)
+	assert(contains_sub(haystack: index, needle: "href=\"lib.html\""))
+}
+
+test "WIP modules render banners on module and symbol pages" {
+	let docs = collect(source: "// WIP: The <API> may change.\n// Module overview.\n\npub enum Choice { case none }")
+	let links = [ModuleLink(name: "main", file: "main.html", declarations: 1, documentation: ["Module overview."], wip: .some("The <API> may change."))]
+	let symbols = symbol_links(module: "main", page: "main.html", collection: docs)
+	let index = render_index_page_with_symbols(package: "pkg", modules: links, symbols: symbols)
+	assert(contains_sub(haystack: index, needle: "<span class=\"docs-module-wip\" title=\"The &lt;API&gt; may change.\">WIP</span>"))
+	let module_page = render_module_page(package: "pkg", module: "main", collection: docs, modules: links, symbols: symbols)
+	assert(count_sub(haystack: module_page, needle: "docs-wip-banner") == 1)
+	assert(contains_sub(haystack: module_page, needle: "<span class=\"docs-nav-wip\" title=\"The &lt;API&gt; may change.\">WIP</span>"))
+	assert(contains_sub(haystack: module_page, needle: "<strong>Work in progress</strong>"))
+	assert(contains_sub(haystack: module_page, needle: "The &lt;API&gt; may change."))
+	assert(contains_sub(haystack: module_page, needle: "Module overview."))
+
+	for entry in docs.items {
+		if let .some(_) = symbol_file(module_page: "main.html", collection: docs, entry: entry) {
+			let page = render_symbol_page(package: "pkg", module: "main", module_page: "main.html", collection: docs, entry: entry, modules: links, symbols: symbols)
+			assert(count_sub(haystack: page, needle: "docs-wip-banner") == 1)
+			assert(contains_sub(haystack: page, needle: "The &lt;API&gt; may change."))
+		}
+	}
+}
+
+test "module summaries link to standalone declaration pages" {
+	let docs = collect(source: "// A choice.\n//\n// More detail belongs on the symbol page.\npub enum Choice {\n\t// Contains a value.\n\tcase some(Int)\n\tcase none\n}")
+	let links = [ModuleLink(name: "main", file: "main.html", declarations: 1)]
+	let symbols = symbol_links(module: "main", page: "main.html", collection: docs)
+	let module_page = render_module_page(package: "pkg", module: "main", collection: docs, modules: links, symbols: symbols)
+	assert(contains_sub(haystack: module_page, needle: "<h2 class=\"docs-reference-title\">API Reference</h2>"))
+	assert(contains_sub(haystack: module_page, needle: "<code class=\"docs-api-signature\"><span class=\"keyword\">enum</span> <a class=\"docs-symbol-link\" href=\"main.symbol-enum-choice.html#enum-choice\"><span class=\"type\">Choice</span></a></code>"))
+	assert(contains_sub(haystack: module_page, needle: "<h4>") == false)
+	assert(contains_sub(haystack: module_page, needle: "A choice."))
+	assert(contains_sub(haystack: module_page, needle: "More detail belongs on the symbol page.") == false)
+	assert(contains_sub(haystack: module_page, needle: "Contains a value.") == false)
+
+	for entry in docs.items {
+		if let .some(file) = symbol_file(module_page: "main.html", collection: docs, entry: entry) {
+			assert(file == "main.symbol-enum-choice.html")
+			let page = render_symbol_page(package: "pkg", module: "main", module_page: "main.html", collection: docs, entry: entry, modules: links, symbols: symbols)
+			assert(contains_sub(haystack: page, needle: "<title>Choice - pkg</title>"))
+			assert(contains_sub(haystack: page, needle: "href=\"#enum-choice\" aria-current=\"page\">Choice</a>"))
+			assert(count_sub(haystack: page, needle: "docs-breadcrumbs") == 1)
+			assert(contains_sub(haystack: page, needle: "More detail belongs on the symbol page."))
+			assert(contains_sub(haystack: page, needle: "<section class=\"docs-symbol-member-group\" id=\"members-cases\"><h2>Cases</h2>"))
+			assert(contains_sub(haystack: page, needle: "Contains a value."))
+		}
+	}
+}
+
+test "detached leading comments render as module documentation" {
+	let docs = collect(source: "// Module summary.\n//\n// ## Details\n\npub func run() {}")
+	assert(docs.module_documentation.count == 3)
+	assert(docs.items[0].documentation.is_empty())
+	let links = [ModuleLink(name: "main", file: "main.html", declarations: 1)]
+	let symbols = symbol_links(module: "main", page: "main.html", collection: docs)
+	let page = render_module_page(package: "pkg", module: "main", collection: docs, modules: links, symbols: symbols)
+	assert(contains_sub(haystack: page, needle: "docs-module-documentation"))
+	assert(contains_sub(haystack: page, needle: "Module summary."))
+	assert(contains_sub(haystack: page, needle: "<h3>Details</h3>"))
+}
+
+test "leading comments attached to the first declaration remain declaration documentation" {
+	let docs = collect(source: "// Runs.\npub func run() {}")
+	assert(docs.module_documentation.is_empty())
+	assert(docs.items[0].documentation[0] == "Runs.")
+}
+
+test "backticked symbols link in nominal and member scope" {
+	let docs = collect(source: "// Uses `Box`, `Box.value`, `make()`, and `missing`.\npub struct Box {\n\t// Read by `make()` and exposed as `.value`.\n\tpub let value: Int\n\t// Returns `value`.\n\tpub func make() -> Int { self.value }\n}")
+	let rendered = render_entries(collection: docs)
+	assert(contains_sub(haystack: rendered, needle: "href=\"#struct-box\" title=\"\"><code>Box</code></a>"))
+	assert(contains_sub(haystack: rendered, needle: "href=\"#struct-box-let-value-int\" title=\"\"><code>Box.value</code></a>"))
+	assert(contains_sub(haystack: rendered, needle: "href=\"#struct-box-func-make-int\" title=\"\"><code>make()</code></a>"))
+	assert(contains_sub(haystack: rendered, needle: "href=\"#struct-box-let-value-int\" title=\"\"><code>.value</code></a>"))
+	assert(contains_sub(haystack: rendered, needle: "<code>missing</code>"))
+}
+
+test "backticked symbols link across package modules" {
+	let left = collect(source: "// A box.\npub struct Box {}")
+	let right = collect(source: "// Creates a `Box`.\npub func build() {}")
+	let symbols: [SymbolLink] = []
+	for symbol in symbol_links(module: "left", page: "left.html", collection: left) { symbols.push(symbol.clone()) }
+	for symbol in symbol_links(module: "right", page: "right.html", collection: right) { symbols.push(symbol.clone()) }
+	let links = [
+		ModuleLink(name: "left", file: "left.html", declarations: 1),
+		ModuleLink(name: "right", file: "right.html", declarations: 1)
+	]
+	let page = render_module_page(package: "pkg", module: "right", collection: right, modules: links, symbols: symbols)
+	assert(contains_sub(haystack: page, needle: "href=\"left.symbol-struct-box.html#struct-box\" title=\"\"><code>Box</code></a>"))
+}
+
+test "signature symbols always link across modules" {
+	let left = collect(source: "pub struct Box {}")
+	let right = collect(source: "pub func build(value: Box) -> Box { value }")
+	let symbols: [SymbolLink] = []
+	for symbol in symbol_links(module: "left", page: "left.html", collection: left) { symbols.push(symbol.clone()) }
+	for symbol in symbol_links(module: "right", page: "right.html", collection: right) { symbols.push(symbol.clone()) }
+	let links = [ModuleLink(name: "right", file: "right.html", declarations: 1)]
+	let page = render_module_page(package: "pkg", module: "right", collection: right, modules: links, symbols: symbols)
+	assert(count_sub(haystack: page, needle: "<a class=\"docs-symbol-link\" href=\"left.symbol-struct-box.html#struct-box\"><span class=\"type\">Box</span></a>") == 2)
+	assert(contains_sub(haystack: page, needle: "<a class=\"docs-symbol-link\" href=\"#func-build") == false)
+}
+
+test "display signatures preserve labels ownership and constraints" {
+	let docs = collect(source: "pub struct Values<Element> {\n\tpub mut func index(consume _ needle: Element) -> Int? where Element: Equatable<Element> { .none }\n}")
+	let found = false
+	for entry in docs.items {
+		if let .method(method) = entry.value {
+			found = true
+			assert(method.function.signature == "mut func index(consume _ needle: Element) -> Int? where Element: Equatable<Element>")
+		}
+	}
+	assert(found)
+}
+
+test "protocols and their methods are linkable symbols" {
+	let docs = collect(source: "// A source. Use `Iterator.skip()`.\npub protocol Iterator {\n\t// Advances.\n\tmut func next() -> Int\n\t// Skips.\n\tconsuming func skip(count: Int) -> Self { self }\n}\n// Takes an `Iterator`.\npub func take(value: Iterator) {}")
+	let rendered = render_entries(collection: docs)
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">protocol</span> <span class=\"type\">Iterator</span>"))
+	assert(contains_sub(haystack: rendered, needle: "href=\"#protocol-iterator-consuming-func-skip-count-int-self\" title=\"\"><code>Iterator.skip()</code></a>"))
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">mut</span> <span class=\"keyword\">func</span> <span class=\"function\">next</span>()"))
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">consuming</span> <span class=\"keyword\">func</span> <span class=\"function\">skip</span>(count: <span class=\"type\">Int</span>)"))
+	assert(contains_sub(haystack: rendered, needle: "<a class=\"docs-symbol-link\" href=\"#protocol-iterator\"><span class=\"type\">Iterator</span></a>"))
+}
+
+test "synthetic builtins render and link without source declarations" {
+	let core = DocumentableCollection()
+	core.add_builtin(name: "Int", documentation: ["A signed integer."])
+	let rendered = render_entries(collection: core)
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">builtin</span> <span class=\"type\">Int</span>"))
+	assert(contains_sub(haystack: rendered, needle: "A signed integer."))
+	assert(contains_sub(haystack: rendered, needle: "View Source") == false)
+
+	let package = collect(source: "// Accepts an `Int`.\npub func identity(value: Int) -> Int { value }")
+	let symbols: [SymbolLink] = []
+	for symbol in symbol_links(module: "Builtins", page: "/docs/core/Builtins.html", collection: core) { symbols.push(symbol.clone()) }
+	for symbol in symbol_links(module: "main", page: "main.html", collection: package) { symbols.push(symbol.clone()) }
+	let links = [ModuleLink(name: "main", file: "main.html", declarations: 1)]
+	let page = render_module_page(package: "pkg", module: "main", collection: package, modules: links, symbols: symbols)
+	assert(count_sub(haystack: page, needle: "href=\"/docs/core/Builtins.symbol-builtin-int.html#builtin-int\"") == 3)
+}
+
+test "core symbols use their external catalog URL" {
+	let core = collect(source: "pub struct String {}")
+	let package = collect(source: "// Uses `String`.\npub func echo(value: String) -> String { value }")
+	let symbols: [SymbolLink] = []
+	for symbol in symbol_links(module: "String", page: "/docs/core/String.html", collection: core) { symbols.push(symbol.clone()) }
+	for symbol in symbol_links(module: "main", page: "main.html", collection: package) { symbols.push(symbol.clone()) }
+	let links = [ModuleLink(name: "main", file: "main.html", declarations: 1)]
+	let page = render_module_page(package: "pkg", module: "main", collection: package, modules: links, symbols: symbols)
+	assert(count_sub(haystack: page, needle: "href=\"/docs/core/String.symbol-struct-string.html#struct-string\"") == 3)
+}
+
+test "ambiguous package symbols remain unlinked code" {
+	let left = collect(source: "pub struct Item {}")
+	let right = collect(source: "pub struct Item {}")
+	let current = collect(source: "// Uses `Item`.\npub func use_item() {}")
+	let symbols: [SymbolLink] = []
+	for symbol in symbol_links(module: "left", page: "left.html", collection: left) { symbols.push(symbol.clone()) }
+	for symbol in symbol_links(module: "right", page: "right.html", collection: right) { symbols.push(symbol.clone()) }
+	for symbol in symbol_links(module: "current", page: "current.html", collection: current) { symbols.push(symbol.clone()) }
+	let links = [ModuleLink(name: "current", file: "current.html", declarations: 1)]
+	let page = render_module_page(package: "pkg", module: "current", collection: current, modules: links, symbols: symbols)
+	assert(contains_sub(haystack: page, needle: "Uses <code>Item</code>."))
+}
+
+test "source highlighting handles generated table declarations" {
+	let source = StringBuilder(capacity: 250000)
+	source.append(string: "pub func table() -> String { \"")
+	let index = 0
+	loop index < 200000 {
+		source.append(character: 'a')
+		index = index + 1
+	}
+	source.append(string: "\" }")
+	let rendered = highlight_source(source: source.finish())
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"string\">&quot;aaaa"))
+	assert(rendered.byte_count > 200000)
+}
+
+test "functions and methods include formatted highlighted source" {
+	let docs = collect(source: "pub func top() -> Int { let text = \"<tag>\"; 1 < 2 }\npub struct Box {\n\tpub let value: Int\n\tpub func get() -> Int {\n\t\tlet result = self.value\n\t\tresult\n\t}\n}")
+	let rendered = render_entries(collection: docs)
+	assert(count_sub(haystack: rendered, needle: "<summary>View Source</summary>") == 2)
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"modifier\">pub</span> <span class=\"keyword\">func</span> <span class=\"function\">top</span>"))
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"string\">&quot;&lt;tag&gt;&quot;</span>"))
+	assert(contains_sub(haystack: rendered, needle: "<span class=\"operator\">&lt;</span>"))
+	assert(contains_sub(haystack: rendered, needle: "\n\t<span class=\"keyword\">let</span> result"))
+	assert(contains_sub(haystack: rendered, needle: "\n\t\t<span class=\"keyword\">let</span> result") == false)
+}

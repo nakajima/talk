@@ -1,6 +1,6 @@
 # 4. Data and Patterns
 
-TalkTalk has a few ways to group data. Structs define a reusable kind of value, records are handy one-off bundles of fields, and enums describe values that can be one of several cases. Patterns let you look inside all three.
+TalkTalk has a few ways to group data. Structs define a reusable kind of value, records are handy structural bundles of fields, and enums describe values that can be one of several cases. Patterns let you look inside all three.
 
 ## Structs
 
@@ -40,7 +40,7 @@ Rectangle(square: 12)
 
 ## Records
 
-Records need no declaration and are typed by their fields:
+Records need no declaration. A literal's field labels and value types determine its type:
 
 ```tlk
 let user = {
@@ -52,7 +52,47 @@ let user = {
 print(user.greeting(user.name))
 ```
 
-Use records for local structural values and structs for nominal identity, conformance, constructors, or a public API.
+The type of `user` is `{ active: Bool, greeting: (String) -> String, name: String }`. Source order is not part of record identity: labels, not positions, connect fields. The compiler stores a closed row in a canonical label order, so `{ x: 1, y: 2 }` and `{ y: 2, x: 1 }` have the same type.
+
+Field access can infer an *open* record row. This function does not require one declared record shape; it accepts any record with an `x` field:
+
+```tlk norun
+func x_coordinate(point) {
+    point.x
+}
+
+print(x_coordinate({ x: 3, y: 4 }))
+print(x_coordinate({ name: "origin", x: 0 }))
+```
+
+The inferred parameter is approximately `{ x: T, ..row }`, and the return type is `T`. The hidden row tail means "possibly more fields." Each call fills in both `T` and the remaining fields, and compilation specializes the function for the concrete closed row used there.
+
+Uses constrain field types in both directions:
+
+```tlk norun
+func shifted(point) {
+    point.x + 1
+}
+
+shifted({ x: 41, label: "answer" })
+```
+
+`+ 1` constrains `point.x` to support integer addition, so the call resolves `x` as `Int`. Accessing several fields adds all of them to the required row. A record missing a required label, or with an incompatible field type, is a type error.
+
+Open-row inference is currently a frontend feature with incomplete executable-backend coverage, so these two generic examples are shown as non-runnable reference code. Closed record literals, field reads, writes, and concrete record patterns execute on the supported targets.
+
+Record patterns are structural too. `..` allows fields the pattern does not mention:
+
+```tlk
+let point = { x: 10, y: 0, label: "start" }
+
+match point {
+    { x, y: 0, .. } -> x,
+    { y, .. } -> y
+}
+```
+
+Use records for local structural values. Prefer structs when a value needs nominal identity, declared conformance, constructors, methods as a public API, or a stable exported name. [Type Inference Reference](type-inference#record-rows) describes row inference and specialization in detail.
 
 ## Enums
 

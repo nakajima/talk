@@ -1,0 +1,227 @@
+use package::markdown::{ Block, Inline, TableAlignment, TableCell }
+use html::{ html, PreEscaped }
+
+extend Optional<String>: Clone {}
+extend Inline: Clone {}
+extend Block: Clone {}
+
+extend Into<String> {
+	// Convenience spelling for consuming `Into<String>.into`.
+	//
+	// Formatting and escaping are entirely defined by the selected conformance.
+	pub consuming func to_string() -> String {
+		self.into()
+	}
+}
+
+func inline(consume _ inlines: [Inline]) -> PreEscaped {
+	let output = StringBuilder()
+	for value in inlines {
+		output.append(string: value.to_string())
+	}
+	PreEscaped(value: output.finish())
+}
+
+func inline(consume blocks: [Block], heading_offset: Int) -> PreEscaped {
+	let output = StringBuilder()
+	for value in blocks {
+		output.append(string: value.to_string_with_heading_offset(heading_offset: heading_offset))
+	}
+	PreEscaped(value: output.finish())
+}
+
+struct HtmlTableCell {
+	let inlines: [Inline]
+	let style: String
+}
+
+func html_table_cells(consume cells: [TableCell], alignments: &[TableAlignment]) -> [HtmlTableCell] {
+	let rendered: [HtmlTableCell] = []
+	let index = 0
+	for cell in cells {
+		let style = if index < alignments.count {
+			let alignment: &TableAlignment = alignments[index]
+			match alignment {
+				.left -> "text-align: left",
+				.center -> "text-align: center",
+				.right -> "text-align: right",
+				.unspecified -> ""
+			}
+		} else {
+			""
+		}
+		rendered.push(HtmlTableCell(inlines: cell.inlines, style: style))
+		index = index + 1
+	}
+	rendered
+}
+
+extend Inline: Into<String> {
+	consuming func into() -> String {
+		let md = match self {
+			.text(text) -> {
+				@html { (text) }
+			},
+			.emphasis(inlines) -> {
+				@html {
+		    em {(
+		        inline(inlines)
+		    )}}
+			},
+			.strong(inlines) -> {
+				@html { b {(inline(inlines))} }
+			},
+			.strikethrough(inlines) -> {
+				@html { s {(inline(inlines))} }
+			},
+			.code(text) -> {
+				@html { code { (text) } }
+			},
+			.link(href, title, children) -> {
+				@html {
+		      a href=(href) title=(title.or { "" }) {
+		        (inline(children))
+		      }
+		    }
+			},
+			.image(src, title, alt) -> {
+				@html {
+					img src=(src) title=(title.or { "" }) alt=(alt) {}
+				}
+			},
+			.softBreak -> {
+				@html { " " }
+			},
+			.hardBreak -> {
+				@html { br {} }
+			}
+		}
+
+		md.into_string()
+	}
+}
+
+extend Block {
+	// Renders one block as escaped semantic HTML.
+	//
+	// `heading_offset` is added to heading levels and capped at six; callers must
+	// keep the result positive. Inline text and attributes are escaped by the HTML
+	// macro, while recursively rendered children re-enter as trusted `PreEscaped` markup.
+	pub consuming func to_string_with_heading_offset(heading_offset: Int) -> String {
+		let md = match self {
+			.paragraph(inlines) -> {
+				@html {
+					p {
+						(inline(inlines))
+					}
+				}
+			},
+			.heading(level, contents) -> {
+				let rendered_level = if level + heading_offset < 6 { level + heading_offset } else { 6 }
+				match rendered_level {
+					1 -> {
+						@html {
+							h1 { (inline(contents)) }
+						}
+					},
+					2 -> {
+						@html {
+							h2 { (inline(contents)) }
+						}
+					},
+					3 -> {
+						@html {
+							h3 { (inline(contents)) }
+						}
+					},
+					4 -> {
+						@html {
+							h4 { (inline(contents)) }
+						}
+					},
+					5 -> {
+						@html {
+							h5 { (inline(contents)) }
+						}
+					},
+					6 -> {
+						@html {
+							h6 { (inline(contents)) }
+						}
+					},
+					_ -> unreachable
+				}
+			},
+			.blockQuote(blocks) -> {
+				@html {
+					blockquote { (inline(blocks: blocks, heading_offset: heading_offset)) }
+				}
+			},
+			.unorderedList(items) -> {
+				@html {
+				ul {
+					@for item in items {
+						li { (inline(blocks: item.blocks, heading_offset: heading_offset)) }
+					}
+				}
+			}
+			},
+			.orderedList(start, items) -> {
+				@html {
+					ol start=(start) {
+						@for item in items {
+							li { (inline(blocks: item.blocks, heading_offset: heading_offset)) }
+						}
+					}
+				}
+			},
+			.codeBlock(syntax, code) -> {
+				@html {
+					pre {
+						code {
+							(code)
+						}
+					}
+				}
+			},
+			.thematicBreak -> {
+				@html { hr {} }
+			},
+			.table(header, alignments, rows) -> {
+				let headings = html_table_cells(cells: header, alignments: alignments)
+				let body: [[HtmlTableCell]] = []
+				for row in rows {
+					body.push(html_table_cells(cells: row, alignments: alignments))
+				}
+				@html {
+					table {
+						thead {
+							tr {
+								@for cell in headings {
+									th style=(cell.style) { (inline(cell.inlines)) }
+								}
+							}
+						}
+						tbody {
+							@for row in body {
+								tr {
+									@for cell in row {
+										td style=(cell.style) { (inline(cell.inlines)) }
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		md.into_string()
+	}
+}
+
+extend Block: Into<String> {
+	consuming func into() -> String {
+		self.to_string_with_heading_offset(heading_offset: 0)
+	}
+}

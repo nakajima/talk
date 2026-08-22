@@ -8,103 +8,136 @@ use package::String::{ String }
 // and Duration is a signed nanosecond count. Wall-clock dates do not
 // belong to these types.
 
+// A signed time span stored as a 64-bit nanosecond count.
+//
+// Unit constructors and arithmetic use the normal trapping integer operators;
+// large conversions can therefore perform `'panic` on overflow. `as_*`
+// conversions truncate toward zero. `Duration` has no calendar or clock
+// identity.
 pub struct Duration {
 	let nanos: Int
 
+	// Creates a duration from a nanosecond count.
 	pub static func nanoseconds(_ count: Int) -> Duration {
 		Duration(nanos: count)
 	}
 
+	// Creates a duration from a microsecond count.
 	pub static func microseconds(_ count: Int) -> Duration {
 		Duration(nanos: count * 1000)
 	}
 
+	// Creates a duration from a millisecond count.
 	pub static func milliseconds(_ count: Int) -> Duration {
 		Duration(nanos: count * 1000000)
 	}
 
+	// Creates a duration from a second count.
 	pub static func seconds(_ count: Int) -> Duration {
 		Duration(nanos: count * 1000000000)
 	}
 
+	// Creates a duration from a minute count.
 	pub static func minutes(_ count: Int) -> Duration {
 		Duration(nanos: count * 60000000000)
 	}
 
+	// Creates a duration from an hour count.
 	pub static func hours(_ count: Int) -> Duration {
 		Duration(nanos: count * 3600000000000)
 	}
 
+	// Creates a duration from a day count.
 	pub static func days(_ count: Int) -> Duration {
 		Duration(nanos: count * 86400000000000)
 	}
 
+	// Creates a duration from a week count.
 	pub static func weeks(_ count: Int) -> Duration {
 		Duration(nanos: count * 604800000000000)
 	}
 }
 
 extend Duration {
+	// Returns this value as nanoseconds.
 	pub func as_nanoseconds() -> Int {
 		self.nanos
 	}
 
+	// Returns this value as microseconds.
 	pub func as_microseconds() -> Int {
 		self.nanos / 1000
 	}
 
+	// Returns this value as milliseconds.
 	pub func as_milliseconds() -> Int {
 		self.nanos / 1000000
 	}
 
+	// Returns this value as seconds.
 	pub func as_seconds() -> Int {
 		self.nanos / 1000000000
 	}
 }
 
 extend Duration: Add<Duration> {
+	// Adds the signed nanosecond counts, trapping on overflow.
 	pub func add(_ rhs: Duration) -> Duration {
 		Duration(nanos: self.nanos + rhs.nanos)
 	}
 }
 
 extend Duration: Subtract<Duration> {
+	// Subtracts signed nanosecond counts, trapping when the difference
+	// overflows.
 	pub func minus(_ rhs: Duration) -> Duration {
 		Duration(nanos: self.nanos - rhs.nanos)
 	}
 }
 
 extend Duration: Multiply<Int> {
+	// Scales the nanosecond count by `rhs`, trapping on integer overflow.
 	pub func multiply(_ rhs: Int) -> Duration {
 		Duration(nanos: self.nanos * rhs)
 	}
 }
 
 extend Duration: Divide<Int> {
+	// Divides the nanosecond count by `rhs` with truncation toward zero.
+	//
+	// A zero divisor and the unrepresentable minimum quotient trap.
 	pub func divide(_ rhs: Int) -> Duration {
 		Duration(nanos: self.nanos / rhs)
 	}
 }
 
 extend Duration: Divide<Duration> {
+	// Returns the whole-number ratio between two durations, truncated toward
+	// zero.
+	//
+	// A zero-length divisor and the unrepresentable minimum quotient trap.
 	pub func divide(_ rhs: Duration) -> Int {
 		self.nanos / rhs.nanos
 	}
 }
 
 extend Duration: Negatable {
+	// Negates the signed nanosecond count, trapping for the minimum integer
+	// value.
 	pub func negated() -> Duration {
 		Duration(nanos: 0 - self.nanos)
 	}
 }
 
 extend Duration: Equatable<Duration> {
+	// Compares durations by their signed nanosecond counts.
 	pub func equals(_ rhs: Duration) -> Bool {
 		self.nanos == rhs.nanos
 	}
 }
 
 extend Duration: Comparable<Duration> {
+	// Orders durations by their signed nanosecond counts.
 	pub func gt(_ rhs: Duration) -> Bool {
 		self.nanos > rhs.nanos
 	}
@@ -121,6 +154,11 @@ func _zeroes(count: Int) -> String {
 }
 
 extend Duration: Showable {
+	// Formats a signed duration as `hours:minutes:seconds[.fraction]`.
+	//
+	// Minutes and seconds are zero-padded, while fractional nanoseconds omit
+	// trailing zeroes. Hours do not wrap at 24. The minimum integer duration
+	// cannot be made positive by the current formatter and therefore traps.
 	pub func show() -> String {
 		let nanos = self.nanos
 		let sign = ""
@@ -153,21 +191,30 @@ extend Duration: Showable {
 	}
 }
 
+// A reading from the process-local monotonic clock.
+//
+// Instants are suitable for elapsed time and deadlines, not wall-clock dates.
+// Their numeric anchor is arbitrary and meaningful only when compared with
+// another `Instant` produced in the same process.
 pub struct Instant {
 	let nanos: Int
 
+	// Reads the host's monotonic clock.
+	//
+	// The returned anchor is process-local and arbitrary; only differences and
+	// ordering against other process-local instants are meaningful.
 	pub static func now() -> Instant {
-		#unsafe {
-			Instant(nanos: _io_monotonic_nanos())
-		}
+		#unsafe { Instant(nanos: _io_monotonic_nanos()) }
 	}
 }
 
 extend Instant {
+	// Returns the monotonic deadline `duration` after this instant.
 	pub func adding(_ duration: Duration) -> Instant {
 		Instant(nanos: self.nanos + duration.nanos)
 	}
 
+	// Returns the duration elapsed since the earlier reading.
 	pub func since(_ earlier: Instant) -> Duration {
 		Duration(nanos: self.nanos - earlier.nanos)
 	}
@@ -179,18 +226,22 @@ extend Instant {
 }
 
 extend Instant: Equatable<Instant> {
+	// Compares readings from the same process-local monotonic clock.
 	pub func equals(_ rhs: Instant) -> Bool {
 		self.nanos == rhs.nanos
 	}
 }
 
 extend Instant: Comparable<Instant> {
+	// Orders readings from the same process-local monotonic clock.
 	pub func gt(_ rhs: Instant) -> Bool {
 		self.nanos > rhs.nanos
 	}
 }
 
 extend Instant: Showable {
+	// Exposes the opaque process-local reading as `Instant(nanos: N)` for
+	// diagnostics.
 	pub func show() -> String {
 		"Instant(nanos: " + self.nanos.show() + ")"
 	}

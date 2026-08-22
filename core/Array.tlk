@@ -9,17 +9,31 @@ use package::Showable::{ Showable }
 use package::Ownership::{ Borrowed, Clone, Deinit }
 use package::Host::{ panic }
 
+// A growable, copy-on-write sequence with value semantics.
+//
+// `storage[0..<count]` is initialized and `count <= capacity`. Copies share
+// storage until mutation; every mutating operation first makes the buffer
+// unique. Indexing traps rather than returning `none`.
 pub struct Array<Element> {
+	// The underlying storage for this Array
 	pub let storage: Storage<Element>
+	// The length of this Array
 	pub let count: Int
+	// Maximum length of this Array before it grows.
 	pub let capacity: Int
 
+	// Creates an empty array with storage reserved for `capacity` elements.
+	//
+	// `capacity` must be non-negative; raw allocation handles invalid counts as
+	// a runtime error.
 	pub init(capacity: Int) {
 		self.capacity = capacity
 		self.count = 0
 		self.storage = _storage<Element>(capacity: capacity)
 	}
 
+	// Adopts initialized `storage`; callers must ensure `count <= capacity` and
+	// matching layout.
 	pub init(storage: Storage<Element>, count: Int, capacity: Int) {
 		self.storage = storage
 		self.count = count
@@ -35,12 +49,23 @@ pub struct Array<Element> {
 		) }
 	}
 
+	// Borrows the element at `index`, panicking when it is out of bounds.
 	pub func get(_ index: Int) -> &Element {
 		self._check_index(index: index)
+		self._get_unchecked(index: index)
+	}
+
+	// The raw read behind every proven-index accessor: iteration checks
+	// its bounds into `.none`, so only `get` routes through 'panic.
+	func _get_unchecked(index: Int) -> &Element {
 		let ptr: RawPtr = #_ir(self.storage.base, index) { %? = gep Element $0 $1 }
 		_load<Element>(ptr: ptr)
 	}
 
+	// Appends `value`, doubling capacity when the initialized prefix is full.
+	//
+	// The buffer is made unique before the write. Amortized time is O(1), with
+	// an O(count) copy when growth or copy-on-write detachment is required.
 	pub mut func push(consume _ value: Element) -> () {
 		let new_capacity = if self.capacity == 0 {
 			1
@@ -78,6 +103,10 @@ pub struct Array<Element> {
 		_store<Element>(ptr: ptr, value: value)
 	}
 
+	// Exchanges two initialized elements after detaching shared storage.
+	//
+	// Both indices are checked before mutation; either invalid index performs
+	// `'panic` and leaves the array unchanged.
 	pub mut func swap(i: Int, j: Int) -> Void {
 		self._check_index(index: i)
 		self._check_index(index: j)
@@ -88,10 +117,19 @@ pub struct Array<Element> {
 		_swap<Element>(a: a, b: b)
 	}
 
+	// Consumes the array into a lazy mapping iterator.
+	//
+	// Elements move out in index order and `fn` runs only when the returned
+	// iterator advances. Call `to_array` on that iterator for eager collection.
 	pub consuming func map<T>(consume fn: (Element) -> T) -> Map<ArrayIntoIterator<Element>, T> {
 		self.into_iter().map(fn: fn)
 	}
 
+	// Consumes the array and eagerly discards its first `count` elements.
+	//
+	// Discarded elements are dropped as they are read. Counts at or below zero
+	// preserve every element; counts beyond the length return an exhausted
+	// iterator.
 	pub consuming func skip(count: Int) -> ArrayIntoIterator<Element> {
 		self.into_iter().skip(count: count)
 	}
@@ -130,6 +168,7 @@ pub struct Array<Element> {
 		fresh
 	}
 
+	// Returns the final value, or `none` when the collection is empty.
 	pub func last() -> Optional<&Element> {
 		if self.count == 0 { return Optional.none }
 		Optional.some(self.get(self.count - 1))
@@ -148,12 +187,18 @@ pub struct Array<Element> {
 		Optional.some(element)
 	}
 
+	// Returns whether the collection contains no values.
 	pub func is_empty() -> Bool {
 		self.count == 0
 	}
 }
 
 extend<Element> Array<Element> where Element: Comparable<Element> {
+	// Consumes and selection-sorts the array according to `fn`.
+	//
+	// `fn(a, b)` must define a strict ordering and should return true when `a`
+	// belongs before `b`. The implementation is in-place after copy-on-write
+	// detachment, is not stable, and performs O(count^2) comparisons.
 	pub consuming func sort_by(fn: (Element, Element) -> Bool) -> Self {
 		let i = 0
 
@@ -178,12 +223,16 @@ extend<Element> Array<Element> where Element: Comparable<Element> {
 }
 
 extend<Element> Array<Element>: SubscriptRead<Int> {
+	// Borrows the indexed element and performs the same trapping check as
+	// `get`.
 	pub func subscript_read(at: Int) -> &Element {
 		self.get(at)
 	}
 }
 
 extend<Element> Array<Element>: SubscriptWrite<Int, Element> {
+	// Replaces the indexed element after bounds checking and copy-on-write
+	// detachment.
 	pub mut func subscript_write(at: Int, consume value: Element) -> Void {
 		self.set(index: at, value: value)
 	}
@@ -209,6 +258,8 @@ extend<Element> Array<Element>: Deinit {
 	}
 }
 extend<Element: Showable> Array<Element>: Showable {
+	// Formats elements in index order as `[a, b, c]`, using each element's
+	// `show`.
 	pub func show() -> String {
 		let result = StringBuilder()
 		result.append(string: "[")
@@ -237,30 +288,50 @@ extend<Element: Equatable<Element>> Array<Element>: Equatable {
 }
 
 extend<Element> Array<Element>: Iterable {
+	// Borrows the array and yields elements from index zero through `count -
+	// 1`.
 	pub func iter() -> IndexIterator<[Element]> {
 		IndexIterator(inner: self, position: 0)
 	}
 }
 
 extend<Element> Array<Element>: IndexIterable {
+	// Supplies the current element count to `IndexIterator`.
 	pub func _index_iterable_count() -> Int {
 		self.count
 	}
 
+	// Bounds-checked into `.none` rather than through the trapping
+	// `get`: iteration proves its indexes by construction, and routing
+	// it through 'panic would keep the panic host reachable in every
+	// program that touches an array.
 	pub func _index_iterable_get(i index: Int) -> Optional<&Element> {
-		.some(self.get(index))
+		if index < 0 || index >= self.count { return Optional.none }
+		return .some(self._get_unchecked(index: index))
 	}
 }
 
 // MARK: Consuming iteration
 
+// An iterator over array into values.
+// A consuming array iterator that moves elements out in index order.
+//
+// Slots before `position` have been moved out; slots from `position..<count`
+// remain initialized and are destroyed if the iterator is dropped early.
 pub struct ArrayIntoIterator<T> {
+	// The backing storage.
 	pub let storage: Storage<T>
+	// The total number of elements available to the iterator.
 	pub let count: Int
+	// The current position.
 	pub let position: Int
 }
 
 extend<Element> Array<Element>: IntoIterator<Element, ArrayIntoIterator<Element>> {
+	// Transfers this array's initialized elements into a consuming iterator.
+	//
+	// Shared storage is detached first so each yielded element can move out
+	// exactly once. The source array is left empty and owns no yielded values.
 	pub consuming func into_iter() -> ArrayIntoIterator<Element> {
 		self.uniqued_storage()
 		let storage = self.storage
@@ -273,6 +344,8 @@ extend<Element> Array<Element>: IntoIterator<Element, ArrayIntoIterator<Element>
 }
 
 extend<T> ArrayIntoIterator<T>: Iterator {
+	// Moves out the next initialized slot; `none` is permanent after `position
+	// == count`.
 	pub mut func next() -> T? {
 		if self.position > self.count - 1 { return Optional.none }
 		let index = self.position
@@ -296,15 +369,24 @@ extend<T> ArrayIntoIterator<T>: Deinit {
 
 // MARK: Mutable iteration
 
+// An iterator over array mut values.
+// An exclusive iterator over a uniquely owned array buffer.
+//
+// `next` moves the current element out; callers that continue using the array
+// must replace it through `_store_current` before advancing ownership again.
 pub struct ArrayMutIterator<T> {
+	// The backing storage.
 	pub let storage: &mut Storage<T>
+	// The total number of elements available to the iterator.
 	pub let count: Int
+	// The current position.
 	pub let position: Int
 }
 
 extend<T> ArrayMutIterator<T>: Borrowed {}
 
 extend<Element> Array<Element> {
+	// Returns an iterator that can update the collection's values.
 	pub mut func iter_mut() -> ArrayMutIterator<Element> {
 		let storage = self.uniqued_storage()
 		ArrayMutIterator(storage: storage, count: self.count, position: 0)
@@ -312,6 +394,10 @@ extend<Element> Array<Element> {
 }
 
 extend<T> ArrayMutIterator<T> {
+	// Moves out the next slot so it can be replaced through `_store_current`.
+	//
+	// Leaving a yielded slot uninitialized violates the source array's
+	// invariant.
 	pub mut func next() -> T? {
 		if self.position > self.count - 1 { return Optional.none }
 		let index = self.position
@@ -321,6 +407,7 @@ extend<T> ArrayMutIterator<T> {
 		return .some(element)
 	}
 
+	// Replaces the element most recently yielded by `next`.
 	pub mut func _store_current(consume value: T) -> Void {
 		let ptr: RawPtr = #_ir(self.storage.base, self.position - 1) { %? = gep T $0 $1 }
 		_store<T>(ptr: ptr, value: value)
@@ -348,11 +435,14 @@ pub struct DropToken {
 }
 
 extend DropToken {
+	// Returns true for the final retained copy of this logical token.
 	pub func is_last() -> Bool {
 		_storage_is_unique(xs: self.token)
 	}
 }
 
+// Creates a fresh identity used to elect one logical finalizer among retained
+// copies.
 pub func _drop_token() -> DropToken {
 	let token: [Int] = []
 	DropToken(token: token)

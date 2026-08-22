@@ -1,0 +1,123 @@
+// no-core
+use package::Operators
+use package::Optional::{ Optional }
+
+extend Int {
+	// Adds with two's-complement wraparound instead of the normal trapping
+	// behavior.
+	//
+	// Use this only when modular arithmetic is intentional. `checked_add`
+	// reports overflow as `none`, while the `+` operator performs `'panic` on
+	// overflow.
+	pub func unchecked_add(_ rhs: Int) -> Int {
+		let sum = self
+		let carry = rhs
+		loop carry != 0 {
+			let next = sum ^ carry
+			carry = (sum & carry) << 1
+			sum = next
+		}
+		sum
+	}
+
+	// Negates with two's-complement wraparound; `Int.min` remains `Int.min`.
+	pub func unchecked_neg() -> Int {
+		(~self).unchecked_add(1)
+	}
+
+	// Subtracts modulo 2^64 by adding the wrapped negation of `rhs`.
+	pub func unchecked_sub(_ rhs: Int) -> Int {
+		self.unchecked_add(rhs.unchecked_neg())
+	}
+
+	// Multiplies modulo 2^64 using shift-and-add.
+	//
+	// This guarantees two's-complement wrapping without invoking the normal
+	// trapping multiplication operator on an overflowing intermediate value.
+	pub func unchecked_mul(_ rhs: Int) -> Int {
+		let result = 0
+		let multiplicand = self
+		let multiplier = rhs
+		let i = 0
+		loop i < 64 {
+			if (multiplier & 1) != 0 { result = result.unchecked_add(multiplicand) }
+			multiplicand = multiplicand << 1
+			multiplier = multiplier >> 1
+			i = i + 1
+		}
+		result
+	}
+
+	// Divides while wrapping the one overflowing quotient, `Int.min / -1`.
+	//
+	// Division by zero still traps. Use `checked_div` to represent both zero
+	// divisors and the unrepresentable minimum quotient as `none`.
+	pub func unchecked_div(_ rhs: Int) -> Int {
+		let max = 9223372036854775807
+		let min = -max - 1
+		if self == min && rhs == -1 { return min }
+		self / rhs
+	}
+
+	// Returns the sum, or `none` when signed integer overflow occurs.
+	pub func checked_add(_ rhs: Int) -> Int? {
+		let max = 9223372036854775807
+		let min = -max - 1
+		if rhs > 0 {
+			if self > max - rhs { return .none }
+		} else {
+			if rhs < 0 {
+				if self < min - rhs { return .none }
+			}
+		}
+		.some(self + rhs)
+	}
+
+	pub func checked_sub(_ rhs: Int) -> Int? {
+		let max = 9223372036854775807
+		let min = -max - 1
+		if rhs > 0 {
+			if self < min + rhs { return .none }
+		} else {
+			if rhs < 0 {
+				if self > max + rhs { return .none }
+			}
+		}
+		.some(self - rhs)
+	}
+
+	pub func checked_mul(_ rhs: Int) -> Int? {
+		let max = 9223372036854775807
+		let min = -max - 1
+		if self == 0 || rhs == 0 { return .some(0) }
+		if self > 0 {
+			if rhs > 0 {
+				if self > max / rhs { return .none }
+			} else {
+				if rhs < min / self { return .none }
+			}
+		} else {
+			if rhs > 0 {
+				if self < min / rhs { return .none }
+			} else {
+				if self < max / rhs { return .none }
+			}
+		}
+		.some(self * rhs)
+	}
+
+	pub func checked_div(_ rhs: Int) -> Int? {
+		let max = 9223372036854775807
+		let min = -max - 1
+		if rhs == 0 { return .none }
+		if self == min && rhs == -1 { return .none }
+		.some(self / rhs)
+	}
+
+	pub func checked_neg() -> Int? {
+		let max = 9223372036854775807
+		let min = -max - 1
+		if self == min { return .none }
+		.some(0 - self)
+	}
+}

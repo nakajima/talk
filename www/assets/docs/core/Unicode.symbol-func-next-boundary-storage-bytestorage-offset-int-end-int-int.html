@@ -1,0 +1,65 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"></meta><meta name="viewport" content="width=device-width, initial-scale=1"></meta><title>_next_boundary - Core</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"></link><link rel="stylesheet" href="/reset.css"></link><link rel="stylesheet" href="/style.css"></link><link rel="stylesheet" href="/docs.css"></link></head><body><nav class="global-nav" aria-label="Global navigation"><a class="global-nav-brand" href="/">talktalk</a><div class="global-nav-links"><a href="/">Language</a><a href="/manual/">Guide</a><a aria-current="page" href="/docs/">Docs</a><a href="/playground">Playground</a><a href="/qa">Q/A</a><a href="/philosophy">Philosophy</a></div></nav><main class="site-page docs-proposal docs-design-1"><header class="site-page-header docs-proposal-header docs-symbol-header"><div class="site-page-heading docs-proposal-heading"><nav class="site-breadcrumbs docs-breadcrumbs docs-header-breadcrumbs" aria-label="Breadcrumb"><a href="../">Docs</a> / <a href="index.html">Core</a> / <a href="Unicode.html">Unicode</a> / <a href="#func-next-boundary-storage-bytestorage-offset-int-end-int-int" aria-current="page">_next_boundary</a></nav><h1>_next_boundary</h1></div></header><div class="site-page-layout docs-proposal-shell"><aside class="site-page-sidebar docs-catalog" aria-label="Documentation sections"><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Libraries</span><a href="/docs/">All libraries</a><a class="active" href="/docs/core/">Core</a></div><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Modules</span><a class="" href="Array.html">Array</a><a class="" href="Async.html">Async</a><a class="" href="Convert.html">Convert</a><a class="" href="Host.html">Host</a><a class="" href="IO.html">IO</a><a class="" href="InlineArray.html">InlineArray</a><a class="" href="Iterable.html">Iterable</a><a class="" href="Memory.html">Memory</a><a class="" href="Operators.html">Operators</a><a class="" href="Optional.html">Optional</a><a class="" href="Ownership.html">Ownership</a><a class="" href="Range.html">Range</a><a class="" href="Result.html">Result</a><a class="" href="Showable.html">Showable</a><a class="" href="String.html">String</a><a class="" href="StringBuilder.html">StringBuilder</a><a class="" href="Text.html">Text</a><a class="" href="TextUnicodeData.html">TextUnicodeData</a><a class="" href="Time.html">Time</a><a class="active" href="Unicode.html">Unicode</a><a class="" href="UnicodeData.html">UnicodeData</a><a class="" href="Builtins.html">Builtins</a></div></aside><article class="site-page-content docs-reference"><section class="docs-symbol" id="func-next-boundary-storage-bytestorage-offset-int-end-int-int"><code class="docs-symbol-signature"><span class="keyword">func</span> <span class="function">_next_boundary</span>(storage: <a class="docs-symbol-link" href="Memory.symbol-struct-bytestorage.html#struct-bytestorage"><span class="type">ByteStorage</span></a>, offset: <a class="docs-symbol-link" href="Builtins.symbol-builtin-int.html#builtin-int"><span class="type">Int</span></a>, end: <a class="docs-symbol-link" href="Builtins.symbol-builtin-int.html#builtin-int"><span class="type">Int</span></a>) -&gt; <a class="docs-symbol-link" href="Builtins.symbol-builtin-int.html#builtin-int"><span class="type">Int</span></a></code><div class="prose docs docs-symbol-documentation"><p>The byte offset just past the extended grapheme cluster starting at <code>offset</code>, which must itself be a cluster boundary. Because scans start at true boundaries, all UAX #29 rule state (GB11&#39;s emoji sequence, GB9c&#39;s conjunct chain, GB12/13&#39;s regional-indicator parity) is local to this one scan — the iterator carries none.</p></div><section class="docs-symbol-source" id="source"><details class="docs-source"><summary>View Source</summary><pre><code><span class="modifier">pub</span> <span class="keyword">func</span> <span class="function">_next_boundary</span>(<span class="parameter">storage</span>: <span class="type">ByteStorage</span>, <span class="parameter">offset</span>: <span class="type">Int</span>, <span class="parameter">end</span>: <span class="type">Int</span>) <span class="operator">-&gt;</span> <span class="type">Int</span> {
+	<span class="keyword">let</span> <span class="parameter">head</span>: <span class="type">Int</span> <span class="operator">=</span> _utf8_decode(<span class="parameter">storage</span>: storage, <span class="parameter">offset</span>: offset, <span class="parameter">end</span>: end)
+	<span class="keyword">let</span> <span class="parameter">head_cat</span>: <span class="type">Int</span> <span class="operator">=</span> _grapheme_category(<span class="parameter">scalar</span>: _packed_scalar(<span class="parameter">packed</span>: head))
+	<span class="keyword">let</span> <span class="parameter">pos</span>: <span class="type">Int</span> <span class="operator">=</span> offset <span class="operator">+</span> _packed_size(<span class="parameter">packed</span>: head)
+	<span class="comment">// GB3/GB4: CR joins only a following LF; controls stand alone.</span>
+	<span class="keyword">if</span> head_cat <span class="operator">==</span> _GC_CR {
+		<span class="keyword">if</span> pos <span class="operator">&lt;</span> end {
+			<span class="keyword">let</span> <span class="parameter">after_cr</span>: <span class="type">Int</span> <span class="operator">=</span> _utf8_decode(<span class="parameter">storage</span>: storage, <span class="parameter">offset</span>: pos, <span class="parameter">end</span>: end)
+			<span class="keyword">if</span> _packed_scalar(<span class="parameter">packed</span>: after_cr) <span class="operator">==</span> <span class="number">10</span> { <span class="keyword">return</span> pos <span class="operator">+</span> _packed_size(
+				<span class="parameter">packed</span>: after_cr
+			) }
+		}
+		<span class="keyword">return</span> pos
+	}
+	<span class="keyword">if</span> head_cat <span class="operator">==</span> _GC_CONTROL { <span class="keyword">return</span> pos }
+	<span class="keyword">if</span> head_cat <span class="operator">==</span> _GC_LF { <span class="keyword">return</span> pos }
+	<span class="keyword">let</span> <span class="parameter">prev</span>: <span class="type">Int</span> <span class="operator">=</span> head_cat
+	<span class="comment">// GB11 state: 0 none, 1 ExtPict (+ extends), 2 ExtPict + extends + ZWJ.</span>
+	<span class="keyword">let</span> <span class="parameter">emoji</span>: <span class="type">Int</span> <span class="operator">=</span> <span class="number">0</span>
+	<span class="keyword">if</span> head_cat <span class="operator">==</span> _GC_EXT_PICT { emoji <span class="operator">=</span> <span class="number">1</span> }
+	<span class="comment">// GB9c state: 0 none, 1 consonant (+ InCB extends), 2 consonant + linker.</span>
+	<span class="keyword">let</span> <span class="parameter">incb</span>: <span class="type">Int</span> <span class="operator">=</span> <span class="number">0</span>
+	<span class="keyword">if</span> head_cat <span class="operator">==</span> _GC_INCB_CONSONANT { incb <span class="operator">=</span> <span class="number">1</span> }
+	<span class="comment">// GB12/13 state: length of the trailing regional-indicator run.</span>
+	<span class="keyword">let</span> <span class="parameter">ri_run</span>: <span class="type">Int</span> <span class="operator">=</span> <span class="number">0</span>
+	<span class="keyword">if</span> head_cat <span class="operator">==</span> _GC_REGIONAL_INDICATOR { ri_run <span class="operator">=</span> <span class="number">1</span> }
+	<span class="keyword">loop</span> pos <span class="operator">&lt;</span> end {
+		<span class="keyword">let</span> <span class="parameter">next_packed</span>: <span class="type">Int</span> <span class="operator">=</span> _utf8_decode(<span class="parameter">storage</span>: storage, <span class="parameter">offset</span>: pos, <span class="parameter">end</span>: end)
+		<span class="keyword">let</span> <span class="parameter">cat</span>: <span class="type">Int</span> <span class="operator">=</span> _grapheme_category(<span class="parameter">scalar</span>: _packed_scalar(<span class="parameter">packed</span>: next_packed))
+		<span class="keyword">if</span> _joins(<span class="parameter">prev</span>: prev, <span class="parameter">cat</span>: cat, <span class="parameter">emoji</span>: emoji, <span class="parameter">incb</span>: incb, <span class="parameter">ri_run</span>: ri_run) <span class="operator">==</span> <span class="keyword">false</span> { <span class="keyword">return</span> pos }
+		<span class="keyword">if</span> cat <span class="operator">==</span> _GC_EXT_PICT {
+			emoji <span class="operator">=</span> <span class="number">1</span>
+		} <span class="keyword">else</span> {
+			<span class="keyword">let</span> <span class="parameter">emoji_extends</span>: <span class="type">Bool</span> <span class="operator">=</span> emoji <span class="operator">==</span> <span class="number">1</span> <span class="operator">&amp;&amp;</span> _extends_cluster(<span class="parameter">cat</span>: cat)
+			<span class="keyword">if</span> emoji_extends {
+				<span class="keyword">if</span> cat <span class="operator">==</span> _GC_ZWJ { emoji <span class="operator">=</span> <span class="number">2</span> }
+			} <span class="keyword">else</span> {
+				emoji <span class="operator">=</span> <span class="number">0</span>
+			}
+		}
+		<span class="keyword">if</span> cat <span class="operator">==</span> _GC_INCB_CONSONANT {
+			incb <span class="operator">=</span> <span class="number">1</span>
+		} <span class="keyword">else</span> {
+			<span class="keyword">let</span> <span class="parameter">links</span>: <span class="type">Bool</span> <span class="operator">=</span> incb <span class="operator">&gt;=</span> <span class="number">1</span> <span class="operator">&amp;&amp;</span> cat <span class="operator">==</span> _GC_EXTEND_INCB_LINKER
+			<span class="keyword">let</span> <span class="parameter">carries</span>: <span class="type">Bool</span> <span class="operator">=</span> incb <span class="operator">&gt;=</span> <span class="number">1</span> <span class="operator">&amp;&amp;</span> (cat <span class="operator">==</span> _GC_EXTEND_INCB_EXTEND <span class="operator">||</span> cat <span class="operator">==</span> _GC_ZWJ)
+			<span class="keyword">if</span> links {
+				incb <span class="operator">=</span> <span class="number">2</span>
+			} <span class="keyword">else</span> {
+				<span class="keyword">if</span> carries <span class="operator">==</span> <span class="keyword">false</span> { incb <span class="operator">=</span> <span class="number">0</span> }
+			}
+		}
+		<span class="keyword">if</span> cat <span class="operator">==</span> _GC_REGIONAL_INDICATOR {
+			<span class="keyword">if</span> prev <span class="operator">==</span> _GC_REGIONAL_INDICATOR {
+				ri_run <span class="operator">=</span> ri_run <span class="operator">+</span> <span class="number">1</span>
+			} <span class="keyword">else</span> {
+				ri_run <span class="operator">=</span> <span class="number">1</span>
+			}
+		} <span class="keyword">else</span> {
+			ri_run <span class="operator">=</span> <span class="number">0</span>
+		}
+		prev <span class="operator">=</span> cat
+		pos <span class="operator">=</span> pos <span class="operator">+</span> _packed_size(<span class="parameter">packed</span>: next_packed)
+	}
+	pos
+}</code></pre></details></section></section></article><aside class="site-page-rail docs-page-index" aria-label="Sections on this page"><span class="site-nav-label docs-nav-label">On this page</span><a href="#func-next-boundary-storage-bytestorage-offset-int-end-int-int">Overview</a><a href="#source">Source</a></aside></div></main></body></html>

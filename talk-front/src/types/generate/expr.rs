@@ -1282,6 +1282,14 @@ impl<'s, 'a> BodyChecker<'s, 'a> {
                         expr.id,
                     ));
                 }
+                if matches!(name.symbol(), Ok(Symbol::Effect(_))) {
+                    self.diagnostics.errors.push((
+                        TypeError::BareEffectReference {
+                            effect: name.name_str(),
+                        },
+                        expr.id,
+                    ));
+                }
                 ty
             }
 

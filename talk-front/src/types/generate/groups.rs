@@ -122,8 +122,11 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
         // Statements check under a progressively narrowed extent: each
         // `#handle` opens a fresh ambient row for the statements after it,
         // filtered into the previous one — the same label-scoped boundary
-        // the block walkers give it inside functions.
-        let top_eff = self.filtered_ambient(Vec::new(), NodeID::SYNTHESIZED);
+        // the block walkers give it inside functions. The row anchors to
+        // the first statement so an effect spilling through it reports at
+        // a real node (ADR 0055); with no statements nothing can spill.
+        let top_node = stmts.first().map_or(NodeID::SYNTHESIZED, |stmt| stmt.id);
+        let top_eff = self.filtered_ambient(Vec::new(), top_node);
         let mut top_ctx = Ctx::root().with_ret_eff(top_ret.clone(), top_eff);
         let mut last = StmtValue::Unit;
         let mut top_level_handler: Option<NodeID> = None;
@@ -836,6 +839,14 @@ impl<'s, 'a> BindingGroupChecker<'s, 'a> {
                 // needs one concrete type member or pattern variant per node.
                 // A later group (or the final solve's error) owns it.
                 Constraint::HasTypeMember { .. } | Constraint::HasVariant { .. } => {
+                    self.deferred.push(residual)
+                }
+                // A borrow-view or string-pattern check on an unresolved
+                // scrutinee floats too: its scrutinee's head can be
+                // solved by a later group (a member call's signature
+                // arriving late), and dropping it silently strands every
+                // constraint downstream of the pattern.
+                Constraint::PatternView { .. } | Constraint::StringPattern { .. } => {
                     self.deferred.push(residual)
                 }
                 _ => {}

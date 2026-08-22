@@ -15,6 +15,7 @@ pub const CORE_SOURCE_NAMES: &[&str] = &[
     "Optional.tlk",
     "Result.tlk",
     "Operators.tlk",
+    "CheckedArithmetic.tlk",
     "Convert.tlk",
     "String.tlk",
     "Memory.tlk",

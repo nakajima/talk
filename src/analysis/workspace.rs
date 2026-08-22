@@ -41,6 +41,10 @@ pub struct Workspace {
     /// same allocation the compiler parsed from (CLEAN-04/07).
     pub texts: Vec<crate::common::source_snapshot::SourceSnapshot>,
     pub asts: Vec<Option<AST<NameResolved>>>,
+    /// Doc-comment attachments per document (parallel to `asts`):
+    /// declaration span plus its comment spans, from the frontend's
+    /// documenting parse entry. Hover renders them as markdown.
+    pub docs: Vec<Vec<crate::compiling::bridge::BridgedDoc>>,
     pub resolved_names: crate::name_resolution::name_resolver::ResolvedNames,
     /// The checker's program-level residue (catalog, schemes, names).
     pub types: crate::types::TypeOutput,
@@ -170,7 +174,7 @@ impl Workspace {
         let mut config = DriverConfig::new(module_name)
             .source_root(source_root.clone())
             .lenient_parsing()
-            .preserve_comments(true);
+            .collect_docs(true);
         config.parse_cache = parse_cache;
         match compile_context {
             WorkspaceCompileContext::Core => {
@@ -204,15 +208,16 @@ impl Workspace {
                 }
                 None => {
                     // The manifest DSL names Package without a `use`, so it
-                    // registers like core. Every other stdlib module stays
+                    // registers like core. Every other builtin package stays
                     // demand-driven: a document's own imports activate them
                     // during parse, and only modules loaded that way serve
                     // auto-import completions and cross-module navigation.
-                    if let Some((id, module)) = crate::compiling::stdlib::try_module_with_id("Package")
+                    if let Some((id, module, _)) =
+                        crate::compiling::builtin_packages::try_compiled("Package")
                     {
                         Rc::make_mut(&mut config.modules)
-                            .import_shared(module.clone(), id)
-                            .expect("Package stdlib module registers once per session");
+                            .import_shared(module, id)
+                            .expect("Package builtin registers once per session");
                     }
                     Driver::new(sources, config)
                 }
@@ -220,15 +225,11 @@ impl Workspace {
         };
         // Name+id registration only: nothing compiles here. Definition
         // lookups resolve a symbol's module through this map and compile
-        // the target stdlib module on demand (definition.rs), so every
-        // stdlib module is reachable no matter what the session imported.
+        // the target builtin package on demand (definition.rs), so every
+        // builtin is reachable no matter what the session imported.
         let stdlib_module_ids = match compile_context {
-            WorkspaceCompileContext::Normal => crate::compiling::stdlib::stdlib_sources()
-                .into_iter()
-                .filter_map(|(name, _)| {
-                    crate::compiling::stdlib::module_id_for_name(name)
-                        .map(|module_id| (module_id, name.to_string()))
-                })
+            WorkspaceCompileContext::Normal => crate::compiling::builtin_packages::all()
+                .map(|(name, module_id)| (module_id, name.to_string()))
                 .collect(),
             _ => FxHashMap::default(),
         };
@@ -265,6 +266,9 @@ impl Workspace {
         // imports, identifier spans the typed compiler tree strips). Capture it
         // here, before `type_check` consumes the AST.
         let asts_by_source = resolved.phase.asts.clone();
+        // Doc attachments likewise move out before `type_check`
+        // consumes the resolve phase.
+        let docs_by_file = resolved.phase.docs.clone();
         // Files discovered through imports get FileIDs past the input docs
         // (Driver::parse appends them). Extend the file-id-indexed tables so
         // their ASTs and diagnostics map to documents instead of being
@@ -309,6 +313,14 @@ impl Workspace {
             let idx = ast.file_id.0 as usize;
             if idx < asts.len() {
                 asts[idx] = Some(ast);
+            }
+        }
+        let mut docs: Vec<Vec<crate::compiling::bridge::BridgedDoc>> =
+            vec![Vec::new(); file_id_to_document.len()];
+        for (file_id, file_docs) in docs_by_file {
+            let idx = file_id.0 as usize;
+            if idx < docs.len() {
+                docs[idx] = file_docs;
             }
         }
 
@@ -395,6 +407,7 @@ impl Workspace {
             document_to_file_id,
             texts,
             asts,
+            docs,
             resolved_names,
             types,
             facts,
@@ -467,7 +480,7 @@ impl Workspace {
     }
 
     fn stdlib_module_name_for_path(path: &Path) -> Option<&'static str> {
-        crate::compiling::stdlib::module_name_for_path(path)
+        crate::compiling::builtin_packages::module_name_for_path(path)
     }
 
     fn is_core_path_override(path: &Path) -> bool {
@@ -571,19 +584,28 @@ impl Workspace {
                 .unwrap_or_default();
         let mut config = DriverConfig::new("Core")
             .source_root(source_root.clone())
-            .preserve_comments(true);
+            .collect_docs(true);
         config.module_id = ModuleId::Core;
 
         let driver = Driver::new_bare(sources, config);
         let resolved = driver.parse().ok()?.resolve_names().ok()?;
 
         let resolved_names = resolved.phase.resolved_names.clone();
+        let docs_by_file = resolved.phase.docs.clone();
 
         let mut asts: Vec<Option<AST<NameResolved>>> = vec![None; file_id_to_document.len()];
         for ast in resolved.phase.asts.values() {
             let idx = ast.file_id.0 as usize;
             if idx < asts.len() {
                 asts[idx] = Some(ast.clone());
+            }
+        }
+        let mut docs: Vec<Vec<crate::compiling::bridge::BridgedDoc>> =
+            vec![Vec::new(); file_id_to_document.len()];
+        for (file_id, file_docs) in docs_by_file {
+            let idx = file_id.0 as usize;
+            if idx < docs.len() {
+                docs[idx] = file_docs;
             }
         }
 
@@ -595,6 +617,7 @@ impl Workspace {
             document_to_file_id,
             texts,
             asts,
+            docs,
             resolved_names,
             // Name resolution only: the core workspace exists for symbol
             // rendering, not hover.
@@ -628,7 +651,7 @@ impl Workspace {
         module_id: ModuleId,
         parse_cache: Option<std::rc::Rc<std::cell::RefCell<crate::compiling::driver::ParseCache>>>,
     ) -> Option<Self> {
-        let name = crate::compiling::stdlib::name_for_module_id(module_id)?;
+        let name = crate::compiling::builtin_packages::name_for_module_id(module_id)?;
         Self::stdlib_module(name, module_id, parse_cache)
     }
 
@@ -641,7 +664,7 @@ impl Workspace {
         module_id: ModuleId,
         parse_cache: Option<std::rc::Rc<std::cell::RefCell<crate::compiling::driver::ParseCache>>>,
     ) -> Option<Self> {
-        let documents = crate::compiling::stdlib::source_documents(name)?;
+        let documents = crate::compiling::builtin_packages::source_documents(name)?;
         let source_root =
             LocalModulePaths::infer_source_root(documents.iter().map(|(path, _)| path.clone()))?;
         let file_id_to_document: Vec<DocumentId> = documents
@@ -668,7 +691,7 @@ impl Workspace {
 
         let mut config = DriverConfig::new(name)
             .source_root(source_root.clone())
-            .preserve_comments(true);
+            .collect_docs(true);
         config.module_id = module_id;
         config.mode = CompilationMode::Library;
         config.modules = Rc::new(modules);
@@ -678,12 +701,21 @@ impl Workspace {
         let resolved = driver.parse().ok()?.resolve_names().ok()?;
         let resolved_names = resolved.phase.resolved_names;
         let asts_by_source = resolved.phase.asts;
+        let docs_by_file = resolved.phase.docs;
 
         let mut asts: Vec<Option<AST<NameResolved>>> = vec![None; file_id_to_document.len()];
         for ast in asts_by_source.values() {
             let idx = ast.file_id.0 as usize;
             if idx < asts.len() {
                 asts[idx] = Some(ast.clone());
+            }
+        }
+        let mut docs: Vec<Vec<crate::compiling::bridge::BridgedDoc>> =
+            vec![Vec::new(); file_id_to_document.len()];
+        for (file_id, file_docs) in docs_by_file {
+            let idx = file_id.0 as usize;
+            if idx < docs.len() {
+                docs[idx] = file_docs;
             }
         }
 
@@ -695,6 +727,7 @@ impl Workspace {
             document_to_file_id,
             texts,
             asts,
+            docs,
             resolved_names,
             types: Default::default(),
             facts: Default::default(),
@@ -916,10 +949,7 @@ pub struct CompileDiagnostics {
 
 impl CompileDiagnostics {
     pub fn from_driver_asts(
-        asts_by_source: &indexmap::IndexMap<
-            crate::compiling::driver::Source,
-            AST<NameResolved>,
-        >,
+        asts_by_source: &indexmap::IndexMap<crate::compiling::driver::Source, AST<NameResolved>>,
         diagnostics: &[AnyDiagnostic],
     ) -> Self {
         let file_count = asts_by_source
@@ -1076,16 +1106,13 @@ mod tests {
     }
 
     #[test]
-    fn stdlib_source_does_not_import_bundled_stdlib_into_itself() {
-        let (name, text) = crate::compiling::stdlib::stdlib_sources()
+    fn builtin_source_does_not_import_bundled_builtin_into_itself() {
+        let (path, text) = crate::compiling::builtin_packages::source_documents("fs")
+            .expect("fs builtin sources")
             .into_iter()
-            .find(|(name, _)| *name == "fs")
-            .expect("fs stdlib source");
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("stdlib")
-            .join(format!("{name}.tlk"))
-            .to_string_lossy()
-            .into_owned();
+            .next()
+            .expect("fs has a source");
+        let path = path.to_string_lossy().into_owned();
         let docs = vec![DocumentInput {
             id: path.clone(),
             path,
@@ -1096,7 +1123,7 @@ mod tests {
         let workspace = Workspace::new(docs).expect("workspace");
         assert!(
             workspace.diagnostics.is_empty(),
-            "expected no stdlib diagnostics, got {:?}",
+            "expected no builtin diagnostics, got {:?}",
             workspace.diagnostics
         );
     }

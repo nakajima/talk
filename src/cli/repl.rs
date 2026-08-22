@@ -25,10 +25,13 @@ const PRIMARY_PROMPT: &[u8] = b"talk> ";
 const CONTINUATION_PROMPT: &[u8] = b"....> ";
 const HISTORY_FILE_NAME: &str = ".talk_history";
 
-pub fn run(import_package: bool) -> Result<(), String> {
-    let session = if import_package {
-        let root = crate::compiling::package::PackageProject::enclosing_root(".")
-            .ok_or_else(|| "the current directory is not inside a package".to_string())?;
+pub fn run(standalone: bool) -> Result<(), String> {
+    let package_root = if standalone {
+        None
+    } else {
+        crate::compiling::package::PackageProject::enclosing_root(".")
+    };
+    let session = if let Some(root) = package_root {
         let project = crate::compiling::package::PackageProject::open_at(root, false)
             .map_err(|err| err.to_string())?;
         let context = project.repl_context().map_err(|err| err.to_string())?;

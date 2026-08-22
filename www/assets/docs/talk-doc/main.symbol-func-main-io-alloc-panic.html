@@ -1,0 +1,124 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"></meta><meta name="viewport" content="width=device-width, initial-scale=1"></meta><title>main - talk-doc</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"></link><link rel="stylesheet" href="/reset.css"></link><link rel="stylesheet" href="/style.css"></link><link rel="stylesheet" href="/docs.css"></link></head><body><nav class="global-nav" aria-label="Global navigation"><a class="global-nav-brand" href="/">talktalk</a><div class="global-nav-links"><a href="/">Language</a><a href="/manual/">Guide</a><a aria-current="page" href="/docs/">Docs</a><a href="/playground">Playground</a><a href="/qa">Q/A</a><a href="/philosophy">Philosophy</a></div></nav><main class="site-page docs-proposal docs-design-1"><header class="site-page-header docs-proposal-header docs-symbol-header"><div class="site-page-heading docs-proposal-heading"><nav class="site-breadcrumbs docs-breadcrumbs docs-header-breadcrumbs" aria-label="Breadcrumb"><a href="../">Docs</a> / <a href="index.html">talk-doc</a> / <a href="main.html">main</a> / <a href="#func-main-io-alloc-panic" aria-current="page">main</a></nav><h1>main</h1></div></header><div class="site-page-layout docs-proposal-shell"><aside class="site-page-sidebar docs-catalog" aria-label="Documentation sections"><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Libraries</span><a href="/docs/">All libraries</a><a class="" href="/docs/core/">Core</a><a class="active" href="./">talk-doc</a></div><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Modules</span><a class="" href="autolink.html">autolink</a><a class="" href="documentable.html">documentable</a><a class="" href="generate.html">generate</a><a class="" href="highlight.html">highlight</a><a class="active" href="main.html">main</a><a class="" href="module.html">module</a><a class="" href="render.html">render</a><a class="" href="store.html">store</a><a class="" href="symbols.html">symbols</a><a class="" href="talk-doc.html">talk-doc</a></div></aside><article class="site-page-content docs-reference"><section class="docs-symbol" id="func-main-io-alloc-panic"><code class="docs-symbol-signature"><span class="keyword">func</span> <span class="function">main</span>() &#39;[<a class="docs-symbol-link" href="/docs/core/IO.symbol-effect-io-request-iorequest-int.html#effect-io-request-iorequest-int"><span class="type">io</span></a>, <a class="docs-symbol-link" href="/docs/core/Memory.symbol-effect-alloc-allocation-allocation-void.html#effect-alloc-allocation-allocation-void"><span class="type">alloc</span></a>, <a class="docs-symbol-link" href="/docs/core/Host.symbol-effect-panic-message-string-never.html#effect-panic-message-string-never"><span class="type">panic</span></a>] -&gt; ()</code><div class="prose docs docs-symbol-documentation"><p>Generates deterministic package, module-summary, and symbol-reference pages.</p><p>Test files are excluded and only public declarations are rendered. <code>--only</code> limits page writes but still indexes every module for stable navigation. When configured, Core declarations join symbol resolution but link to the supplied Core documentation base instead of rendering into this package. The output directory must already exist; unreadable sources are skipped.</p></div><section class="docs-symbol-source" id="source"><details class="docs-source"><summary>View Source</summary><pre><code><span class="modifier">pub</span> <span class="keyword">func</span> <span class="function">main</span>() &#39;[io, alloc, panic] <span class="operator">-&gt;</span> () {
+	<span class="operator">#</span>unsafe {
+		<span class="keyword">let</span> root <span class="operator">=</span> strip_suffix(<span class="parameter">s</span>: argument(<span class="parameter">index</span>: <span class="number">1</span>, <span class="parameter">fallback</span>: <span class="string">&quot;.&quot;</span>), <span class="parameter">suffix</span>: <span class="string">&quot;/&quot;</span>)
+		<span class="keyword">let</span> out_dir <span class="operator">=</span> strip_suffix(<span class="parameter">s</span>: argument(<span class="parameter">index</span>: <span class="number">2</span>, <span class="parameter">fallback</span>: <span class="string">&quot;docs&quot;</span>), <span class="parameter">suffix</span>: <span class="string">&quot;/&quot;</span>)
+		<span class="keyword">let</span> source_root <span class="operator">=</span> strip_suffix(
+			<span class="parameter">s</span>: argument(<span class="parameter">index</span>: <span class="number">3</span>, <span class="parameter">fallback</span>: root <span class="operator">+</span> <span class="string">&quot;/src&quot;</span>),
+			<span class="parameter">suffix</span>: <span class="string">&quot;/&quot;</span>
+		)
+		<span class="keyword">let</span> display_name <span class="operator">=</span> argument(<span class="parameter">index</span>: <span class="number">4</span>, <span class="parameter">fallback</span>: package_name(<span class="parameter">root</span>: root))
+		<span class="keyword">let</span> core_source_root <span class="operator">=</span> <span class="string">&quot;&quot;</span>
+		<span class="keyword">let</span> core_docs_base <span class="operator">=</span> <span class="string">&quot;/docs/core/&quot;</span>
+		<span class="keyword">let</span> restricted <span class="operator">=</span> <span class="keyword">false</span>
+		<span class="keyword">let</span> <span class="parameter">selected</span>: [<span class="type">String</span>] <span class="operator">=</span> []
+		<span class="keyword">let</span> arguments <span class="operator">=</span> <span class="type">OS</span>.<span class="property">args</span>()
+		<span class="keyword">let</span> argument_index <span class="operator">=</span> <span class="number">5</span>
+		<span class="keyword">loop</span> argument_index <span class="operator">&lt;</span> arguments.<span class="property">count</span> {
+			<span class="keyword">let</span> value <span class="operator">=</span> arguments[argument_index].<span class="property">to_string</span>()
+			<span class="keyword">if</span> value <span class="operator">==</span> <span class="string">&quot;--core-source&quot;</span> <span class="operator">&amp;&amp;</span> argument_index <span class="operator">+</span> <span class="number">1</span> <span class="operator">&lt;</span> arguments.<span class="property">count</span> {
+				core_source_root <span class="operator">=</span> strip_suffix(<span class="parameter">s</span>: arguments[argument_index <span class="operator">+</span> <span class="number">1</span>].<span class="property">to_string</span>(), <span class="parameter">suffix</span>: <span class="string">&quot;/&quot;</span>)
+				argument_index <span class="operator">=</span> argument_index <span class="operator">+</span> <span class="number">2</span>
+				<span class="keyword">continue</span>
+			}
+			<span class="keyword">if</span> value <span class="operator">==</span> <span class="string">&quot;--core-docs-base&quot;</span> <span class="operator">&amp;&amp;</span> argument_index <span class="operator">+</span> <span class="number">1</span> <span class="operator">&lt;</span> arguments.<span class="property">count</span> {
+				core_docs_base <span class="operator">=</span> strip_suffix(<span class="parameter">s</span>: arguments[argument_index <span class="operator">+</span> <span class="number">1</span>].<span class="property">to_string</span>(), <span class="parameter">suffix</span>: <span class="string">&quot;/&quot;</span>) <span class="operator">+</span> <span class="string">&quot;/&quot;</span>
+				argument_index <span class="operator">=</span> argument_index <span class="operator">+</span> <span class="number">2</span>
+				<span class="keyword">continue</span>
+			}
+			<span class="keyword">if</span> value <span class="operator">==</span> <span class="string">&quot;--only&quot;</span> {
+				restricted <span class="operator">=</span> <span class="keyword">true</span>
+				argument_index <span class="operator">=</span> argument_index <span class="operator">+</span> <span class="number">1</span>
+				<span class="keyword">continue</span>
+			}
+			<span class="keyword">if</span> restricted { selected.<span class="property">push</span>(value) }
+			argument_index <span class="operator">=</span> argument_index <span class="operator">+</span> <span class="number">1</span>
+		}
+		<span class="keyword">let</span> builtin_source_root <span class="operator">=</span> <span class="keyword">if</span> core_source_root.<span class="property">byte_count</span> <span class="operator">&gt;</span> <span class="number">0</span> {
+			core_source_root
+		} <span class="keyword">else</span> <span class="keyword">if</span> display_name <span class="operator">==</span> <span class="string">&quot;Core&quot;</span> {
+			source_root
+		} <span class="keyword">else</span> {
+			<span class="string">&quot;&quot;</span>
+		}
+		<span class="keyword">let</span> <span class="parameter">paths</span>: [<span class="type">String</span>] <span class="operator">=</span> []
+		collect_tlk_paths(<span class="parameter">directory</span>: <span class="type">Directory</span>(<span class="parameter">path</span>: <span class="type">Path</span>(source_root)), <span class="parameter">paths</span>: paths)
+		<span class="keyword">let</span> sorted <span class="operator">=</span> sort_paths(<span class="parameter">paths</span>: paths)
+		<span class="keyword">let</span> <span class="parameter">modules</span>: [<span class="type">SourceModule</span>] <span class="operator">=</span> []
+		<span class="keyword">for</span> path <span class="keyword">in</span> sorted {
+			<span class="keyword">if</span> <span class="keyword">let</span> .<span class="property">some</span>(source) <span class="operator">=</span> read_source(<span class="parameter">path</span>: path) {
+				<span class="keyword">let</span> collection <span class="operator">=</span> <span class="type">DocumentableCollection</span>()
+				collection.<span class="property">collect_public</span>(<span class="parameter">source</span>: source)
+				<span class="keyword">if</span> collection.<span class="property">items</span>.<span class="property">is_empty</span>() { <span class="keyword">continue</span> }
+				<span class="keyword">let</span> name <span class="operator">=</span> module_name(<span class="parameter">path</span>: path, <span class="parameter">source_root</span>: source_root)
+				modules.<span class="property">push</span>(<span class="type">SourceModule</span>(
+					<span class="parameter">path</span>: path,
+					<span class="parameter">name</span>: name,
+					<span class="parameter">page</span>: name <span class="operator">+</span> <span class="string">&quot;.html&quot;</span>,
+					<span class="parameter">collection</span>: collection
+				))
+			}
+		}
+		<span class="keyword">if</span> builtin_source_root <span class="operator">==</span> source_root {
+			modules.<span class="property">push</span>(builtin_module(<span class="parameter">core_source_root</span>: builtin_source_root))
+		}
+		<span class="keyword">let</span> wrote_all <span class="operator">=</span> <span class="keyword">true</span>
+		<span class="keyword">let</span> <span class="parameter">links</span>: [<span class="type">ModuleLink</span>] <span class="operator">=</span> []
+		<span class="keyword">let</span> <span class="parameter">symbols</span>: [<span class="type">SymbolLink</span>] <span class="operator">=</span> []
+		<span class="keyword">for</span> module <span class="keyword">in</span> modules {
+			<span class="keyword">let</span> <span class="parameter">module_documentation</span>: [<span class="type">String</span>] <span class="operator">=</span> []
+			<span class="keyword">for</span> line <span class="keyword">in</span> module.<span class="property">collection</span>.<span class="property">module_documentation</span> {
+				module_documentation.<span class="property">push</span>(line.<span class="property">to_string</span>())
+			}
+			<span class="keyword">let</span> <span class="parameter">module_wip</span>: <span class="type">String</span><span class="operator">?</span> <span class="operator">=</span> <span class="keyword">match</span> module.<span class="property">collection</span>.<span class="property">module_wip</span> {
+				.<span class="property">some</span>(value) <span class="operator">-&gt;</span> .<span class="property">some</span>(value.<span class="property">to_string</span>()),
+				.<span class="property">none</span> <span class="operator">-&gt;</span> .<span class="property">none</span>
+			}
+			links.<span class="property">push</span>(<span class="type">ModuleLink</span>(
+				<span class="parameter">name</span>: module.<span class="property">name</span>,
+				<span class="parameter">file</span>: module.<span class="property">page</span>,
+				<span class="parameter">declarations</span>: module.<span class="property">collection</span>.<span class="property">items</span>.<span class="property">count</span>,
+				<span class="parameter">documentation</span>: module_documentation,
+				<span class="parameter">wip</span>: module_wip
+			))
+			<span class="keyword">for</span> symbol <span class="keyword">in</span> symbol_links(<span class="parameter">module</span>: module.<span class="property">name</span>, <span class="parameter">page</span>: module.<span class="property">page</span>, <span class="parameter">collection</span>: module.<span class="property">collection</span>) {
+				symbols.<span class="property">push</span>(symbol.<span class="property">clone</span>())
+			}
+		}
+		<span class="keyword">if</span> builtin_source_root.<span class="property">byte_count</span> <span class="operator">&gt;</span> <span class="number">0</span> <span class="operator">&amp;&amp;</span> builtin_source_root <span class="operator">!=</span> source_root {
+			append_external_symbols(<span class="parameter">source_root</span>: builtin_source_root, <span class="parameter">page_base</span>: core_docs_base, <span class="parameter">symbols</span>: symbols)
+		}
+		<span class="keyword">for</span> module <span class="keyword">in</span> modules {
+			<span class="keyword">if</span> restricted <span class="operator">&amp;&amp;</span> selected_path(<span class="parameter">paths</span>: selected, <span class="parameter">path</span>: module.<span class="property">path</span>) <span class="operator">==</span> <span class="keyword">false</span> { <span class="keyword">continue</span> }
+			<span class="keyword">let</span> page <span class="operator">=</span> render_module_page(
+				<span class="parameter">package</span>: display_name,
+				<span class="parameter">module</span>: module.<span class="property">name</span>,
+				<span class="parameter">collection</span>: module.<span class="property">collection</span>,
+				<span class="parameter">modules</span>: links,
+				<span class="parameter">symbols</span>: symbols
+			)
+			<span class="keyword">if</span> write_page(<span class="parameter">dir</span>: out_dir, <span class="parameter">file</span>: module.<span class="property">page</span>, <span class="parameter">contents</span>: page) <span class="operator">==</span> <span class="keyword">false</span> {
+				wrote_all <span class="operator">=</span> <span class="keyword">false</span>
+			}
+			<span class="keyword">for</span> symbol <span class="keyword">in</span> render_symbol_pages(
+				<span class="parameter">package</span>: display_name,
+				<span class="parameter">module</span>: module.<span class="property">name</span>,
+				<span class="parameter">module_page</span>: module.<span class="property">page</span>,
+				<span class="parameter">collection</span>: module.<span class="property">collection</span>,
+				<span class="parameter">modules</span>: links,
+				<span class="parameter">symbols</span>: symbols
+			) {
+				<span class="keyword">if</span> write_page(<span class="parameter">dir</span>: out_dir, <span class="parameter">file</span>: symbol.<span class="property">file</span>, <span class="parameter">contents</span>: symbol.<span class="property">contents</span>) <span class="operator">==</span> <span class="keyword">false</span> {
+					wrote_all <span class="operator">=</span> <span class="keyword">false</span>
+				}
+			}
+		}
+		<span class="keyword">let</span> index <span class="operator">=</span> render_index_page_with_symbols(<span class="parameter">package</span>: display_name, <span class="parameter">modules</span>: links, <span class="parameter">symbols</span>: symbols)
+		<span class="keyword">if</span> write_page(<span class="parameter">dir</span>: out_dir, <span class="parameter">file</span>: <span class="string">&quot;index.html&quot;</span>, <span class="parameter">contents</span>: index) <span class="operator">==</span> <span class="keyword">false</span> {
+			wrote_all <span class="operator">=</span> <span class="keyword">false</span>
+		}
+		<span class="keyword">if</span> wrote_all <span class="operator">==</span> <span class="keyword">false</span> {
+			print(<span class="string">&quot;error: could not write every page; create the output directory `&quot;</span> <span class="operator">+</span> out_dir <span class="operator">+</span> <span class="string">&quot;` first&quot;</span>)
+			<span class="effect">&#39;panic</span>(<span class="parameter">message</span>: <span class="string">&quot;talk-doc: output directory is not writable&quot;</span>)
+		}
+	}
+}</code></pre></details></section></section></article><aside class="site-page-rail docs-page-index" aria-label="Sections on this page"><span class="site-nav-label docs-nav-label">On this page</span><a href="#func-main-io-alloc-panic">Overview</a><a href="#source">Source</a></aside></div></main></body></html>

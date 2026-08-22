@@ -1,6 +1,6 @@
 # 0032 - Single-artifact ownership and lowering pipeline
 
-Status: accepted semantic record; implementation-shape requirements superseded by ADR 0034 (2026-07-16)
+Status: accepted semantic record; implementation-shape requirements superseded by ADR 0034 (2026-07-16). Integer-overflow semantics superseded by ADR 0070.
 
 ## Context
 

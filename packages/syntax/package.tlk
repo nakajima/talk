@@ -1,0 +1,8 @@
+Package(
+	name: "syntax",
+	version: "0.1.0",
+	builds: [
+		.lib(from: "src/syntax.tlk")
+	],
+	dependencies: []
+)

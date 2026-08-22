@@ -37,7 +37,12 @@ impl DevServer {
             Err(error) => return Err(io::Error::new(io::ErrorKind::InvalidInput, error)),
         };
         let assets = PathBuf::from("./assets");
-        builder.write_all(&assets)?;
+        if !assets.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "./assets is missing; run `cargo run -- build` first",
+            ));
+        }
 
         let listener = TcpListener::bind(("0.0.0.0", port))?;
         listener.set_nonblocking(true)?;
@@ -138,6 +143,9 @@ impl SourceState {
         let mut site = BTreeMap::new();
         FileStamp::collect(Path::new("./content"), &mut site);
         FileStamp::collect(Path::new("./manual"), &mut site);
+        FileStamp::collect(Path::new("../core"), &mut site);
+        FileStamp::collect(Path::new("../stdlib"), &mut site);
+        FileStamp::collect(Path::new("../packages"), &mut site);
 
         Self { executable, site }
     }

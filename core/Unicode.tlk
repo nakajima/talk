@@ -28,6 +28,8 @@ func _is_continuation(b: Int) -> Bool {
 	b < 192
 }
 
+// Decodes one UTF-8 scalar and packs its value with the consumed byte count.
+// Malformed input yields U+FFFD and consumes one maximal invalid subpart.
 pub func _utf8_decode(storage: ByteStorage, offset: Int, end: Int) -> Int {
 	let replacement: Int = 65533
 	let b0: Int = storage.get(offset)._toInt()
@@ -203,6 +205,7 @@ pub func _grapheme_category(scalar: Int) -> Int {
 	v - (v / 32) * 32
 }
 
+// Returns whether the scalar has the Unicode extended pictographic property.
 pub func scalar_is_extended_pictographic(scalar: Int) -> Bool {
 	_grapheme_category(scalar: scalar) == _GC_EXT_PICT
 }
@@ -237,28 +240,34 @@ func _character_class(scalar: Int) -> Int {
 	v - (v / 32) * 32
 }
 
+// Tests the scalar against Unicode's `White_Space` property.
 pub func scalar_is_whitespace(scalar: Int) -> Bool {
 	_character_class(scalar: scalar) == _CC_WHITESPACE
 }
 
+// Tests the scalar against Unicode's `Alphabetic` property.
 pub func scalar_is_alphabetic(scalar: Int) -> Bool {
 	let cat: Int = _character_class(scalar: scalar)
 	cat == _CC_ALPHABETIC || cat == _CC_ALPHANUMERIC
 }
 
+// Returns true for decimal, digit, or other numeric Unicode scalars.
 pub func scalar_is_numeric(scalar: Int) -> Bool {
 	let cat: Int = _character_class(scalar: scalar)
 	cat == _CC_NUMERIC || cat == _CC_ALPHANUMERIC
 }
 
+// Returns true when the scalar is Unicode alphabetic or numeric.
 pub func scalar_is_alphanumeric(scalar: Int) -> Bool {
 	scalar_is_alphabetic(scalar: scalar) || scalar_is_numeric(scalar: scalar)
 }
 
+// Returns true when `scalar` is the code point for `0...9`.
 pub func scalar_is_ascii_digit(scalar: Int) -> Bool {
 	47 < scalar && scalar < 58
 }
 
+// Returns true for ASCII `0...9`, `a...f`, or `A...F`.
 pub func scalar_is_ascii_hexdigit(scalar: Int) -> Bool {
 	if scalar_is_ascii_digit(scalar: scalar) { return true }
 	if 64 < scalar && scalar < 71 { return true }
@@ -275,61 +284,93 @@ func _has_property(scalar: Int, bit: Int) -> Bool {
 	(flags / bit - (flags / (bit * 2)) * 2) == 1
 }
 
+// Tests the scalar against Unicode's `Lowercase` property.
 pub func scalar_is_lowercase(scalar: Int) -> Bool {
 	_has_property(scalar: scalar, bit: 1)
 }
+// Tests the scalar against Unicode's `Uppercase` property.
 pub func scalar_is_uppercase(scalar: Int) -> Bool {
 	_has_property(scalar: scalar, bit: 2)
 }
+// Returns true when the scalar has Unicode general category `Lt`.
 pub func scalar_is_titlecase(scalar: Int) -> Bool {
 	_has_property(scalar: scalar, bit: 4)
 }
+// Returns true when the scalar has Unicode general category `Nd`.
 pub func scalar_is_decimal(scalar: Int) -> Bool {
 	_has_property(scalar: scalar, bit: 8)
 }
+// Tests whether Unicode assigns the scalar decimal or digit numeric status.
 pub func scalar_is_digit(scalar: Int) -> Bool {
 	_has_property(scalar: scalar, bit: 16)
 }
+// Returns true for any Unicode punctuation general category.
 pub func scalar_is_punctuation(scalar: Int) -> Bool {
 	_has_property(scalar: scalar, bit: 32)
 }
+// Returns true for any Unicode symbol general category.
 pub func scalar_is_symbol(scalar: Int) -> Bool {
 	_has_property(scalar: scalar, bit: 64)
 }
+// Returns true when the scalar has Unicode general category `Cc`.
 pub func scalar_is_control(scalar: Int) -> Bool {
 	_has_property(scalar: scalar, bit: 128)
 }
+// Excludes control, format, surrogate, private-use, and unassigned categories.
 pub func scalar_is_printable(scalar: Int) -> Bool {
 	_has_property(scalar: scalar, bit: 256)
 }
+// Tests Unicode's derived `Cased` property used by case conversion.
 pub func scalar_is_cased(scalar: Int) -> Bool {
 	_has_property(scalar: scalar, bit: 512)
 }
+// Tests Unicode's `Case_Ignorable` property used when finding cased neighbors.
 pub func scalar_is_case_ignorable(scalar: Int) -> Bool {
 	_has_property(scalar: scalar, bit: 1024)
 }
 
+// Internal code for UAX #29 word-break category `Other`.
 pub let _WB_OTHER: Int = 0
+// Internal code for UAX #29 word-break category `CR`.
 pub let _WB_CR: Int = 1
+// Internal code for UAX #29 word-break category `LF`.
 pub let _WB_LF: Int = 2
+// Internal code for UAX #29 word-break category `Newline`.
 pub let _WB_NEWLINE: Int = 3
+// Internal code for UAX #29 word-break category `Extend`.
 pub let _WB_EXTEND: Int = 4
+// Internal code for UAX #29 word-break category `ZWJ`.
 pub let _WB_ZWJ: Int = 5
+// Internal code for UAX #29 word-break category `Regional_Indicator`.
 pub let _WB_REGIONAL_INDICATOR: Int = 6
+// Internal code for UAX #29 word-break category `Format`.
 pub let _WB_FORMAT: Int = 7
+// Internal code for UAX #29 word-break category `Katakana`.
 pub let _WB_KATAKANA: Int = 8
+// Internal code for UAX #29 word-break category `Hebrew_Letter`.
 pub let _WB_HEBREW_LETTER: Int = 9
+// Internal code for UAX #29 word-break category `ALetter`.
 pub let _WB_ALETTER: Int = 10
+// Internal code for UAX #29 word-break category `Single_Quote`.
 pub let _WB_SINGLE_QUOTE: Int = 11
+// Internal code for UAX #29 word-break category `Double_Quote`.
 pub let _WB_DOUBLE_QUOTE: Int = 12
+// Internal code for UAX #29 word-break category `MidNumLet`.
 pub let _WB_MIDNUMLET: Int = 13
+// Internal code for UAX #29 word-break category `MidLetter`.
 pub let _WB_MIDLETTER: Int = 14
+// Internal code for UAX #29 word-break category `MidNum`.
 pub let _WB_MIDNUM: Int = 15
+// Internal code for UAX #29 word-break category `Numeric`.
 pub let _WB_NUMERIC: Int = 16
+// Internal code for UAX #29 word-break category `ExtendNumLet`.
 pub let _WB_EXTENDNUMLET: Int = 17
+// Internal code for UAX #29 word-break category `WSegSpace`.
 pub let _WB_WSEGSPACE: Int = 18
+// Internal code for the extended-pictographic override used by UAX #29.
 pub let _WB_EXTENDED_PICTOGRAPHIC: Int = 19
 
+// Looks up the Unicode word-break category assigned to `scalar`.
 pub func _word_break_category(scalar: Int) -> Int {
 	_boundary_property(
 		table: _word_break_table(),
@@ -339,7 +380,11 @@ pub func _word_break_category(scalar: Int) -> Int {
 	)
 }
 
-// kind: 0 lowercase, 1 uppercase, 2 titlecase, 3 case folding.
+// Borrows the full Unicode case mapping for one scalar.
+//
+// `kind` selects lowercase (0), uppercase (1), titlecase (2), or case folding
+// (3 and other values). Mappings may contain multiple scalars; `none` means the
+// input maps to itself.
 pub func _case_mapping(scalar: Int, kind: Int) -> Substring? {
 	if kind == 0 { return _mapping(
 		index: _lowercase_index(),
@@ -359,6 +404,11 @@ pub func _case_mapping(scalar: Int, kind: Int) -> Substring? {
 	_mapping(index: _casefold_index(), payload: _casefold_payload(), scalar: scalar)
 }
 
+// Looks up a normalization decomposition without allocating.
+//
+// `compatibility = false` selects canonical mappings for NFC/NFD;
+// `true` also admits compatibility mappings for NFKC/NFKD. `none` means the
+// scalar decomposes to itself.
 pub func _decomposition(scalar: Int, compatibility: Bool) -> Substring? {
 	if compatibility {
 		_mapping(
@@ -375,6 +425,7 @@ pub func _decomposition(scalar: Int, compatibility: Bool) -> Substring? {
 	}
 }
 
+// Returns `scalar`'s canonical combining class.
 pub func _combining_class(scalar: Int) -> Int {
 	_boundary_property(
 		table: _combining_class_table(),
@@ -384,6 +435,10 @@ pub func _combining_class(scalar: Int) -> Int {
 	)
 }
 
+// Looks up canonical composition for a starter and following combining scalar.
+//
+// Hangul syllables are composed algorithmically; all other pairs use the
+// generated Unicode composition table. `none` leaves the pair decomposed.
 pub func _compose_pair(starter: Int, combining: Int) -> Int? {
 	let table = _composition_table()
 	let width = 9
@@ -533,20 +588,31 @@ pub func _next_boundary(storage: ByteStorage, offset: Int, end: Int) -> Int {
 	pos
 }
 
-// One user-perceived character: a borrowed view of a cluster's bytes.
+// One extended grapheme cluster, represented as a borrowed UTF-8 byte range.
+//
+// The range is produced by UAX #29 boundary iteration and may contain several
+// Unicode scalars. Classification uses the first scalar, while equality is
+// exact byte equality and does not normalize canonically equivalent text.
 pub struct Character {
+	// The backing storage.
 	pub let storage: ByteStorage
+	// The inclusive starting byte offset in the source.
 	pub let start: Int
+	// The number of bytes in the encoded representation.
 	pub let byte_count: Int
 
+	// Returns this grapheme cluster's encoded byte length, not its scalar
+	// count.
 	pub func utf8_count() -> Int {
 		self.byte_count
 	}
 
+	// Borrows the cluster's exact UTF-8 range without copying.
 	pub func as_substring() -> Substring {
 		Substring(storage: self.storage, start: self.start, byte_count: self.byte_count)
 	}
 
+	// Copies the cluster's UTF-8 bytes into a new owned string.
 	pub func to_string() -> String {
 		self.as_substring().to_string()
 	}
@@ -564,93 +630,120 @@ pub struct Character {
 		)
 	}
 
+	// Tests the first scalar against Unicode's `White_Space` property.
 	pub func is_whitespace() -> Bool {
 		scalar_is_whitespace(scalar: self.first_scalar())
 	}
 
+	// Tests the first scalar against Unicode's `Alphabetic` property.
 	pub func is_alphabetic() -> Bool {
 		scalar_is_alphabetic(scalar: self.first_scalar())
 	}
 
+	// Returns true for Unicode decimal, digit, or numeric-number scalars.
 	pub func is_numeric() -> Bool {
 		scalar_is_numeric(scalar: self.first_scalar())
 	}
 
+	// Returns true when the first scalar is Unicode alphabetic or numeric.
 	pub func is_alphanumeric() -> Bool {
 		scalar_is_alphanumeric(scalar: self.first_scalar())
 	}
 
+	// Returns true when the first scalar is in `0...9`.
 	pub func is_ascii_digit() -> Bool {
 		scalar_is_ascii_digit(scalar: self.first_scalar())
 	}
 
+	// Returns true for the ASCII hexadecimal digits `0...9`, `a...f`, or
+	// `A...F`.
 	pub func is_ascii_hexdigit() -> Bool {
 		scalar_is_ascii_hexdigit(scalar: self.first_scalar())
 	}
 
+	// Returns true only for a one-byte ASCII grapheme cluster.
 	pub func is_ascii() -> Bool {
 		self.byte_count == 1 && self.first_scalar() < 128
 	}
 
+	// Returns true when the first scalar is an ASCII letter.
 	pub func is_ascii_alphabetic() -> Bool {
 		let scalar = self.first_scalar()
 		(64 < scalar && scalar < 91) || (96 < scalar && scalar < 123)
 	}
 
+	// Returns true when the first scalar is an ASCII letter or decimal digit.
 	pub func is_ascii_alphanumeric() -> Bool {
 		self.is_ascii_alphabetic() || self.is_ascii_digit()
 	}
 
+	// Recognizes ASCII space and the tab, newline, vertical-tab, form-feed, and
+	// return controls.
 	pub func is_ascii_whitespace() -> Bool {
 		let scalar = self.first_scalar()
 		scalar == 9 || scalar == 10 || scalar == 11 || scalar == 12 || scalar == 13 || scalar == 32
 	}
 
+	// Tests the first scalar against Unicode's `Lowercase` property.
 	pub func is_lowercase() -> Bool {
 		scalar_is_lowercase(scalar: self.first_scalar())
 	}
 
+	// Tests the first scalar against Unicode's `Uppercase` property.
 	pub func is_uppercase() -> Bool {
 		scalar_is_uppercase(scalar: self.first_scalar())
 	}
 
+	// Returns true when the first scalar has Unicode general category `Lt`.
 	pub func is_titlecase() -> Bool {
 		scalar_is_titlecase(scalar: self.first_scalar())
 	}
 
+	// Returns true when the first scalar has Unicode general category `Nd`.
 	pub func is_decimal() -> Bool {
 		scalar_is_decimal(scalar: self.first_scalar())
 	}
 
+	// Returns true for Unicode decimal digits and compatibility digit
+	// characters.
 	pub func is_digit() -> Bool {
 		scalar_is_digit(scalar: self.first_scalar())
 	}
 
+	// Returns true when the first scalar is in a Unicode punctuation category.
 	pub func is_punctuation() -> Bool {
 		scalar_is_punctuation(scalar: self.first_scalar())
 	}
 
+	// Returns true when the first scalar is in a Unicode symbol category.
 	pub func is_symbol() -> Bool {
 		scalar_is_symbol(scalar: self.first_scalar())
 	}
 
+	// Returns true when the first scalar has Unicode general category `Cc`.
 	pub func is_control() -> Bool {
 		scalar_is_control(scalar: self.first_scalar())
 	}
 
+	// Excludes Unicode control, format, surrogate, private-use, and unassigned
+	// scalars.
 	pub func is_printable() -> Bool {
 		scalar_is_printable(scalar: self.first_scalar())
 	}
 
+	// Recognizes Talk identifier starts: an ASCII letter or underscore.
 	pub func is_identifier_start() -> Bool {
 		let scalar = self.first_scalar()
 		self.is_ascii_alphabetic() || scalar == 95
 	}
 
+	// Recognizes Talk identifier continuations: a valid start or an
+	// alphanumeric scalar.
 	pub func is_identifier_continue() -> Bool {
 		self.is_identifier_start() || self.is_alphanumeric()
 	}
 
+	// Returns the number of Unicode scalar values.
 	pub func scalar_count() -> Int {
 		let count = 0
 		for _ in self.scalars() {
@@ -659,10 +752,13 @@ pub struct Character {
 		count
 	}
 
+	// Returns whether this grapheme cluster contains exactly one Unicode
+	// scalar.
 	pub func is_single_scalar() -> Bool {
 		self.scalar_count() == 1
 	}
 
+	// Returns a view that iterates over Unicode scalar values.
 	pub func scalars() -> ScalarIterator {
 		ScalarIterator(
 			storage: self.storage,
@@ -678,6 +774,8 @@ extend Character: Clone {}
 // Byte equality of the cluster — same semantic as String equality, so
 // canonically equivalent characters in different normal forms differ.
 extend Character: Equatable {
+	// Compares the grapheme clusters byte-for-byte without Unicode
+	// normalization.
 	pub func equals(_ rhs: Character) -> Bool {
 		if self.byte_count != rhs.byte_count { return false }
 		let idx = 0
@@ -693,26 +791,38 @@ extend Character: Equatable {
 }
 
 extend Character: Showable {
+	// Copies the complete grapheme cluster into an owned display string.
 	pub func show() -> String {
 		self.to_string()
 	}
 }
 
 extend Character: Add<String> {
+	// Concatenates this grapheme cluster with `rhs`.
 	pub func add(_ rhs: String) -> String {
 		self.as_substring() + rhs
 	}
 }
 
+// Walks extended grapheme clusters across a borrowed UTF-8 range.
+//
+// `offset` is always a cluster boundary no later than `end`. Malformed UTF-8
+// follows the decoder's maximal-subpart replacement rule, so iteration always
+// makes progress without allocating.
 pub struct CharacterIterator {
+	// The backing storage.
 	pub let storage: ByteStorage
+	// The byte offset in the underlying storage.
 	pub let offset: Int
+	// The exclusive ending byte offset in the source.
 	pub let end: Int
 }
 
 extend CharacterIterator: Borrowed {}
 
 extend CharacterIterator: Iterator<Character> {
+	// Yields the borrowed cluster at `offset` and advances to the next UAX #29
+	// boundary.
 	pub mut func next() -> Character? {
 		if self.end <= self.offset { return Optional.none }
 		let next_offset: Int = _next_boundary(
@@ -731,17 +841,25 @@ extend CharacterIterator: Iterator<Character> {
 	}
 }
 
-// A Unicode-scalar view. Values are scalar code points as Ints; malformed
-// UTF-8 yields U+FFFD while advancing by the decoder's maximal subpart.
+// Walks Unicode scalar values across a borrowed UTF-8 range.
+//
+// Unlike `CharacterIterator`, this exposes code points rather than user-visible
+// grapheme clusters. Malformed subsequences yield U+FFFD and consume one
+// maximal subpart, so every call advances or reports exhaustion.
 pub struct ScalarIterator {
+	// The backing storage.
 	pub let storage: ByteStorage
+	// The byte offset in the underlying storage.
 	pub let offset: Int
+	// The exclusive ending byte offset in the source.
 	pub let end: Int
 }
 
 extend ScalarIterator: Borrowed {}
 
 extend ScalarIterator: Iterator<Int> {
+	// Decodes one scalar, advances by its maximal-subpart byte count, or
+	// reports exhaustion.
 	pub mut func next() -> Int? {
 		if self.end <= self.offset { return Optional.none }
 		let packed: Int = _utf8_decode(
@@ -755,12 +873,14 @@ extend ScalarIterator: Iterator<Int> {
 }
 
 extend String: Iterable {
+	// Borrows the string and yields UAX #29 extended grapheme clusters.
 	pub func iter() -> CharacterIterator {
 		CharacterIterator(storage: self.storage, offset: 0, end: self.byte_count)
 	}
 }
 
 extend Substring: Iterable {
+	// Yields UAX #29 extended grapheme clusters within the substring's bounds.
 	pub func iter() -> CharacterIterator {
 		CharacterIterator(
 			storage: self.storage,
@@ -771,12 +891,16 @@ extend Substring: Iterable {
 }
 
 extend String {
+	// Borrows the string as Unicode scalar values rather than grapheme
+	// clusters.
 	pub func scalars() -> ScalarIterator {
 		ScalarIterator(storage: self.storage, offset: 0, end: self.byte_count)
 	}
 }
 
 extend Substring {
+	// Borrows this range as Unicode scalar values rather than grapheme
+	// clusters.
 	pub func scalars() -> ScalarIterator {
 		ScalarIterator(
 			storage: self.storage,

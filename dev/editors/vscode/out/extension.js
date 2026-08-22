@@ -119,10 +119,7 @@ function serverOptions() {
         transport: node_1.TransportKind.stdio,
         args: ["lsp"],
         options: {
-            env: {
-                ...configuredEnvironment(),
-                RUST_LOG: process.env.RUST_LOG ?? "debug",
-            },
+            env: configuredEnvironment(),
         },
     };
 }
@@ -205,6 +202,8 @@ async function clearStdlibPath() {
     }
 }
 function activate(context) {
+    const fileEvents = vscode_1.workspace.createFileSystemWatcher("**/*.tlk");
+    context.subscriptions.push(fileEvents);
     // Options to control the language client
     const clientOptions = {
         // Register the server for plain text documents
@@ -213,8 +212,8 @@ function activate(context) {
             { scheme: "untitled", language: "talktalk" },
         ],
         synchronize: {
-            // Notify the server about file changes to '.clientrc files contained in the workspace
-            fileEvents: vscode_1.workspace.createFileSystemWatcher("**/*.tlk"),
+            // Notify the server about .tlk file changes in the workspace
+            fileEvents,
         },
     };
     createClient = () => new node_1.LanguageClient("TalkTalk", "TalkTalk Language Server", serverOptions(), clientOptions);

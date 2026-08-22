@@ -193,6 +193,58 @@ fn for_each_corpus_case<T: Sync>(cases: &[T], run: impl Fn(&T) + Sync) {
 }
 
 #[test]
+fn run_executes_main_after_declaration_only_scripts() {
+    // A top-level `let` is the global initializer, not the program:
+    // it must not suppress a zero-parameter `main`.
+    assert_runs(
+        b"let page_style = \"a global constant\"\n\npub func main() '[io, alloc, panic] -> () {\n\tprint(\"main runs\")\n}\n",
+        &[],
+        b"main runs\n",
+    );
+}
+
+#[test]
+fn run_initializes_globals_before_main() {
+    assert_runs(
+        b"let answer = 42\n\npub func main() '[io, alloc, panic] -> () {\n\tprint(answer)\n}\n",
+        &[],
+        b"42\n",
+    );
+}
+
+#[test]
+fn run_script_statements_still_take_the_script_entry() {
+    // Documented semantics: executable top-level statements are the
+    // program; `main` is only the fallback when there are none.
+    assert_runs(
+        b"print(\"top level\")\n\npub func main() '[io, alloc, panic] -> () {\n\tprint(\"main\")\n}\n",
+        &[],
+        b"top level\n",
+    );
+}
+
+#[test]
+fn rebinding_a_loan_binding_releases_the_displaced_value() {
+    // A borrow-typed binding reassigned to an owned value must own
+    // from birth: without the materialization at the bind, the
+    // displaced value leaked (caught by the VM's exit balance check).
+    assert_runs(
+        b"func slice(s: &String, start: Int) -> String {\n\tlet view = s.utf8()\n\tlet bytes: [Byte] = []\n\tlet i = start\n\tloop i < view.count() {\n\t\tbytes.push(view.at(index: i))\n\t\ti = i + 1\n\t}\n\tString.from_bytes(bytes: bytes)\n}\nfunc check(path: String, source_root: String) -> String {\n\tlet name = path\n\tif name.starts_with(needle: source_root) {\n\t\tname = slice(s: name, start: source_root.byte_count)\n\t}\n\tname\n}\npub func main() '[io, alloc, panic] -> () {\n\tprint(check(path: \"/tmp/one/a.tlk\", source_root: \"/tmp/one\"))\n}\n",
+        &[],
+        b"/a.tlk\n",
+    );
+}
+
+#[test]
+fn rebinding_an_element_borrow_releases_the_displaced_value() {
+    assert_runs(
+        b"pub func main() '[io, alloc, panic] -> () {\n\tlet parts = [\"one\", \"two\"]\n\tlet out = parts[0]\n\tout = out + \" \" + parts[1]\n\tprint(out)\n}\n",
+        &[],
+        b"one two\n",
+    );
+}
+
+#[test]
 fn run_renders_a_scalar_script_result_in_talk_syntax() {
     assert_runs(b"// no-core\nlet answer = 42\nanswer\n", &[], b"42\n");
 }
@@ -215,6 +267,15 @@ fn syntax_stdlib_exposes_the_self_hosted_parser() {
         b"use syntax::{ parse_expr_source, Item }\nlet outcome = parse_expr_source(source: \"1 + 2\")\nif let .some(failure) = outcome.failure {\n\tprint(failure.code + \": \" + failure.message)\n} else {\n\tlet first: Item = outcome.items[0]\n\tmatch first {\n\t\t.expr_item(_) -> print(\"parsed\"),\n\t\t_ -> print(\"wrong root\")\n\t}\n}\n",
         &[],
         b"parsed\n",
+    );
+}
+
+#[test]
+fn syntax_stdlib_attaches_doc_comments() {
+    assert_runs(
+        b"use syntax::{ parse_file_source, parse_file_docs_source, collect_doc_comments }\nfunc check(name: String, ok: Bool) {\n\tif ok { print(name + \" ok\") } else { print(name + \" FAIL\") }\n}\nlet code = \"// Adds one.\\npub func add_one(x: Int) -> Int { x + 1 }\"\nlet outcome = parse_file_source(source: code)\nlet index = collect_doc_comments(source: code, outcome: outcome)\ncheck(name: \"attach-crosses-pub\", ok: index.entries.count == 1 && index.entries[0].comments.count == 1 && index.entries[0].decl_start == 17 && index.orphans.count == 0)\nlet grouped = collect_doc_comments(source: \"// a\\n// b\\nfunc f() { }\", outcome: parse_file_source(source: \"// a\\n// b\\nfunc f() { }\"))\ncheck(name: \"groups-lines\", ok: grouped.entries.count == 1 && grouped.entries[0].comments.count == 2)\nlet detached = collect_doc_comments(source: \"// a\\n\\nfunc f() { }\", outcome: parse_file_source(source: \"// a\\n\\nfunc f() { }\"))\ncheck(name: \"blank-line-detaches\", ok: detached.entries.count == 0 && detached.orphans.count == 1)\nlet trailing = collect_doc_comments(source: \"let x = 1 // tail\\n\", outcome: parse_file_source(source: \"let x = 1 // tail\\n\"))\ncheck(name: \"trailing-is-orphan\", ok: trailing.entries.count == 0 && trailing.orphans.count == 1)\nlet members = collect_doc_comments(source: \"struct S {\\n\\t// The x value.\\n\\tlet x: Int\\n\\t// Does it.\\n\\tfunc do_it() { }\\n}\", outcome: parse_file_source(source: \"struct S {\\n\\t// The x value.\\n\\tlet x: Int\\n\\t// Does it.\\n\\tfunc do_it() { }\\n}\"))\ncheck(name: \"members\", ok: members.entries.count == 2 && members.orphans.count == 0)\nlet documented = parse_file_docs_source(source: code)\ncheck(name: \"docs-entry\", ok: documented.docs.count == 1 && documented.docs[0].comments.count == 1 && outcome.docs.count == 0)\nlet above_use = collect_doc_comments(source: \"// Docs.\\nuse package::Lexer::{ lex }\\nfunc f() { }\", outcome: parse_file_source(source: \"// Docs.\\nuse package::Lexer::{ lex }\\nfunc f() { }\"))\ncheck(name: \"skips-use-block\", ok: above_use.entries.count == 1 && above_use.entries[0].decl_start > 30)\nlet blank_after_use = collect_doc_comments(source: \"// Docs.\\nuse package::Lexer::{ lex }\\n\\nfunc f() { }\", outcome: parse_file_source(source: \"// Docs.\\nuse package::Lexer::{ lex }\\n\\nfunc f() { }\"))\ncheck(name: \"blank-after-use-detaches\", ok: blank_after_use.entries.count == 0 && blank_after_use.orphans.count == 1)\nlet pragma = collect_doc_comments(source: \"// no-core\\n// Docs.\\nfunc f() { }\", outcome: parse_file_source(source: \"// no-core\\n// Docs.\\nfunc f() { }\"))\ncheck(name: \"pragma-not-doc\", ok: pragma.entries.count == 1 && pragma.entries[0].comments.count == 1 && pragma.orphans.count == 1)\n",
+        &[],
+        b"attach-crosses-pub ok\ngroups-lines ok\nblank-line-detaches ok\ntrailing-is-orphan ok\nmembers ok\ndocs-entry ok\nskips-use-block ok\nblank-after-use-detaches ok\npragma-not-doc ok\n",
     );
 }
 
@@ -2809,7 +2870,7 @@ fn assert_flow_corpus(
 fn reference_flow_corpus_holds() {
     const KNOWN_STRICTER: &[&str] = &[
         "borrowed_generic_payload_requires_copy_or_clone_bound",
-        "generic_heap_extraction_rejects_non_cheap_owned_instantiation",
+        "generic_heap_extraction_rejects_non_clone_owned_instantiation",
     ];
     const PENDING_REJECTION: &[&str] = &[];
     assert_flow_corpus(
@@ -2979,7 +3040,7 @@ fn repl_package_imports_the_current_library() {
     );
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_talk"))
-        .args(["repl", "--package"])
+        .arg("repl")
         .current_dir(root.join("src"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -3001,7 +3062,122 @@ fn repl_package_imports_the_current_library() {
     let stdout = String::from_utf8(output.stdout).expect("REPL stdout is UTF-8");
     assert_eq!(stdout.matches("42").count(), 2, "{stdout}");
 
+    let mut standalone = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["repl", "--standalone"])
+        .current_dir(root.join("src"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start standalone REPL");
+    standalone
+        .stdin
+        .take()
+        .expect("standalone REPL stdin")
+        .write_all(b"answer()\n")
+        .expect("write standalone REPL input");
+    let standalone_output = standalone
+        .wait_with_output()
+        .expect("read standalone REPL output");
+    assert!(standalone_output.status.success());
+    assert!(String::from_utf8_lossy(&standalone_output.stderr).contains("Undefined name: answer"));
+
     std::fs::remove_dir_all(root).expect("remove package fixture");
+}
+
+#[test]
+fn package_run_resolves_methods_declared_after_the_caller() {
+    // A member call's SCC edge is unknowable before typechecking, so
+    // binding groups edge to every nominal owning the label. Without
+    // it the caller's group ran first, the member constraint floated,
+    // and the method's scheme published too late ("Unknown member on
+    // the inferred result").
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!("talk-pkg-order-{unique}-{}", std::process::id()));
+    std::fs::create_dir_all(root.join("src")).expect("root src");
+    std::fs::write(
+        root.join("package.tlk"),
+        "Package(name: \"method-order\", version: \"0.1.0\", builds: [.bin(named: \"main\", from: \"src/main.tlk\")], dependencies: [])",
+    )
+    .expect("manifest");
+    std::fs::write(
+        root.join("src/documentable.tlk"),
+        "pub struct Entry {\n\tpub let value: Int\n}\n",
+    )
+    .expect("documentable source");
+    std::fs::write(
+        root.join("src/render.tlk"),
+        "use package::documentable::{ Entry }\nuse package::store::{ Store }\n\npub func type_name(store: &Store) -> String {\n\tif let .some(entry) = store.get(index: 0) {\n\t\treturn entry.value.show()\n\t}\n\t\"?\"\n}\n",
+    )
+    .expect("render source");
+    std::fs::write(
+        root.join("src/store.tlk"),
+        "use package::documentable::{ Entry }\n\npub struct Store {\n\tpub let items: [Entry]\n\n\tpub init() {\n\t\tself.items = [Entry(value: 42)]\n\t}\n\n\tpub func get(index: Int) -> Entry? {\n\t\tif index < 0 || index >= self.items.count { return .none }\n\t\t.some(self.items[index])\n\t}\n}\n",
+    )
+    .expect("store source");
+    std::fs::write(
+        root.join("src/main.tlk"),
+        "use package::render::{ type_name }\nuse package::store::{ Store }\n\npub func main() '[io, alloc, panic] -> () {\n\tlet store = Store()\n\tprint(type_name(store: store))\n}\n",
+    )
+    .expect("main source");
+
+    let install = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["install", "--offline"])
+        .current_dir(&root)
+        .output()
+        .expect("install");
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    let run = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["run", "--offline", "--bin", "main"])
+        .current_dir(&root)
+        .output()
+        .expect("package run");
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(run.stdout, b"42\n");
+    std::fs::remove_dir_all(&root).expect("remove fixture dir");
+}
+
+#[test]
+fn fixit_applies_all_preferred_quick_fixes() {
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!("talk-fixit-{}-{unique}.tlk", std::process::id()));
+    std::fs::write(
+        &path,
+        "public func greet(name: String) -> String { name }\nprint(greet(\"Ada\"))\n",
+    )
+    .expect("write fixit source");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .arg("fixit")
+        .arg(&path)
+        .output()
+        .expect("run fixit");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("applied 2 fixes"));
+    assert_eq!(
+        std::fs::read_to_string(&path).expect("read fixed source"),
+        "pub func greet(name: String) -> String { name }\nprint(greet(name: \"Ada\"))\n"
+    );
+
+    std::fs::remove_file(path).expect("remove fixit source");
 }
 
 #[test]
@@ -5039,6 +5215,15 @@ fn run_coop_scheduler_interleaves_matches_pin() {
 }
 
 #[test]
+fn run_coop_scheduler_waits_matches_pin() {
+    // The unified 'wait effect under the cooperative scheduler: the
+    // root task parks on a deadline reason while a spawned task
+    // interleaves, then parks on a channel reason until a parallel
+    // worker's send wakes it. The same program runs through the C sweep.
+    assert_parity_program("coop_wait");
+}
+
+#[test]
 fn run_parallel_channel_pipeline_matches_pin() {
     // ADR 0059: producers on parallel workers feed one consumer through
     // an MPSC channel. The consumer waits between sends instead of
@@ -5853,6 +6038,28 @@ fn run_reports_a_clean_division_by_zero_trap() {
     assert!(stderr.contains("division by zero"), "{stderr}");
     assert!(stderr.contains("0 live allocations"), "{stderr}");
     assert!(stderr.contains("0 live 'heap objects"), "{stderr}");
+}
+
+#[test]
+fn integer_overflow_traps_and_explicit_alternatives_work() {
+    for source in [
+        "let max = 9223372036854775807\nlet one = 1\nmax + one\n",
+        "let max = 9223372036854775807\nlet min = -max - 1\nlet one = 1\nmin - one\n",
+        "let max = 9223372036854775807\nlet two = 2\nmax * two\n",
+        "let max = 9223372036854775807\nlet min = -max - 1\n0 - min\n",
+        "let max = 9223372036854775807\nlet min = -max - 1\nlet negative_one = -1\nmin / negative_one\n",
+    ] {
+        let output = run_source(source.as_bytes(), &[]);
+        assert!(!output.status.success(), "{source}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("integer overflow"), "{source}: {stderr}");
+    }
+
+    assert_runs(
+        b"let max = 9223372036854775807\nlet min = -max - 1\nprint(max.checked_add(1))\nprint(20.checked_mul(2))\nprint(1.checked_div(0))\nprint(max.unchecked_add(1))\nprint(min.unchecked_sub(1))\nprint(max.unchecked_mul(2))\nprint(min.unchecked_div(-1))\nprint(min.unchecked_neg())\n",
+        &[],
+        b"Optional.none\nOptional.some(40)\nOptional.none\n-9223372036854775808\n9223372036854775807\n-2\n-9223372036854775808\n-9223372036854775808\n",
+    );
 }
 
 #[test]

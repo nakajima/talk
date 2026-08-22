@@ -6,23 +6,24 @@
     <title>talktalk - 4. Data and Patterns</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787039522" rel="stylesheet">
+    <link href="/style.css?t=1787386830" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
       <a class="global-nav-brand" href="/">talktalk</a>
       <div class="global-nav-links">
         <a href="/">Language</a>
-        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/manual/" aria-current="page">Guide</a>
+        <a href="/docs/">Docs</a>
         <a href="/playground">Playground</a>
         <a href="/qa">Q/A</a>
         <a href="/philosophy">Philosophy</a>
       </div>
     </nav>
-    <main class="content-page manual-page">
-      <header class="page-header">
-        <div class="page-header-content">
-          <code class="page-kicker">talktalk / docs</code>
+    <main class="site-page manual-page">
+      <header class="site-page-header">
+        <div class="site-page-heading">
+          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/data-and-patterns" aria-current="page">4. Data and Patterns</a></nav>
           <div class="page-header-title-row">
             <h1>4. Data and Patterns</h1>
             
@@ -30,10 +31,10 @@
         </div>
       </header>
 
-      <div class="manual-layout">
-        <aside class="manual-outline">
+      <div class="site-page-layout manual-layout">
+        <aside class="site-page-sidebar manual-outline">
           <nav aria-label="Manual table of contents">
-            <span class="manual-outline-title">Contents</span>
+            <span class="site-nav-label manual-outline-title">Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -58,17 +59,20 @@
 <li><a href="/manual/standard-library">13. The Standard Library</a></li>
 <li><a href="/manual/toolchain">14. The Toolchain</a></li>
 <li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+<li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
+<li><a href="/manual/mir-reference">B. MIR Reference</a></li>
+<li><a href="/manual/bytecode-reference">C. Bytecode Reference</a></li>
             </ol>
           </nav>
         </aside>
-        <div class="manual-document">
+        <div class="site-page-content manual-document">
           <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
             <a class="manual-previous" href="/manual/bindings-and-functions">&larr; 3. Bindings and Functions</a>
             <a class="manual-contents" href="/manual/">All chapters</a>
             <a class="manual-next" href="/manual/generics-and-protocols">5. Generics and Protocols &rarr;</a>
           </nav>
-          <article class="page-content">
-            <p>TalkTalk has a few ways to group data. Structs define a reusable kind of value, records are handy one-off bundles of fields, and enums describe values that can be one of several cases. Patterns let you look inside all three.</p>
+          <article class="prose page-content">
+            <p>TalkTalk has a few ways to group data. Structs define a reusable kind of value, records are handy structural bundles of fields, and enums describe values that can be one of several cases. Patterns let you look inside all three.</p>
 <h2><a href="#structs" aria-hidden="true" class="anchor" id="structs"></a>Structs</h2>
 <p>A struct declares stored fields and methods. It receives a memberwise initializer when it does not declare its own <code>init</code>:</p>
 <div class='runnable' data-accumulates='true' data-accumulate-group='person'>
@@ -155,7 +159,7 @@ Rectangle(square: 12)</textarea>
             <div class='result'></div>
         </div>
 <h2><a href="#records" aria-hidden="true" class="anchor" id="records"></a>Records</h2>
-<p>Records need no declaration and are typed by their fields:</p>
+<p>Records need no declaration. A literal's field labels and value types determine its type:</p>
 <div class='runnable'>
             <div class='code-block'>
                 <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> user <span class="operator">=</span> { <span class="parameter">name</span>: <span class="string">"Pat"</span>, <span class="parameter">active</span>: <span class="keyword">true</span>, <span class="parameter">greeting</span>: <span class="keyword">func</span>(<span class="parameter">name</span>) { <span class="string">"hi "</span> <span class="operator">+</span> <span class="variable">name</span> } }
@@ -179,7 +183,54 @@ print(user.greeting(user.name))</textarea>
             </div>
             <div class='result'></div>
         </div>
-<p>Use records for local structural values and structs for nominal identity, conformance, constructors, or a public API.</p>
+<p>The type of <code>user</code> is <code>{ active: Bool, greeting: (String) -&gt; String, name: String }</code>. Source order is not part of record identity: labels, not positions, connect fields. The compiler stores a closed row in a canonical label order, so <code>{ x: 1, y: 2 }</code> and <code>{ y: 2, x: 1 }</code> have the same type.</p>
+<p>Field access can infer an <em>open</em> record row. This function does not require one declared record shape; it accepts any record with an <code>x</code> field:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">func</span> <span class="function">x_coordinate</span>(<span class="parameter">point</span>) { <span class="variable">point</span>.<span class="property">x</span> }
+
+<span class="variable">print</span>(<span class="variable">x_coordinate</span>({ <span class="parameter">x</span>: <span class="number">3</span>, <span class="parameter">y</span>: <span class="number">4</span> }))
+<span class="variable">print</span>(<span class="variable">x_coordinate</span>({ <span class="parameter">name</span>: <span class="string">"origin"</span>, <span class="parameter">x</span>: <span class="number">0</span> }))</pre>
+        </div>
+<p>The inferred parameter is approximately <code>{ x: T, ..row }</code>, and the return type is <code>T</code>. The hidden row tail means &quot;possibly more fields.&quot; Each call fills in both <code>T</code> and the remaining fields, and compilation specializes the function for the concrete closed row used there.</p>
+<p>Uses constrain field types in both directions:</p>
+<div class='code-block no-run'>
+            <pre class='code-highlight'><span class="keyword">func</span> <span class="function">shifted</span>(<span class="parameter">point</span>) { <span class="variable">point</span>.<span class="property">x</span> <span class="operator">+</span> <span class="number">1</span> }
+
+<span class="variable">shifted</span>({ <span class="parameter">x</span>: <span class="number">41</span>, <span class="parameter">label</span>: <span class="string">"answer"</span> })</pre>
+        </div>
+<p><code>+ 1</code> constrains <code>point.x</code> to support integer addition, so the call resolves <code>x</code> as <code>Int</code>. Accessing several fields adds all of them to the required row. A record missing a required label, or with an incompatible field type, is a type error.</p>
+<p>Open-row inference is currently a frontend feature with incomplete executable-backend coverage, so these two generic examples are shown as non-runnable reference code. Closed record literals, field reads, writes, and concrete record patterns execute on the supported targets.</p>
+<p>Record patterns are structural too. <code>..</code> allows fields the pattern does not mention:</p>
+<div class='runnable'>
+            <div class='code-block'>
+                <pre class='code-highlight' aria-hidden='true'><span class="keyword">let</span> point <span class="operator">=</span> { <span class="parameter">x</span>: <span class="number">10</span>, <span class="parameter">y</span>: <span class="number">0</span>, <span class="parameter">label</span>: <span class="string">"start"</span> }
+
+<span class="keyword">match</span> <span class="variable">point</span> {
+	{ <span class="parameter">x</span>, <span class="parameter">y</span>: <span class="number">0</span>, <span class="operator">..</span> } <span class="operator">-&gt;</span> <span class="variable">x</span>,
+	{ <span class="parameter">y</span>, <span class="operator">..</span> } <span class="operator">-&gt;</span> <span class="variable">y</span>
+}</pre>
+                <div class='code-diagnostics' aria-hidden='true'></div>
+                <textarea class='code-editable' rows='6' spellcheck='false' autocapitalize='off' autocorrect='off' autocomplete='off' wrap='off'>let point = { x: 10, y: 0, label: &quot;start&quot; }
+
+match point {
+	{ x, y: 0, .. } -&gt; x,
+	{ y, .. } -&gt; y
+}</textarea>
+            </div>
+            <div class='actions'>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='run' disabled>Run</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='lower' disabled>Lower</button>
+                </span>
+                <span class='action-control' data-tooltip='WASM bundle initializing' aria-label='WASM bundle initializing' tabindex='0'>
+                    <button type='button' class='format' disabled>Format</button>
+                </span>
+            </div>
+            <div class='result'></div>
+        </div>
+<p>Use records for local structural values. Prefer structs when a value needs nominal identity, declared conformance, constructors, methods as a public API, or a stable exported name. <a href="type-inference#record-rows">Type Inference Reference</a> describes row inference and specialization in detail.</p>
 <h2><a href="#enums" aria-hidden="true" class="anchor" id="enums"></a>Enums</h2>
 <p>Enum cases may be empty or carry values:</p>
 <div class='code-block no-run' data-accumulates='true' data-accumulate-group='enum' data-source='enum Response {
@@ -199,7 +250,6 @@ let redirect: Response = .redirect(to: &quot;/login&quot;)'>
 <span class="keyword">let</span> response <span class="operator">=</span> <span class="type">Response</span>.<span class="property">ok</span>(<span class="string">"all good"</span>)
 <span class="keyword">let</span> redirect: <span class="type">Response</span> <span class="operator">=</span> .<span class="property">redirect</span>(<span class="parameter">to</span>: <span class="string">"/login"</span>)</pre>
         </div>
-        
 <p>Case qualification can be omitted when the expected enum type is known. Payload labels are used in construction and matching.</p>
 <h2><a href="#exhaustive-matching" aria-hidden="true" class="anchor" id="exhaustive-matching"></a>Exhaustive matching</h2>
 <p><code>match</code> is exhaustive and returns a value:</p>
@@ -306,7 +356,6 @@ match point {
 	print(user.name)
 }</pre>
         </div>
-        
 <p>A <code>let ... else</code> guard makes the successful bindings available after the statement:</p>
 <div class='runnable'>
             <div class='code-block'>
@@ -393,9 +442,9 @@ evaluate(.int(42))</textarea>
             <a class="manual-next" href="/manual/generics-and-protocols">5. Generics and Protocols &rarr;</a>
           </nav>
         </div>
-        <div class="manual-rail" aria-hidden="true"></div>
+        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
       </div>
-      <script type="module" src="/page.js?t=1787039522"></script>
+      <script type="module" src="/page.js?t=1787386830"></script>
     </main>
   </body>
 </html>

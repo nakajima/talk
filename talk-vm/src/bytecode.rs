@@ -12,8 +12,10 @@ const MAGIC: &[u8; 7] = b"TALKBC\0";
 // `PushHandler`/`FindHandler`/`Suspend` for clause-derived suspension
 // (ADR 0068: entries carry the clause kind, performs branch on it), so
 // older layouts are no longer decodable and the floor rises with it.
-pub const FORMAT_VERSION: u32 = 10;
-const MIN_SUPPORTED_FORMAT_VERSION: u32 = 10;
+// Version 11 makes Int add/subtract/multiply/divide trap on overflow;
+// explicit unchecked Core methods provide wrapping behavior instead.
+pub const FORMAT_VERSION: u32 = 11;
+const MIN_SUPPORTED_FORMAT_VERSION: u32 = 11;
 
 pub fn supports_format(version: u32) -> bool {
     (MIN_SUPPORTED_FORMAT_VERSION..=FORMAT_VERSION).contains(&version)

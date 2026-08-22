@@ -12,7 +12,445 @@ use package::Convert::{ Into }
 use package::Result::{ Result }
 use package::Iterable::{ IndexIterable }
 
+// An owned Unicode string with copy-on-write UTF-8 storage.
+//
+// Bytes in `storage[0..<byte_count]` are valid UTF-8 and
+// `byte_count <= capacity`. Byte-oriented access lives on `UTF8View`; ordinary
+// iteration and the deep text APIs operate on extended grapheme clusters.
+pub struct String {
+	// The backing storage.
+	pub let storage: ByteStorage
+	// The number of bytes in the encoded representation.
+	pub let byte_count: Int
+	// The number of bytes that fit without reallocating.
+	pub let capacity: Int
+
+	// Adopts an existing byte allocation without validation or copying.
+	//
+	// Callers must guarantee valid UTF-8 in `0..<byte_count`, matching
+	// allocation capacity, and `0 <= byte_count <= capacity`. Prefer
+	// `from_bytes` or the decoding constructors outside trusted storage code.
+	pub init(base: ByteStorage, byte_count: Int, capacity: Int) {
+		self.storage = base
+		self.byte_count = byte_count
+		self.capacity = capacity
+		self
+	}
+
+	// Returns an independent owned copy of this string.
+	//
+	// The copy receives exactly `byte_count` capacity and does not share the
+	// original buffer, unlike ordinary implicit copy-on-write sharing.
+	pub func to_string() -> String {
+		let base: RawPtr = _alloc<Byte>(count: self.byte_count)
+		_copy(from: self.storage.base, to: base, length: self.byte_count)
+		String(
+			base: ByteStorage(base: base),
+			byte_count: self.byte_count,
+			capacity: self.byte_count
+		)
+	}
+
+	// The bytes are copied into a fresh buffer, so byte-level string
+	// building needs no raw allocation at the call site (ADR 0043
+	// stage 0: the frontend source set may not use `#_ir`).
+	pub static func from_bytes(bytes: &[Byte]) -> String {
+		let count: Int = bytes.count
+		let base: RawPtr = _alloc<Byte>(count: count)
+		let i = 0
+		loop i < count {
+			let ptr: RawPtr = _ptr_add(ptr: base, offset: i)
+			_store<Byte>(ptr: ptr, value: bytes.get(i))
+			i = i + 1
+		}
+		String(base: ByteStorage(base: base), byte_count: count, capacity: count)
+	}
+
+	// Validates an entire byte array and copies it into an owned string.
+	//
+	// The first malformed subsequence returns `error` with its starting byte
+	// offset; no partial string escapes. Compare with `decoding_utf8_lossy`,
+	// which always succeeds by inserting U+FFFD.
+	pub static func decoding_utf8(_ bytes: [Byte]) -> Result<String, UTF8Error> {
+		let output: [Byte] = []
+		let i = 0
+		loop i < bytes.count {
+			let remaining = bytes.count - i
+			let b0 = bytes.get(i)._toInt()
+			let b1 = if remaining > 1 {
+				bytes.get(i + 1)._toInt()
+			} else {
+				0 - 1
+			}
+			let b2 = if remaining > 2 {
+				bytes.get(i + 2)._toInt()
+			} else {
+				0 - 1
+			}
+			let b3 = if remaining > 3 {
+				bytes.get(i + 3)._toInt()
+			} else {
+				0 - 1
+			}
+			let size = _valid_utf8_values(
+				b0: b0,
+				b1: b1,
+				b2: b2,
+				b3: b3,
+				remaining: remaining
+			)
+			if size < 1 { return .error(UTF8Error(offset: i)) }
+			let j = 0
+			loop j < size {
+				output.push(bytes.get(i + j))
+				j = j + 1
+			}
+			i = i + size
+		}
+		.ok(_copy_byte_array(bytes: output))
+	}
+
+	// Decodes all bytes, replacing each maximal malformed subsequence with
+	// U+FFFD.
+	//
+	// The returned string is always valid UTF-8. Use `decoding_utf8` when the
+	// caller needs to reject input or report the exact failing byte offset.
+	pub static func decoding_utf8_lossy(_ bytes: [Byte]) -> String {
+		let output: [Byte] = []
+		let i = 0
+		loop i < bytes.count {
+			let remaining = bytes.count - i
+			let b0 = bytes.get(i)._toInt()
+			let b1 = if remaining > 1 {
+				bytes.get(i + 1)._toInt()
+			} else {
+				0 - 1
+			}
+			let b2 = if remaining > 2 {
+				bytes.get(i + 2)._toInt()
+			} else {
+				0 - 1
+			}
+			let b3 = if remaining > 3 {
+				bytes.get(i + 3)._toInt()
+			} else {
+				0 - 1
+			}
+			let size = _valid_utf8_values(
+				b0: b0,
+				b1: b1,
+				b2: b2,
+				b3: b3,
+				remaining: remaining
+			)
+			if size > 0 {
+				let j = 0
+				loop j < size {
+					output.push(bytes.get(i + j))
+					j = j + 1
+				}
+				i = i + size
+			} else {
+				output.push(239._toByte())
+				output.push(191._toByte())
+				output.push(189._toByte())
+				i = i + (0 - size)
+			}
+		}
+		_copy_byte_array(bytes: output)
+	}
+
+	// Copies the string's initialized UTF-8 bytes into an array.
+	//
+	// This is the owned counterpart to the borrowed `utf8()` view; modifying
+	// the returned array cannot affect the string.
+	pub func encoded_utf8() -> [Byte] {
+		let result: [Byte] = []
+		let i = 0
+		loop i < self.byte_count {
+			result.push(self.storage.get(i))
+			i = i + 1
+		}
+		result
+	}
+}
+
+// A borrowed contiguous byte range of an existing UTF-8 string.
+//
+// `start..<start + byte_count` must lie within `storage` and align with the
+// operation that created it. Unlike `String`, a substring does not own or
+// resize storage; `to_string` copies the range into a new owner.
+pub struct Substring {
+	// The backing storage.
+	pub let storage: ByteStorage
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The number of bytes in the encoded representation.
+	pub let byte_count: Int
+
+	// Constructs a borrowed byte range without checking bounds or UTF-8
+	// boundaries.
+	//
+	// Callers must keep `start..<start + byte_count` inside `storage` and
+	// preserve the source owner's lifetime. Text-facing constructors
+	// additionally ensure grapheme alignment; raw UTF-8 slicing may not.
+	pub init(storage: ByteStorage, start: Int, byte_count: Int) {
+		self.storage = storage
+		self.start = start
+		self.byte_count = byte_count
+		self
+	}
+}
+
+extend Substring: Borrowed {}
+extend Substring: Clone {}
+
+extend String: Clone {}
+extend<Value: Clone> Static<Value>: Clone {}
+
+// A borrowed view of raw UTF-8 code units.
+//
+// Indices and slice lengths are bytes, not characters. `slice` deliberately
+// permits splitting a multi-byte scalar and should only feed byte-oriented
+// protocols; use `StringMethods` and `StringIndex` for Unicode-safe slicing.
+pub struct UTF8View {
+	// The backing storage.
+	pub let storage: ByteStorage
+	// The inclusive starting byte offset in the source.
+	pub let start: Int
+	// The number of bytes in the encoded representation.
+	pub let byte_count: Int
+
+	// Returns the number of bytes in the view.
+	pub func count() -> Int { self.byte_count }
+
+	// Loads the byte at a view-relative index.
+	//
+	// Bounds are not checked here; an invalid index traps through raw storage
+	// access.
+	pub func at(index: Int) -> Byte {
+		self.storage.get(self.start + index)
+	}
+
+	// Creates a borrowed raw-byte slice relative to this view.
+	//
+	// Bounds are the caller's responsibility and the slice may split a UTF-8
+	// scalar or grapheme cluster. Use `StringRange`-based text slicing when
+	// boundaries matter.
+	pub func slice(start: Int, byte_count: Int) -> Substring {
+		Substring(
+			storage: self.storage,
+			start: self.start + start,
+			byte_count: byte_count
+		)
+	}
+}
+
+extend UTF8View: Borrowed {}
+
+// Shared text operations for owned strings, substrings, and static strings.
+//
+// `as_substring` is the common borrowed representation. Methods in this
+// protocol count bytes; the extensions in `Text.tlk` count and slice extended
+// grapheme clusters, preserving a clear boundary between encoding and text.
+pub protocol StringMethods {
+	// Borrows the complete text as a contiguous substring.
+	func as_substring() -> Substring
+	// Returns a view of the UTF-8 code units.
+	func utf8() -> UTF8View
+
+	// Returns whether the text contains zero UTF-8 bytes.
+	func is_empty() -> Bool {
+		self.as_substring().byte_count == 0
+	}
+
+	// Returns the number of UTF-8 bytes.
+	func utf8_count() -> Int {
+		self.as_substring().byte_count
+	}
+}
+
+extend String: StringMethods {
+	// Borrows the complete owned string without copying its bytes.
+	pub func as_substring() -> Substring {
+		Substring(storage: self.storage, start: 0, byte_count: self.byte_count)
+	}
+
+	// Returns a view of the UTF-8 code units.
+	pub func utf8() -> UTF8View {
+		UTF8View(storage: self.storage, start: 0, byte_count: self.byte_count)
+	}
+}
+
+extend Substring: StringMethods {
+	// Returns this borrowed range unchanged.
+	pub func as_substring() -> Substring {
+		self
+	}
+
+	// Returns a view of the UTF-8 code units.
+	pub func utf8() -> UTF8View {
+		UTF8View(storage: self.storage, start: self.start, byte_count: self.byte_count)
+	}
+}
+
+extend Static<String>: StringMethods {
+	// Borrows the complete program-lifetime string.
+	pub func as_substring() -> Substring {
+		self.value.as_substring()
+	}
+
+	// Returns a view of the UTF-8 code units.
+	pub func utf8() -> UTF8View {
+		self.value.utf8()
+	}
+}
+
+extend Static<String> {
+	// Copies the program-lifetime bytes into a new owned string.
+	pub func to_string() -> String {
+		self.value.to_string()
+	}
+}
+
+extend Static<String>: Into<String> {
+	// Consumes the wrapper and exposes its immutable program-lifetime string
+	// value.
+	pub consuming func into() -> String { self.value }
+}
+
+extend Static<String>: Into<Substring> {
+	// Consumes the wrapper while returning a borrowed view of program-lifetime
+	// storage.
+	pub consuming func into() -> Substring {
+		self.value.as_substring()
+	}
+}
+
+extend Substring {
+	// Copies this byte range into a new owned string.
+	pub func to_string() -> String {
+		let base: RawPtr = _alloc<Byte>(count: self.byte_count)
+		let source: RawPtr = _ptr_add(ptr: self.storage.base, offset: self.start)
+		_copy(from: source, to: base, length: self.byte_count)
+		String(
+			base: ByteStorage(base: base),
+			byte_count: self.byte_count,
+			capacity: self.byte_count
+		)
+	}
+
+	// Returns whether this substring has the same UTF-8 bytes as `rhs`.
+	pub func equals_string(_ rhs: String) -> Bool {
+		if self.byte_count != rhs.byte_count { return false }
+
+		let i = 0
+		loop i < self.byte_count {
+			let lhs_byte: Byte = self.storage.get(self.start + i)
+			let rhs_byte: Byte = rhs.storage.get(i)
+			let same: Bool = #_ir(lhs_byte, rhs_byte) { %? = cmp Byte $0 == $1 }
+			if same == false { return false }
+			i = i + 1
+		}
+		true
+	}
+}
+
+extend Substring: Equatable<Substring> {
+	// Compares both borrowed ranges byte-for-byte.
+	pub func equals(_ rhs: Substring) -> Bool {
+		if self.byte_count != rhs.byte_count { return false }
+
+		let i = 0
+		loop i < self.byte_count {
+			if self.storage.get(self.start + i) != rhs.storage.get(rhs.start + i) { return false }
+			i = i + 1
+		}
+		true
+	}
+}
+
+extend Substring: Add<String> {
+	// Concatenates the borrowed range with an owned string.
+	pub func add(_ rhs: String) -> String {
+		self.to_string() + rhs
+	}
+}
+
+extend String: Add<String> {
+	// Concatenates both strings into one freshly allocated UTF-8 buffer.
+	pub func add(_ rhs: String) -> String {
+		let selfLen: Int = self.byte_count
+		let rhsLen: Int = rhs.byte_count
+		let newLen: Int = selfLen + rhsLen
+		let newBase: RawPtr = _alloc<Byte>(count: newLen)
+		_copy(from: self.storage.base, to: newBase, length: selfLen)
+
+		let rhsDest: RawPtr = _ptr_add(ptr: newBase, offset: selfLen)
+		_copy(from: rhs.storage.base, to: rhsDest, length: rhsLen)
+		String(base: ByteStorage(base: newBase), byte_count: newLen, capacity: newLen)
+	}
+}
+
+extend Static<String>: Add<Static<String>> {
+	// Concatenates two program-lifetime strings into a new owned string.
+	pub func add(_ rhs: Static<String>) -> String {
+		self.value + rhs.value
+	}
+}
+
+extend Static<String>: Add<String> {
+	// Concatenates a program-lifetime string with an owned string.
+	pub func add(_ rhs: String) -> String {
+		self.value + rhs
+	}
+}
+
+extend String: Equatable<String> {
+	// Compares UTF-8 bytes exactly; canonically equivalent spellings may
+	// differ.
+	pub func equals(_ rhs: String) -> Bool {
+		if self.byte_count != rhs.byte_count { return false }
+
+		let i = 0
+		loop i < self.byte_count {
+			let lhs_byte: Byte = self.storage.get(i)
+			let rhs_byte: Byte = rhs.storage.get(i)
+			let same: Bool = #_ir(lhs_byte, rhs_byte) { %? = cmp Byte $0 == $1 }
+			if same == false { return false }
+			i = i + 1
+		}
+		true
+	}
+}
+
+extend Static<String>: Equatable<Static<String>> {
+	// Compares the underlying program-lifetime strings by content.
+	pub func equals(_ rhs: Static<String>) -> Bool {
+		self.value == rhs.value
+	}
+}
+
+extend Static<String>: Equatable<String> {
+	// Compares the static string's bytes with an owned string.
+	pub func equals(_ rhs: String) -> Bool {
+		self.value == rhs
+	}
+}
+
+extend String: Equatable<Static<String>> {
+	// Compares the owned string's bytes with a static string.
+	pub func equals(_ rhs: Static<String>) -> Bool {
+		self == rhs.value
+	}
+}
+
+// A UTF-8 validation failure located at the first malformed byte.
+//
+// `offset` is relative to the byte array passed to `String.decoding_utf8`, not
+// a character index or an absolute source location.
 pub struct UTF8Error {
+	// The byte offset in the underlying storage.
 	pub let offset: Int
 }
 
@@ -29,6 +467,7 @@ pub struct Static<Value> {
 }
 
 extend UTF8Error: Equatable<UTF8Error> {
+	// Treats failures at the same byte offset as equal.
 	pub func equals(_ rhs: UTF8Error) -> Bool {
 		self.offset == rhs.offset
 	}
@@ -86,345 +525,4 @@ func _valid_utf8_values(b0: Int, b1: Int, b2: Int, b3: Int, remaining: Int) -> I
 		return 4
 	}
 	0 - 1
-}
-
-pub struct String {
-	pub let storage: ByteStorage
-	pub let byte_count: Int
-	pub let capacity: Int
-
-	pub init(base: ByteStorage, byte_count: Int, capacity: Int) {
-		self.storage = base
-		self.byte_count = byte_count
-		self.capacity = capacity
-		self
-	}
-
-	pub func to_string() -> String {
-		let base: RawPtr = _alloc<Byte>(count: self.byte_count)
-		_copy(from: self.storage.base, to: base, length: self.byte_count)
-		String(
-			base: ByteStorage(base: base),
-			byte_count: self.byte_count,
-			capacity: self.byte_count
-		)
-	}
-
-	// The bytes are copied into a fresh buffer, so byte-level string
-	// building needs no raw allocation at the call site (ADR 0043
-	// stage 0: the frontend source set may not use `#_ir`).
-	pub static func from_bytes(bytes: &[Byte]) -> String {
-		let count: Int = bytes.count
-		let base: RawPtr = _alloc<Byte>(count: count)
-		let i = 0
-		loop i < count {
-			let ptr: RawPtr = _ptr_add(ptr: base, offset: i)
-			_store<Byte>(ptr: ptr, value: bytes.get(i))
-			i = i + 1
-		}
-		String(base: ByteStorage(base: base), byte_count: count, capacity: count)
-	}
-
-	pub static func decoding_utf8(_ bytes: [Byte]) -> Result<String, UTF8Error> {
-		let output: [Byte] = []
-		let i = 0
-		loop i < bytes.count {
-			let remaining = bytes.count - i
-			let b0 = bytes.get(i)._toInt()
-			let b1 = if remaining > 1 {
-				bytes.get(i + 1)._toInt()
-			} else {
-				0 - 1
-			}
-			let b2 = if remaining > 2 {
-				bytes.get(i + 2)._toInt()
-			} else {
-				0 - 1
-			}
-			let b3 = if remaining > 3 {
-				bytes.get(i + 3)._toInt()
-			} else {
-				0 - 1
-			}
-			let size = _valid_utf8_values(
-				b0: b0,
-				b1: b1,
-				b2: b2,
-				b3: b3,
-				remaining: remaining
-			)
-			if size < 1 { return .error(UTF8Error(offset: i)) }
-			let j = 0
-			loop j < size {
-				output.push(bytes.get(i + j))
-				j = j + 1
-			}
-			i = i + size
-		}
-		.ok(_copy_byte_array(bytes: output))
-	}
-
-	pub static func decoding_utf8_lossy(_ bytes: [Byte]) -> String {
-		let output: [Byte] = []
-		let i = 0
-		loop i < bytes.count {
-			let remaining = bytes.count - i
-			let b0 = bytes.get(i)._toInt()
-			let b1 = if remaining > 1 {
-				bytes.get(i + 1)._toInt()
-			} else {
-				0 - 1
-			}
-			let b2 = if remaining > 2 {
-				bytes.get(i + 2)._toInt()
-			} else {
-				0 - 1
-			}
-			let b3 = if remaining > 3 {
-				bytes.get(i + 3)._toInt()
-			} else {
-				0 - 1
-			}
-			let size = _valid_utf8_values(
-				b0: b0,
-				b1: b1,
-				b2: b2,
-				b3: b3,
-				remaining: remaining
-			)
-			if size > 0 {
-				let j = 0
-				loop j < size {
-					output.push(bytes.get(i + j))
-					j = j + 1
-				}
-				i = i + size
-			} else {
-				output.push(239._toByte())
-				output.push(191._toByte())
-				output.push(189._toByte())
-				i = i + (0 - size)
-			}
-		}
-		_copy_byte_array(bytes: output)
-	}
-
-	pub func encoded_utf8() -> [Byte] {
-		let result: [Byte] = []
-		let i = 0
-		loop i < self.byte_count {
-			result.push(self.storage.get(i))
-			i = i + 1
-		}
-		result
-	}
-}
-
-pub struct Substring {
-	pub let storage: ByteStorage
-	pub let start: Int
-	pub let byte_count: Int
-
-	pub init(storage: ByteStorage, start: Int, byte_count: Int) {
-		self.storage = storage
-		self.start = start
-		self.byte_count = byte_count
-		self
-	}
-}
-
-extend Substring: Borrowed {}
-extend Substring: Clone {}
-
-extend String: Clone {}
-extend<Value: Clone> Static<Value>: Clone {}
-
-// A borrowed view of a string's raw UTF-8 bytes. Offsets are byte
-// offsets: `slice` can split a multi-byte character, so anything
-// character-shaped should iterate instead.
-pub struct UTF8View {
-	pub let storage: ByteStorage
-	pub let start: Int
-	pub let byte_count: Int
-
-	pub func count() -> Int { self.byte_count }
-
-	pub func at(index: Int) -> Byte {
-		self.storage.get(self.start + index)
-	}
-
-	pub func slice(start: Int, byte_count: Int) -> Substring {
-		Substring(
-			storage: self.storage,
-			start: self.start + start,
-			byte_count: byte_count
-		)
-	}
-}
-
-extend UTF8View: Borrowed {}
-
-pub protocol StringMethods {
-	func as_substring() -> Substring
-	func utf8() -> UTF8View
-
-	func is_empty() -> Bool {
-		self.as_substring().byte_count == 0
-	}
-
-	func utf8_count() -> Int {
-		self.as_substring().byte_count
-	}
-}
-
-extend String: StringMethods {
-	pub func as_substring() -> Substring {
-		Substring(storage: self.storage, start: 0, byte_count: self.byte_count)
-	}
-
-	pub func utf8() -> UTF8View {
-		UTF8View(storage: self.storage, start: 0, byte_count: self.byte_count)
-	}
-}
-
-extend Substring: StringMethods {
-	pub func as_substring() -> Substring {
-		self
-	}
-
-	pub func utf8() -> UTF8View {
-		UTF8View(storage: self.storage, start: self.start, byte_count: self.byte_count)
-	}
-}
-
-extend Static<String>: StringMethods {
-	pub func as_substring() -> Substring {
-		self.value.as_substring()
-	}
-
-	pub func utf8() -> UTF8View {
-		self.value.utf8()
-	}
-}
-
-extend Static<String> {
-	pub func to_string() -> String {
-		self.value.to_string()
-	}
-}
-
-extend Static<String>: Into<String> {
-	pub consuming func into() -> String { self.value }
-}
-
-extend Static<String>: Into<Substring> {
-	pub consuming func into() -> Substring {
-		self.value.as_substring()
-	}
-}
-
-extend Substring {
-	pub func to_string() -> String {
-		let base: RawPtr = _alloc<Byte>(count: self.byte_count)
-		let source: RawPtr = _ptr_add(ptr: self.storage.base, offset: self.start)
-		_copy(from: source, to: base, length: self.byte_count)
-		String(
-			base: ByteStorage(base: base),
-			byte_count: self.byte_count,
-			capacity: self.byte_count
-		)
-	}
-
-	pub func equals_string(_ rhs: String) -> Bool {
-		if self.byte_count != rhs.byte_count { return false }
-
-		let i = 0
-		loop i < self.byte_count {
-			let lhs_byte: Byte = self.storage.get(self.start + i)
-			let rhs_byte: Byte = rhs.storage.get(i)
-			let same: Bool = #_ir(lhs_byte, rhs_byte) { %? = cmp Byte $0 == $1 }
-			if same == false { return false }
-			i = i + 1
-		}
-		true
-	}
-}
-
-extend Substring: Equatable<Substring> {
-	pub func equals(_ rhs: Substring) -> Bool {
-		if self.byte_count != rhs.byte_count { return false }
-
-		let i = 0
-		loop i < self.byte_count {
-			if self.storage.get(self.start + i) != rhs.storage.get(rhs.start + i) { return false }
-			i = i + 1
-		}
-		true
-	}
-}
-
-extend Substring: Add<String> {
-	pub func add(_ rhs: String) -> String {
-		self.to_string() + rhs
-	}
-}
-
-extend String: Add<String> {
-	pub func add(_ rhs: String) -> String {
-		let selfLen: Int = self.byte_count
-		let rhsLen: Int = rhs.byte_count
-		let newLen: Int = selfLen + rhsLen
-		let newBase: RawPtr = _alloc<Byte>(count: newLen)
-		_copy(from: self.storage.base, to: newBase, length: selfLen)
-
-		let rhsDest: RawPtr = _ptr_add(ptr: newBase, offset: selfLen)
-		_copy(from: rhs.storage.base, to: rhsDest, length: rhsLen)
-		String(base: ByteStorage(base: newBase), byte_count: newLen, capacity: newLen)
-	}
-}
-
-extend Static<String>: Add<Static<String>> {
-	pub func add(_ rhs: Static<String>) -> String {
-		self.value + rhs.value
-	}
-}
-
-extend Static<String>: Add<String> {
-	pub func add(_ rhs: String) -> String {
-		self.value + rhs
-	}
-}
-
-extend String: Equatable<String> {
-	pub func equals(_ rhs: String) -> Bool {
-		if self.byte_count != rhs.byte_count { return false }
-
-		let i = 0
-		loop i < self.byte_count {
-			let lhs_byte: Byte = self.storage.get(i)
-			let rhs_byte: Byte = rhs.storage.get(i)
-			let same: Bool = #_ir(lhs_byte, rhs_byte) { %? = cmp Byte $0 == $1 }
-			if same == false { return false }
-			i = i + 1
-		}
-		true
-	}
-}
-
-extend Static<String>: Equatable<Static<String>> {
-	pub func equals(_ rhs: Static<String>) -> Bool {
-		self.value == rhs.value
-	}
-}
-
-extend Static<String>: Equatable<String> {
-	pub func equals(_ rhs: String) -> Bool {
-		self.value == rhs
-	}
-}
-
-extend String: Equatable<Static<String>> {
-	pub func equals(_ rhs: Static<String>) -> Bool {
-		self == rhs.value
-	}
 }

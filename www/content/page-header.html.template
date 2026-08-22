@@ -1,6 +1,6 @@
-      <header class="page-header">
-        <div class="page-header-content">
-          <code class="page-kicker">talktalk / {KICKER}</code>
+      <header class="site-page-header">
+        <div class="site-page-heading">
+          <nav class="site-breadcrumbs" aria-label="Breadcrumb">{BREADCRUMBS}</nav>
           <div class="page-header-title-row">
             <h1>{TITLE}</h1>
             {HEADER_EXTRA}

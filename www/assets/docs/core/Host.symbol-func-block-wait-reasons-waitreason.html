@@ -1,0 +1,43 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"></meta><meta name="viewport" content="width=device-width, initial-scale=1"></meta><title>_block_wait - Core</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"></link><link rel="stylesheet" href="/reset.css"></link><link rel="stylesheet" href="/style.css"></link><link rel="stylesheet" href="/docs.css"></link></head><body><nav class="global-nav" aria-label="Global navigation"><a class="global-nav-brand" href="/">talktalk</a><div class="global-nav-links"><a href="/">Language</a><a href="/manual/">Guide</a><a aria-current="page" href="/docs/">Docs</a><a href="/playground">Playground</a><a href="/qa">Q/A</a><a href="/philosophy">Philosophy</a></div></nav><main class="site-page docs-proposal docs-design-1"><header class="site-page-header docs-proposal-header docs-symbol-header"><div class="site-page-heading docs-proposal-heading"><nav class="site-breadcrumbs docs-breadcrumbs docs-header-breadcrumbs" aria-label="Breadcrumb"><a href="../">Docs</a> / <a href="index.html">Core</a> / <a href="Host.html">Host</a> / <a href="#func-block-wait-reasons-waitreason" aria-current="page">_block_wait</a></nav><h1>_block_wait</h1></div></header><div class="site-page-layout docs-proposal-shell"><aside class="site-page-sidebar docs-catalog" aria-label="Documentation sections"><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Libraries</span><a href="/docs/">All libraries</a><a class="active" href="/docs/core/">Core</a></div><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Modules</span><a class="" href="Array.html">Array</a><a class="" href="Async.html">Async</a><a class="" href="Convert.html">Convert</a><a class="active" href="Host.html">Host</a><a class="" href="IO.html">IO</a><a class="" href="InlineArray.html">InlineArray</a><a class="" href="Iterable.html">Iterable</a><a class="" href="Memory.html">Memory</a><a class="" href="Operators.html">Operators</a><a class="" href="Optional.html">Optional</a><a class="" href="Ownership.html">Ownership</a><a class="" href="Range.html">Range</a><a class="" href="Result.html">Result</a><a class="" href="Showable.html">Showable</a><a class="" href="String.html">String</a><a class="" href="StringBuilder.html">StringBuilder</a><a class="" href="Text.html">Text</a><a class="" href="TextUnicodeData.html">TextUnicodeData</a><a class="" href="Time.html">Time</a><a class="" href="Unicode.html">Unicode</a><a class="" href="UnicodeData.html">UnicodeData</a><a class="" href="Builtins.html">Builtins</a></div></aside><article class="site-page-content docs-reference"><section class="docs-symbol" id="func-block-wait-reasons-waitreason"><code class="docs-symbol-signature"><span class="keyword">func</span> <span class="function">_block_wait</span>(reasons: [<a class="docs-symbol-link" href="Async.symbol-enum-waitreason.html#enum-waitreason"><span class="type">WaitReason</span></a>]) -&gt; ()</code><div class="prose docs docs-symbol-documentation"><p>The blocking wait fallback&#39;s body, shared with cooperative package schedulers that install their own root fallbacks: register every reason, block the worker, unregister, and return. Element access stays on the Optional-returning accessor: the trapping <code>get</code> would make &#39;panic reachable from this always-installed fallback and keep the panic host alive in programs that cannot panic.</p></div><section class="docs-symbol-source" id="source"><details class="docs-source"><summary>View Source</summary><pre><code><span class="modifier">pub</span> <span class="keyword">func</span> <span class="function">_block_wait</span>(<span class="parameter">reasons</span>: [<span class="type">WaitReason</span>]) <span class="operator">-&gt;</span> () {
+	<span class="keyword">let</span> i <span class="operator">=</span> <span class="number">0</span>
+	<span class="keyword">loop</span> i <span class="operator">&lt;</span> reasons.<span class="property">count</span> {
+		<span class="keyword">if</span> <span class="keyword">let</span> .<span class="property">some</span>(reason) <span class="operator">=</span> reasons.<span class="property">_index_iterable_get</span>(<span class="parameter">i</span>: i) {
+			<span class="keyword">match</span> reason {
+				.<span class="property">recv</span>(handle) <span class="operator">-&gt;</span> {
+					<span class="keyword">let</span> registered <span class="operator">=</span> _chan_ctl(<span class="parameter">handle</span>: handle, <span class="parameter">op</span>: <span class="number">4</span>)
+					()
+				},
+				.<span class="property">send</span>(handle) <span class="operator">-&gt;</span> {
+					<span class="keyword">let</span> registered <span class="operator">=</span> _chan_ctl(<span class="parameter">handle</span>: handle, <span class="parameter">op</span>: <span class="number">11</span>)
+					()
+				},
+				.<span class="property">deadline</span>(instant) <span class="operator">-&gt;</span> {
+					<span class="keyword">let</span> registered <span class="operator">=</span> _chan_ctl(<span class="parameter">handle</span>: instant.<span class="property">_nanoseconds</span>(), <span class="parameter">op</span>: <span class="number">14</span>)
+					()
+				}
+			}
+		}
+		i <span class="operator">=</span> i <span class="operator">+</span> <span class="number">1</span>
+	}
+	<span class="keyword">let</span> parked <span class="operator">=</span> _chan_ctl(<span class="parameter">handle</span>: <span class="number">0</span>, <span class="parameter">op</span>: <span class="number">6</span>)
+	<span class="keyword">let</span> j <span class="operator">=</span> <span class="number">0</span>
+	<span class="keyword">loop</span> j <span class="operator">&lt;</span> reasons.<span class="property">count</span> {
+		<span class="keyword">if</span> <span class="keyword">let</span> .<span class="property">some</span>(reason) <span class="operator">=</span> reasons.<span class="property">_index_iterable_get</span>(<span class="parameter">i</span>: j) {
+			<span class="keyword">match</span> reason {
+				.<span class="property">recv</span>(handle) <span class="operator">-&gt;</span> {
+					<span class="keyword">let</span> released <span class="operator">=</span> _chan_ctl(<span class="parameter">handle</span>: handle, <span class="parameter">op</span>: <span class="number">5</span>)
+					()
+				},
+				.<span class="property">send</span>(handle) <span class="operator">-&gt;</span> {
+					<span class="keyword">let</span> released <span class="operator">=</span> _chan_ctl(<span class="parameter">handle</span>: handle, <span class="parameter">op</span>: <span class="number">12</span>)
+					()
+				},
+				.<span class="property">deadline</span>(instant) <span class="operator">-&gt;</span> {
+					<span class="keyword">let</span> released <span class="operator">=</span> _chan_ctl(<span class="parameter">handle</span>: instant.<span class="property">_nanoseconds</span>(), <span class="parameter">op</span>: <span class="number">15</span>)
+					()
+				}
+			}
+		}
+		j <span class="operator">=</span> j <span class="operator">+</span> <span class="number">1</span>
+	}
+}</code></pre></details></section></section></article><aside class="site-page-rail docs-page-index" aria-label="Sections on this page"><span class="site-nav-label docs-nav-label">On this page</span><a href="#func-block-wait-reasons-waitreason">Overview</a><a href="#source">Source</a></aside></div></main></body></html>

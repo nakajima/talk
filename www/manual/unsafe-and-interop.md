@@ -1,6 +1,6 @@
 # 15. Unsafe Code and Interop
 
-Most TalkTalk programs never need the features in this chapter. Raw pointers and inline IR let low-level code bypass some safety checks, while the C interface lets TalkTalk call into a larger application. Use the regular library first, and keep these boundaries small.
+Most TalkTalk programs never need the features in this chapter. Raw pointers and inline IR let low-level code bypass safety checks, while native library exports and embedding APIs connect TalkTalk to a host. Use the regular library first, and keep these boundaries small.
 
 ## The unsafe boundary
 
@@ -12,7 +12,15 @@ Raw-pointer operations and inline IR outside Core perform an intrinsic `'unsafe`
 }
 ```
 
-This is not a runtime handler. It is a static trust boundary: the programmer accepts obligations that ordinary type and ownership checking cannot prove. Keep the block small and expose a typed safe operation around it.
+This is not a runtime handler. It is a static trust boundary: the programmer accepts obligations that ordinary type and ownership checking cannot prove. The compiler still checks the surrounding TalkTalk code, but it cannot prove that an arbitrary address is live, aligned, correctly typed, or within an allocation.
+
+## Wrapping unsafe operations
+
+An unsafe block is useful when it is the small implementation detail behind an ordinary typed operation. Keep pointer creation, arithmetic, access, and cleanup together. Validate lengths and tags before entering the block, return normal TalkTalk values, and do not let a raw pointer outlive the storage it addresses.
+
+The wrapper's signature should state the ownership transition that the unsafe code actually performs. A read-only operation should borrow; an operation that stores a value should consume or clone it deliberately; an operation that writes through caller storage should use `mut`. Test the wrapper through its safe surface, including empty, boundary, and cleanup paths.
+
+Unsafe code removes a check, not the invariant the check protected. If the wrapper claims a stronger guarantee than its implementation maintains, callers can be memory-unsafe even though they contain no `#unsafe` themselves.
 
 ## Inline IR
 
@@ -34,11 +42,17 @@ Or let TalkTalk invoke a C compiler:
 talk build --native program.tlk -o program
 ```
 
-The generated C links the static TalkTalk runtime and implements the same finalized MIR semantics as the bytecode target.
+The generated C includes the TalkTalk runtime and implements the same finalized MIR semantics as the bytecode target.
 
 ## Exporting a native library
 
-The C command can emit host-callable wrappers for selected public functions:
+For a quick library build, select a public function. The prefix defaults to `talk`, and the generated header and manifest are optional:
+
+```sh
+talk c library.tlk --export add > library.c
+```
+
+For a distributable boundary, request the sidecar files and choose a namespace:
 
 ```sh
 talk c library.tlk \
@@ -49,9 +63,15 @@ talk c library.tlk \
     > library.c
 ```
 
-`--export` is repeatable. `--allow-effect EFFECT` declares which effects an exported boundary may perform. The generated header describes the C ABI, and the manifest maps TalkTalk export names to external symbols.
+`--export` is repeatable. `--allow-effect EFFECT` declares which effects an exported boundary may perform. The generated header defines the versioned C call convention and lifecycle functions. The manifest maps TalkTalk export names to external symbols. A pure exported function is the simplest boundary; only allow effects whose generated runtime behavior the host intends to expose.
 
-Only use effect allowances the host actually supplies. A pure exported function is the simplest and safest boundary.
+The arguments serve separate jobs: export selection belongs to the TalkTalk API, the prefix prevents link-time symbol collisions, and the two sidecars describe the C API and name mapping. Defaults keep inspection short while explicit paths make a shippable artifact reproducible.
+
+## Native boundary obligations
+
+A generated library permits one active invocation at a time. Initialize it before calling exports and tear it down after the last result is no longer needed. Successful result values remain valid until teardown. A trap or exit request is contained at the wrapper boundary and returned as a status rather than terminating the embedding process.
+
+Ownership transfer at this boundary follows the generated header, not C's type system. Do not retain pointers into a result past teardown, fabricate tagged values, or call a wrapper with the wrong arity. Keep host conversion code in one place and test failure cleanup as well as successful calls.
 
 ## FFI embeddings
 
@@ -61,15 +81,4 @@ The repository contains three host-facing layers:
 - `talk-swift` - a Swift package over the C API
 - `wasm` - browser and JavaScript embedding of the bytecode compiler/runtime
 
-Their own READMEs and generated headers are the API references. These embeddings compile source through the same frontend and execute validated bytecode, rather than defining a second language implementation.
-
-## Boundary design
-
-A good unsafe or host boundary has four properties:
-
-1. raw operations are confined to one small implementation,
-2. the public signature uses ordinary TalkTalk values,
-3. ownership transfer is explicit at the ABI edge, and
-4. safe tests compare the boundary against a trusted reference behavior.
-
-Unsafe code removes a check; it does not remove the invariant the check was protecting.
+Their READMEs and generated headers are the API references. These embeddings compile source through the same frontend and execute validated bytecode; they do not define a second language implementation.

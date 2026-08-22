@@ -434,42 +434,48 @@ impl FunctionBuilder<'_, '_> {
                     },
                     Agenda::Read(read) => {
                         let owned = state[read.local as usize] == OWNED;
-                        if !owned
-                            && self.tracks(read.local)
-                            && reported.insert((block, *index))
-                        {
+                        if !owned && self.tracks(read.local) && reported.insert((block, *index)) {
                             // The walk's former hard errors, in priority
                             // order: a view whose owner moved, then a
                             // plain use-after-move.
                             if let Some(root) = self.view_root_of(read.local) {
                                 if state[root as usize] != OWNED {
-                                    errors.push((entry_seq, BackendError::new(
-                                        format!(
-                                            "use of borrowed value `{}`: its owner was moved",
-                                            read.name
+                                    errors.push((
+                                        entry_seq,
+                                        BackendError::new(
+                                            format!(
+                                                "use of borrowed value `{}`: its owner was moved",
+                                                read.name
+                                            ),
+                                            read.span,
                                         ),
-                                        read.span,
-                                    )));
+                                    ));
                                     continue;
                                 }
                             }
-                            errors.push((entry_seq, BackendError::new(
-                                format!("use of moved value `{}`", read.name),
-                                read.span,
-                            )));
+                            errors.push((
+                                entry_seq,
+                                BackendError::new(
+                                    format!("use of moved value `{}`", read.name),
+                                    read.span,
+                                ),
+                            ));
                         } else if owned
                             && let Some(loan) = loan_active(read.seq, block, *index, read.local)
                                 .filter(|l| l.exclusive)
                             && loan.view != read.local
                             && reported.insert((block, *index))
                         {
-                            errors.push((entry_seq, BackendError::new(
-                                format!(
-                                    "`{}` is already mutable borrowed as `{}`",
-                                    read.name, loan.view_name
+                            errors.push((
+                                entry_seq,
+                                BackendError::new(
+                                    format!(
+                                        "`{}` is already mutable borrowed as `{}`",
+                                        read.name, loan.view_name
+                                    ),
+                                    read.span,
                                 ),
-                                read.span,
-                            )));
+                            ));
                         }
                     }
                     Agenda::Site(site) => {
@@ -499,13 +505,16 @@ impl FunctionBuilder<'_, '_> {
                                             .filter(|l| l.exclusive)
                                     && reported.insert((block, *index))
                                 {
-                                    errors.push((entry_seq, BackendError::new(
-                                        format!(
-                                            "cannot move a value while it is borrowed as `{}`",
-                                            loan.view_name
+                                    errors.push((
+                                        entry_seq,
+                                        BackendError::new(
+                                            format!(
+                                                "cannot move a value while it is borrowed as `{}`",
+                                                loan.view_name
+                                            ),
+                                            Span::SYNTHESIZED,
                                         ),
-                                        Span::SYNTHESIZED,
-                                    )));
+                                    ));
                                 }
                                 if decided.insert(key) {
                                     if donate {
@@ -524,29 +533,41 @@ impl FunctionBuilder<'_, '_> {
                                             Err(error) => errors.push((entry_seq, error)),
                                         }
                                         if respend {
-                                            new_events.push((site.seq, FlowRecord {
-                                                block,
-                                                index: *index,
-                                                event: FlowEvent::Def(site.local),
-                                                }));
-                                            new_events.push((site.seq, FlowRecord {
+                                            new_events.push((
+                                                site.seq,
+                                                FlowRecord {
+                                                    block,
+                                                    index: *index,
+                                                    event: FlowEvent::Def(site.local),
+                                                },
+                                            ));
+                                            new_events.push((
+                                                site.seq,
+                                                FlowRecord {
+                                                    block,
+                                                    index: *index,
+                                                    event: FlowEvent::Move(site.local),
+                                                },
+                                            ));
+                                        } else {
+                                            new_events.push((
+                                                site.seq,
+                                                FlowRecord {
+                                                    block,
+                                                    index: *index,
+                                                    event: FlowEvent::Use(site.local),
+                                                },
+                                            ));
+                                        }
+                                    } else {
+                                        new_events.push((
+                                            site.seq,
+                                            FlowRecord {
                                                 block,
                                                 index: *index,
                                                 event: FlowEvent::Move(site.local),
-                                                }));
-                                        } else {
-                                            new_events.push((site.seq, FlowRecord {
-                                                block,
-                                                index: *index,
-                                                event: FlowEvent::Use(site.local),
-                                                }));
-                                        }
-                                    } else {
-                                        new_events.push((site.seq, FlowRecord {
-                                            block,
-                                            index: *index,
-                                            event: FlowEvent::Move(site.local),
-                                            }));
+                                            },
+                                        ));
                                     }
                                 }
                                 if !donate {
@@ -569,22 +590,31 @@ impl FunctionBuilder<'_, '_> {
                                                 src: Operand::Local(site.local),
                                             }],
                                         });
-                                        new_events.push((site.seq, FlowRecord {
-                                            block,
-                                            index: *index,
-                                            event: FlowEvent::Move(site.local),
-                                            }));
-                                        new_events.push((site.seq, FlowRecord {
-                                            block,
-                                            index: *index,
-                                            event: FlowEvent::Def(displaced),
-                                            }));
+                                        new_events.push((
+                                            site.seq,
+                                            FlowRecord {
+                                                block,
+                                                index: *index,
+                                                event: FlowEvent::Move(site.local),
+                                            },
+                                        ));
+                                        new_events.push((
+                                            site.seq,
+                                            FlowRecord {
+                                                block,
+                                                index: *index,
+                                                event: FlowEvent::Def(displaced),
+                                            },
+                                        ));
                                     } else {
-                                        new_events.push((site.seq, FlowRecord {
-                                            block,
-                                            index: *index,
-                                            event: FlowEvent::Drop(site.local),
-                                            }));
+                                        new_events.push((
+                                            site.seq,
+                                            FlowRecord {
+                                                block,
+                                                index: *index,
+                                                event: FlowEvent::Drop(site.local),
+                                            },
+                                        ));
                                         match self.realize_drop(site.local, &site.ty, site.span) {
                                             Ok(insts) => insertions.push(Insertion {
                                                 block,
@@ -624,11 +654,14 @@ impl FunctionBuilder<'_, '_> {
                                         index: *index,
                                         insts,
                                     });
-                                    new_events.push((site.seq, FlowRecord {
-                                        block,
-                                        index: *index,
-                                        event: FlowEvent::Def(displaced),
-                                        }));
+                                    new_events.push((
+                                        site.seq,
+                                        FlowRecord {
+                                            block,
+                                            index: *index,
+                                            event: FlowEvent::Def(displaced),
+                                        },
+                                    ));
                                 }
                             }
                         }
@@ -640,8 +673,8 @@ impl FunctionBuilder<'_, '_> {
             // path moved is settled by the release planner's edge
             // equalization, exactly as before).
             let push = |target: BlockId,
-                            in_states: &mut Vec<Option<Vec<u8>>>,
-                            worklist: &mut Vec<BlockId>| {
+                        in_states: &mut Vec<Option<Vec<u8>>>,
+                        worklist: &mut Vec<BlockId>| {
                 match &mut in_states[target] {
                     None => {
                         in_states[target] = Some(state.clone());
@@ -952,10 +985,8 @@ impl Liveness {
                             let _ = seq;
                         }
                         PointKind::ViewQuery(site_seq, views) => {
-                            view_live_at.insert(
-                                *site_seq,
-                                views.iter().any(|view| get(&live, *view)),
-                            );
+                            view_live_at
+                                .insert(*site_seq, views.iter().any(|view| get(&live, *view)));
                         }
                     }
                 }
@@ -979,7 +1010,6 @@ impl Liveness {
     fn view_live_site(&self, seq: u32) -> bool {
         self.view_live_at.get(&seq).copied().unwrap_or(false)
     }
-
 }
 
 fn or_into(dest: &mut [u64], src: &[u64]) {
@@ -987,4 +1017,3 @@ fn or_into(dest: &mut [u64], src: &[u64]) {
         *d |= *s;
     }
 }
-

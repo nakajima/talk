@@ -1,0 +1,56 @@
+use package::markdown::{ parse }
+use package::html
+use os
+use fs::{ File, Path }
+
+func read_file(path: String) -> String {
+	let file = File.open(path: Path(path), mode: .r)!
+	let contents = file.read()!
+	file.close()
+	contents
+}
+
+func read_stdin() -> String {
+	#unsafe {
+		let capacity = 4096
+		let buffer = _alloc<Byte>(count: capacity)
+		let total = 0
+		loop {
+			let count = _io_read(
+				fd: STDIN_FD,
+				buf: _ptr_add(ptr: buffer, offset: total),
+				count: capacity - total
+			)
+			if count < 0 {
+				_free(ptr: buffer)
+				'panic(message: "talk-md: could not read stdin")
+			}
+			if count == 0 { break }
+			total = total + count
+			if total == capacity {
+				let grown = _alloc<Byte>(count: capacity * 2)
+				_copy(from: buffer, to: grown, length: total)
+				_free(ptr: buffer)
+				buffer = grown
+				capacity = capacity * 2
+			}
+		}
+		String(base: ByteStorage(base: buffer), byte_count: total, capacity: capacity)
+	}
+}
+
+func input() -> String {
+	let arguments = OS.args()
+	if arguments.count <= 1 {
+		read_stdin()
+	} else {
+		read_file(path: arguments[1].to_string())
+	}
+}
+
+func main() {
+	let document = parse(markdown: input(), extensions: [])
+	for block in document.blocks.into_iter() {
+		print(block.to_string())
+	}
+}

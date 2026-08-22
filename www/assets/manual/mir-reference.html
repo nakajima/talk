@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - B. MIR Reference</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css?t=1787386852" rel="stylesheet">
+  </head>
+  <body>
+    <nav class="global-nav" aria-label="Global navigation">
+      <a class="global-nav-brand" href="/">talktalk</a>
+      <div class="global-nav-links">
+        <a href="/">Language</a>
+        <a href="/manual/" aria-current="page">Guide</a>
+        <a href="/docs/">Docs</a>
+        <a href="/playground">Playground</a>
+        <a href="/qa">Q/A</a>
+        <a href="/philosophy">Philosophy</a>
+      </div>
+    </nav>
+    <main class="site-page manual-page">
+      <header class="site-page-header">
+        <div class="site-page-heading">
+          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/mir-reference" aria-current="page">B. MIR Reference</a></nav>
+          <div class="page-header-title-row">
+            <h1>B. MIR Reference</h1>
+            
+          </div>
+        </div>
+      </header>
+
+      <div class="site-page-layout manual-layout">
+        <aside class="site-page-sidebar manual-outline">
+          <nav aria-label="Manual table of contents">
+            <span class="site-nav-label manual-outline-title">Contents</span>
+            <ol>
+              <li><a href="/manual/">Overview</a></li>
+<li><a href="/manual/getting-started">0. Getting Started</a></li>
+<li><a href="/manual/syntax">1. Syntax</a></li>
+<li><a href="/manual/values-and-types">2. Values and Types</a></li>
+<li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
+<li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
+<li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
+<li><a href="/manual/effects">6. Effects</a></li>
+<li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
+<li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
+<li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
+<li><a href="/manual/macros">10. Macros</a></li>
+<li><a href="/manual/concurrency">11. Concurrency</a></li>
+<li><a href="/manual/testing">12. Testing</a></li>
+<li><a href="/manual/standard-library">13. The Standard Library</a></li>
+<li><a href="/manual/toolchain">14. The Toolchain</a></li>
+<li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+<li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
+<li><a href="/manual/mir-reference" aria-current="page">B. MIR Reference</a><ol class="manual-outline-sections"><li><a href="#pipeline-position">Pipeline position</a></li>
+<li><a href="#module">Module</a></li>
+<li><a href="#functions-blocks-and-locals">Functions, blocks, and locals</a></li>
+<li><a href="#operands-and-constants">Operands and constants</a></li>
+<li><a href="#layouts">Layouts</a></li>
+<li><a href="#scalar-instructions">Scalar instructions</a></li>
+<li><a href="#calls-and-closures">Calls and closures</a></li>
+<li><a href="#aggregate-and-existential-instructions">Aggregate and existential instructions</a></li>
+<li><a href="#managed-memory">Managed memory</a></li>
+<li><a href="#effects-and-control-capture">Effects and control capture</a></li>
+<li><a href="#tasks-channels-and-host-operations">Tasks, channels, and host operations</a></li>
+<li><a href="#terminators">Terminators</a></li>
+<li><a href="#ownership-and-cleanup">Ownership and cleanup</a></li>
+<li><a href="#debug-metadata">Debug metadata</a></li>
+<li><a href="#optimized-and-unoptimized-views">Optimized and unoptimized views</a></li>
+<li><a href="#target-contract">Target contract</a></li></ol></li>
+<li><a href="/manual/bytecode-reference">C. Bytecode Reference</a></li>
+            </ol>
+          </nav>
+        </aside>
+        <div class="site-page-content manual-document">
+          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/type-inference">&larr; A. Type Inference Reference</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/bytecode-reference">C. Bytecode Reference &rarr;</a>
+          </nav>
+          <article class="prose page-content">
+            <p>MIR is TalkTalk's finalized, target-independent middle representation. The compiler publishes it after type checking, ownership checking, cleanup insertion, optimization, register allocation, and frame shaping. Bytecode and C consume this same artifact; targets do not inspect source types or repeat semantic decisions.</p>
+<p>Inspect it with:</p>
+<pre><code class="language-sh">talk mir source.tlk
+talk mir --no-opt source.tlk
+talk mir --debug source.tlk
+</code></pre>
+<p>The text printed by <code>talk mir</code> is diagnostic output, not a stable file format. The public in-process data model in <code>talk-mir/src/lib.rs</code> and <code>talk-mir/src/layout.rs</code> is authoritative.</p>
+<h2><a href="#pipeline-position" aria-hidden="true" class="anchor" id="pipeline-position"></a>Pipeline position</h2>
+<p>The relevant pipeline is:</p>
+<pre><code class="language-text">source
+  -&gt; parsed and resolved program
+  -&gt; inferred typed program
+  -&gt; ownership-checked source MIR
+  -&gt; optimized, register-allocated finalized MIR
+  -&gt; bytecode or C
+</code></pre>
+<p>By the finalized seam:</p>
+<ul>
+<li>generic call sites have concrete specialization plans;</li>
+<li>protocol and member choices are fixed;</li>
+<li>moves, retains, releases, and cleanup edges are explicit;</li>
+<li>aggregate layouts and field offsets are fixed;</li>
+<li>effect handler routing operations are explicit;</li>
+<li>source-only types, predicates, and parser nodes are gone.</li>
+</ul>
+<p>A target may reject malformed manually constructed MIR, but it may not reinterpret source semantics or silently repair invalid ownership.</p>
+<h2><a href="#module" aria-hidden="true" class="anchor" id="module"></a>Module</h2>
+<p>A <code>Module</code> contains:</p>
+<ul>
+<li><code>functions</code>: every reachable finalized function;</li>
+<li><code>entry</code>: the function run for the executable;</li>
+<li><code>global_slots</code>: the number of program-global value slots;</li>
+<li><code>exports</code>: host-callable name and wrapper-function pairs;</li>
+<li><code>layout_table</code>: aggregate layouts indexed by <code>LayoutId</code>;</li>
+<li>display metadata for structs, enums, strings, and arrays;</li>
+<li>well-known String and Storage identities; and</li>
+<li>optional source files and source text for debug rendering.</li>
+</ul>
+<p>MIR symbol identities are compact <code>(kind, module, local)</code> triples. They identify structs, enums, effects, and protocols across modules. Display names are metadata and never linkage identity.</p>
+<h2><a href="#functions-blocks-and-locals" aria-hidden="true" class="anchor" id="functions-blocks-and-locals"></a>Functions, blocks, and locals</h2>
+<p>A <code>Function</code> declares its name, source arity, frame locals, basic blocks, parameter representations, return representation, frame-local aggregate sites, and optional debug names.</p>
+<p>A local is a numbered frame slot. <code>LocalInfo.layout</code> is either a concrete inline layout or <code>None</code> for the uniform tagged representation. <code>frame_local</code> proves the value never leaves its frame, allowing a backend to reuse frame storage.</p>
+<p>A basic block has:</p>
+<ul>
+<li>block parameters receiving values from predecessor <code>Goto</code> edges;</li>
+<li>an ordered instruction list; and</li>
+<li>exactly one terminator after construction is complete.</li>
+</ul>
+<p>Block parameters provide SSA-style merge edges while locals keep the register-oriented representation convenient for backends.</p>
+<h2><a href="#operands-and-constants" aria-hidden="true" class="anchor" id="operands-and-constants"></a>Operands and constants</h2>
+<p>An operand is either a local or one of four MIR constants: Unit, Bool, signed 64-bit Int, or 64-bit Float. Other source values are represented by explicit construction instructions or static data.</p>
+<p>Operands state where an instruction reads. Ownership-changing behavior is represented by the selected instruction and cleanup plan rather than inferred from a reused local number.</p>
+<h2><a href="#layouts" aria-hidden="true" class="anchor" id="layouts"></a>Layouts</h2>
+<p>A layout describes how an aggregate occupies slots. Products cover structs, tuples, closed records, and inline arrays. Sums cover enums: slot zero is the tag and payload slots follow it. A field is either one uniform slot or a nested inline aggregate spliced into its parent.</p>
+<p><code>Aggregate</code> carries a <code>LayoutId</code>, tag, and arguments. <code>Field</code> and <code>SetField</code> carry the already-resolved container, slot offset, and optional child layout. Targets never search for a field label or infer an offset from surrounding instructions.</p>
+<p>An unshaped layout entry keeps table identities aligned for values that are not constructed as flat aggregates.</p>
+<h2><a href="#scalar-instructions" aria-hidden="true" class="anchor" id="scalar-instructions"></a>Scalar instructions</h2>
+<p><code>Copy</code> writes a constant or local value to a destination. <code>Scalar</code> performs one selected primitive operation:</p>
+<ul>
+<li>Int and Float arithmetic;</li>
+<li>Int and Byte bitwise operations;</li>
+<li>comparison over Int, Float, Byte, Bool, or pointers; and</li>
+<li>numeric conversions among Float, Int, and Byte.</li>
+</ul>
+<p>The operation identity is selected before MIR. Int addition, subtraction, multiplication, negation-as-subtraction, and the overflowing division case are potentially trapping operations; optimizers preserve them even when their result is unused. A target maps each operation to its own instruction or generated code without protocol lookup.</p>
+<h2><a href="#calls-and-closures" aria-hidden="true" class="anchor" id="calls-and-closures"></a>Calls and closures</h2>
+<p><code>Call</code> invokes a known function ID. <code>CallIndirect</code> invokes a function value. Both carry argument operands and an optional unwind block entered when an abort crosses the call.</p>
+<p><code>MakeClosure</code> pairs a function ID with an ordered environment. <code>EnvGet</code> reads a captured value. Mutable captured locals use explicit <code>CellNew</code>, <code>CellGet</code>, and <code>CellSet</code>; no backend rediscovers which captures require shared cells.</p>
+<h2><a href="#aggregate-and-existential-instructions" aria-hidden="true" class="anchor" id="aggregate-and-existential-instructions"></a>Aggregate and existential instructions</h2>
+<p>The aggregate family includes:</p>
+<ul>
+<li><code>Aggregate</code>, <code>Blank</code>, <code>GetTag</code>;</li>
+<li><code>Field</code>, <code>FieldIndex</code>, <code>GetElement</code>;</li>
+<li><code>SetField</code>, <code>SetFieldIndex</code>;</li>
+<li><code>StringLit</code> and <code>BytesLit</code>; and</li>
+<li>global loads and stores.</li>
+</ul>
+<p><code>Blank</code> creates the initialization cell used by an explicit struct initializer before its fields are assigned. <code>FieldIndex</code> forms exist only where the container shape is dynamic, notably existential writeback.</p>
+<p><code>ExistentialPack</code> stores a payload with its ordered witness closures. <code>ExistentialWitness</code> and <code>ExistentialPayload</code> project those components. Witness slots and protocol identity are fixed before the target seam.</p>
+<h2><a href="#managed-memory" aria-hidden="true" class="anchor" id="managed-memory"></a>Managed memory</h2>
+<p>The raw managed-buffer family is:</p>
+<ul>
+<li><code>Alloc</code>, <code>Free</code>, and <code>RetainPtr</code>;</li>
+<li><code>IsUnique</code> for copy-on-write decisions;</li>
+<li>typed <code>Load</code> and <code>Store</code>;</li>
+<li><code>MemCopy</code>; and</li>
+<li>scaled <code>PtrAdd</code>.</li>
+</ul>
+<p>Each access carries a slot kind such as Byte, Int, Float, Bool, pointer, or boxed value. The kind determines representation and transfer behavior; it does not weaken bounds or lifetime requirements.</p>
+<p>Heap objects use <code>ObjectNew</code>, <code>ObjectGet</code>, and <code>ObjectSet</code>. <code>RegionAcquire</code> and <code>RegionRelease</code> update claims on every region reachable from object handles. <code>SetFinalizer</code> installs type-specific teardown behavior.</p>
+<h2><a href="#effects-and-control-capture" aria-hidden="true" class="anchor" id="effects-and-control-capture"></a>Effects and control capture</h2>
+<p>Effect handlers lower to explicit delimiter and handler-stack operations:</p>
+<ul>
+<li><code>MakeCont</code> reifies the current return delimiter;</li>
+<li><code>PushHandler</code> installs an effect clause and records whether it binds a resumption;</li>
+<li><code>FindHandler</code> finds the nearest live entry and returns its clause, delimiter, index, and clause kind;</li>
+<li><code>GetFloor</code> and <code>SetFloor</code> enforce delegation outside the current clause;</li>
+<li><code>AbortTo</code> returns through a delimiter while unwinding intervening frames.</li>
+</ul>
+<p>A resumption-binding path uses <code>Suspend</code> to capture the delimited extent. <code>Resume</code> supplies the effect result and runs that extent again; <code>Cancel</code> abandons it through the same cleanup edges used by abort unwinding.</p>
+<p>Tail-resumptive clauses use an ordinary call path. This distinction is selected from the handler clause shape, not an effect declaration attribute.</p>
+<h2><a href="#tasks-channels-and-host-operations" aria-hidden="true" class="anchor" id="tasks-channels-and-host-operations"></a>Tasks, channels, and host operations</h2>
+<p>MIR exposes only target-neutral runtime operations:</p>
+<ul>
+<li><code>TaskSpawn</code>, <code>TaskJoin</code>, and <code>TaskWidth</code>;</li>
+<li><code>ChanSend</code>, <code>ChanTake</code>, and scalar <code>ChanCtl</code>; and</li>
+<li><code>Io</code> with one operation-table index and three scalar operands.</li>
+</ul>
+<p>Scheduling policy remains in TalkTalk source or the runtime. A target decides whether a parallel worker is an OS thread or a sequential fallback, but it preserves structured join and <code>Send</code> transfer semantics.</p>
+<p>The I/O operation index follows Core's <code>IORequest</code> case order. It includes files, environment, arguments, directories, sockets, process exit, and monotonic time.</p>
+<h2><a href="#terminators" aria-hidden="true" class="anchor" id="terminators"></a>Terminators</h2>
+<p>Every block ends with one of:</p>
+<ul>
+<li><code>Goto(target, args)</code>, passing one value per target block parameter;</li>
+<li><code>Branch</code>, selecting between two blocks from a Boolean operand;</li>
+<li><code>Switch</code>, dispatching a nonnegative enum tag with a default edge;</li>
+<li><code>Return</code>, returning one operand;</li>
+<li><code>Trap</code>, terminating with a compiler-provided message; or</li>
+<li><code>UnwindRet</code>, ending one cleanup frame during an abort or cancellation.</li>
+</ul>
+<p>A terminator owns control flow. Instructions do not have implicit fallthrough across basic blocks.</p>
+<h2><a href="#ownership-and-cleanup" aria-hidden="true" class="anchor" id="ownership-and-cleanup"></a>Ownership and cleanup</h2>
+<p>Finalized MIR makes cleanup executable. Releases and type-specific destruction occur on normal block exits, control-flow edges, function epilogues, unwind paths, and cancellation paths. Drop flags and initialization analysis ensure a value is destroyed exactly when live.</p>
+<p>Call-like and suspension instructions name unwind blocks. Those blocks destroy values belonging to the crossed scope and end with <code>UnwindRet</code>. This shares one cleanup mechanism across panic-like aborts and cancelled resumptions.</p>
+<p>The compiler verifies use-after-move, initialization, loan exclusivity, linear consumption, cleanup balance, block arguments, layouts, and instruction structure before publication. Compiler-produced invalid MIR is an internal compiler error, not a target-dependent program result.</p>
+<h2><a href="#debug-metadata" aria-hidden="true" class="anchor" id="debug-metadata"></a>Debug metadata</h2>
+<p><code>talk mir --debug</code> retains source provenance through optimization. Each instruction can point to a source span or a generated reason, including closure capture, handler delimiter, function epilogue, cleanup, global initialization, export adaptation, heap teardown, derived protocol glue, and enum construction.</p>
+<p>Local debug names list all bindings represented by a reused register. Debug source spans use 1-based line and column positions plus byte offsets into the recorded source.</p>
+<p>Debug metadata is optional and does not affect identity or execution.</p>
+<h2><a href="#optimized-and-unoptimized-views" aria-hidden="true" class="anchor" id="optimized-and-unoptimized-views"></a>Optimized and unoptimized views</h2>
+<p>The default dump shows the same optimized finalized MIR targets consume. <code>--no-opt</code> disables optimization but still shows checked MIR in the finalized public shape. It is useful for seeing source-like control flow and cleanup before dead-code elimination and instruction simplification.</p>
+<p>Register allocation and frame shaping may make one local represent several source bindings. Use <code>--debug</code> when relating either view back to source.</p>
+<h2><a href="#target-contract" aria-hidden="true" class="anchor" id="target-contract"></a>Target contract</h2>
+<p>A backend must preserve:</p>
+<ul>
+<li>scalar operation and trap behavior;</li>
+<li>block and call control flow;</li>
+<li>aggregate layouts and value semantics;</li>
+<li>explicit memory and region operations;</li>
+<li>cleanup and unwind order;</li>
+<li>handler lookup, floors, aborts, suspension, resumption, and cancellation;</li>
+<li>task and channel transfer semantics; and</li>
+<li>global initialization and exported wrapper identities.</li>
+</ul>
+<p>Bytecode lowering maps MIR to a validated register machine. C emission maps the same functions, layouts, and runtime operations to generated C. Agreement tests run common programs through both targets.</p>
+
+          </article>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a class="manual-previous" href="/manual/type-inference">&larr; A. Type Inference Reference</a>
+            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a class="manual-next" href="/manual/bytecode-reference">C. Bytecode Reference &rarr;</a>
+          </nav>
+        </div>
+        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+      </div>
+      <script type="module" src="/page.js?t=1787386852"></script>
+    </main>
+  </body>
+</html>

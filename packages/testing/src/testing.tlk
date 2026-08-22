@@ -1,0 +1,64 @@
+use ansi
+
+// Reports a failed assertion to the active test runner and then resumes the test.
+pub effect 'fail(message: String) -> ()
+// Registers a test case during test-module initialization.
+pub effect 'registerTest(testCase: TestCase) -> ()
+
+// A failed test assertion and the test that produced it.
+pub struct Failure {
+	// The name of the test that failed.
+	pub let test_name: String
+	// The assertion message.
+	pub let assertion: String
+}
+
+// A named test and the block that runs it.
+pub struct TestCase {
+	// The name shown in failure reports.
+	pub let name: String
+	// The test body.
+	pub let block: () -> ()
+}
+
+// Registers `block` under `name` without running it immediately.
+//
+// The test prelude handles registration while the module initializes, applies
+// any name filter, and executes retained cases later in registration order.
+pub func test(consume _ name: String, consume _ block: () -> ()) 'registerTest {
+	'registerTest(testCase: TestCase(name: name, block: block))
+}
+
+// Reports the default assertion message when `condition` is false.
+//
+// Failure is resumable: execution continues after the assertion so one test can
+// record multiple failures. The active test runner owns failure collection.
+pub func assert(_ condition: Bool) 'fail {
+	if !condition { 'fail(message: "assertion failed") }
+}
+
+// The pre-reset stdlib's name for assert_message; existing programs
+// (talk-syntax among them) call it, so it stays as an alias.
+pub func assertMessage(_ condition: Bool, _ message: String) 'fail {
+	assert_message(condition, message)
+}
+
+// Reports `message` when `condition` is false and then resumes execution.
+pub func assert_message(_ condition: Bool, _ message: String) 'fail {
+	if !condition { 'fail(message: message) }
+}
+
+// Prints either a passing count or every recorded failure.
+//
+// A clean run emits `<count> tests passed.`. A failing run prints each test name
+// in red with its assertion text; exit status is decided by the prelude from the
+// returned failure count, not by this formatter.
+pub func report(tests: [TestCase], failures: [Failure]) {
+	if failures.is_empty() {
+		print(tests.count.show() + " tests passed.")
+	} else {
+		for failure in failures {
+			print(ColorfulString.red(failure.test_name) + ": " + failure.assertion)
+		}
+	}
+}

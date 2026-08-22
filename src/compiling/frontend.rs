@@ -16,11 +16,12 @@ use std::path::{Path, PathBuf};
 /// validates during migration. `parse_file_source` is the structured
 /// result op — it returns the `ParseOutcome` value the ABI descriptor
 /// describes, where the `parse` dump ops return rendered text.
-pub const EXPORTS: [&str; 14] = [
+pub const EXPORTS: [&str; 15] = [
     "lex",
     "trees",
     "parse",
     "parse_file_source",
+    "parse_file_docs_source",
     "parse_lenient",
     "parse_block_items",
     "parse_expr",
@@ -46,7 +47,7 @@ pub const ALLOWED_EFFECTS: [&str; 2] = ["alloc", "panic"];
 pub const SCHEMA_ROOT: &str = "ParseOutcome";
 
 pub fn source_dir(root: &Path) -> PathBuf {
-    root.join("stdlib").join("syntax")
+    root.join("packages").join("syntax").join("src")
 }
 
 pub fn artifact_path(root: &Path) -> PathBuf {
@@ -71,9 +72,11 @@ pub fn c_path(root: &Path) -> PathBuf {
 /// becomes `talk_frontend_parse__file__source`).
 pub const NATIVE_PREFIX: &str = "talk_frontend";
 
-/// The canonical frontend source set: every `.tlk` file in `stdlib/syntax/`,
-/// sorted by name. Names participate in the manifest digest, so renames
-/// invalidate the artifact exactly like edits.
+/// The canonical frontend source set: every `.tlk` file in the syntax
+/// package's `src/`, sorted by name — except `syntax.tlk`, the package's
+/// library root, which exists to span the package's export closure and
+/// carries no parser logic. Names participate in the manifest digest,
+/// so renames invalidate the artifact exactly like edits.
 pub fn sources(root: &Path) -> Result<Vec<(String, String)>, String> {
     let dir = source_dir(root);
     let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
@@ -81,6 +84,7 @@ pub fn sources(root: &Path) -> Result<Vec<(String, String)>, String> {
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "tlk"))
+        .filter(|path| path.file_name().is_none_or(|name| name != "syntax.tlk"))
         .collect();
     paths.sort();
     if paths.is_empty() {
@@ -237,7 +241,7 @@ pub fn parse_source(
     source: &str,
     file_id: crate::node_id::FileID,
 ) -> Result<crate::compiling::bridge::BridgedParse, String> {
-    parse_source_in(None, source, file_id)
+    parse_source_in(None, source, file_id, false)
 }
 
 /// The parse-result schema alone, for the native production path — no
@@ -260,31 +264,36 @@ fn parse_source_in(
     parser: Option<&ParserSession>,
     source: &str,
     file_id: crate::node_id::FileID,
+    collect_docs: bool,
 ) -> Result<crate::compiling::bridge::BridgedParse, String> {
     crate::profile::init();
     profiling::scope!("frontend.parse_source");
+    // The documenting entry runs the frontend's doc-comment attachment
+    // pass (stdlib/syntax/Docs.tlk); the plain entry leaves
+    // ParseOutcome.docs empty so non-editor compiles never pay for it.
+    let entry = if collect_docs {
+        "parse_file_docs_source"
+    } else {
+        "parse_file_source"
+    };
     match parser {
-        Some(candidate) => parse_source_vm(&candidate.0, source, file_id),
+        Some(candidate) => parse_source_vm(&candidate.0, source, file_id, entry),
         #[cfg(not(target_arch = "wasm32"))]
         None => {
             let schema = shared_schema()?;
-            crate::compiling::native_frontend::run_export(
-                "parse_file_source",
-                &[source.as_bytes()],
-                |run| {
-                    crate::compiling::bridge::adapt(
-                        crate::compiling::bridge::FrontendRun::Native(run),
-                        schema,
-                        file_id,
-                    )
-                },
-            )
+            crate::compiling::native_frontend::run_export(entry, &[source.as_bytes()], |run| {
+                crate::compiling::bridge::adapt(
+                    crate::compiling::bridge::FrontendRun::Native(run),
+                    schema,
+                    file_id,
+                )
+            })
         }
         // wasm32 executes the same verified frontend program as
         // bytecode: its toolchain cannot build the native artifact
         // (ADR 0048 wasm carve-out).
         #[cfg(target_arch = "wasm32")]
-        None => parse_source_vm(FrontendSession::shared()?, source, file_id),
+        None => parse_source_vm(FrontendSession::shared()?, source, file_id, entry),
     }
 }
 
@@ -356,13 +365,14 @@ fn parse_source_vm(
     session: &FrontendSession,
     source: &str,
     file_id: crate::node_id::FileID,
+    entry: &str,
 ) -> Result<crate::compiling::bridge::BridgedParse, String> {
     let mut io = talk_vm::io::CaptureIO::default();
     let run = {
         profiling::scope!("frontend.execute");
         talk_vm::interp::run_export(
             &session.module,
-            "parse_file_source",
+            entry,
             &[talk_vm::interp::HostValue::String(
                 source.as_bytes().to_vec(),
             )],
@@ -467,24 +477,28 @@ pub fn parse_ast(
     ),
     crate::parsing::parser_error::ParserError,
 > {
-    parse_ast_in(None, input, file_id, path)
+    parse_ast_in(None, input, file_id, path, false).map(|(ast, diagnostics, _)| (ast, diagnostics))
 }
 
 /// [`parse_ast`] through an explicit session (bootstrap stage 2).
+/// `collect_docs` runs the frontend's doc-comment attachment pass and
+/// returns the attachments alongside the AST (the editor path).
 pub fn parse_ast_in(
     parser: Option<&ParserSession>,
     input: &str,
     file_id: crate::node_id::FileID,
     path: &str,
+    collect_docs: bool,
 ) -> Result<
     (
         crate::ast::AST<crate::ast::Parsed>,
         Vec<crate::common::diagnostic::AnyDiagnostic>,
+        Vec<crate::compiling::bridge::BridgedDoc>,
     ),
     crate::parsing::parser_error::ParserError,
 > {
-    parse_ast_with_comments_in(parser, input, file_id, path)
-        .map(|(ast, diagnostics, _)| (ast, diagnostics))
+    parse_ast_with_comments_in(parser, input, file_id, path, collect_docs)
+        .map(|(ast, diagnostics, _, docs)| (ast, diagnostics, docs))
 }
 
 /// `parse_ast` plus the comment byte ranges the formatter reads.
@@ -500,7 +514,8 @@ pub fn parse_ast_with_comments(
     ),
     crate::parsing::parser_error::ParserError,
 > {
-    parse_ast_with_comments_in(None, input, file_id, path)
+    parse_ast_with_comments_in(None, input, file_id, path, false)
+        .map(|(ast, diagnostics, comments, _)| (ast, diagnostics, comments))
 }
 
 fn parse_ast_with_comments_in(
@@ -508,22 +523,25 @@ fn parse_ast_with_comments_in(
     input: &str,
     file_id: crate::node_id::FileID,
     path: &str,
+    collect_docs: bool,
 ) -> Result<
     (
         crate::ast::AST<crate::ast::Parsed>,
         Vec<crate::common::diagnostic::AnyDiagnostic>,
         Vec<(u32, u32)>,
+        Vec<crate::compiling::bridge::BridgedDoc>,
     ),
     crate::parsing::parser_error::ParserError,
 > {
     use crate::parsing::parser_error::ParserError;
-    let bridged =
-        parse_source_in(parser, input, file_id).map_err(|error| ParserError::Frontend {
+    let bridged = parse_source_in(parser, input, file_id, collect_docs).map_err(|error| {
+        ParserError::Frontend {
             code: "parser.frontend-bridge".into(),
             message: error,
             span: None,
             expected: None,
-        })?;
+        }
+    })?;
     if let Some(failure) = bridged.failure {
         return Err(ParserError::Frontend {
             code: failure.code,
@@ -553,6 +571,7 @@ fn parse_ast_with_comments_in(
     let mut meta = bridged.meta;
     meta.path = std::path::PathBuf::from(path);
     let comments = bridged.comments;
+    let docs = bridged.docs;
     Ok((
         crate::ast::AST {
             path: path.to_string(),
@@ -568,6 +587,7 @@ fn parse_ast_with_comments_in(
         },
         diagnostics,
         comments,
+        docs,
     ))
 }
 
@@ -579,11 +599,13 @@ pub fn parse_ast_lenient(
     input: &str,
     file_id: crate::node_id::FileID,
     path: &str,
+    collect_docs: bool,
 ) -> (
     crate::ast::AST<crate::ast::Parsed>,
     Vec<crate::common::diagnostic::AnyDiagnostic>,
+    Vec<crate::compiling::bridge::BridgedDoc>,
 ) {
-    match parse_ast(input, file_id, path) {
+    match parse_ast_in(None, input, file_id, path, collect_docs) {
         Ok(parsed) => parsed,
         Err(error) => (
             crate::ast::AST {
@@ -603,6 +625,7 @@ pub fn parse_ast_lenient(
                     kind: error,
                 },
             )],
+            vec![],
         ),
     }
 }
@@ -616,14 +639,73 @@ mod tests {
     }
 
     #[test]
+    fn documented_parse_attaches_leading_comment_groups() {
+        let session = ParserSession::from_artifact(EMBEDDED_ARTIFACT, EMBEDDED_ABI)
+            .expect("embedded parser session");
+        let source = "// Adds two ints.\n// Pure.\nfunc add(a: Int, b: Int) -> Int {\n\ta + b\n}\n\n// detached\n\nlet x = 1\n";
+        let (_ast, _diagnostics, docs) = parse_ast_in(
+            Some(&session),
+            source,
+            crate::node_id::FileID(0),
+            "main.tlk",
+            true,
+        )
+        .expect("documented parse");
+        assert_eq!(docs.len(), 1, "only the function attaches: {docs:?}");
+        let doc = &docs[0];
+        let decl = &source[doc.decl_start as usize..doc.decl_end as usize];
+        assert!(decl.starts_with("func add"), "{decl}");
+        let lines: Vec<&str> = doc
+            .comments
+            .iter()
+            .map(|(start, end)| &source[*start as usize..*end as usize])
+            .collect();
+        assert_eq!(lines, ["// Adds two ints.", "// Pure."]);
+    }
+
+    #[test]
+    fn documented_parse_skips_multiline_imports() {
+        let session = ParserSession::from_artifact(EMBEDDED_ARTIFACT, EMBEDDED_ABI)
+            .expect("embedded parser session");
+        let source = "// Docs.\nuse package::Lexer::{\n\tlex\n}\nfunc f() {}\n";
+        let (_ast, _diagnostics, docs) = parse_ast_in(
+            Some(&session),
+            source,
+            crate::node_id::FileID(0),
+            "main.tlk",
+            true,
+        )
+        .expect("documented parse");
+        assert_eq!(docs.len(), 1, "function should retain docs: {docs:?}");
+        let decl = &source[docs[0].decl_start as usize..docs[0].decl_end as usize];
+        assert!(decl.starts_with("func f"), "{decl}");
+    }
+
+    #[test]
+    fn plain_parse_collects_no_docs() {
+        let session = ParserSession::from_artifact(EMBEDDED_ARTIFACT, EMBEDDED_ABI)
+            .expect("embedded parser session");
+        let (_ast, _diagnostics, docs) = parse_ast_in(
+            Some(&session),
+            "// Adds.\nfunc add() {}\n",
+            crate::node_id::FileID(0),
+            "main.tlk",
+            false,
+        )
+        .expect("plain parse");
+        assert!(docs.is_empty(), "{docs:?}");
+    }
+
+    #[test]
     fn embedded_frontend_classifies_external_package_imports() {
         let session = ParserSession::from_artifact(EMBEDDED_ARTIFACT, EMBEDDED_ABI)
             .expect("embedded parser session");
-        let (ast, diagnostics) = parse_ast_in(
+        let (ast, diagnostics, _) = parse_ast_in(
             Some(&session),
             "use net::{ TcpStream }\n",
             crate::node_id::FileID(0),
             "main.tlk",
+            false,
         )
         .expect("package import parses");
         assert!(diagnostics.is_empty());
@@ -643,11 +725,12 @@ mod tests {
     fn embedded_frontend_classifies_recursive_glob_imports() {
         let session = ParserSession::from_artifact(EMBEDDED_ARTIFACT, EMBEDDED_ABI)
             .expect("embedded parser session");
-        let (ast, diagnostics) = parse_ast_in(
+        let (ast, diagnostics, _) = parse_ast_in(
             Some(&session),
             "use package::foo::*\n",
             crate::node_id::FileID(0),
             "main.tlk",
+            false,
         )
         .expect("glob import parses");
         assert!(diagnostics.is_empty());
@@ -724,7 +807,10 @@ mod tests {
             bootstrap.manifest.artifact_digest
         );
         let _ = writeln!(report, "artifact_bytes: {}", bootstrap.image.len());
-        let _ = writeln!(report, "workload: stdlib/syntax/*.tlk, sorted by filename");
+        let _ = writeln!(
+            report,
+            "workload: packages/syntax/src/*.tlk, sorted by filename"
+        );
         let _ = writeln!(report, "source_files: {}", corpus.len());
         let _ = writeln!(report, "source_bytes: {source_bytes}");
         for (name, source) in &corpus {

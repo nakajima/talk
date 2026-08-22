@@ -1,0 +1,90 @@
+// Stateless access to process information supplied by the host runtime.
+//
+// Values are copied into owned Talk strings. Host failures are intentionally
+// collapsed to `none` by optional queries; raw errno detail remains available
+// only through the lower-level core I/O operations.
+pub struct OS {
+	// Copies the process's current working directory into an owned string.
+	//
+	// The host is queried for length and contents separately. Any failure returns
+	// `none`, and an untrusted copied length is clamped to the allocated capacity.
+	pub static func cwd() -> String? {
+		#unsafe {
+			let len = _io_cwd_len()
+			if len < 0 { return Optional.none }
+
+			let buf = _alloc<Byte>(count: len)
+			let copied = _io_cwd_copy(buf: buf)
+			if copied < 0 { return Optional.none }
+
+			let copied = _io_clamp(count: copied, capacity: len)
+			Optional.some(String(
+				base: ByteStorage(base: buf),
+				byte_count: copied,
+				capacity: copied
+			))
+		}
+	}
+
+	// Copies the environment value named by the exact UTF-8 bytes in `name`.
+	//
+	// Missing variables and host errors both return `none`; this API does not
+	// distinguish absence from an inaccessible process environment.
+	pub static func getenv(name: String) -> String? {
+		#unsafe {
+			let len = _io_getenv_len(name: name.storage.base, name_len: name.byte_count)
+			if len < 0 { return Optional.none }
+
+			let buf = _alloc<Byte>(count: len)
+			let copied = _io_getenv_copy(
+				name: name.storage.base,
+				name_len: name.byte_count,
+				buf: buf
+			)
+			if copied < 0 { return Optional.none }
+
+			let copied = _io_clamp(count: copied, capacity: len)
+			Optional.some(String(
+				base: ByteStorage(base: buf),
+				byte_count: copied,
+				capacity: copied
+			))
+		}
+	}
+
+	// Copies every process argument into an owned string array in argument order.
+	//
+	// The first element identifies the invoked program. Host-provided lengths are
+	// clamped before becoming string bounds.
+	pub static func args() -> [String] {
+		#unsafe {
+			let count = _io_argc()
+			let result = Array<String>(capacity: count)
+			let i = 0
+
+			loop i < count {
+				let len = _io_arg_len(index: i)
+				let len = _io_clamp(count: len, capacity: len)
+				let buf = _alloc<Byte>(count: len)
+				let copied = _io_clamp(count: _io_arg_copy(index: i, buf: buf), capacity: len)
+				result.storage.set(
+					index: i,
+					value: String(
+						base: ByteStorage(base: buf),
+						byte_count: copied,
+						capacity: copied
+					)
+				)
+				i = i + 1
+			}
+
+			result.count = count
+			result
+		}
+	}
+
+	// Compatibility alias for `args`; the historical name does not return a count.
+	pub static func argc() -> [String] {
+		OS.args()
+	}
+}

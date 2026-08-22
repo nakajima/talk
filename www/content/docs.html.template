@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>talktalk - Docs</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link href="/reset.css" rel="stylesheet">
+    <link href="/style.css" rel="stylesheet">
+    <link href="/docs.css" rel="stylesheet">
+  </head>
+  <body>
+{GLOBAL_NAV}
+    <main class="site-page docs-proposal docs-design-1">
+      <header class="site-page-header docs-proposal-header">
+        <div class="site-page-heading docs-proposal-heading">
+          <code class="page-kicker">talktalk / docs</code>
+          <p class="docs-proposal-label">Reference</p>
+          <h1>API Documentation</h1>
+        </div>
+      </header>
+      <div class="site-page-layout docs-proposal-shell">
+        <aside class="site-page-sidebar docs-catalog" aria-label="Documentation sections">
+          <div class="site-nav-group docs-nav-group">
+            <span class="site-nav-label docs-nav-label">Libraries</span>
+{SECTION_NAV}
+          </div>
+        </aside>
+        <article class="site-page-content docs-reference">
+          <div class="docs-breadcrumbs">Docs</div>
+          <div class="docs-section-list">
+{SECTION_LINKS}
+          </div>
+        </article>
+        <aside class="site-page-rail docs-page-index" aria-hidden="true"></aside>
+      </div>
+    </main>
+  </body>
+</html>

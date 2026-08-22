@@ -63,15 +63,23 @@ dependency resolution, source installation, Git revision resolution, SHA-256
 verification, and safe tar extraction. Package binary compilation and Talk test
 execution are absent with the backend.
 
-## Core and stdlib (`core.rs`, `stdlib.rs`)
+## Builtin packages (`builtin_packages.rs`)
 
-Core and stdlib are ordinary Talk sources compiled lazily into module interfaces.
-`TALK_CORE_PATH` and `TALK_STDLIB_PATH` can replace the bundled sources. A normal
-`Driver::new` imports Core and the bundled stdlib interfaces; `Driver::new_bare`
-skips that setup for core compilation and focused tests.
+The bundled library (fs, testing, syntax, html, ...) is a set of ordinary
+Talk packages under `packages/`. A bare `use name` activates one during
+parse discovery, but it compiles and caches through the package library
+pipeline: the manifest names the library target and dependencies, and the
+compiled image replays from the shared disk cache. Each package registers
+under a permanent `WellKnown` slot (absolute identity, ADR 0038); a retired
+slot never returns. The `Package` package bootstraps the manifest DSL, so
+it alone compiles manifest-free from its known library root.
 
-Only exported type information is retained. Backend body caches were deleted in
-the frontend-only reset.
+## Core (`core.rs`)
+
+Core is ordinary Talk source compiled lazily into a module interface plus
+typed bodies. `TALK_CORE_PATH` can replace the bundled sources. A normal
+`Driver::new` imports Core; `Driver::new_bare` skips that setup for core
+compilation and focused tests.
 
 ## Frontend consumers
 

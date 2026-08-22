@@ -1,13 +1,17 @@
 // no-core
 use package::Array::{ Array }
 use package::IO::{ IORequest, io, STDERR_FD, write_string }
-use package::InlineArray::{ InlineArray }
 use package::Memory::{ alloc }
 use package::Operators::{ Add, Comparable, Equatable, Not }
-use package::Async::{ yield, recv, send, wait_until, _chan_ctl, Resumption, resume }
+use package::Async::{ yield, wait, WaitReason, _chan_ctl, Resumption, resume }
 use package::String::{ String }
 use package::Time::{ Instant }
 
+// Aborts the current handled extent with a diagnostic message.
+//
+// A user handler may recover by replacing the extent's `Never` path.
+// Without one, the root host fallback writes the message to standard
+// error and exits the process.
 pub effect 'panic(message: String) -> Never
 
 // The host adapter, in source: one arm per request case, each a fixed
@@ -51,35 +55,26 @@ pub func _io_host(request: IORequest) -> Int {
 // Cooperative task operations belong to the executable entry surface.
 // Every program runs as one root task; a nearer `coop::run` may install
 // another scheduler for an explicit nested scope.
-pub typealias Task = () '[spawn, recv, send, wait_until, io, alloc, yield, panic] -> ()
+pub typealias Task = () '[spawn, wait, io, alloc, yield, panic] -> ()
 
-typealias BlockingTask = () '[recv, send, wait_until, io, alloc, yield, panic] -> ()
+typealias BlockingTask = () '[wait, io, alloc, yield, panic] -> ()
 
+// Adds `task` to the nearest cooperative scheduler scope.
+//
+// The operation returns after scheduling, not after task completion. Structured
+// scope ownership guarantees the scheduler itself does not return until spawned
+// descendants finish.
 pub effect 'spawn(task: Task) -> ()
 
 enum TaskStep {
 	case finished
-	case wants_recv([Int], Resumption<(), TaskStep>)
-	case wants_send(Int, Resumption<(), TaskStep>)
-	case sleeping(Instant, Resumption<(), TaskStep>)
+	case waiting([WaitReason], Resumption<(), TaskStep>)
 	case paused(Resumption<(), TaskStep>)
 	case spawned(Task, Resumption<(), TaskStep>)
 }
 
 func _drive_task(consume task: Task) -> TaskStep {
-	#handle 'recv { channels, k in
-		let handles: [Int] = []
-		let i = 0
-		loop i < channels.count() {
-			if let .some(handle) = channels.get(i) {
-				handles.push(handle)
-			}
-			i = i + 1
-		}
-		TaskStep.wants_recv(handles, k)
-	}
-	#handle 'send { handle, k in TaskStep.wants_send(handle, k) }
-	#handle 'wait_until { deadline, k in TaskStep.sleeping(deadline, k) }
+	#handle 'wait { reasons, k in TaskStep.waiting(reasons, k) }
 	#handle 'yield { k in TaskStep.paused(k) }
 	#handle 'spawn { task, k in TaskStep.spawned(task, k) }
 	task()
@@ -110,12 +105,22 @@ func _drain_cooperative(consume first: TaskStep) -> () {
 						next.push(_drive_task(task: task))
 						next.push(resume(k: k, value: ()))
 					},
-					.wants_recv(handles, k) -> {
+					.waiting(reasons, k) -> {
 						let ready = false
 						let i = 0
-						loop i < handles.count {
-							if _chan_ctl(handle: handles.get(i), op: 0) != 1 {
-								ready = true
+						loop i < reasons.count {
+							match reasons.get(i) {
+								.recv(handle) -> {
+									if _chan_ctl(handle: handle, op: 0) != 1 { ready = true }
+								},
+								.send(handle) -> {
+									if _chan_ctl(handle: handle, op: 17) == 1 { ready = true }
+								},
+								.deadline(deadline) -> {
+									if Instant.now() >= deadline { ready = true }
+								}
+							}
+							if ready {
 								break
 							}
 							i = i + 1
@@ -125,32 +130,24 @@ func _drain_cooperative(consume first: TaskStep) -> () {
 							next.push(resume(k: k, value: ()))
 						} else {
 							let j = 0
-							loop j < handles.count {
-								reg_kind.push(0)
-								reg_handle.push(handles.get(j))
+							loop j < reasons.count {
+								match reasons.get(j) {
+									.recv(handle) -> {
+										reg_kind.push(0)
+										reg_handle.push(handle)
+									},
+									.send(handle) -> {
+										reg_kind.push(1)
+										reg_handle.push(handle)
+									},
+									.deadline(deadline) -> {
+										reg_kind.push(2)
+										reg_handle.push(deadline._nanoseconds())
+									}
+								}
 								j = j + 1
 							}
-							next.push(TaskStep.wants_recv(handles, k))
-						}
-					},
-					.wants_send(handle, k) -> {
-						if _chan_ctl(handle: handle, op: 17) == 1 {
-							progressed = true
-							next.push(resume(k: k, value: ()))
-						} else {
-							reg_kind.push(1)
-							reg_handle.push(handle)
-							next.push(TaskStep.wants_send(handle, k))
-						}
-					},
-					.sleeping(deadline, k) -> {
-						if Instant.now() >= deadline {
-							progressed = true
-							next.push(resume(k: k, value: ()))
-						} else {
-							reg_kind.push(2)
-							reg_handle.push(deadline._nanoseconds())
-							next.push(TaskStep.sleeping(deadline, k))
+							next.push(TaskStep.waiting(reasons, k))
 						}
 					}
 				}
@@ -167,7 +164,15 @@ func _drain_cooperative(consume first: TaskStep) -> () {
 			loop i < reg_kind.count {
 				let kind = reg_kind.get(i)
 				let handle = reg_handle.get(i)
-				let op = if kind == 0 { 4 } else { if kind == 1 { 11 } else { 14 } }
+				let op = if kind == 0 {
+					4
+				} else {
+					if kind == 1 {
+						11
+					} else {
+						14
+					}
+				}
 				let registered = _chan_ctl(handle: handle, op: op)
 				i = i + 1
 			}
@@ -176,7 +181,15 @@ func _drain_cooperative(consume first: TaskStep) -> () {
 			loop j < reg_kind.count {
 				let kind = reg_kind.get(j)
 				let handle = reg_handle.get(j)
-				let op = if kind == 0 { 5 } else { if kind == 1 { 12 } else { 15 } }
+				let op = if kind == 0 {
+					5
+				} else {
+					if kind == 1 {
+						12
+					} else {
+						15
+					}
+				}
 				let released = _chan_ctl(handle: handle, op: op)
 				j = j + 1
 			}
@@ -184,45 +197,67 @@ func _drain_cooperative(consume first: TaskStep) -> () {
 	}
 }
 
-// Run one root task and everything it spawns to completion on this
-// worker. If every task is waiting, register every interest and block
-// through the runtime until work becomes ready.
-pub func _run_cooperative(consume main_task: Task) -> () {
-	match _drive_task(task: main_task) {
+// Runs one scheduler root and its complete spawned task tree on this worker.
+//
+// `root_task` is a role within this scheduler scope, not necessarily the
+// program's main task. Ready tasks advance cooperatively; when all tasks
+// wait, every channel or timer interest is registered before the worker
+// parks to avoid lost wakes.
+pub func _run_cooperative(consume root_task: Task) -> () {
+	match _drive_task(task: root_task) {
 		.finished -> (),
 		first -> _drain_cooperative(first: first)
 	}
 }
 
-func _block_recv<static N: Int>(consume channels: [Int; N]) -> () {
+// The blocking wait fallback's body, shared with cooperative package
+// schedulers that install their own root fallbacks: register every
+// reason, block the worker, unregister, and return.
+// Element access stays on the Optional-returning accessor: the trapping
+// `get` would make 'panic reachable from this always-installed fallback
+// and keep the panic host alive in programs that cannot panic.
+pub func _block_wait(reasons: [WaitReason]) -> () {
 	let i = 0
-	loop i < channels.count() {
-		if let .some(handle) = channels.get(i) {
-			let registered = _chan_ctl(handle: handle, op: 4)
+	loop i < reasons.count {
+		if let .some(reason) = reasons._index_iterable_get(i: i) {
+			match reason {
+				.recv(handle) -> {
+					let registered = _chan_ctl(handle: handle, op: 4)
+					()
+				},
+				.send(handle) -> {
+					let registered = _chan_ctl(handle: handle, op: 11)
+					()
+				},
+				.deadline(instant) -> {
+					let registered = _chan_ctl(handle: instant._nanoseconds(), op: 14)
+					()
+				}
+			}
 		}
 		i = i + 1
 	}
 	let parked = _chan_ctl(handle: 0, op: 6)
 	let j = 0
-	loop j < channels.count() {
-		if let .some(handle) = channels.get(j) {
-			let released = _chan_ctl(handle: handle, op: 5)
+	loop j < reasons.count {
+		if let .some(reason) = reasons._index_iterable_get(i: j) {
+			match reason {
+				.recv(handle) -> {
+					let released = _chan_ctl(handle: handle, op: 5)
+					()
+				},
+				.send(handle) -> {
+					let released = _chan_ctl(handle: handle, op: 12)
+					()
+				},
+				.deadline(instant) -> {
+					let released = _chan_ctl(handle: instant._nanoseconds(), op: 15)
+					()
+				}
+			}
 		}
 		j = j + 1
 	}
-}
-
-func _block_send(handle: Int) -> () {
-	let registered = _chan_ctl(handle: handle, op: 11)
-	let parked = _chan_ctl(handle: 0, op: 6)
-	let released = _chan_ctl(handle: handle, op: 12)
-}
-
-func _block_until(deadline: Instant) -> () {
-	let nanos = deadline._nanoseconds()
-	let registered = _chan_ctl(handle: nanos, op: 14)
-	let parked = _chan_ctl(handle: 0, op: 6)
-	let released = _chan_ctl(handle: nanos, op: 15)
 }
 
 // The executable's host fallbacks (ADR 0039): ordinary handlers below
@@ -251,22 +286,14 @@ pub func _with_host(consume body: Task) -> () {
 		_io_host(request: .exit(1))
 		loop {}
 	}
-	// The blocking wait fallbacks (ADR 0067/0068): register the
-	// interest, block the worker, unregister, and continue. A resumed
-	// operation re-checks its source, so a spurious wake just waits again.
-	#handle 'recv { channels in
-		_block_recv(channels: channels)
+	// The blocking wait fallback (ADR 0067/0068): register every
+	// reason, block the worker, unregister, and continue. A resumed
+	// operation re-checks its sources, so a spurious wake just waits again.
+	#handle 'wait { reasons in
+		_block_wait(reasons: reasons)
 		'continue
 	}
-	#handle 'send { handle in
-		_block_send(handle: handle)
-		'continue
-	}
-	#handle 'wait_until { deadline in
-		_block_until(deadline: deadline)
-		'continue
-	}
-	_run_cooperative(main_task: body)
+	_run_cooperative(root_task: body)
 }
 
 // The no-cooperative-effects entry specialization. The backend selects
@@ -290,16 +317,8 @@ pub func _with_blocking_host(consume body: BlockingTask) -> () {
 		_io_host(request: .exit(1))
 		loop {}
 	}
-	#handle 'recv { channels in
-		_block_recv(channels: channels)
-		'continue
-	}
-	#handle 'send { handle in
-		_block_send(handle: handle)
-		'continue
-	}
-	#handle 'wait_until { deadline in
-		_block_until(deadline: deadline)
+	#handle 'wait { reasons in
+		_block_wait(reasons: reasons)
 		'continue
 	}
 	body()

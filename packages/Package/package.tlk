@@ -1,0 +1,8 @@
+Package(
+	name: "Package",
+	version: "0.1.0",
+	builds: [
+		.lib(from: "src/Package.tlk")
+	],
+	dependencies: []
+)

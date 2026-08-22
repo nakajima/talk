@@ -1,0 +1,228 @@
+use package::markdown::{ Block, Inline, TableAlignment, parse, parse_inlines, to_html, to_html_with_heading_offset }
+
+func contains_sub(haystack: &String, needle: &String) -> Bool {
+	let h = haystack.utf8()
+	let n = needle.utf8()
+	if n.count() == 0 { return true }
+	if h.count() < n.count() { return false }
+	let i = 0
+	loop i <= h.count() - n.count() {
+		let j = 0
+		let matches = true
+		loop j < n.count() {
+			if h.at(index: i + j)._toInt() != n.at(index: j)._toInt() {
+				matches = false
+				break
+			}
+			j = j + 1
+		}
+		if matches { return true }
+		i = i + 1
+	}
+	false
+}
+
+func assert_text(inlines: &[Inline], expected: &String) 'fail {
+	assert(inlines.count == 1)
+	let inline: &Inline = inlines[0]
+	match inline {
+		.text(value) -> assert(value == expected),
+		_ -> assert(false)
+	}
+}
+
+test("parses an ATX heading and paragraph") {
+	let document = parse(markdown: "# Hello\n\nWorld", extensions: [])
+	assert(document.blocks.count == 2)
+	let first: &Block = document.blocks[0]
+	match first { .heading(level, children) -> {
+			assert(level == 1)
+			assert_text(inlines: children, expected: "Hello")
+		}, _ -> assert(false) }
+	let second: &Block = document.blocks[1]
+	match second { .paragraph(children) -> assert_text(inlines: children, expected: "World"), _ -> assert(false) }
+}
+
+test("parses setext headings and thematic breaks") {
+	let document = parse(markdown: "Title\n=====\n\n---", extensions: [])
+	assert(document.blocks.count == 2)
+	let first: &Block = document.blocks[0]
+	match first { .heading(level, children) -> {
+			assert(level == 1)
+			assert_text(inlines: children, expected: "Title")
+		}, _ -> assert(false) }
+	let second: &Block = document.blocks[1]
+	match second { .thematicBreak -> assert(true), _ -> assert(false) }
+}
+
+test("parses a setext heading at end of input") {
+	let document = parse(markdown: "Title\n---", extensions: [])
+	assert(document.blocks.count == 1)
+	let block: &Block = document.blocks[0]
+	match block { .heading(level, _) -> assert(level == 2), _ -> assert(false) }
+}
+
+test("parses fenced code with info") {
+	let document = parse(markdown: "```talk\nlet x = 1\n```", extensions: [])
+	assert(document.blocks.count == 1)
+	let block: &Block = document.blocks[0]
+	match block { .codeBlock(info, code) -> {
+			match info { .some(value) -> assert(value == "talk"), .none -> assert(false) }
+			assert(code == "let x = 1")
+		}, _ -> assert(false) }
+}
+
+test("parses block quotes recursively") {
+	let document = parse(markdown: "> ## Quote\n> text", extensions: [])
+	assert(document.blocks.count == 1)
+	let block: &Block = document.blocks[0]
+	match block { .blockQuote(blocks) -> {
+			assert(blocks.count == 2)
+			let first: &Block = blocks[0]
+			match first { .heading(level, _) -> assert(level == 2), _ -> assert(false) }
+		}, _ -> assert(false) }
+}
+
+test("parses unordered and ordered lists") {
+	let document = parse(markdown: "- one\n- two\n\n3. three\n4. four", extensions: [])
+	assert(document.blocks.count == 2)
+	let first: &Block = document.blocks[0]
+	match first { .unorderedList(items) -> assert(items.count == 2), _ -> assert(false) }
+	let second: &Block = document.blocks[1]
+	match second { .orderedList(start, items) -> {
+			assert(start == 3)
+			assert(items.count == 2)
+		}, _ -> assert(false) }
+}
+
+test("parses inline formatting") {
+	let nodes = parse_inlines(text: "a *small* and **large** `value`", extensions: [])
+	assert(nodes.count == 6)
+	let small: &Inline = nodes[1]
+	match small { .emphasis(children) -> assert_text(inlines: children, expected: "small"), _ -> assert(false) }
+	let large: &Inline = nodes[3]
+	match large { .strong(children) -> assert_text(inlines: children, expected: "large"), _ -> assert(false) }
+	let code: &Inline = nodes[5]
+	match code { .code(value) -> assert(value == "value"), _ -> assert(false) }
+}
+
+test("parses links and images") {
+	let nodes = parse_inlines(text: "[Talk](https://example.com \"site\") ![logo](logo.png)", extensions: [])
+	assert(nodes.count == 3)
+	let link: &Inline = nodes[0]
+	match link { .link(url, title, children) -> {
+			assert(url == "https://example.com")
+			match title { .some(value) -> assert(value == "site"), .none -> assert(false) }
+			assert_text(inlines: children, expected: "Talk")
+		}, _ -> assert(false) }
+	let image: &Inline = nodes[2]
+	match image { .image(url, _, alt) -> {
+			assert(url == "logo.png")
+			assert(alt == "logo")
+		}, _ -> assert(false) }
+}
+
+test("enables GFM tables explicitly") {
+	let document = parse(markdown: "Name | Score\n:--- | ---:\nAda | 10\nLinus | 9", extensions: [.gfm([.tables])])
+	assert(document.blocks.count == 1)
+	let block: &Block = document.blocks[0]
+	match block { .table(header, alignments, rows) -> {
+			assert(header.count == 2)
+			assert(alignments.count == 2)
+			assert(rows.count == 2)
+			assert_text(inlines: header[0].inlines, expected: "Name")
+			let left: &TableAlignment = alignments[0]
+			match left { .left -> assert(true), _ -> assert(false) }
+			let right: &TableAlignment = alignments[1]
+			match right { .right -> assert(true), _ -> assert(false) }
+		}, _ -> assert(false) }
+}
+
+test("enables GFM task lists explicitly") {
+	let document = parse(markdown: "- [x] done\n- [ ] later", extensions: [.gfm([.taskLists])])
+	let block: &Block = document.blocks[0]
+	match block { .unorderedList(items) -> {
+			match items[0].checked { .some(value) -> assert(value), .none -> assert(false) }
+			match items[1].checked { .some(value) -> assert(value == false), .none -> assert(false) }
+		}, _ -> assert(false) }
+}
+
+test("configures GFM inline extensions independently") {
+	let enabled = parse_inlines(text: "~~old~~ https://example.com.", extensions: [.gfm([.strikethrough, .autolinks])])
+	assert(enabled.count == 4)
+	let strike: &Inline = enabled[0]
+	match strike { .strikethrough(children) -> assert_text(inlines: children, expected: "old"), _ -> assert(false) }
+	let link: &Inline = enabled[2]
+	match link { .link(url, _, children) -> {
+			assert(url == "https://example.com")
+			assert_text(inlines: children, expected: "https://example.com")
+		}, _ -> assert(false) }
+
+	let single = parse_inlines(text: "~old~", extensions: [.gfm([.strikethrough])])
+	let single_strike: &Inline = single[0]
+	match single_strike { .strikethrough(children) -> assert_text(inlines: children, expected: "old"), _ -> assert(false) }
+	let triple = parse_inlines(text: "~~~old~~~", extensions: [.gfm([.strikethrough])])
+	assert_text(inlines: triple, expected: "~~~old~~~")
+
+	let automatic = parse_inlines(text: "www.example.com me@example.com", extensions: [.gfm([.autolinks])])
+	assert(automatic.count == 3)
+	let www: &Inline = automatic[0]
+	match www { .link(url, _, _) -> assert(url == "http://www.example.com"), _ -> assert(false) }
+	let email: &Inline = automatic[2]
+	match email { .link(url, _, _) -> assert(url == "mailto:me@example.com"), _ -> assert(false) }
+
+	let disabled = parse_inlines(text: "~~old~~", extensions: [])
+	assert_text(inlines: disabled, expected: "~~old~~")
+}
+
+test("renders ordered starts, image metadata, and tables") {
+	let ordered = to_html(markdown: "3. three\n4. four", extensions: [])
+	assert(contains_sub(haystack: ordered, needle: "<ol start=\"3\">"))
+
+	let image = to_html(markdown: "![logo](logo.png \"site\")", extensions: [])
+	assert(contains_sub(haystack: image, needle: "src=\"logo.png\""))
+	assert(contains_sub(haystack: image, needle: "title=\"site\""))
+	assert(contains_sub(haystack: image, needle: "alt=\"logo\""))
+
+	let table = to_html(
+		markdown: "Name | Score\n:--- | ---:\nAda | 10",
+		extensions: [.gfm([.tables])]
+	)
+	assert(contains_sub(haystack: table, needle: "<table>"))
+	assert(contains_sub(haystack: table, needle: "<th style=\"text-align: left\">Name</th>"))
+	assert(contains_sub(haystack: table, needle: "<td style=\"text-align: right\">10</td>"))
+}
+
+test("offsets nested heading levels for embedded documents") {
+	let rendered = to_html_with_heading_offset(
+		markdown: "# Top\n\n> ## Nested\n\n- ### Listed",
+		extensions: [],
+		heading_offset: 2
+	)
+	assert(contains_sub(haystack: rendered, needle: "<h3>Top</h3>"))
+	assert(contains_sub(haystack: rendered, needle: "<h4>Nested</h4>"))
+	assert(contains_sub(haystack: rendered, needle: "<h5>Listed</h5>"))
+}
+
+test("preserves UTF-8 text and parses line breaks") {
+	let soft_html = to_html(markdown: "one\ntwo", extensions: [])
+	assert(contains_sub(haystack: soft_html, needle: "<p>one two</p>"))
+	assert(contains_sub(haystack: soft_html, needle: "<br") == false)
+	let hard_html = to_html(markdown: "one  \ntwo", extensions: [])
+	assert(contains_sub(haystack: hard_html, needle: "<br"))
+
+	let nodes = parse_inlines(text: "café 世界  \nnext", extensions: [])
+	assert(nodes.count == 3)
+	let text: &Inline = nodes[0]
+	match text { .text(value) -> assert(value == "café 世界"), _ -> assert(false) }
+	let newline: &Inline = nodes[1]
+	match newline { .hardBreak -> assert(true), _ -> assert(false) }
+
+	let escaped = parse_inlines(text: "one\\\ntwo", extensions: [])
+	let escaped_newline: &Inline = escaped[1]
+	match escaped_newline { .hardBreak -> assert(true), _ -> assert(false) }
+
+	let formatted = parse_inlines(text: "**café 世界**", extensions: [])
+	let strong: &Inline = formatted[0]
+	match strong { .strong(children) -> assert_text(inlines: children, expected: "café 世界"), _ -> assert(false) }
+}

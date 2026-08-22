@@ -99,6 +99,7 @@ Status vocabulary:
 - [0043 - Self-hosted source frontend](adr/0043-self-hosted-source-frontend.md)
 - [0048 - One native source frontend and native library artifacts](adr/0048-native-source-frontend-and-library-artifacts.md)
 - [0051 - Invocation-scoped function effects](adr/0051-invocation-scoped-function-effects.md)
+- [0070 - Trapping integer arithmetic](adr/0070-trapping-integer-arithmetic.md)
 
 ### Historical, superseded, or rejected
 

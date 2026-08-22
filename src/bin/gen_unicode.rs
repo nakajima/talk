@@ -296,22 +296,55 @@ fn render_unicode_data(gcb_entries: &[(u32, u8)], char_entries: &[(u32, u8)]) ->
          use package::String::{ String }\n\n",
     );
     for (name, value) in CAT_NAMES {
-        let _ = writeln!(out, "pub let _GC_{name}: Int = {value}");
+        let description = match *name {
+            "OTHER" => "UAX #29 `Other`",
+            "CR" => "carriage return (`CR`)",
+            "LF" => "line feed (`LF`)",
+            "CONTROL" => "UAX #29 `Control`",
+            "EXTEND" => "UAX #29 `Extend`",
+            "ZWJ" => "zero-width joiner (`ZWJ`)",
+            "REGIONAL_INDICATOR" => "UAX #29 `Regional_Indicator`",
+            "PREPEND" => "UAX #29 `Prepend`",
+            "SPACINGMARK" => "UAX #29 `SpacingMark`",
+            "HANGUL_L" => "Hangul leading jamo (`L`)",
+            "HANGUL_V" => "Hangul vowel jamo (`V`)",
+            "HANGUL_T" => "Hangul trailing jamo (`T`)",
+            "HANGUL_LV" => "Hangul `LV` syllables",
+            "HANGUL_LVT" => "Hangul `LVT` syllables",
+            "EXT_PICT" => "the `Extended_Pictographic` override",
+            "INCB_CONSONANT" => "Indic conjunct-break consonants",
+            "EXTEND_INCB_LINKER" => "`Extend` scalars that are InCB linkers",
+            "EXTEND_INCB_EXTEND" => "`Extend` scalars that are InCB extenders",
+            _ => unreachable!("every generated category has documentation"),
+        };
+        let _ = writeln!(
+            out,
+            "// Internal grapheme-cluster code for {description}.\npub let _GC_{name}: Int = {value}"
+        );
     }
     let _ = writeln!(
         out,
-        "\npub func _gcb_table() -> String {{\n\t\"{gcb_literal}\"\n}}"
+        "\n// Packed scalar boundaries for Unicode grapheme-cluster categories.\n\
+         // Entries are sorted four-septet values encoding `start * 32 + category`.\n\
+         pub func _gcb_table() -> String {{\n\t\"{gcb_literal}\"\n}}"
     );
     out.push_str(
-        "\npub let _CC_OTHER: Int = 0\n\
+        "\n// Character does not satisfy one of the specialized classes below.\n\
+         pub let _CC_OTHER: Int = 0\n\
+         // Character satisfies Unicode White_Space.\n\
          pub let _CC_WHITESPACE: Int = 1\n\
+         // Character satisfies Unicode Alphabetic.\n\
          pub let _CC_ALPHABETIC: Int = 2\n\
+         // Character has a Unicode numeric category.\n\
          pub let _CC_NUMERIC: Int = 3\n\
+         // Character is both alphabetic and numeric under the table's combined flags.\n\
          pub let _CC_ALPHANUMERIC: Int = 4\n",
     );
     let _ = writeln!(
         out,
-        "\npub func _character_class_table() -> String {{\n\t\"{char_literal}\"\n}}"
+        "\n// Packed scalar boundaries for the public character-class predicates.\n\
+         // Entries use the same sorted four-septet `start * 32 + category` encoding.\n\
+         pub func _character_class_table() -> String {{\n\t\"{char_literal}\"\n}}"
     );
     out
 }

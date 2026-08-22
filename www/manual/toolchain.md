@@ -25,10 +25,9 @@ Start the interactive frontend:
 
 ```sh
 talk repl
-talk repl --package
 ```
 
-The package mode imports the current package library's public surface. The REPL supports declarations, type queries, completion, and indentation.
+Inside a package, the REPL imports the current package library's public surface automatically. Outside a package it starts a standalone session; use `talk repl --standalone` to ignore an enclosing package explicitly. The REPL supports declarations, type queries, completion, and indentation.
 
 Query source directly with:
 
@@ -50,7 +49,7 @@ talk run-image program.tbc
 talk bytecode source.tlk
 ```
 
-Use `--entry NAME` to choose a public zero-parameter function instead of the script's top-level statements.
+Use `--entry NAME` to choose a public zero-parameter function instead of the script's top-level statements. `talk bytecode` prints disassembly; `.tbc` is the encoded and validated transport format. See the [Bytecode Reference](bytecode-reference.md) for the image layout, instruction families, validation rules, and version policy.
 
 ## MIR and C
 
@@ -60,6 +59,8 @@ Inspect the optimized middle representation:
 talk mir source.tlk
 talk mir --no-opt --debug source.tlk
 ```
+
+`--no-opt` shows MIR before optimization. `--debug` annotates instructions with source spans, binding names, and reasons for compiler-generated operations. The dump is an inspection format, not a stable serialization. See the [MIR Reference](mir-reference.md) for its control flow, layouts, instructions, cleanup, and target contract.
 
 Emit C or build a native executable:
 
@@ -82,7 +83,7 @@ talk update [PACKAGE...]
 
 See [Modules and Packages](modules-and-packages.md) for manifest and lockfile semantics.
 
-## Editor integration
+## Editor integration and automatic repairs
 
 ```sh
 talk lsp --stdio
@@ -90,11 +91,13 @@ talk setup nvim
 talk completions zsh
 ```
 
-The language server provides diagnostics, hover, completion, go-to-definition, rename, semantic tokens, and conservative code actions. `talk fix-labels` rewrites call sites when argument labels have changed:
+The language server provides diagnostics, hover, completion, go-to-definition, rename, semantic tokens, and conservative code actions. `talk fixit` applies the same preferred, compiler-proven quick fixes without an editor:
 
 ```sh
-talk fix-labels src/main.tlk
+talk fixit src/main.tlk
 ```
+
+When no path is supplied inside a package, it repairs the package workspace. Ambiguous actions are never chosen automatically. Edits are rechecked between rounds so a repair can reveal another deterministic fix without applying overlapping stale edits.
 
 ## Extending the command
 
@@ -108,4 +111,4 @@ Built-in commands always take precedence.
 
 ## Compiler-development commands
 
-`talk core-artifact` and `talk bootstrap` regenerate checked-in compiler artifacts. They are maintenance commands, not part of the application build loop. `talk llm` prints a compact, current language reference suitable for tools and agents.
+`talk core-artifact` and `talk bootstrap` regenerate checked-in compiler artifacts. They are maintenance commands, not part of the application build loop; the wasm build script runs `talk core-artifact` itself before embedding the artifact. `talk llm` prints a compact, current language reference suitable for tools and agents.

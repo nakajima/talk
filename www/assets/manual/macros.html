@@ -6,23 +6,24 @@
     <title>talktalk - 10. Macros</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787039527" rel="stylesheet">
+    <link href="/style.css?t=1787386842" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
       <a class="global-nav-brand" href="/">talktalk</a>
       <div class="global-nav-links">
         <a href="/">Language</a>
-        <a href="/manual/" aria-current="page">Docs</a>
+        <a href="/manual/" aria-current="page">Guide</a>
+        <a href="/docs/">Docs</a>
         <a href="/playground">Playground</a>
         <a href="/qa">Q/A</a>
         <a href="/philosophy">Philosophy</a>
       </div>
     </nav>
-    <main class="content-page manual-page">
-      <header class="page-header">
-        <div class="page-header-content">
-          <code class="page-kicker">talktalk / docs</code>
+    <main class="site-page manual-page">
+      <header class="site-page-header">
+        <div class="site-page-heading">
+          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/macros" aria-current="page">10. Macros</a></nav>
           <div class="page-header-title-row">
             <h1>10. Macros</h1>
             
@@ -30,10 +31,10 @@
         </div>
       </header>
 
-      <div class="manual-layout">
-        <aside class="manual-outline">
+      <div class="site-page-layout manual-layout">
+        <aside class="site-page-sidebar manual-outline">
           <nav aria-label="Manual table of contents">
-            <span class="manual-outline-title">Contents</span>
+            <span class="site-nav-label manual-outline-title">Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -56,16 +57,19 @@
 <li><a href="/manual/standard-library">13. The Standard Library</a></li>
 <li><a href="/manual/toolchain">14. The Toolchain</a></li>
 <li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
+<li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
+<li><a href="/manual/mir-reference">B. MIR Reference</a></li>
+<li><a href="/manual/bytecode-reference">C. Bytecode Reference</a></li>
             </ol>
           </nav>
         </aside>
-        <div class="manual-document">
+        <div class="site-page-content manual-document">
           <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
             <a class="manual-previous" href="/manual/modules-and-packages">&larr; 9. Modules and Packages</a>
             <a class="manual-contents" href="/manual/">All chapters</a>
             <a class="manual-next" href="/manual/concurrency">11. Concurrency &rarr;</a>
           </nav>
-          <article class="page-content">
+          <article class="prose page-content">
             <p>Macros write TalkTalk code for you before the compiler checks the program. Simple macros substitute pieces of syntax into a template. More advanced macros can inspect syntax and build a result. Either way, the generated code is checked like code you wrote yourself.</p>
 <h2><a href="#declarative-macros" aria-hidden="true" class="anchor" id="declarative-macros"></a>Declarative macros</h2>
 <p>A declarative macro is a balanced token template with <code>$</code> parameters:</p>
@@ -169,7 +173,6 @@ let done = false
 
 <span class="variable">print</span>(<span class="variable">page</span>.<span class="property">into_string</span>())</pre>
         </div>
-        
 <p>Interpolated values are escaped. The macro checks the markup while compiling and produces ordinary TalkTalk code.</p>
 <h2><a href="#further-reading" aria-hidden="true" class="anchor" id="further-reading"></a>Further reading</h2>
 <p>TalkTalk's declarative macros use lexical hygiene: names introduced by a macro do not accidentally capture names at the call site. <a href="https://www.cs.utah.edu/plt/scope-sets/">Binding as sets of scopes</a> explains the scope-set model that informs modern hygienic macro systems. TalkTalk's typed procedural services are its own constrained design, documented by <a href="https://github.com/nakajima/talk/blob/main/docs/adr/0026-macros.md">ADR 0026</a>.</p>
@@ -181,9 +184,9 @@ let done = false
             <a class="manual-next" href="/manual/concurrency">11. Concurrency &rarr;</a>
           </nav>
         </div>
-        <div class="manual-rail" aria-hidden="true"></div>
+        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
       </div>
-      <script type="module" src="/page.js?t=1787039527"></script>
+      <script type="module" src="/page.js?t=1787386842"></script>
     </main>
   </body>
 </html>

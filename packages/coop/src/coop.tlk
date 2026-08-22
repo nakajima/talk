@@ -1,0 +1,13 @@
+// Executables already run their top-level statements as a cooperative
+// root task. `run` remains available for an explicit nested scheduler
+// scope; it uses the same core task effects and scheduler.
+
+// Runs `root_task` and every task it spawns in a nested cooperative scope.
+//
+// The scheduler intercepts `yield`, channel waits, timers, and nested spawns;
+// ordinary host effects continue to the enclosing program fallbacks. It returns
+// only after the complete spawned task tree finishes. If every task is blocked,
+// the worker parks until a registered channel or timer can make progress.
+pub func run(consume root_task: Task) -> () {
+	_run_cooperative(root_task: root_task)
+}

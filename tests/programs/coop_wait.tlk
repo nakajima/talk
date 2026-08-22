@@ -1,0 +1,27 @@
+// The cooperative drain parks tasks on 'wait reasons, not just 'yield:
+// the root's sleep suspends as a deadline reason while the spawned task
+// interleaves, and its recv suspends as a channel reason until a
+// parallel worker's send wakes the scheduler. Margins are wide on
+// purpose — the pin is about order, not precision.
+use task::{ channel, sleep, run_blocking, Sender }
+
+'spawn(task: func() -> () {
+	print("child")
+	'yield()
+	print("child resumed")
+})
+
+print("root")
+sleep(.milliseconds(20))
+print("slept")
+
+let (sender, receiver) = channel<Int>()
+let worker = _task_spawn(arg: sender, worker: func(consume sender: Sender<Int>) -> Int {
+	run_blocking(arg: sender, body: func(consume sender: Sender<Int>) -> Int {
+		sleep(.milliseconds(40))
+		sender.send(value: 77)
+		0
+	})
+})
+if let .some(value) = receiver.recv() { print(value) } else { print(0 - 1) }
+print(_task_join<Int>(handle: worker))

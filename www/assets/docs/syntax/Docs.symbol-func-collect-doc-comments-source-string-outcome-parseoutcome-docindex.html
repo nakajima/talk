@@ -1,0 +1,82 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"></meta><meta name="viewport" content="width=device-width, initial-scale=1"></meta><title>collect_doc_comments - syntax</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"></link><link rel="stylesheet" href="/reset.css"></link><link rel="stylesheet" href="/style.css"></link><link rel="stylesheet" href="/docs.css"></link></head><body><nav class="global-nav" aria-label="Global navigation"><a class="global-nav-brand" href="/">talktalk</a><div class="global-nav-links"><a href="/">Language</a><a href="/manual/">Guide</a><a aria-current="page" href="/docs/">Docs</a><a href="/playground">Playground</a><a href="/qa">Q/A</a><a href="/philosophy">Philosophy</a></div></nav><main class="site-page docs-proposal docs-design-1"><header class="site-page-header docs-proposal-header docs-symbol-header"><div class="site-page-heading docs-proposal-heading"><nav class="site-breadcrumbs docs-breadcrumbs docs-header-breadcrumbs" aria-label="Breadcrumb"><a href="../">Docs</a> / <a href="index.html">syntax</a> / <a href="Docs.html">Docs</a> / <a href="#func-collect-doc-comments-source-string-outcome-parseoutcome-docindex" aria-current="page">collect_doc_comments</a></nav><h1>collect_doc_comments</h1></div></header><div class="site-page-layout docs-proposal-shell"><aside class="site-page-sidebar docs-catalog" aria-label="Documentation sections"><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Libraries</span><a href="/docs/">All libraries</a><a class="" href="/docs/core/">Core</a><a class="active" href="./">syntax</a></div><div class="site-nav-group docs-nav-group"><span class="site-nav-label docs-nav-label">Modules</span><a class="" href="Ast.html">Ast</a><a class="active" href="Docs.html">Docs</a><a class="" href="Dump.html">Dump</a><a class="" href="Lexer.html">Lexer</a><a class="" href="Parser.html">Parser</a><a class="" href="Syntax.html">Syntax</a></div></aside><article class="site-page-content docs-reference"><section class="docs-symbol" id="func-collect-doc-comments-source-string-outcome-parseoutcome-docindex"><code class="docs-symbol-signature"><span class="keyword">func</span> <span class="function">collect_doc_comments</span>(source: <a class="docs-symbol-link" href="/docs/core/String.symbol-struct-string.html#struct-string"><span class="type">String</span></a>, outcome: &amp;<a class="docs-symbol-link" href="Parser.symbol-struct-parseoutcome.html#struct-parseoutcome"><span class="type">ParseOutcome</span></a>) -&gt; <a class="docs-symbol-link" href="Docs.symbol-struct-docindex.html#struct-docindex"><span class="type">DocIndex</span></a></code><div class="prose docs docs-symbol-documentation"><p>Attaches leading line-comment groups without changing the parser token stream.</p><p>A group must end on the line immediately before a declaration after skipping declaration modifiers. Imports may be crossed as one block, but any blank line breaks attachment. The merge is ordered and local declarations are excluded.</p></div><section class="docs-symbol-source" id="source"><details class="docs-source"><summary>View Source</summary><pre><code><span class="modifier">pub</span> <span class="keyword">func</span> <span class="function">collect_doc_comments</span>(<span class="parameter">source</span>: <span class="type">String</span>, <span class="parameter">outcome</span>: <span class="operator">&amp;</span><span class="type">ParseOutcome</span>) <span class="operator">-&gt;</span> <span class="type">DocIndex</span> {
+	<span class="keyword">let</span> view <span class="operator">=</span> source.<span class="property">utf8</span>()
+	<span class="keyword">let</span> spans <span class="operator">=</span> collect_item_spans(<span class="parameter">items</span>: outcome.<span class="property">items</span>, <span class="parameter">spans</span>: [])
+	<span class="keyword">let</span> <span class="parameter">entries</span>: [<span class="type">DocumentedDecl</span>] <span class="operator">=</span> []
+	<span class="keyword">let</span> <span class="parameter">orphans</span>: [<span class="type">Comment</span>] <span class="operator">=</span> []
+	<span class="keyword">let</span> <span class="parameter">group</span>: [<span class="type">Comment</span>] <span class="operator">=</span> []
+	<span class="keyword">let</span> si <span class="operator">=</span> <span class="number">0</span>
+	<span class="keyword">for</span> c <span class="keyword">in</span> outcome.<span class="property">comments</span> {
+		<span class="comment">// A comment sharing its line with preceding code is trailing.</span>
+		<span class="keyword">let</span> trailing <span class="operator">=</span> <span class="keyword">false</span>
+		<span class="keyword">let</span> j <span class="operator">=</span> c.<span class="property">start</span> <span class="operator">-</span> <span class="number">1</span>
+		<span class="keyword">loop</span> j <span class="operator">&gt;=</span> <span class="number">0</span> {
+			<span class="keyword">let</span> b <span class="operator">=</span> view.<span class="property">at</span>(<span class="parameter">index</span>: j).<span class="property">_toInt</span>()
+			<span class="keyword">if</span> b <span class="operator">==</span> newline_byte { <span class="keyword">break</span> }
+			<span class="keyword">if</span> b <span class="operator">==</span> space_byte <span class="operator">||</span> b <span class="operator">==</span> tab_byte <span class="operator">||</span> b <span class="operator">==</span> return_byte {
+				j <span class="operator">=</span> j <span class="operator">-</span> <span class="number">1</span>
+				<span class="keyword">continue</span>
+			}
+			trailing <span class="operator">=</span> <span class="keyword">true</span>
+			<span class="keyword">break</span>
+		}
+		<span class="keyword">if</span> trailing {
+			<span class="keyword">let</span> f <span class="operator">=</span> flush_group(<span class="parameter">source</span>: source, <span class="parameter">group</span>: group, <span class="parameter">spans</span>: spans, <span class="parameter">si</span>: si)
+			si <span class="operator">=</span> f.<span class="property">si</span>
+			group <span class="operator">=</span> []
+			<span class="keyword">if</span> <span class="keyword">let</span> .<span class="property">some</span>(e) <span class="operator">=</span> f.<span class="property">entry</span> { entries.<span class="property">push</span>(e) }
+			<span class="keyword">for</span> o <span class="keyword">in</span> f.<span class="property">orphans</span> { orphans.<span class="property">push</span>(<span class="type">Comment</span>(<span class="parameter">start</span>: o.<span class="property">start</span>, <span class="parameter">end</span>: o.<span class="property">end</span>)) }
+			orphans.<span class="property">push</span>(<span class="type">Comment</span>(<span class="parameter">start</span>: c.<span class="property">start</span>, <span class="parameter">end</span>: c.<span class="property">end</span>))
+			<span class="keyword">continue</span>
+		}
+		<span class="comment">// `// no-core` is a compiler pragma, not documentation: it</span>
+		<span class="comment">// breaks the current group and never attaches.</span>
+		<span class="keyword">if</span> c.<span class="property">end</span> <span class="operator">-</span> c.<span class="property">start</span> <span class="operator">==</span> <span class="number">10</span> {
+			<span class="keyword">let</span> is_pragma <span class="operator">=</span> <span class="keyword">true</span>
+			<span class="keyword">let</span> pragma <span class="operator">=</span> <span class="string">&quot;// no-core&quot;</span>.<span class="property">utf8</span>()
+			<span class="keyword">let</span> p <span class="operator">=</span> <span class="number">0</span>
+			<span class="keyword">loop</span> p <span class="operator">&lt;</span> <span class="number">10</span> {
+				<span class="keyword">if</span> view.<span class="property">at</span>(<span class="parameter">index</span>: c.<span class="property">start</span> <span class="operator">+</span> p).<span class="property">_toInt</span>() <span class="operator">!=</span> pragma.<span class="property">at</span>(<span class="parameter">index</span>: p).<span class="property">_toInt</span>() {
+					is_pragma <span class="operator">=</span> <span class="keyword">false</span>
+					<span class="keyword">break</span>
+				}
+				p <span class="operator">=</span> p <span class="operator">+</span> <span class="number">1</span>
+			}
+			<span class="keyword">if</span> is_pragma {
+				<span class="keyword">let</span> f <span class="operator">=</span> flush_group(<span class="parameter">source</span>: source, <span class="parameter">group</span>: group, <span class="parameter">spans</span>: spans, <span class="parameter">si</span>: si)
+				si <span class="operator">=</span> f.<span class="property">si</span>
+				group <span class="operator">=</span> []
+				<span class="keyword">if</span> <span class="keyword">let</span> .<span class="property">some</span>(e) <span class="operator">=</span> f.<span class="property">entry</span> { entries.<span class="property">push</span>(e) }
+				<span class="keyword">for</span> o <span class="keyword">in</span> f.<span class="property">orphans</span> { orphans.<span class="property">push</span>(<span class="type">Comment</span>(<span class="parameter">start</span>: o.<span class="property">start</span>, <span class="parameter">end</span>: o.<span class="property">end</span>)) }
+				orphans.<span class="property">push</span>(<span class="type">Comment</span>(<span class="parameter">start</span>: c.<span class="property">start</span>, <span class="parameter">end</span>: c.<span class="property">end</span>))
+				<span class="keyword">continue</span>
+			}
+		}
+		<span class="comment">// A group continues only across adjacent comment lines.</span>
+		<span class="keyword">if</span> group.<span class="property">is_empty</span>() <span class="operator">==</span> <span class="keyword">false</span> {
+			<span class="keyword">let</span> k <span class="operator">=</span> group[group.<span class="property">count</span> <span class="operator">-</span> <span class="number">1</span>].<span class="property">end</span>
+			<span class="keyword">let</span> newlines <span class="operator">=</span> <span class="number">0</span>
+			<span class="keyword">let</span> blocked <span class="operator">=</span> <span class="keyword">false</span>
+			<span class="keyword">loop</span> k <span class="operator">&lt;</span> c.<span class="property">start</span> {
+				<span class="keyword">let</span> b <span class="operator">=</span> view.<span class="property">at</span>(<span class="parameter">index</span>: k).<span class="property">_toInt</span>()
+				<span class="keyword">if</span> b <span class="operator">==</span> newline_byte {
+					newlines <span class="operator">=</span> newlines <span class="operator">+</span> <span class="number">1</span>
+				} <span class="keyword">else</span> <span class="keyword">if</span> b <span class="operator">==</span> space_byte <span class="operator">||</span> b <span class="operator">==</span> tab_byte <span class="operator">||</span> b <span class="operator">==</span> return_byte { } <span class="keyword">else</span> {
+					blocked <span class="operator">=</span> <span class="keyword">true</span>
+				}
+				k <span class="operator">=</span> k <span class="operator">+</span> <span class="number">1</span>
+			}
+			<span class="keyword">if</span> blocked <span class="operator">||</span> newlines <span class="operator">!=</span> <span class="number">1</span> {
+				<span class="keyword">let</span> f <span class="operator">=</span> flush_group(<span class="parameter">source</span>: source, <span class="parameter">group</span>: group, <span class="parameter">spans</span>: spans, <span class="parameter">si</span>: si)
+				si <span class="operator">=</span> f.<span class="property">si</span>
+				group <span class="operator">=</span> []
+				<span class="keyword">if</span> <span class="keyword">let</span> .<span class="property">some</span>(e) <span class="operator">=</span> f.<span class="property">entry</span> { entries.<span class="property">push</span>(e) }
+				<span class="keyword">for</span> o <span class="keyword">in</span> f.<span class="property">orphans</span> { orphans.<span class="property">push</span>(<span class="type">Comment</span>(<span class="parameter">start</span>: o.<span class="property">start</span>, <span class="parameter">end</span>: o.<span class="property">end</span>)) }
+			}
+		}
+		group.<span class="property">push</span>(<span class="type">Comment</span>(<span class="parameter">start</span>: c.<span class="property">start</span>, <span class="parameter">end</span>: c.<span class="property">end</span>))
+	}
+	<span class="keyword">let</span> f <span class="operator">=</span> flush_group(<span class="parameter">source</span>: source, <span class="parameter">group</span>: group, <span class="parameter">spans</span>: spans, <span class="parameter">si</span>: si)
+	<span class="keyword">if</span> <span class="keyword">let</span> .<span class="property">some</span>(e) <span class="operator">=</span> f.<span class="property">entry</span> { entries.<span class="property">push</span>(e) }
+	<span class="keyword">for</span> o <span class="keyword">in</span> f.<span class="property">orphans</span> { orphans.<span class="property">push</span>(<span class="type">Comment</span>(<span class="parameter">start</span>: o.<span class="property">start</span>, <span class="parameter">end</span>: o.<span class="property">end</span>)) }
+	<span class="type">DocIndex</span>(<span class="parameter">entries</span>: entries, <span class="parameter">orphans</span>: orphans)
+}</code></pre></details></section></section></article><aside class="site-page-rail docs-page-index" aria-label="Sections on this page"><span class="site-nav-label docs-nav-label">On this page</span><a href="#func-collect-doc-comments-source-string-outcome-parseoutcome-docindex">Overview</a><a href="#source">Source</a></aside></div></main></body></html>

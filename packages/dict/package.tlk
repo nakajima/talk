@@ -1,0 +1,8 @@
+Package(
+	name: "dict",
+	version: "0.1.0",
+	builds: [
+		.lib(from: "src/dict.tlk")
+	],
+	dependencies: []
+)

@@ -3207,7 +3207,6 @@ fn exec_local(
                 ArithOp::Add,
                 rk(module, frame, a)?,
                 rk(module, frame, b)?,
-                i64::wrapping_add,
                 |x, y| x + y,
             )?
         }
@@ -3216,7 +3215,6 @@ fn exec_local(
                 ArithOp::Sub,
                 rk(module, frame, a)?,
                 rk(module, frame, b)?,
-                i64::wrapping_sub,
                 |x, y| x - y,
             )?
         }
@@ -3225,7 +3223,6 @@ fn exec_local(
                 ArithOp::Mul,
                 rk(module, frame, a)?,
                 rk(module, frame, b)?,
-                i64::wrapping_mul,
                 |x, y| x * y,
             )?
         }
@@ -3235,7 +3232,10 @@ fn exec_local(
                 (OperandValue::I64(_), OperandValue::I64(0)) => {
                     return Err("vm: division by zero".into());
                 }
-                (OperandValue::I64(x), OperandValue::I64(y)) => Value::I64(x.wrapping_div(y)),
+                (OperandValue::I64(x), OperandValue::I64(y)) => Value::I64(
+                    x.checked_div(y)
+                        .ok_or_else(|| "vm: integer overflow in division".to_string())?,
+                ),
                 (OperandValue::F64(x), OperandValue::F64(y)) => Value::F64(x / y),
                 _ => return Err(format!("vm: div on {a:?} and {b:?}")),
             };
@@ -4062,15 +4062,32 @@ enum ArithOp {
     Mul,
 }
 
+impl ArithOp {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Add => "addition",
+            Self::Sub => "subtraction",
+            Self::Mul => "multiplication",
+        }
+    }
+}
+
 fn arith(
     op: ArithOp,
     a: OperandValue<'_>,
     b: OperandValue<'_>,
-    ints: fn(i64, i64) -> i64,
     floats: fn(f64, f64) -> f64,
 ) -> Result<Value, String> {
     match (a, b) {
-        (OperandValue::I64(x), OperandValue::I64(y)) => Ok(Value::I64(ints(x, y))),
+        (OperandValue::I64(x), OperandValue::I64(y)) => {
+            let value = match op {
+                ArithOp::Add => x.checked_add(y),
+                ArithOp::Sub => x.checked_sub(y),
+                ArithOp::Mul => x.checked_mul(y),
+            }
+            .ok_or_else(|| format!("vm: integer overflow in {}", op.name()))?;
+            Ok(Value::I64(value))
+        }
         (OperandValue::F64(x), OperandValue::F64(y)) => Ok(Value::F64(floats(x, y))),
         // Pointer arithmetic (`add RawPtr p offset`).
         (OperandValue::Ptr(pointer), OperandValue::I64(offset)) if op == ArithOp::Add => {

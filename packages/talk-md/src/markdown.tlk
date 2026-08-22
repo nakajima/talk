@@ -1,0 +1,1125 @@
+// A dependency-free Markdown parser with configurable GFM extensions.
+use package::html
+
+// A Markdown document parsed into block nodes with recursively parsed inline content.
+//
+// The tree is presentation-neutral: source offsets and trivia are not retained,
+// and enabled extensions are reflected directly in node cases such as tables,
+// task-list state, and strikethrough.
+pub struct Document {
+	// Top-level block nodes in source order.
+	pub let blocks: [Block]
+}
+
+// A Markdown list item and its optional task-list state.
+pub struct ListItem {
+	// Block nodes belonging to this item, including nested lists.
+	pub let blocks: [Block]
+	// The task-list state: checked, unchecked, or absent for a normal item.
+	pub let checked: Bool?
+}
+
+// Controls how a Markdown table column is aligned when rendered.
+pub enum TableAlignment {
+	// No alignment marker was present; render without an alignment style.
+	case unspecified
+	// Align cell content to the left edge of the column.
+	case left
+	// Center cell content within the column.
+	case center
+	// Align cell content to the right edge of the column.
+	case right
+}
+
+// A Markdown table cell containing parsed inline content.
+pub struct TableCell {
+	// Parsed inline contents of the cell.
+	pub let inlines: [Inline]
+}
+
+// A block-level Markdown node.
+//
+// Child arrays preserve source order. Payloads contain semantic content rather
+// than delimiter spellings; for example, code blocks carry decoded info/content
+// and tables separate header, alignment, and body rows.
+pub enum Block {
+	// A paragraph containing inline nodes.
+	case paragraph([Inline])
+	// A heading level and its inline contents.
+	case heading(Int, [Inline])
+	// Blocks nested under a block-quote marker.
+	case blockQuote([Block])
+	// Unordered list items in source order.
+	case unorderedList([ListItem])
+	// An ordered list's starting number and items.
+	case orderedList(Int, [ListItem])
+	// An optional info string and the literal contents of a fenced or indented code block.
+	case codeBlock(String?, String)
+	// A thematic break such as `---` or `***`.
+	case thematicBreak
+	// Header cells, per-column alignment, and body rows for a GFM table.
+	case table([TableCell], [TableAlignment], [[TableCell]])
+}
+
+// An inline Markdown node after delimiter and escape processing.
+//
+// Container cases recursively preserve formatting structure. Link/image URLs
+// and titles are decoded strings; soft and hard breaks remain distinct so the
+// renderer can choose whitespace versus `<br>`.
+pub enum Inline {
+	// Literal text after Markdown escapes and entity handling.
+	case text(String)
+	// Inline children delimited for emphasis.
+	case emphasis([Inline])
+	// Inline children delimited for strong emphasis.
+	case strong([Inline])
+	// Inline children struck through by the GFM extension.
+	case strikethrough([Inline])
+	// Literal code-span contents.
+	case code(String)
+	// A destination URL, optional title, and linked inline contents.
+	case link(String, String?, [Inline])
+	// A source URL, optional title, and plain-text alt text.
+	case image(String, String?, String)
+	// A source newline that may render as ordinary whitespace.
+	case softBreak
+	// An explicit line break that must render as `<br>`.
+	case hardBreak
+}
+
+// An individually selectable GitHub Flavored Markdown feature.
+pub enum GFMExtension {
+	// Parse `[ ]` and `[x]` prefixes on list items as task states.
+	case taskLists
+	// Parse pipe-delimited tables with delimiter-row alignment markers.
+	case tables
+	// Parse paired `~~` delimiters as strikethrough.
+	case strikethrough
+	// Link bare URL-like text recognized by the autolink rules.
+	case autolinks
+}
+
+// A family of optional Markdown syntax extensions.
+pub enum Extension {
+	// Enables the selected GitHub Flavored Markdown features.
+	case gfm([GFMExtension])
+}
+
+struct Config {
+	let task_lists: Bool
+	let tables: Bool
+	let strikethrough: Bool
+	let autolinks: Bool
+}
+
+func config_for(extensions: &[Extension]) -> Config {
+	let task_lists = false
+	let tables = false
+	let strikethrough = false
+	let autolinks = false
+	for item in extensions {
+		match item {
+			.gfm(features) -> for feature in features {
+				match feature {
+					.taskLists -> task_lists = true,
+					.tables -> tables = true,
+					.strikethrough -> strikethrough = true,
+					.autolinks -> autolinks = true
+				}
+			}
+		}
+	}
+	Config(task_lists: task_lists, tables: tables, strikethrough: strikethrough, autolinks: autolinks)
+}
+
+// Local Markdown conveniences build on Core's cursor; source ownership,
+// grapheme boundaries, marks, restoration, and slicing stay in TextCursor.
+extend TextCursor {
+	mut func lookahead(_ distance: Int) -> Character? {
+		let start = self.mark()
+		let i = 0
+		loop i < distance {
+			if let .none = self.advance() {
+				self.restore(to: start)
+				return .none
+			}
+			i = i + 1
+		}
+		let result = self.peek()
+		self.restore(to: start)
+		result
+	}
+
+	func check(_ expected: Character) -> Bool {
+		match self.peek() {
+			.some(character) -> character == expected,
+			.none -> false
+		}
+	}
+
+	func check_any(_ expected: [Character]) -> Bool {
+		match self.peek() {
+			.some(character) -> {
+				for candidate in expected {
+					if character == candidate { return true }
+				}
+				false
+			},
+			.none -> false
+		}
+	}
+
+	mut func consume_character(_ expected: Character) -> Bool {
+		if self.check(expected) == false { return false }
+		self.advance()
+		true
+	}
+
+	mut func skip_spaces() {
+		self.consume(while: is_horizontal_space)
+		()
+	}
+
+	mut func consume_run(_ expected: Character) -> Int {
+		let count = 0
+		loop self.consume_character(expected) { count = count + 1 }
+		count
+	}
+
+	func starts_with(_ expected: &String) -> Bool {
+		self.remaining().starts_with(text: expected)
+	}
+
+	mut func find(_ expected: &String) -> StringIndex? {
+		let start = self.mark()
+		loop self.is_at_end() == false {
+			if self.starts_with(expected) {
+				let found = self.mark()
+				self.restore(to: start)
+				return .some(found)
+			}
+			self.advance()
+		}
+		self.restore(to: start)
+		return .none
+	}
+
+	mut func text(from start: StringIndex, to end: StringIndex) -> String {
+		let current = self.mark()
+		if self.restore(to: end) == false { return "".to_string() }
+		let result = self.slice(from: start).to_string()
+		self.restore(to: current)
+		result
+	}
+
+	func is_empty(from start: StringIndex, to end: StringIndex) -> Bool {
+		start == end
+	}
+}
+
+func is_horizontal_space(_ character: Character) -> Bool {
+	character == ' ' || character == '\t'
+}
+
+func is_blank(_ line: &String) -> Bool {
+	line.trimmed().is_empty()
+}
+
+func leading_spaces(_ line: &String) -> Int {
+	line.prefix(while: is_horizontal_space).count()
+}
+
+func parse_decimal(mut scanner: TextCursor, maximum_digits: Int) -> Int? {
+	let value = 0
+	let digits = 0
+	loop digits < maximum_digits {
+		let character = match scanner.peek() {
+			.some(character) -> character,
+			.none -> {
+				break
+			}
+		}
+		if character.is_ascii_digit() == false {
+			break
+		}
+		value = value * 10 + character.first_scalar() - '0'.first_scalar()
+		scanner.advance()
+		digits = digits + 1
+	}
+	if digits == 0 {
+		.none
+	} else {
+		.some(value)
+	}
+}
+
+struct ListMarker {
+	let ordered: Bool
+	let number: Int
+	let indent: Int
+	let content: String
+}
+
+func list_marker(_ line: &String) -> ListMarker? {
+	let scanner = TextCursor(text: line)
+	let indent = scanner.consume_run(' ')
+	if 3 < indent || scanner.is_at_end() { return .none }
+	if scanner.check_any(['-', '+', '*']) {
+		scanner.advance()
+		if scanner.is_at_end() == false && scanner.check_any([' ', '\t']) == false { return .none }
+		scanner.skip_spaces()
+		return .some(
+			ListMarker(ordered: false, number: 0, indent: indent, content: scanner.remaining().to_string())
+		)
+	}
+	let number = match parse_decimal(scanner: mut scanner, maximum_digits: 9) {
+		.some(value) -> value,
+		.none -> return .none
+	}
+	if scanner.check_any(['.', ')']) == false { return .none }
+	scanner.advance()
+	if scanner.is_at_end() == false && scanner.check_any([' ', '\t']) == false { return .none }
+	scanner.skip_spaces()
+	return .some(
+		ListMarker(ordered: true, number: number, indent: indent, content: scanner.remaining().to_string())
+	)
+}
+
+func strip_heading_closer(_ text: &String) -> String {
+	let value = text.trimmed()
+	let without_hashes = value.trimmed_end(CharacterSet(characters: "#"))
+	if without_hashes.utf8_count() == value.utf8_count() { return value.to_string() }
+	match without_hashes.last() {
+		.some(character) -> {
+			if is_horizontal_space(character) {
+				without_hashes.trimmed_end().to_string()
+			} else {
+				value.to_string()
+			}
+		},
+		.none -> "".to_string()
+	}
+}
+
+func heading(_ line: &String) -> (Int, String)? {
+	let scanner = TextCursor(text: line)
+	let indent = scanner.consume_run(' ')
+	if 3 < indent { return .none }
+	let level = scanner.consume_run('#')
+	if level == 0 || 6 < level { return .none }
+	if scanner.is_at_end() == false && scanner.check_any([' ', '\t']) == false { return .none }
+	scanner.skip_spaces()
+	return .some((level, strip_heading_closer(scanner.remaining().to_string())))
+}
+
+func setext_level(_ line: &String) -> Int? {
+	let value = line.trimmed().to_string()
+	let scanner = TextCursor(text: value)
+	let marker = match scanner.peek() {
+		.some(character) -> character,
+		.none -> return .none
+	}
+	if marker != '=' && marker != '-' { return .none }
+	let count = 0
+	loop scanner.is_at_end() == false {
+		if scanner.consume_character(marker) {
+			count = count + 1
+		} else {
+			if scanner.check_any([' ', '\t']) {
+				scanner.advance()
+				()
+			} else {
+				return .none
+			}
+		}
+	}
+	if count == 0 { return .none }
+	if marker == '=' {
+		.some(1)
+	} else {
+		.some(2)
+	}
+}
+
+func is_thematic_break(_ line: &String) -> Bool {
+	let value = line.trimmed().to_string()
+	let scanner = TextCursor(text: value)
+	let marker = match scanner.peek() {
+		.some(character) -> character,
+		.none -> return false
+	}
+	if marker != '*' && marker != '-' && marker != '_' { return false }
+	let count = 0
+	loop scanner.is_at_end() == false {
+		if scanner.consume_character(marker) {
+			count = count + 1
+		} else {
+			if scanner.check_any([' ', '\t']) {
+				scanner.advance()
+				()
+			} else {
+				return false
+			}
+		}
+	}
+	3 <= count
+}
+
+struct Fence {
+	let marker: Character
+	let length: Int
+	let info: String
+}
+
+func fence(_ line: &String) -> Fence? {
+	let scanner = TextCursor(text: line)
+	let indent = scanner.consume_run(' ')
+	if 3 < indent || scanner.check_any(['`', '~']) == false { return .none }
+	let marker = scanner.peek()!
+	let length = scanner.consume_run(marker)
+	if length < 3 { return .none }
+	.some(Fence(marker: marker, length: length, info: scanner.remaining().trimmed().to_string()))
+}
+
+func closes_fence(_ line: &String, opening: &Fence) -> Bool {
+	let scanner = TextCursor(text: line)
+	let indent = scanner.consume_run(' ')
+	if 3 < indent { return false }
+	let length = scanner.consume_run(opening.marker)
+	if length < opening.length { return false }
+	scanner.skip_spaces()
+	scanner.is_at_end()
+}
+
+func quote_content(_ line: &String) -> String? {
+	let scanner = TextCursor(text: line)
+	let indent = scanner.consume_run(' ')
+	if 3 < indent || scanner.consume_character('>') == false { return .none }
+	scanner.consume_character(' ')
+	return .some(scanner.remaining().to_string())
+}
+
+func join_lines(lines: &[String], start: Int, end: Int) -> String {
+	let builder = StringBuilder()
+	let i = start
+	loop i < end {
+		if start < i { builder.append(string: "\n") }
+		builder.append(substring: lines[i].as_substring())
+		i = i + 1
+	}
+	builder.finish()
+}
+
+func starts_block(_ line: &String) -> Bool {
+	if is_blank(line) { return true }
+	if let .some(_) = heading(line) {
+		return true
+	}
+	if let .some(_) = fence(line) {
+		return true
+	}
+	if let .some(_) = quote_content(line) {
+		return true
+	}
+	if let .some(_) = list_marker(line) {
+		return true
+	}
+	is_thematic_break(line)
+}
+
+struct TaskPrefix {
+	let checked: Bool
+	let content: String
+}
+
+func task_prefix(_ line: &String) -> TaskPrefix? {
+	let scanner = TextCursor(text: line)
+	if scanner.consume_character('[') == false { return .none }
+	let checked = if scanner.consume_character(' ') {
+		false
+	} else {
+		if scanner.consume_character('x') || scanner.consume_character('X') {
+			true
+		} else {
+			return .none
+		}
+	}
+	if scanner.consume_character(']') == false { return .none }
+	if scanner.is_at_end() == false && scanner.check_any([' ', '\t']) == false { return .none }
+	scanner.skip_spaces()
+	return .some(TaskPrefix(checked: checked, content: scanner.remaining().to_string()))
+}
+
+func strip_item_indent(_ line: &String, width: Int) -> String {
+	let spaces = leading_spaces(line)
+	line.drop_first(if spaces < width {
+			spaces
+		} else {
+			width
+		}).to_string()
+}
+
+func split_table_row(_ line: &String) -> [String] {
+	let value = line.trimmed().to_string()
+	let scanner = TextCursor(text: value)
+	let cells: [String] = []
+	scanner.consume_character('|')
+	let cell_start = scanner.mark()
+	let in_code = false
+	let escaped = false
+	let ended_with_separator = false
+	loop scanner.is_at_end() == false {
+		let mark = scanner.mark()
+		let character = scanner.advance()!
+		if character == '`' && escaped == false { in_code = !in_code }
+		if character == '|' && escaped == false && in_code == false {
+			cells.push(scanner.text(from: cell_start, to: mark).trimmed().to_string())
+			cell_start = scanner.mark()
+			ended_with_separator = scanner.is_at_end()
+		} else {
+			ended_with_separator = false
+		}
+		escaped = character == '\\' && escaped == false
+		if character != '\\' { escaped = false }
+	}
+	if ended_with_separator == false { cells.push(
+		scanner.text(from: cell_start, to: scanner.mark()).trimmed().to_string()
+	) }
+	cells
+}
+
+func delimiter_alignment(_ cell: &String) -> TableAlignment? {
+	let value = cell.trimmed().to_string()
+	let scanner = TextCursor(text: value)
+	let left = scanner.consume_character(':')
+	let dashes = scanner.consume_run('-')
+	let right = scanner.consume_character(':')
+	if dashes == 0 || scanner.is_at_end() == false { return .none }
+	if left && right {
+		.some(.center)
+	} else {
+		if left {
+			.some(.left)
+		} else {
+			if right {
+				.some(.right)
+			} else {
+				.some(.unspecified)
+			}
+		}
+	}
+}
+
+func has_table_pipe(_ line: &String) -> Bool {
+	let scanner = TextCursor(text: line)
+	let escaped = false
+	loop {
+		match scanner.advance() {
+			.some(character) -> {
+				if character == '|' && escaped == false { return true }
+				escaped = character == '\\' && escaped == false
+				if character != '\\' { escaped = false }
+			},
+			.none -> return false
+		}
+	}
+}
+
+func table_delimiter(_ line: &String) -> [TableAlignment]? {
+	let cells = split_table_row(line)
+	let alignments: [TableAlignment] = []
+	for cell in cells {
+		match delimiter_alignment(cell) {
+			.some(alignment) -> alignments.push(alignment),
+			.none -> return .none
+		}
+	}
+	if alignments.is_empty() {
+		.none
+	} else {
+		.some(alignments)
+	}
+}
+
+func table_cells(_ line: &String, columns: Int, config: &Config) -> [TableCell] {
+	let values = split_table_row(line)
+	let cells: [TableCell] = []
+	let i = 0
+	loop i < columns {
+		let value = if i < values.count {
+			values[i].to_string()
+		} else {
+			"".to_string()
+		}
+		cells.push(TableCell(inlines: parse_inlines_config(text: value, config: config)))
+		i = i + 1
+	}
+	cells
+}
+
+func parse_list(lines: &[String], start: Int, end: Int, first: ListMarker, config: &Config) -> ([ListItem], Int) {
+	let items: [ListItem] = []
+	let i = start
+	loop i < end {
+		let current = match list_marker(lines[i]) {
+			.some(value) -> value,
+			.none -> {
+				break
+			}
+		}
+		if current.ordered != first.ordered || current.indent != first.indent {
+			break
+		}
+		let first_line = current.content
+		let checked: Bool? = .none
+		if config.task_lists {
+			if let .some(task) = task_prefix(first_line) {
+				checked = .some(task.checked)
+				first_line = task.content
+			}
+		}
+		let item_lines: [String] = [first_line]
+		i = i + 1
+		loop i < end {
+			if is_blank(lines[i]) {
+				item_lines.push("".to_string())
+				i = i + 1
+				continue
+			}
+			if let .some(next) = list_marker(lines[i]) {
+				if next.ordered == first.ordered && next.indent == first.indent {
+					break
+				}
+			}
+			let indent = leading_spaces(lines[i])
+			if indent <= first.indent {
+				break
+			}
+			item_lines.push(strip_item_indent(lines[i], width: first.indent + 2))
+			i = i + 1
+		}
+		items.push(
+			ListItem(
+				blocks: parse_blocks(lines: item_lines, start: 0, end: item_lines.count, config: config),
+				checked: checked
+			)
+		)
+	}
+	(items, i)
+}
+
+func parse_blocks(lines: &[String], start: Int, end: Int, config: &Config) -> [Block] {
+	let blocks: [Block] = []
+	let i = start
+	loop i < end {
+		if is_blank(lines[i]) {
+			i = i + 1
+			continue
+		}
+
+		if let .some(opening) = fence(lines[i]) {
+			let info: String? = if opening.info.is_empty() {
+				.none
+			} else {
+				.some(opening.info)
+			}
+			i = i + 1
+			let content = StringBuilder()
+			let first_line = true
+			loop i < end && closes_fence(lines[i], opening: opening) == false {
+				if first_line == false { content.append(string: "\n") }
+				content.append(substring: lines[i].as_substring())
+				first_line = false
+				i = i + 1
+			}
+			if i < end { i = i + 1 }
+			blocks.push(.codeBlock(info, content.finish()))
+			continue
+		}
+
+		if let .some(found) = heading(lines[i]) {
+			blocks.push(.heading(found.0, parse_inlines_config(text: found.1, config: config)))
+			i = i + 1
+			continue
+		}
+
+		if config.tables && i + 1 < end && has_table_pipe(lines[i]) {
+			if let .some(alignments) = table_delimiter(lines[i + 1]) {
+				let headers = split_table_row(lines[i])
+				if headers.count == alignments.count {
+					let header = table_cells(lines[i], columns: alignments.count, config: config)
+					let rows: [[TableCell]] = []
+					i = i + 2
+					loop i < end && is_blank(lines[i]) == false && has_table_pipe(lines[i]) {
+						rows.push(table_cells(lines[i], columns: alignments.count, config: config))
+						i = i + 1
+					}
+					blocks.push(.table(header, alignments, rows))
+					continue
+				}
+			}
+		}
+
+		if is_thematic_break(lines[i]) {
+			blocks.push(.thematicBreak)
+			i = i + 1
+			continue
+		}
+
+		if let .some(_) = quote_content(lines[i]) {
+			let quoted: [String] = []
+			loop i < end {
+				match quote_content(lines[i]) {
+					.some(content) -> {
+						quoted.push(content)
+						i = i + 1
+					},
+					.none -> {
+						if is_blank(lines[i]) {
+							quoted.push("".to_string())
+							i = i + 1
+						} else {
+							break
+						}
+					}
+				}
+			}
+			blocks.push(.blockQuote(parse_blocks(lines: quoted, start: 0, end: quoted.count, config: config)))
+			continue
+		}
+
+		if let .some(marker) = list_marker(lines[i]) {
+			let parsed = parse_list(lines: lines, start: i, end: end, first: marker, config: config)
+			if marker.ordered {
+				blocks.push(.orderedList(marker.number, parsed.0))
+			} else {
+				blocks.push(.unorderedList(parsed.0))
+			}
+			i = parsed.1
+			continue
+		}
+
+		if 4 <= leading_spaces(lines[i]) {
+			let content = StringBuilder()
+			let first_line = true
+			loop i < end {
+				if is_blank(lines[i]) {
+					if first_line == false { content.append(string: "\n") }
+					first_line = false
+					i = i + 1
+					continue
+				}
+				if leading_spaces(lines[i]) < 4 {
+					break
+				}
+				if first_line == false { content.append(string: "\n") }
+				content.append(substring: lines[i].drop_first(4))
+				first_line = false
+				i = i + 1
+			}
+			blocks.push(.codeBlock(.none, content.finish()))
+			continue
+		}
+
+		let paragraph_start = i
+		i = i + 1
+		loop i < end && starts_block(lines[i]) == false {
+			if let .some(_) = setext_level(lines[i]) {
+				break
+			}
+			i = i + 1
+		}
+		if i < end {
+			if let .some(level) = setext_level(lines[i]) {
+				let text = join_lines(lines: lines, start: paragraph_start, end: i)
+				blocks.push(.heading(level, parse_inlines_config(text: text, config: config)))
+				i = i + 1
+				continue
+			}
+		}
+		let text = join_lines(lines: lines, start: paragraph_start, end: i)
+		blocks.push(.paragraph(parse_inlines_config(text: text, config: config)))
+	}
+	blocks
+}
+
+func is_escapable(_ character: Character) -> Bool {
+	CharacterSet(characters: "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~").contains(character)
+}
+
+func parse_destination(_ text: &String) -> (String, String?) {
+	let value = text.trimmed().to_string()
+	let scanner = TextCursor(text: value)
+	let url_start = scanner.mark()
+	loop scanner.is_at_end() == false && scanner.check_any([' ', '\t']) == false { scanner.advance() }
+	let url = scanner.text(from: url_start, to: scanner.mark())
+	if url.starts_with(text: "<") && url.ends_with(text: ">") { url = url.drop_first().drop_last().to_string() }
+	scanner.skip_spaces()
+	let title: String? = .none
+	let rest = scanner.remaining().trimmed().to_string()
+	if 2 <= rest.count() {
+		let rest_scanner = TextCursor(text: rest)
+		let quote = match rest_scanner.peek() {
+			.some(character) -> character,
+			.none -> return (url, title)
+		}
+		if quote == '"' || quote == '\'' {
+			rest_scanner.advance()
+			let start = rest_scanner.mark()
+			let closing = rest_scanner.find(quote.to_string())
+			if let .some(mark) = closing {
+				title = .some(rest_scanner.text(from: start, to: mark))
+			}
+		}
+	}
+	(url, title)
+}
+
+func code_at(mut scanner: TextCursor) -> Inline? {
+	let opening_start = scanner.mark()
+	let width = scanner.consume_run('`')
+	if width == 0 { return .none }
+	let marker = scanner.text(from: opening_start, to: scanner.mark())
+	let content_start = scanner.mark()
+	let close = match scanner.find(marker) {
+		.some(mark) -> mark,
+		.none -> return .none
+	}
+	let value = scanner.text(from: content_start, to: close)
+	if value.starts_with(character: ' ') && value.ends_with(character: ' ') && 1 < value.count() { value = value.drop_first().drop_last().to_string() }
+	scanner.restore(to: close)
+	scanner.consume(text: marker)
+	return .some(.code(value))
+}
+
+func link_at(mut scanner: TextCursor, config: &Config) -> Inline? {
+	let image = scanner.consume_character('!')
+	if scanner.consume_character('[') == false { return .none }
+	let label_start = scanner.mark()
+	let label_end = match scanner.find("]") {
+		.some(mark) -> mark,
+		.none -> return .none
+	}
+	let label = scanner.text(from: label_start, to: label_end)
+	scanner.restore(to: label_end)
+	scanner.consume_character(']')
+	if scanner.consume_character('(') == false { return .none }
+	let destination_start = scanner.mark()
+	let destination_end = match scanner.find(")") {
+		.some(mark) -> mark,
+		.none -> return .none
+	}
+	let parsed = parse_destination(scanner.text(from: destination_start, to: destination_end))
+	scanner.restore(to: destination_end)
+	scanner.consume_character(')')
+	if image { return .some(.image(parsed.0, parsed.1, label)) }
+	return .some(.link(parsed.0, parsed.1, parse_inlines_config(text: label, config: config)))
+}
+
+func delimited_at(mut scanner: TextCursor, marker: Character, width: Int, config: &Config, strikethrough: Bool) -> Inline? {
+	let opening = scanner.mark()
+	let i = 0
+	loop i < width {
+		if scanner.consume_character(marker) == false { return .none }
+		i = i + 1
+	}
+	let marker_text = scanner.text(from: opening, to: scanner.mark())
+	let content_start = scanner.mark()
+	let close = match scanner.find(marker_text) {
+		.some(mark) -> mark,
+		.none -> return .none
+	}
+	if scanner.is_empty(from: content_start, to: close) { return .none }
+	let content = parse_inlines_config(
+		text: scanner.text(from: content_start, to: close),
+		config: config
+	)
+	scanner.restore(to: close)
+	scanner.consume(text: marker_text)
+	if strikethrough { return .some(.strikethrough(content)) }
+	if width == 2 { return .some(.strong(content)) }
+	return .some(.emphasis(content))
+}
+
+func character_before(_ text: &String, _ scanner: &TextCursor) -> Character? {
+	match text.index(before: scanner.mark()) {
+		.some(index) -> text.character(at: index),
+		.none -> .none
+	}
+}
+
+func is_autolink_boundary(_ text: &String, _ scanner: &TextCursor) -> Bool {
+	match character_before(text, scanner) {
+		.some(character) -> is_horizontal_space(character) || character == '\n' || character == '(' || character == '[' || character == '{' || character == '<',
+		.none -> true
+	}
+}
+
+func trim_autolink(_ text: &String) -> String {
+	let value = text.trimmed_end(CharacterSet(characters: ".,:;!?")).to_string()
+	let opens = 0
+	let closes = 0
+	for character in value {
+		if character == '(' { opens = opens + 1 }
+		if character == ')' { closes = closes + 1 }
+	}
+	loop opens < closes && value.ends_with(character: ')') {
+		value = value.drop_last().to_string()
+		closes = closes - 1
+	}
+	value
+}
+
+func url_at(mut scanner: TextCursor, source: &String) -> Inline? {
+	if is_autolink_boundary(source, scanner) == false { return .none }
+	let www = scanner.starts_with("www.")
+	if www == false && scanner.starts_with("http://") == false && scanner.starts_with("https://") == false { return .none }
+	let start = scanner.mark()
+	loop scanner.is_at_end() == false && scanner.check_any([' ', '\t', '\n', '<']) == false { scanner.advance() }
+	let label = trim_autolink(scanner.text(from: start, to: scanner.mark()))
+	scanner.restore(to: start)
+	scanner.consume(text: label)
+	let url = label.to_string()
+	if www { url = "http://" + label }
+	return .some(.link(url, .none, [.text(label)]))
+}
+
+func email_at(mut scanner: TextCursor, source: &String) -> Inline? {
+	if is_autolink_boundary(source, scanner) == false { return .none }
+	let first = match scanner.peek() {
+		.some(character) -> character,
+		.none -> return .none
+	}
+	if first.is_ascii_alphanumeric() == false { return .none }
+	let start = scanner.mark()
+	let saw_at = false
+	let saw_dot_after_at = false
+	loop {
+		let character = match scanner.peek() {
+			.some(character) -> character,
+			.none -> {
+				break
+			}
+		}
+		if character == '@' && saw_at == false {
+			saw_at = true
+			scanner.advance()
+			continue
+		}
+		if character == '.' && saw_at { saw_dot_after_at = true }
+		if character.is_ascii_alphanumeric() == false && character != '.' && character != '_' && character != '+' && character != '-' {
+			break
+		}
+		scanner.advance()
+	}
+	let label = scanner.text(from: start, to: scanner.mark())
+	if saw_at == false || saw_dot_after_at == false || label.ends_with(character: '.') || label.ends_with(
+		character: '-'
+	) { return .none }
+	.some(.link("mailto:" + label, .none, [.text(label)]))
+}
+
+func append_text(consume nodes: [Inline], _ text: String) -> [Inline] {
+	if text.is_empty() == false { nodes.push(.text(text)) }
+	nodes
+}
+
+func parse_inlines_config(text: &String, config: &Config) -> [Inline] {
+	let scanner = TextCursor(text: text)
+	let nodes: [Inline] = []
+	let plain_start = scanner.mark()
+	loop scanner.is_at_end() == false {
+		if scanner.check('\\') {
+			if let .some(next) = scanner.lookahead(1) {
+				if is_escapable(next) {
+					nodes = append_text(nodes: nodes, scanner.text(from: plain_start, to: scanner.mark()))
+					scanner.advance()
+					nodes.push(.text(scanner.advance()!.to_string()))
+					plain_start = scanner.mark()
+					continue
+				}
+			}
+		}
+		if scanner.check('\n') {
+			let before = scanner.text(from: plain_start, to: scanner.mark())
+			let hard = before.ends_with(text: "  ") || before.ends_with(character: '\\')
+			let visible = if before.ends_with(text: "  ") {
+				before.drop_last(2).to_string()
+			} else {
+				if before.ends_with(character: '\\') {
+					before.drop_last().to_string()
+				} else {
+					before
+				}
+			}
+			nodes = append_text(nodes: nodes, visible)
+			scanner.advance()
+			if hard {
+				nodes.push(.hardBreak)
+			} else {
+				nodes.push(.softBreak)
+			}
+			plain_start = scanner.mark()
+			continue
+		}
+		if scanner.check('`') {
+			let token_start = scanner.mark()
+			match code_at(scanner: mut scanner) {
+				.some(node) -> {
+					nodes = append_text(nodes: nodes, scanner.text(from: plain_start, to: token_start))
+					nodes.push(node)
+					plain_start = scanner.mark()
+					continue
+				},
+				.none -> scanner.restore(to: token_start)
+			}
+		}
+		if scanner.check('[') || (scanner.check('!') && match scanner.lookahead(1) {
+			.some(character) -> character == '[',
+			.none -> false
+		}) {
+			let token_start = scanner.mark()
+			match link_at(scanner: mut scanner, config: config) {
+				.some(node) -> {
+					nodes = append_text(nodes: nodes, scanner.text(from: plain_start, to: token_start))
+					nodes.push(node)
+					plain_start = scanner.mark()
+					continue
+				},
+				.none -> scanner.restore(to: token_start)
+			}
+		}
+		if config.autolinks {
+			let token_start = scanner.mark()
+			let parsed = match url_at(scanner: mut scanner, source: text) {
+				.some(value) -> .some(value),
+				.none -> {
+					scanner.restore(to: token_start)
+					email_at(scanner: mut scanner, source: text)
+				}
+			}
+			match parsed {
+				.some(node) -> {
+					nodes = append_text(nodes: nodes, scanner.text(from: plain_start, to: token_start))
+					nodes.push(node)
+					plain_start = scanner.mark()
+					continue
+				},
+				.none -> scanner.restore(to: token_start)
+			}
+		}
+		if config.strikethrough && scanner.check('~') {
+			let width = match scanner.lookahead(1) {
+				.some(character) -> {
+					if character == '~' {
+						2
+					} else {
+						1
+					}
+				},
+				.none -> 1
+			}
+			let three = match scanner.lookahead(2) {
+				.some(character) -> character == '~',
+				.none -> false
+			}
+			let at_run_start = match character_before(text, scanner) {
+				.some(character) -> character != '~',
+				.none -> true
+			}
+			if at_run_start && three == false {
+				let token_start = scanner.mark()
+				match delimited_at(
+					scanner: mut scanner,
+					marker: '~',
+					width: width,
+					config: config,
+					strikethrough: true
+				) {
+					.some(node) -> {
+						nodes = append_text(nodes: nodes, scanner.text(from: plain_start, to: token_start))
+						nodes.push(node)
+						plain_start = scanner.mark()
+						continue
+					},
+					.none -> scanner.restore(to: token_start)
+				}
+			}
+		}
+		if scanner.check_any(['*', '_']) {
+			let marker = scanner.peek()!
+			let width = match scanner.lookahead(1) {
+				.some(character) -> {
+					if character == marker {
+						2
+					} else {
+						1
+					}
+				},
+				.none -> 1
+			}
+			let token_start = scanner.mark()
+			match delimited_at(
+				scanner: mut scanner,
+				marker: marker,
+				width: width,
+				config: config,
+				strikethrough: false
+			) {
+				.some(node) -> {
+					nodes = append_text(nodes: nodes, scanner.text(from: plain_start, to: token_start))
+					nodes.push(node)
+					plain_start = scanner.mark()
+					continue
+				},
+				.none -> scanner.restore(to: token_start)
+			}
+		}
+		scanner.advance()
+	}
+	append_text(nodes: nodes, scanner.text(from: plain_start, to: scanner.mark()))
+}
+
+// Parses one inline-content span without applying block grammar.
+//
+// Enabled extensions affect strikethrough and autolink recognition. Newlines are
+// preserved as soft or hard break nodes, and disabled constructs remain text.
+pub func parse_inlines(text: &String, extensions: &[Extension]) -> [Inline] {
+	parse_inlines_config(text: text, config: config_for(extensions: extensions))
+}
+
+// Parses a complete Markdown string with an explicit extension set.
+//
+// Parsing is deterministic and dependency-free. Unsupported or disabled syntax
+// remains ordinary text rather than producing diagnostics. The result drops
+// source trivia and is intended for rendering, not source-to-source editing.
+pub func parse(markdown: &String, extensions: &[Extension]) -> Document {
+	let lines: [String] = []
+	for line in markdown.lines() {
+		lines.push(line.to_string())
+	}
+	let config = config_for(extensions: extensions)
+	Document(blocks: parse_blocks(lines: lines, start: 0, end: lines.count, config: config))
+}
+
+// Parses Markdown and renders escaped HTML with shifted heading levels.
+//
+// The offset is added to each heading; values above six clamp to `h6`, while
+// callers must keep the resulting level positive. Raw Markdown HTML is not
+// passed through as trusted markup;
+// text, destinations, titles, and code are escaped.
+pub func to_html_with_heading_offset(consume markdown: String, extensions: &[Extension], heading_offset: Int) -> String {
+	let output = StringBuilder()
+	let document = parse(markdown: markdown, extensions: extensions)
+	for block in document.blocks {
+		output.append(string: block.to_string_with_heading_offset(heading_offset: heading_offset))
+	}
+	output.finish()
+}
+
+// Parses Markdown and renders escaped HTML without shifting heading levels.
+//
+// This is equivalent to `to_html_with_heading_offset(..., heading_offset: 0)`.
+pub func to_html(consume markdown: String, extensions: &[Extension]) -> String {
+	to_html_with_heading_offset(markdown: markdown, extensions: extensions, heading_offset: 0)
+}

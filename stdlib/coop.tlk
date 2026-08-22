@@ -1,7 +1,0 @@
-// Executables already run their top-level statements as a cooperative
-// root task. `run` remains available for an explicit nested scheduler
-// scope; it uses the same core task effects and scheduler.
-
-pub func run(consume main_task: Task) -> () {
-	_run_cooperative(main_task: main_task)
-}

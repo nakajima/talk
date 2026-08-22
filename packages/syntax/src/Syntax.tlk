@@ -1,0 +1,1737 @@
+// Opaque, category-indexed syntax values for procedural macros.
+//
+// Syntax keeps token boundaries, source trivia, provenance, and hygiene
+// contexts. Quotation marks written identifiers with definition-site plus
+// fresh expansion scopes. Antiquotation (`$name`) embeds an existing syntax
+// value without changing its use-site context. Parsing validates categories
+// from canonical tokens; it never re-lexes rendered text.
+
+use package::Lexer::{
+	Token, TokenKind, TokenRange, TokenTree, MacroInput, group_contents,
+	capture_macro_input, decode_token_records, scan
+}
+use package::Parser::{
+	Fail, ParseOutcome,
+	parse_expr_tokens, parse_pattern_tokens, parse_type_tokens, parse_decl_tokens,
+	parse_decl_tokens_in
+}
+use package::Ast::{ Expr, Pattern, TypeAnnotation, Decl, DeclKind, Item }
+
+// Determines which hygiene context an identifier receives during expansion.
+pub enum SyntaxOrigin {
+	// Syntax captured from the macro invocation retains the caller's context.
+	case use_site
+	// Syntax introduced by a quote receives definition-site and expansion scopes.
+	case definition_site
+}
+
+// Scope identities are allocated by the macro driver. The pair keeps scope
+// ordinals local to one deterministic compilation namespace.
+pub enum SyntaxScopeKind {
+	// A scope belonging to a source node in a file.
+	case lexical
+	// A fresh scope belonging to one macro expansion.
+	case expansion
+	// A scope shared by declarations in one module.
+	case module
+}
+
+// One opaque hygiene-scope identity.
+//
+// Identity is the tuple of kind, namespace, and ordinal. Constructors assign
+// deterministic namespaces for files, expansions, and modules; callers cannot
+// forge fields directly.
+pub struct SyntaxScope {
+	let kind: SyntaxScopeKind
+	let namespace: Int
+	let ordinal: Int
+
+	init(kind: SyntaxScopeKind, namespace: Int, ordinal: Int) {
+		self.kind = kind
+		self.namespace = namespace
+		self.ordinal = ordinal
+	}
+}
+
+extend SyntaxScope: Copy {}
+
+// A set of lexical scopes. Its representation is private so identifiers can
+// acquire context only through explicit syntax operations, never from text.
+pub struct SyntaxContext {
+	let scopes: [SyntaxScope]
+
+	init(scopes: [SyntaxScope]) {
+		self.scopes = scopes
+	}
+}
+
+// The contexts applied to identifiers introduced by one quotation.
+//
+// A quoted identifier receives the macro definition's scopes plus the fresh
+// expansion scope. Antiquoted syntax bypasses this and retains use-site context.
+pub struct QuoteContext {
+	let definition_site: SyntaxContext
+	let expansion_scope: SyntaxScope
+
+	init(definition_site: SyntaxContext, expansion_scope: SyntaxScope) {
+		self.definition_site = definition_site
+		self.expansion_scope = expansion_scope
+	}
+}
+
+// Creates a lexical hygiene scope for a source node.
+pub func lexical_scope(file_id: Int, node_id: Int) -> SyntaxScope {
+	SyntaxScope(kind: .lexical, namespace: file_id, ordinal: node_id)
+}
+
+// Creates a hygiene scope for one macro expansion.
+pub func expansion_scope(namespace: Int, ordinal: Int) -> SyntaxScope {
+	SyntaxScope(kind: .expansion, namespace: namespace, ordinal: ordinal)
+}
+
+// Creates a hygiene scope for a module.
+pub func module_scope(module_id: Int) -> SyntaxScope {
+	SyntaxScope(kind: .module, namespace: module_id, ordinal: 0)
+}
+
+// Returns a syntax context containing no scopes.
+pub func empty_syntax_context() -> SyntaxContext {
+	SyntaxContext(scopes: [])
+}
+
+func same_scope_kind(a: SyntaxScopeKind, b: SyntaxScopeKind) -> Bool {
+	match a {
+		.lexical -> if let .lexical = b { true } else { false },
+		.expansion -> if let .expansion = b { true } else { false },
+		.module -> if let .module = b { true } else { false }
+	}
+}
+
+func same_scope(a: &SyntaxScope, b: &SyntaxScope) -> Bool {
+	same_scope_kind(a: a.kind, b: b.kind) && a.namespace == b.namespace && a.ordinal == b.ordinal
+}
+
+func contains_scope(context: &SyntaxContext, scope: &SyntaxScope) -> Bool {
+	for candidate in context.scopes {
+		if same_scope(a: candidate, b: scope) { return true }
+	}
+	false
+}
+
+// Returns a context with the scope appended once.
+pub func syntax_context_with_scope(context: SyntaxContext, scope: SyntaxScope) -> SyntaxContext {
+	if contains_scope(context: context, scope: scope) { return context }
+	let scopes = context.scopes
+	scopes.push(scope)
+	SyntaxContext(scopes: scopes)
+}
+
+// Returns whether both contexts contain the same scope identities.
+//
+// Scope order is ignored; contexts behave as sets even though their compact
+// representation preserves insertion order.
+pub func same_syntax_context(a: &SyntaxContext, b: &SyntaxContext) -> Bool {
+	if a.scopes.count != b.scopes.count { return false }
+	for scope in a.scopes {
+		if contains_scope(context: b, scope: scope) == false { return false }
+	}
+	true
+}
+
+// Combines a macro definition's context with the fresh scope for one expansion.
+pub func quote_context(definition_site: SyntaxContext, expansion_scope: SyntaxScope) -> QuoteContext {
+	QuoteContext(definition_site: definition_site, expansion_scope: expansion_scope)
+}
+
+func introduced_context(context: &QuoteContext) -> SyntaxContext {
+	syntax_context_with_scope(context: context.definition_site, scope: context.expansion_scope)
+}
+
+enum SyntaxCategory {
+	case expr
+	case pattern
+	case type_annotation
+	case decl
+}
+
+struct SyntaxToken {
+	let kind: TokenKind
+	let leading: String
+	let spelling: String
+	let lexeme_start: Int
+	let lexeme_end: Int
+	let source_id: Int
+	let source_span: Range<Int>
+	let context: SyntaxContext
+	let origin: SyntaxOrigin
+}
+
+enum SyntaxPiece {
+	case token(SyntaxToken)
+	// The leading trivia belonged to the antiquotation token. RawSyntax is
+	// array-indirected because syntax pieces are recursively nestable values.
+	case splice(String, [RawSyntax])
+}
+
+struct RawSyntax {
+	let category: SyntaxCategory
+	let pieces: [SyntaxPiece]
+	let trailing: String
+	// Expression splices are parenthesized by default to preserve their
+	// precedence. A macro can disable that only for syntax used in a
+	// non-expression grammar role, such as a loop binding; the completed
+	// quotation is still category-checked before it can escape.
+	let group_when_spliced: Bool
+}
+
+// Opaque, category-indexed macro syntax with token provenance and hygiene.
+//
+// `Category` is phantom but construction is restricted: expression, pattern,
+// type, and declaration syntax must validate through their canonical parser.
+// Unlike an AST node, `Syntax` retains tokens and trivia so it can be quoted,
+// spliced, and materialized without reconstructing identifiers from text.
+pub struct Syntax<Category> {
+	let raw: RawSyntax
+
+	init(raw: RawSyntax) {
+		self.raw = raw
+	}
+}
+
+// A named antiquotation value awaiting insertion into a quote.
+//
+// The category must match the quote's grammar position. Splicing preserves the
+// syntax value's use-site context rather than applying definition-site hygiene.
+pub struct SyntaxSplice<Category> {
+	let name: String
+	let syntax: Syntax<Category>
+
+	init(name: String, syntax: Syntax<Category>) {
+		self.name = name
+		self.syntax = syntax
+	}
+}
+
+// A stable procedural-syntax failure suitable for crossing the macro-service ABI.
+//
+// `span` indexes the relevant original or virtual source named by the surrounding
+// operation. `code` is machine-stable; `message` is presentation text.
+pub struct SyntaxFailure {
+	// The stable diagnostic or failure code.
+	pub let code: String
+	// A human-readable description of the failure.
+	pub let message: String
+	// The byte range occupied in the source.
+	pub let span: Range<Int>
+}
+
+// A category-checked syntax value or its construction failure.
+//
+// Exactly one of `value` and `failure` is expected to be present. This differs
+// from ordinary `Result` only to keep the procedural-macro service ABI flat and
+// easy to serialize across the compiler boundary.
+pub struct SyntaxResult<Category> {
+	// The validated syntax when the operation succeeded.
+	pub let value: Syntax<Category>?
+	// The structured failure when validation failed.
+	pub let failure: SyntaxFailure?
+
+	// Extracts the successful syntax and discards any failure information.
+	//
+	// Inspect `failure` before consuming the envelope when diagnostics matter.
+	pub consuming func into_value() -> Syntax<Category>? {
+		self.value
+	}
+}
+
+// An identifier's spelling, source provenance, and hygienic resolution context.
+//
+// Equal text does not imply equal binding identity: the ordered scopes and
+// origin determine whether two spellings can resolve to the same declaration.
+// Source ranges point to the token that was captured or introduced.
+pub struct SyntaxIdentifier {
+	// The identifier spelling without quotes or sigils.
+	pub let text: String
+	// The ordered hygiene scopes used during name resolution.
+	pub let context: SyntaxContext
+	// The origin that determines how this syntax resolves.
+	pub let origin: SyntaxOrigin
+	// The identifier of the source file.
+	pub let source_id: Int
+	// The byte range in the original source.
+	pub let source_span: Range<Int>
+}
+
+// One identifier in the virtual source parsed for expansion. `span` and
+// `lexeme` index that virtual source; source_* point back to the token from
+// which the syntax object was captured or quoted.
+pub struct MaterializedIdentifier {
+	// The identifier spelling without quotes or sigils.
+	pub let text: String
+	// The complete token range in the virtual source.
+	pub let span: Range<Int>
+	// The identifier text range in the virtual source.
+	pub let lexeme: Range<Int>
+	// The ordered hygiene scopes used during name resolution.
+	pub let context: SyntaxContext
+	// The origin that determines how this syntax resolves.
+	pub let origin: SyntaxOrigin
+	// The identifier of the source file.
+	pub let source_id: Int
+	// The byte range in the original source.
+	pub let source_span: Range<Int>
+	// The byte range of the original source lexeme.
+	pub let source_lexeme: Range<Int>
+}
+
+// The virtual source, canonical tokens, AST, and provenance produced from syntax.
+//
+// Parenthesized grouping is inserted around expression, pattern, and type
+// splices before parsing, so a splice remains one node rather than textual,
+// precedence-sensitive substitution. Identifiers map virtual ranges back to
+// their original source and hygiene contexts.
+pub struct MaterializedSyntax<Category> {
+	// The virtual source reconstructed from tokens and splices.
+	pub let source: String
+	// Canonical tokens covering the complete virtual source.
+	pub let input: TokenRange
+	// The category-specific AST parsed from `input`.
+	pub let outcome: ParseOutcome
+	// Identifier metadata in virtual-token order.
+	pub let identifiers: [MaterializedIdentifier]
+}
+
+// A successful materialization or the parse failure that rejected it.
+//
+// As with `SyntaxResult`, exactly one optional field should be present. Keeping
+// the envelope uniform lets macro services report failures without throwing an
+// effect across the host boundary.
+pub struct MaterializedResult<Category> {
+	// The virtual source, tokens, AST, and identifier metadata on success.
+	pub let value: MaterializedSyntax<Category>?
+	// The structured parse or materialization failure.
+	pub let failure: SyntaxFailure?
+
+	// Extracts successful materialized syntax and discards any failure information.
+	//
+	// Inspect `failure` before consuming the envelope when diagnostics matter.
+	pub consuming func into_value() -> MaterializedSyntax<Category>? {
+		self.value
+	}
+}
+
+// ABI-facing hygiene records keep generic Range fields flattened. Macro
+// services return this envelope beside their category-specific parse result.
+pub struct SyntaxScopeRecord {
+	// The lexical, expansion, or module scope category.
+	pub let kind: SyntaxScopeKind
+	// The namespace that owns this syntax scope.
+	pub let namespace: Int
+	// The stable ordinal within the scope namespace.
+	pub let ordinal: Int
+}
+
+// A flattened `SyntaxIdentifier` suitable for the macro-service ABI.
+//
+// Generic ranges become integer endpoints and scopes become plain records. The
+// virtual `span`/`lexeme` identify the materialized token, while `source_*`
+// fields preserve the token's original provenance.
+pub struct SyntaxIdentifierRecord {
+	// The identifier spelling without quotes or sigils.
+	pub let text: String
+	// The inclusive starting byte offset of the span.
+	pub let span_start: Int
+	// The exclusive ending byte offset of the span.
+	pub let span_end: Int
+	// The inclusive starting byte offset of the lexeme.
+	pub let lexeme_start: Int
+	// The exclusive ending byte offset of the lexeme.
+	pub let lexeme_end: Int
+	// Ordered hygiene scopes attached to the identifier.
+	pub let scopes: [SyntaxScopeRecord]
+	// The origin that determines how this syntax resolves.
+	pub let origin: SyntaxOrigin
+	// The identifier of the source file.
+	pub let source_id: Int
+	// The inclusive starting byte offset of the source span.
+	pub let source_span_start: Int
+	// The exclusive ending byte offset of the source span.
+	pub let source_span_end: Int
+	// The inclusive starting byte offset of the source lexeme.
+	pub let source_lexeme_start: Int
+	// The exclusive ending byte offset of the source lexeme.
+	pub let source_lexeme_end: Int
+}
+
+// Flattened identifier metadata returned across the procedural-macro service boundary.
+pub struct SyntaxMetadataOutput {
+	// Every materialized identifier in token order.
+	pub let identifiers: [SyntaxIdentifierRecord]
+}
+
+// The service boundary for expression procedural macros. A successful value
+// carries the already-parsed canonical outcome; Rust adapts it directly and
+// does not parse or lex the materialized source again.
+pub struct ExprMacroOutput {
+	// The materialized expression source, empty on failure.
+	pub let source: String
+	// The parsed expression result, present only on success.
+	pub let outcome: ParseOutcome?
+	// Identifier provenance and hygiene records for the materialized source.
+	pub let metadata: SyntaxMetadataOutput
+	// A stable failure code, when the operation failed.
+	pub let failure_code: String?
+	// A human-readable failure description, when the operation failed.
+	pub let failure_message: String?
+	// The inclusive starting byte offset of the failure.
+	pub let failure_start: Int
+	// The exclusive ending byte offset of the failure.
+	pub let failure_end: Int
+}
+
+struct RawSplice {
+	let name: String
+	let raw: RawSyntax
+}
+
+struct RawQuoteResult {
+	let raw: RawSyntax?
+	let failure: SyntaxFailure?
+}
+
+struct MaterializedTokens {
+	let source: String
+	let input: TokenRange
+	let identifiers: [MaterializedIdentifier]
+	// Provenance-preserving copies of each rendered token, parallel to
+	// `input.tokens`; collected only for declaration lens views.
+	let atoms: [SyntaxToken]
+}
+
+struct SyntaxBuilder {
+	let source: StringBuilder
+	let tokens: [Token]
+	let identifiers: [MaterializedIdentifier]
+	let collect_atoms: Bool
+	let atoms: [SyntaxToken]
+}
+
+func source_slice(view: UTF8View, range: Range<Int>) -> String {
+	view.slice(start: range.lower, byte_count: range.upper - range.lower).to_string()
+}
+
+func syntax_token(source_id: Int, source: String, token: Token, leading_start: Int, context: SyntaxContext, origin: SyntaxOrigin) -> SyntaxToken {
+	let view = source.utf8()
+	SyntaxToken(
+		kind: token.kind,
+		leading: source_slice(view: view, range: leading_start..<token.span.lower),
+		spelling: source_slice(view: view, range: token.span),
+		lexeme_start: token.lexeme.lower - token.span.lower,
+		lexeme_end: token.lexeme.upper - token.span.lower,
+		source_id: source_id,
+		source_span: token.span,
+		context: context,
+		origin: origin
+	)
+}
+
+// Copies the ordered scope set so it can cross an ownership boundary.
+pub func copy_syntax_context(context: &SyntaxContext) -> SyntaxContext {
+	let scopes: [SyntaxScope] = []
+	for scope in context.scopes { scopes.push(scope) }
+	SyntaxContext(scopes: scopes)
+}
+
+// Copies a quote context, including an owned copy of its definition-site scopes.
+pub func copy_quote_context(context: &QuoteContext) -> QuoteContext {
+	QuoteContext(
+		definition_site: copy_syntax_context(context: context.definition_site),
+		expansion_scope: context.expansion_scope
+	)
+}
+
+func raw_from_range(source_id: Int, source: String, input: TokenRange, category: SyntaxCategory, context: &SyntaxContext, origin: SyntaxOrigin) -> RawSyntax {
+	let pieces: [SyntaxPiece] = []
+	let previous = input.span.lower
+	for token in input.tokens {
+		pieces.push(.token(syntax_token(source_id: source_id, source: source, token: token, leading_start: previous, context: copy_syntax_context(context: context), origin: origin)))
+		previous = token.span.upper
+	}
+	let trailing = source_slice(view: source.utf8(), range: previous..<input.span.upper)
+	RawSyntax(category: category, pieces: pieces, trailing: trailing, group_when_spliced: true)
+}
+
+func grouped_splice(category: SyntaxCategory) -> Bool {
+	match category {
+		.expr -> true,
+		.pattern -> true,
+		.type_annotation -> true,
+		.decl -> false
+	}
+}
+
+func copy_syntax_token(token: &SyntaxToken) -> SyntaxToken {
+	SyntaxToken(
+		kind: token.kind,
+		leading: token.leading.clone(),
+		spelling: token.spelling.clone(),
+		lexeme_start: token.lexeme_start,
+		lexeme_end: token.lexeme_end,
+		source_id: token.source_id,
+		source_span: token.source_span.lower..<token.source_span.upper,
+		context: copy_syntax_context(context: token.context),
+		origin: token.origin
+	)
+}
+
+func append_delimiter(mut builder: SyntaxBuilder, kind: TokenKind, spelling: String) -> Void {
+	let start = builder.source.utf8_count()
+	builder.source.append(string: spelling)
+	let end = builder.source.utf8_count()
+	builder.tokens.push(Token(kind: kind, span: start..<end, lexeme: start..<end))
+	if builder.collect_atoms {
+		builder.atoms.push(SyntaxToken(
+			kind: kind,
+			leading: "",
+			spelling: spelling.clone(),
+			lexeme_start: 0,
+			lexeme_end: spelling.utf8().count(),
+			source_id: 0 - 1,
+			source_span: 0..<0,
+			context: empty_syntax_context(),
+			origin: .definition_site
+		))
+	}
+}
+
+func append_raw(mut builder: SyntaxBuilder, raw: &RawSyntax, group_splices: Bool) -> Void {
+	for piece in raw.pieces {
+		match piece {
+			.token(token) -> {
+				builder.source.append(string: token.leading)
+				let start = builder.source.utf8_count()
+				builder.source.append(string: token.spelling)
+				let end = builder.source.utf8_count()
+				let lexeme = (start + token.lexeme_start)..<(start + token.lexeme_end)
+				builder.tokens.push(Token(kind: token.kind, span: start..<end, lexeme: lexeme))
+				if builder.collect_atoms {
+					builder.atoms.push(copy_syntax_token(token: token))
+				}
+				if identifier_token(kind: token.kind) {
+					builder.identifiers.push(MaterializedIdentifier(
+						text: token_lexeme(token: token),
+						span: start..<end,
+						lexeme: lexeme,
+						context: token.context,
+						origin: token.origin,
+						source_id: token.source_id,
+						source_span: token.source_span,
+						source_lexeme: (token.source_span.lower + token.lexeme_start)..<(token.source_span.lower + token.lexeme_end)
+					))
+				}
+			},
+			.splice(leading, nested) -> {
+				builder.source.append(string: leading)
+				if nested.count == 1 {
+					let grouped = group_splices && grouped_splice(category: raw.category) && nested[0].group_when_spliced
+					if grouped { append_delimiter(builder: builder, kind: .left_paren, spelling: "(") }
+					append_raw(builder: builder, raw: nested[0], group_splices: group_splices)
+					if grouped { append_delimiter(builder: builder, kind: .right_paren, spelling: ")") }
+				}
+			}
+		}
+	}
+	builder.source.append(string: raw.trailing)
+}
+
+func materialize(raw: &RawSyntax, group_splices: Bool) -> MaterializedTokens {
+	materialize_collect(raw: raw, group_splices: group_splices, collect_atoms: false)
+}
+
+func materialize_collect(raw: &RawSyntax, group_splices: Bool, collect_atoms: Bool) -> MaterializedTokens {
+	let builder = SyntaxBuilder(source: StringBuilder(), tokens: [], identifiers: [], collect_atoms: collect_atoms, atoms: [])
+	append_raw(builder: builder, raw: raw, group_splices: group_splices)
+	let end = builder.source.utf8_count()
+	let source = builder.source.finish()
+	MaterializedTokens(source: source, input: TokenRange(tokens: builder.tokens, span: 0..<end), identifiers: builder.identifiers, atoms: builder.atoms)
+}
+
+func syntax_failure(failure: Fail, fallback: Range<Int>) -> SyntaxFailure {
+	let span = if failure.start >= 0 { failure.start..<failure.end } else { fallback.lower..<fallback.upper }
+	SyntaxFailure(code: failure.code, message: failure.message, span: span)
+}
+
+func parse_failure(outcome: ParseOutcome, fallback: Range<Int>) -> SyntaxFailure? {
+	if let .some(failure) = outcome.failure {
+		return .some(syntax_failure(failure: failure, fallback: fallback))
+	}
+	.none
+}
+
+func category_name(category: SyntaxCategory) -> String {
+	match category {
+		.expr -> "expression",
+		.pattern -> "pattern",
+		.type_annotation -> "type",
+		.decl -> "declaration"
+	}
+}
+
+func category_matches(a: SyntaxCategory, b: SyntaxCategory) -> Bool {
+	match a {
+		.expr -> if let .expr = b { true } else { false },
+		.pattern -> if let .pattern = b { true } else { false },
+		.type_annotation -> if let .type_annotation = b { true } else { false },
+		.decl -> if let .decl = b { true } else { false }
+	}
+}
+
+func raw_splice_at(name: String, splices: &[RawSplice]) -> Int {
+	let index = 0
+	loop index < splices.count {
+		if splices[index].name == name { return index }
+		index = index + 1
+	}
+	0 - 1
+}
+
+func quote_raw(input: MacroInput, splices: [RawSplice], context: &QuoteContext, category: SyntaxCategory) -> RawQuoteResult {
+	let source_id = input.source_id
+	let source = input.source
+	let range: TokenRange
+	match input.tree {
+		.group(group) -> range = group_contents(group: group),
+		.leaf(token) -> return RawQuoteResult(
+			raw: .none,
+			failure: .some(SyntaxFailure(code: "syntax.quote.expected-group", message: "Quotation requires a delimited token tree", span: token.span))
+		)
+	}
+
+	let duplicate = 0
+	loop duplicate < splices.count {
+		let other = duplicate + 1
+		loop other < splices.count {
+			if splices[duplicate].name == splices[other].name {
+				return RawQuoteResult(
+					raw: .none,
+					failure: .some(SyntaxFailure(code: "syntax.quote.duplicate-splice", message: "Duplicate splice `" + splices[duplicate].name + "`", span: range.span))
+				)
+			}
+			other = other + 1
+		}
+		duplicate = duplicate + 1
+	}
+
+	let uses: [Int] = []
+	for _ in splices { uses.push(0) }
+	let pieces: [SyntaxPiece] = []
+	let previous = range.span.lower
+	let quote_site = introduced_context(context: context)
+	for token in range.tokens {
+		let atom = syntax_token(source_id: source_id, source: source, token: token, leading_start: previous, context: quote_site, origin: .definition_site)
+		previous = token.span.upper
+		if token.kind == .bound_var {
+			let name = source_slice(view: source.utf8(), range: token.lexeme)
+			let found = raw_splice_at(name: name, splices: splices)
+			if found >= 0 {
+				if category_matches(a: category, b: splices[found].raw.category) == false {
+					return RawQuoteResult(
+						raw: .none,
+						failure: .some(SyntaxFailure(code: "syntax.quote.category-mismatch", message: "Splice `" + name + "` is not " + category_name(category: category) + " syntax", span: token.span))
+					)
+				}
+				uses[found] = uses[found] + 1
+				if uses[found] > 1 {
+					return RawQuoteResult(
+						raw: .none,
+						failure: .some(SyntaxFailure(code: "syntax.quote.repeated-splice", message: "Syntax splice `" + name + "` appears more than once", span: token.span))
+					)
+				}
+				pieces.push(.splice(atom.leading, [splices[found].raw]))
+				continue
+			}
+			// `$0` and friends remain ordinary closure shorthand. A named
+			// antiquotation must always have a supplied syntax value.
+			let first = name.utf8().at(index: 0)._toInt()
+			if first < 48 || first > 57 {
+				return RawQuoteResult(
+					raw: .none,
+					failure: .some(SyntaxFailure(code: "syntax.quote.unknown-splice", message: "Unknown syntax splice `" + name + "`", span: token.span))
+				)
+			}
+		}
+		pieces.push(.token(atom))
+	}
+
+	let index = 0
+	loop index < splices.count {
+		if uses[index] == 0 {
+			return RawQuoteResult(
+				raw: .none,
+				failure: .some(SyntaxFailure(code: "syntax.quote.unused-splice", message: "Syntax splice `" + splices[index].name + "` is not used by the quotation", span: range.span))
+			)
+		}
+		index = index + 1
+	}
+
+	let trailing = source_slice(view: source.utf8(), range: previous..<range.span.upper)
+	RawQuoteResult(raw: .some(RawSyntax(category: category, pieces: pieces, trailing: trailing, group_when_spliced: true)), failure: .none)
+}
+
+func raw_expr_splices(splices: [SyntaxSplice<Expr>]) -> [RawSplice] {
+	let raw: [RawSplice] = []
+	for item in splices { raw.push(RawSplice(name: item.name, raw: item.syntax.raw)) }
+	raw
+}
+
+func raw_pattern_splices(splices: [SyntaxSplice<Pattern>]) -> [RawSplice] {
+	let raw: [RawSplice] = []
+	for item in splices { raw.push(RawSplice(name: item.name, raw: item.syntax.raw)) }
+	raw
+}
+
+func raw_type_splices(splices: [SyntaxSplice<TypeAnnotation>]) -> [RawSplice] {
+	let raw: [RawSplice] = []
+	for item in splices { raw.push(RawSplice(name: item.name, raw: item.syntax.raw)) }
+	raw
+}
+
+func raw_decl_splices(splices: [SyntaxSplice<Decl>]) -> [RawSplice] {
+	let raw: [RawSplice] = []
+	for item in splices { raw.push(RawSplice(name: item.name, raw: item.syntax.raw)) }
+	raw
+}
+
+// Binds category-checked syntax to an antiquotation name for one quote operation.
+//
+// The quote validates that each referenced name has exactly one compatible value;
+// the inserted syntax retains its original use-site hygiene.
+pub func splice<Category>(name: String, consume syntax: Syntax<Category>) -> SyntaxSplice<Category> {
+	SyntaxSplice<Category>(name: name, syntax: consume syntax)
+}
+
+func raw_expr_fragment(consume raw: RawSyntax) -> Syntax<Expr> {
+	Syntax<Expr>(raw: RawSyntax(
+		category: .expr,
+		pieces: raw.pieces,
+		trailing: raw.trailing,
+		group_when_spliced: false
+	))
+}
+
+// Disables the parentheses normally added around an expression splice.
+//
+// Use this only where the surrounding quote expects a non-expression grammar
+// fragment, such as a loop binder. The completed quote is still category-checked.
+pub func ungrouped_expr_splice(consume syntax: Syntax<Expr>) -> Syntax<Expr> {
+	raw_expr_fragment(raw: consume syntax.raw)
+}
+
+// These fragments are valid only inside an expression quotation at the
+// corresponding grammar position. The completed quotation is parsed before
+// it can escape, so a pattern or type can never materialize as a standalone
+// expression result.
+pub func pattern_expr_fragment(consume syntax: Syntax<Pattern>) -> Syntax<Expr> {
+	raw_expr_fragment(raw: consume syntax.raw)
+}
+
+// Reclassifies type tokens for a type-shaped position inside an expression quote.
+//
+// The fragment cannot materialize as a standalone expression; validation of the
+// completed quote enforces that it landed in a compatible grammar position.
+pub func type_expr_fragment(consume syntax: Syntax<TypeAnnotation>) -> Syntax<Expr> {
+	raw_expr_fragment(raw: consume syntax.raw)
+}
+
+func raw_decl_fragment(consume raw: RawSyntax) -> Syntax<Decl> {
+	Syntax<Decl>(raw: RawSyntax(
+		category: .decl,
+		pieces: raw.pieces,
+		trailing: raw.trailing,
+		group_when_spliced: raw.group_when_spliced
+	))
+}
+
+// These fragments are valid only inside a declaration quotation at the
+// corresponding grammar position; the completed quotation is still parsed
+// as one declaration before it can escape the wrapper service boundary.
+pub func expr_decl_fragment(consume syntax: Syntax<Expr>) -> Syntax<Decl> {
+	raw_decl_fragment(raw: consume syntax.raw)
+}
+
+// Reclassifies type tokens for a type-shaped position inside a declaration quote.
+//
+// The completed declaration is parsed before it can cross the wrapper boundary,
+// preventing this fragment from escaping as a standalone declaration.
+pub func type_decl_fragment(consume syntax: Syntax<TypeAnnotation>) -> Syntax<Decl> {
+	raw_decl_fragment(raw: consume syntax.raw)
+}
+
+func generated_syntax_token(kind: TokenKind, spelling: String, leading: String, source_id: Int, source_span: Range<Int>, context: &QuoteContext) -> SyntaxToken {
+	SyntaxToken(
+		kind: kind,
+		leading: leading,
+		spelling: spelling,
+		lexeme_start: 0,
+		lexeme_end: spelling.utf8().count(),
+		source_id: source_id,
+		source_span: source_span,
+		context: introduced_context(context: context),
+		origin: .definition_site
+	)
+}
+
+func ungrouped_raw(consume raw: RawSyntax) -> RawSyntax {
+	RawSyntax(
+		category: raw.category,
+		pieces: raw.pieces,
+		trailing: raw.trailing,
+		group_when_spliced: false
+	)
+}
+
+// Build one match expression from heterogeneous, already-validated syntax
+// categories. This keeps all arms in one match so ordinary exhaustiveness and
+// ownership checking see the same structure the author wrote.
+pub func build_match_expr(consume subject: Syntax<Expr>, consume patterns: [Syntax<Pattern>], consume bodies: [Syntax<Expr>], source_id: Int, source_span: Range<Int>, context: &QuoteContext) -> SyntaxResult<Expr> {
+	if patterns.count == 0 || patterns.count != bodies.count {
+		return SyntaxResult<Expr>(value: .none, failure: .some(SyntaxFailure(code: "syntax.match.invalid-arms", message: "Match syntax requires equally many patterns and bodies", span: source_span)))
+	}
+	let ordered_patterns: [Syntax<Pattern>] = []
+	let ordered_bodies: [Syntax<Expr>] = []
+	loop patterns.count > 0 {
+		if let .some(pattern) = patterns.pop() { ordered_patterns.push(consume pattern) }
+		if let .some(body) = bodies.pop() { ordered_bodies.push(consume body) }
+	}
+	let pieces: [SyntaxPiece] = []
+	pieces.push(.token(generated_syntax_token(kind: .keyword_match, spelling: "match", leading: "", source_id: source_id, source_span: source_span, context: context)))
+	pieces.push(.splice(" ", [subject.raw]))
+	pieces.push(.token(generated_syntax_token(kind: .left_brace, spelling: "{", leading: " ", source_id: source_id, source_span: source_span, context: context)))
+	loop ordered_patterns.count > 0 {
+		let pattern = ordered_patterns.pop()
+		let body = ordered_bodies.pop()
+		if let .some(pattern_value) = pattern {
+			if let .some(body_value) = body {
+				pieces.push(.splice(" ", [ungrouped_raw(raw: consume pattern_value.raw)]))
+				pieces.push(.token(generated_syntax_token(kind: .arrow, spelling: "->", leading: " ", source_id: source_id, source_span: source_span, context: context)))
+				pieces.push(.splice(" ", [body_value.raw]))
+				if ordered_patterns.count > 0 {
+					pieces.push(.token(generated_syntax_token(kind: .comma, spelling: ",", leading: "", source_id: source_id, source_span: source_span, context: context)))
+				}
+			}
+		}
+	}
+	pieces.push(.token(generated_syntax_token(kind: .right_brace, spelling: "}", leading: " ", source_id: source_id, source_span: source_span, context: context)))
+	SyntaxResult<Expr>(value: .some(Syntax<Expr>(raw: RawSyntax(category: .expr, pieces: pieces, trailing: "", group_when_spliced: true))), failure: .none)
+}
+
+// Construct a category-checked string literal without routing generated text
+// through the lexer. This is intentionally a literal-only constructor: macro
+// authors still cannot manufacture identifiers or their syntax contexts from
+// strings. The generated token points back to the source syntax that caused
+// the literal so diagnostics retain useful provenance.
+pub func string_literal_expr(value: String, source_id: Int, source_span: Range<Int>, context: &QuoteContext) -> Syntax<Expr> {
+	let spelling_builder = StringBuilder(capacity: value.utf8_count() + 2)
+	spelling_builder.append(string: "\"")
+	for character in value {
+		spelling_builder.append(string: match character {
+			'\\' -> "\\\\",
+			'\"' -> "\\\"",
+			'\n' -> "\\n",
+			'\r' -> "\\r",
+			'\t' -> "\\t",
+			_ -> character.to_string()
+		})
+	}
+	spelling_builder.append(string: "\"")
+	let spelling = spelling_builder.finish()
+	let token = SyntaxToken(
+		kind: .string_literal,
+		leading: "",
+		spelling: spelling,
+		lexeme_start: 0,
+		lexeme_end: spelling.utf8().count(),
+		source_id: source_id,
+		source_span: source_span,
+		context: introduced_context(context: context),
+		origin: .definition_site
+	)
+	Syntax<Expr>(raw: RawSyntax(category: .expr, pieces: [.token(token)], trailing: "", group_when_spliced: true))
+}
+
+// Validates `input` as exactly one expression and captures its canonical tokens.
+//
+// Every identifier receives the supplied use-site context and original source
+// provenance. No source text is re-lexed because `input` already owns tokens.
+pub func capture_expr(source_id: Int, source: String, input: TokenRange, context: &SyntaxContext) -> SyntaxResult<Expr> {
+	let outcome = parse_expr_tokens(source: source, input: input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: input.span) {
+		return SyntaxResult<Expr>(value: .none, failure: .some(failure))
+	}
+	let raw = raw_from_range(source_id: source_id, source: source, input: input, category: .expr, context: context, origin: .use_site)
+	SyntaxResult<Expr>(value: .some(Syntax<Expr>(raw: raw)), failure: .none)
+}
+
+// Validates `input` as exactly one pattern and captures it with use-site hygiene.
+//
+// Failure preserves the parser diagnostic range; success retains canonical
+// tokens and trivia for later quotation or materialization.
+pub func capture_pattern(source_id: Int, source: String, input: TokenRange, context: &SyntaxContext) -> SyntaxResult<Pattern> {
+	let outcome = parse_pattern_tokens(source: source, input: input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: input.span) {
+		return SyntaxResult<Pattern>(value: .none, failure: .some(failure))
+	}
+	let raw = raw_from_range(source_id: source_id, source: source, input: input, category: .pattern, context: context, origin: .use_site)
+	SyntaxResult<Pattern>(value: .some(Syntax<Pattern>(raw: raw)), failure: .none)
+}
+
+// Validates `input` as exactly one type annotation with use-site hygiene.
+//
+// The resulting syntax keeps source token boundaries and can only be spliced
+// into a compatible type grammar position.
+pub func capture_type(source_id: Int, source: String, input: TokenRange, context: &SyntaxContext) -> SyntaxResult<TypeAnnotation> {
+	let outcome = parse_type_tokens(source: source, input: input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: input.span) {
+		return SyntaxResult<TypeAnnotation>(value: .none, failure: .some(failure))
+	}
+	let raw = raw_from_range(source_id: source_id, source: source, input: input, category: .type_annotation, context: context, origin: .use_site)
+	SyntaxResult<TypeAnnotation>(value: .some(Syntax<TypeAnnotation>(raw: raw)), failure: .none)
+}
+
+// Validates `input` as one top-level declaration with use-site hygiene.
+//
+// Declaration grammar depends on context; wrapper targets inside nominal bodies
+// should use `capture_decl_in` instead so methods and members parse correctly.
+pub func capture_decl(source_id: Int, source: String, input: TokenRange, context: &SyntaxContext) -> SyntaxResult<Decl> {
+	let outcome = parse_decl_tokens(source: source, input: input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: input.span) {
+		return SyntaxResult<Decl>(value: .none, failure: .some(failure))
+	}
+	let raw = raw_from_range(source_id: source_id, source: source, input: input, category: .decl, context: context, origin: .use_site)
+	SyntaxResult<Decl>(value: .some(Syntax<Decl>(raw: raw)), failure: .none)
+}
+
+// MARK: Declaration wrapper macros (ADR 0026)
+
+// Optional constructors for the generated wrapper ABI entry points, which
+// deliberately avoid naming `MacroInput` so their generated text can never
+// collide with a macro unit's own imports.
+pub func no_macro_input() -> MacroInput? {
+	.none
+}
+
+// Wraps captured macro input in an optional value.
+pub func some_macro_input(consume input: MacroInput) -> MacroInput? {
+	.some(consume input)
+}
+
+// The declaration context a wrapper's target appeared in. Tags match
+// `parse_decl_tokens_in`: file, block, then the nominal bodies.
+pub enum DeclContext {
+	// A file-level declaration.
+	case top_level
+	// A declaration nested in an executable block.
+	case block
+	// A member of a struct body.
+	case struct_body
+	// A member or variant in an enum body.
+	case enum_body
+	// A requirement or nested declaration in a protocol body.
+	case protocol_body
+	// A member in an extension body.
+	case extend_body
+}
+
+// Decodes the wrapper-service declaration-context ABI.
+//
+// Tags 1 through 5 select block and nominal-body contexts; zero and unknown tags
+// conservatively decode as top level.
+pub func decl_context_from_tag(tag: Int) -> DeclContext {
+	if tag == 1 { return .block }
+	if tag == 2 { return .struct_body }
+	if tag == 3 { return .enum_body }
+	if tag == 4 { return .protocol_body }
+	if tag == 5 { return .extend_body }
+	.top_level
+}
+
+// A wrapper macro's single explicit result: replace the target with one
+// declaration, intentionally emit no declaration, or report a diagnostic.
+pub enum DeclWrapperResult {
+	// Replace the target with the supplied declaration syntax.
+	case replace(Syntax<Decl>)
+	// Intentionally emit no declaration for this target.
+	case remove
+	// Reject the expansion with a structured diagnostic.
+	case failure(SyntaxFailure)
+}
+
+// The service boundary for declaration wrapper macros. A replacement
+// carries the already-parsed canonical outcome, exactly like
+// `ExprMacroOutput`; `removed` reports the intentional no-declaration
+// result distinctly from failure.
+pub struct DeclWrapperOutput {
+	// The replacement declaration source, empty for removal or failure.
+	pub let source: String
+	// The parsed replacement declaration, present only after successful replacement.
+	pub let outcome: ParseOutcome?
+	// Identifier provenance and hygiene records for the replacement source.
+	pub let metadata: SyntaxMetadataOutput
+	// Whether the wrapper removed its target declaration.
+	pub let removed: Bool
+	// A stable failure code, when the operation failed.
+	pub let failure_code: String?
+	// A human-readable failure description, when the operation failed.
+	pub let failure_message: String?
+	// The inclusive starting byte offset of the failure.
+	pub let failure_start: Int
+	// The exclusive ending byte offset of the failure.
+	pub let failure_end: Int
+}
+
+// Builds the flattened wrapper-service representation of a failure.
+//
+// Replacement source, parse outcome, and metadata are empty; `removed` stays
+// false so intentional removal remains distinguishable from rejection.
+pub func decl_wrapper_failure(code: String, message: String, span: Range<Int>) -> DeclWrapperOutput {
+	DeclWrapperOutput(
+		source: "",
+		outcome: .none,
+		metadata: SyntaxMetadataOutput(identifiers: []),
+		removed: false,
+		failure_code: .some(code),
+		failure_message: .some(message),
+		failure_start: span.lower,
+		failure_end: span.upper
+	)
+}
+
+// The declaration category parsed in the target's declaration context, so a
+// captured or replaced member means what it meant where the marker appeared.
+pub func capture_decl_in(source_id: Int, source: String, input: TokenRange, context_tag: Int, context: &SyntaxContext) -> SyntaxResult<Decl> {
+	let outcome = parse_decl_tokens_in(source: source, input: input, context_tag: context_tag)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: input.span) {
+		return SyntaxResult<Decl>(value: .none, failure: .some(failure))
+	}
+	let raw = raw_from_range(source_id: source_id, source: source, input: input, category: .decl, context: context, origin: .use_site)
+	SyntaxResult<Decl>(value: .some(Syntax<Decl>(raw: raw)), failure: .none)
+}
+
+// Capture a wrapper's target declaration. The first application in a chain
+// supplies the parser-recorded canonical tokens; a chained application
+// supplies the previous replacement's rendered source instead, which scans
+// deterministically because it was materialized from canonical tokens.
+pub func capture_wrapper_target(source_id: Int, source: String, encoded: String, context_tag: Int, context: &SyntaxContext) -> SyntaxResult<Decl> {
+	if encoded.utf8().count() > 0 {
+		if let .some(tokens) = decode_token_records(encoded: encoded) {
+			if tokens.count == 0 {
+				return SyntaxResult<Decl>(value: .none, failure: .some(SyntaxFailure(code: "macro.invalid-input", message: "Wrapper target token records are empty", span: 0..<0)))
+			}
+			let span = tokens[0].span.lower..<tokens[tokens.count - 1].span.upper
+			return capture_decl_in(source_id: source_id, source: source, input: TokenRange(tokens: tokens, span: span), context_tag: context_tag, context: context)
+		}
+		return SyntaxResult<Decl>(value: .none, failure: .some(SyntaxFailure(code: "macro.invalid-input", message: "Wrapper target token records are invalid", span: 0..<0)))
+	}
+	let result = scan(source: source)
+	if let .some(message) = result.error {
+		return SyntaxResult<Decl>(value: .none, failure: .some(SyntaxFailure(code: "macro.invalid-input", message: message, span: 0..<0)))
+	}
+	let extent = source.utf8().count()
+	capture_decl_in(source_id: source_id, source: source, input: TokenRange(tokens: result.tokens, span: 0..<extent), context_tag: context_tag, context: context)
+}
+
+// The declaration category parse at the wrapper service boundary, in the
+// declaration context the replacement will occupy.
+pub func materialize_decl_syntax_in(syntax: &Syntax<Decl>, context_tag: Int) -> MaterializedResult<Decl> {
+	let materialized = materialize(raw: syntax.raw, group_splices: true)
+	let outcome = parse_decl_tokens_in(source: materialized.source, input: materialized.input, context_tag: context_tag)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: materialized.input.span) {
+		return MaterializedResult<Decl>(value: .none, failure: .some(failure))
+	}
+	MaterializedResult<Decl>(
+		value: .some(MaterializedSyntax<Decl>(source: materialized.source, input: materialized.input, outcome: outcome, identifiers: materialized.identifiers)),
+		failure: .none
+	)
+}
+
+// Turn the wrapper author's result into the flattened service output
+// consumed by the Rust expansion driver.
+pub func materialize_decl_wrapper_result(consume result: DeclWrapperResult, context_tag: Int) -> DeclWrapperOutput {
+	match result {
+		.remove -> DeclWrapperOutput(
+			source: "",
+			outcome: .none,
+			metadata: SyntaxMetadataOutput(identifiers: []),
+			removed: true,
+			failure_code: .none,
+			failure_message: .none,
+			failure_start: 0,
+			failure_end: 0
+		),
+		.failure(failure) -> decl_wrapper_failure(code: failure.code, message: failure.message, span: failure.span),
+		.replace(syntax) -> {
+			let materialized = materialize_decl_syntax_in(syntax: syntax, context_tag: context_tag)
+			if let .some(failure) = materialized.failure {
+				return decl_wrapper_failure(code: failure.code, message: failure.message, span: failure.span)
+			}
+			if let .some(value) = materialized.value {
+				let metadata = syntax_metadata_output(materialized: value)
+				return DeclWrapperOutput(
+					source: value.source,
+					outcome: .some(value.outcome),
+					metadata: metadata,
+					removed: false,
+					failure_code: .none,
+					failure_message: .none,
+					failure_start: 0,
+					failure_end: 0
+				)
+			}
+			decl_wrapper_failure(code: "macro.empty-result", message: "Wrapper returned no declaration syntax", span: 0..<0)
+		}
+	}
+}
+
+func quote_expr_result(result: RawQuoteResult) -> SyntaxResult<Expr> {
+	if let .some(failure) = result.failure { return SyntaxResult<Expr>(value: .none, failure: .some(failure)) }
+	if let .some(raw) = result.raw {
+		// Expression macros commonly compose many small quotations. Parsing
+		// every intermediate tree makes that composition quadratic. Keep the
+		// structural splice checks here and perform the category parse once in
+		// materialize_expr_syntax at the macro service boundary.
+		return SyntaxResult<Expr>(value: .some(Syntax<Expr>(raw: raw)), failure: .none)
+	}
+	SyntaxResult<Expr>(value: .none, failure: .some(SyntaxFailure(code: "syntax.quote.invalid", message: "Invalid expression quotation", span: 0..<0)))
+}
+
+// Quotes expression tokens and resolves named antiquotations.
+//
+// Introduced identifiers receive definition-site plus fresh expansion scopes;
+// spliced syntax retains its existing context. Intermediate expression quotes
+// defer the full parse until materialization to avoid quadratic composition.
+pub func quote_expr(input: MacroInput, splices: [SyntaxSplice<Expr>], context: &QuoteContext) -> SyntaxResult<Expr> {
+	quote_expr_result(result: quote_raw(input: input, splices: raw_expr_splices(splices: splices), context: context, category: .expr))
+}
+
+// Lowering target for `quote { ... }`: canonical parser tokens are embedded in
+// the macro service image and decoded without scanning source text.
+pub func quote_expr_encoded(source_id: Int, source: String, encoded: String, splices: [SyntaxSplice<Expr>], context: &QuoteContext) -> SyntaxResult<Expr> {
+	if let .some(input) = capture_macro_input(source_id: source_id, source: source, encoded: encoded) {
+		return quote_expr(input: input, splices: splices, context: context)
+	}
+	SyntaxResult<Expr>(
+		value: .none,
+		failure: .some(SyntaxFailure(
+			code: "syntax.quote.invalid-tokens",
+			message: "Quotation token records are invalid",
+			span: 0..<0
+		))
+	)
+}
+
+// Quotes pattern tokens, applies hygiene, and validates the completed pattern.
+//
+// Pattern splices are grouped as single grammar nodes. Missing, duplicate, or
+// category-incompatible antiquotations return a `SyntaxFailure`.
+pub func quote_pattern(input: MacroInput, splices: [SyntaxSplice<Pattern>], context: &QuoteContext) -> SyntaxResult<Pattern> {
+	let result = quote_raw(input: input, splices: raw_pattern_splices(splices: splices), context: context, category: .pattern)
+	if let .some(failure) = result.failure { return SyntaxResult<Pattern>(value: .none, failure: .some(failure)) }
+	if let .some(raw) = result.raw {
+		let materialized = materialize(raw: raw, group_splices: false)
+		if let .some(failure) = parse_failure(outcome: parse_pattern_tokens(source: materialized.source, input: materialized.input), fallback: materialized.input.span) {
+			return SyntaxResult<Pattern>(value: .none, failure: .some(failure))
+		}
+		return SyntaxResult<Pattern>(value: .some(Syntax<Pattern>(raw: raw)), failure: .none)
+	}
+	SyntaxResult<Pattern>(value: .none, failure: .some(SyntaxFailure(code: "syntax.quote.invalid", message: "Invalid pattern quotation", span: 0..<0)))
+}
+
+// Quotes type tokens, applies hygiene, and validates the completed annotation.
+//
+// Type splices remain structural nodes rather than rendered text, preserving
+// their source identity and preventing precedence-sensitive substitution.
+pub func quote_type(input: MacroInput, splices: [SyntaxSplice<TypeAnnotation>], context: &QuoteContext) -> SyntaxResult<TypeAnnotation> {
+	let result = quote_raw(input: input, splices: raw_type_splices(splices: splices), context: context, category: .type_annotation)
+	if let .some(failure) = result.failure { return SyntaxResult<TypeAnnotation>(value: .none, failure: .some(failure)) }
+	if let .some(raw) = result.raw {
+		let materialized = materialize(raw: raw, group_splices: false)
+		if let .some(failure) = parse_failure(outcome: parse_type_tokens(source: materialized.source, input: materialized.input), fallback: materialized.input.span) {
+			return SyntaxResult<TypeAnnotation>(value: .none, failure: .some(failure))
+		}
+		return SyntaxResult<TypeAnnotation>(value: .some(Syntax<TypeAnnotation>(raw: raw)), failure: .none)
+	}
+	SyntaxResult<TypeAnnotation>(value: .none, failure: .some(SyntaxFailure(code: "syntax.quote.invalid", message: "Invalid type quotation", span: 0..<0)))
+}
+
+// Quotes declaration tokens while preserving token provenance and hygiene.
+//
+// Because `func` and `init` grammar depends on where the result is inserted,
+// this performs structural splice checks only. Wrapper materialization validates
+// the declaration once the target context is known.
+pub func quote_decl(input: MacroInput, splices: [SyntaxSplice<Decl>], context: &QuoteContext) -> SyntaxResult<Decl> {
+	let result = quote_raw(input: input, splices: raw_decl_splices(splices: splices), context: context, category: .decl)
+	if let .some(failure) = result.failure { return SyntaxResult<Decl>(value: .none, failure: .some(failure)) }
+	if let .some(raw) = result.raw {
+		// Declaration grammar depends on the declaration context the result
+		// lands in (a `func` member is a method, `init` is context-gated), so
+		// the category parse runs once at the wrapper service boundary where
+		// that context is known; only structural splice checks happen here.
+		return SyntaxResult<Decl>(value: .some(Syntax<Decl>(raw: raw)), failure: .none)
+	}
+	SyntaxResult<Decl>(value: .none, failure: .some(SyntaxFailure(code: "syntax.quote.invalid", message: "Invalid declaration quotation", span: 0..<0)))
+}
+
+// Lowering target for `quote decl { ... }` (ADR 0026 wrapper macros).
+pub func quote_decl_encoded(source_id: Int, source: String, encoded: String, splices: [SyntaxSplice<Decl>], context: &QuoteContext) -> SyntaxResult<Decl> {
+	if let .some(input) = capture_macro_input(source_id: source_id, source: source, encoded: encoded) {
+		return quote_decl(input: input, splices: splices, context: context)
+	}
+	SyntaxResult<Decl>(
+		value: .none,
+		failure: .some(SyntaxFailure(
+			code: "syntax.quote.invalid-tokens",
+			message: "Quotation token records are invalid",
+			span: 0..<0
+		))
+	)
+}
+
+// Materializes expression syntax into virtual source, tokens, AST, and metadata.
+//
+// Expression splices are parenthesized to preserve their grouping. The canonical
+// expression parser validates the complete result before it crosses to the host.
+pub func materialize_expr_syntax(syntax: &Syntax<Expr>) -> MaterializedResult<Expr> {
+	let materialized = materialize(raw: syntax.raw, group_splices: true)
+	let outcome = parse_expr_tokens(source: materialized.source, input: materialized.input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: materialized.input.span) {
+		return MaterializedResult<Expr>(value: .none, failure: .some(failure))
+	}
+	MaterializedResult<Expr>(
+		value: .some(MaterializedSyntax<Expr>(source: materialized.source, input: materialized.input, outcome: outcome, identifiers: materialized.identifiers)),
+		failure: .none
+	)
+}
+
+// Materializes and validates pattern syntax through the canonical pattern parser.
+//
+// Identifier metadata maps each virtual token back to its source and hygiene
+// context; consumers must not infer identity from rendered text alone.
+pub func materialize_pattern_syntax(syntax: &Syntax<Pattern>) -> MaterializedResult<Pattern> {
+	let materialized = materialize(raw: syntax.raw, group_splices: true)
+	let outcome = parse_pattern_tokens(source: materialized.source, input: materialized.input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: materialized.input.span) {
+		return MaterializedResult<Pattern>(value: .none, failure: .some(failure))
+	}
+	MaterializedResult<Pattern>(
+		value: .some(MaterializedSyntax<Pattern>(source: materialized.source, input: materialized.input, outcome: outcome, identifiers: materialized.identifiers)),
+		failure: .none
+	)
+}
+
+// Materializes and validates type syntax through the canonical type parser.
+//
+// Structural splices are grouped before parsing, preserving each inserted type
+// as one grammar node regardless of its rendered token precedence.
+pub func materialize_type_syntax(syntax: &Syntax<TypeAnnotation>) -> MaterializedResult<TypeAnnotation> {
+	let materialized = materialize(raw: syntax.raw, group_splices: true)
+	let outcome = parse_type_tokens(source: materialized.source, input: materialized.input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: materialized.input.span) {
+		return MaterializedResult<TypeAnnotation>(value: .none, failure: .some(failure))
+	}
+	MaterializedResult<TypeAnnotation>(
+		value: .some(MaterializedSyntax<TypeAnnotation>(source: materialized.source, input: materialized.input, outcome: outcome, identifiers: materialized.identifiers)),
+		failure: .none
+	)
+}
+
+// Materializes declaration syntax using top-level declaration grammar.
+//
+// Wrapper macros should prefer `materialize_decl_syntax_in`, which validates in
+// the target's actual block or nominal-body context.
+pub func materialize_decl_syntax(syntax: &Syntax<Decl>) -> MaterializedResult<Decl> {
+	let materialized = materialize(raw: syntax.raw, group_splices: true)
+	let outcome = parse_decl_tokens(source: materialized.source, input: materialized.input)
+	if let .some(failure) = parse_failure(outcome: outcome, fallback: materialized.input.span) {
+		return MaterializedResult<Decl>(value: .none, failure: .some(failure))
+	}
+	MaterializedResult<Decl>(
+		value: .some(MaterializedSyntax<Decl>(source: materialized.source, input: materialized.input, outcome: outcome, identifiers: materialized.identifiers)),
+		failure: .none
+	)
+}
+
+func scope_records(context: &SyntaxContext) -> [SyntaxScopeRecord] {
+	let records: [SyntaxScopeRecord] = []
+	for scope in context.scopes {
+		records.push(SyntaxScopeRecord(kind: scope.kind, namespace: scope.namespace, ordinal: scope.ordinal))
+	}
+	records
+}
+
+// Serializes materialized syntax metadata for the macro host.
+pub func syntax_metadata_output<Category>(materialized: &MaterializedSyntax<Category>) -> SyntaxMetadataOutput {
+	let identifiers: [SyntaxIdentifierRecord] = []
+	for identifier in materialized.identifiers {
+		identifiers.push(SyntaxIdentifierRecord(
+			text: identifier.text,
+			span_start: identifier.span.lower,
+			span_end: identifier.span.upper,
+			lexeme_start: identifier.lexeme.lower,
+			lexeme_end: identifier.lexeme.upper,
+			scopes: scope_records(context: identifier.context),
+			origin: identifier.origin,
+			source_id: identifier.source_id,
+			source_span_start: identifier.source_span.lower,
+			source_span_end: identifier.source_span.upper,
+			source_lexeme_start: identifier.source_lexeme.lower,
+			source_lexeme_end: identifier.source_lexeme.upper
+		))
+	}
+	SyntaxMetadataOutput(identifiers: identifiers)
+}
+
+// Builds the flattened expression-macro representation of a failure.
+//
+// Source, parse outcome, and identifier metadata are empty; the supplied code,
+// message, and span cross the service boundary unchanged.
+pub func expr_macro_failure(code: String, message: String, span: Range<Int>) -> ExprMacroOutput {
+	ExprMacroOutput(
+		source: "",
+		outcome: .none,
+		metadata: SyntaxMetadataOutput(identifiers: []),
+		failure_code: .some(code),
+		failure_message: .some(message),
+		failure_start: span.lower,
+		failure_end: span.upper
+	)
+}
+
+// Turn the macro author's category-checked result into the single flattened
+// service output consumed by the Rust expansion driver.
+pub func materialize_expr_macro_result(consume result: SyntaxResult<Expr>) -> ExprMacroOutput {
+	if let .some(failure) = result.failure {
+		return expr_macro_failure(code: failure.code, message: failure.message, span: failure.span)
+	}
+	if let .some(syntax) = result.value {
+		let materialized = materialize_expr_syntax(syntax: syntax)
+		if let .some(failure) = materialized.failure {
+			return expr_macro_failure(code: failure.code, message: failure.message, span: failure.span)
+		}
+		if let .some(value) = materialized.value {
+			let metadata = syntax_metadata_output(materialized: value)
+			return ExprMacroOutput(
+				source: value.source,
+				outcome: .some(value.outcome),
+				metadata: metadata,
+				failure_code: .none,
+				failure_message: .none,
+				failure_start: 0,
+				failure_end: 0
+			)
+		}
+	}
+	expr_macro_failure(code: "macro.empty-result", message: "Macro returned no expression syntax", span: 0..<0)
+}
+
+// MARK: Declaration lens (ADR 0026): category-safe views and rebuilders.
+//
+// A view locates a declaration's structure by parsing its own canonical
+// tokens through the real grammar in the declaration context the target
+// occupies. Rebuilders re-splice the original provenance-carrying tokens
+// around the replaced child syntax, so untouched tokens keep their source
+// identity and hygiene contexts, and the rebuilt declaration is still
+// category-checked at the wrapper service boundary.
+
+// The grammatical shape a viewed declaration parsed as. Functions,
+// methods, and initializers report a body; every shape reports a name
+// when the grammar declares one.
+pub enum DeclShape {
+	// A function or method declaration with a body.
+	case func_shape
+	// An initializer declaration with a body.
+	case init_shape
+	// A struct declaration.
+	case struct_shape
+	// An enum declaration.
+	case enum_shape
+	// A protocol declaration.
+	case protocol_shape
+	// An extension declaration.
+	case extend_shape
+	// A local or top-level `let` declaration.
+	case let_shape
+	// A stored-property declaration.
+	case property_shape
+	// An enum variant declaration.
+	case variant_shape
+	// A type-alias declaration.
+	case typealias_shape
+	// An effect declaration.
+	case effect_shape
+	// An import declaration.
+	case import_shape
+	// A bodyless function, method, or initializer requirement.
+	case signature_shape
+	// An associated-type declaration.
+	case associated_shape
+	// A macro-related or otherwise unsupported declaration shape.
+	case other_shape
+}
+
+// A token-preserving lens over a declaration's name and optional body.
+//
+// Atom tokens retain trivia, provenance, and hygiene. Rebuilders splice only
+// the selected extent and reuse every untouched token, unlike rebuilding from
+// the AST, which would lose exact token identity. Unsupported shapes remain
+// viewable as `other_shape` but expose no replaceable name or body.
+pub struct DeclView {
+	let shape: DeclShape
+	let name: String?
+	let atoms: [SyntaxToken]
+	// Token index of the declared name, or -1 when the grammar declares
+	// none (or records no span for it, as with requirement signatures).
+	let name_index: Int
+	// Token index extent of the body block, braces included; -1/-1 when
+	// the shape has no expression body.
+	let body_lower: Int
+	let body_upper: Int
+
+	init(shape: DeclShape, name: String?, atoms: [SyntaxToken], name_index: Int, body_lower: Int, body_upper: Int) {
+		self.shape = shape
+		self.name = name
+		self.atoms = atoms
+		self.name_index = name_index
+		self.body_lower = body_lower
+		self.body_upper = body_upper
+	}
+}
+
+// Encodes a declaration context using the wrapper-service ABI tags 0 through 5.
+//
+// Keep this mapping synchronized with `parse_decl_tokens_in` and
+// `decl_context_from_tag`.
+pub func decl_context_tag(context: &DeclContext) -> Int {
+	match context {
+		.top_level -> 0,
+		.block -> 1,
+		.struct_body -> 2,
+		.enum_body -> 3,
+		.protocol_body -> 4,
+		.extend_body -> 5
+	}
+}
+
+func token_index_for_lexeme(tokens: &[Token], lower: Int, upper: Int) -> Int {
+	let index = 0
+	loop index < tokens.count {
+		if tokens[index].lexeme.lower == lower && tokens[index].lexeme.upper == upper {
+			return index
+		}
+		index = index + 1
+	}
+	0 - 1
+}
+
+// The inclusive-lower/exclusive-upper token extent covered by one byte
+// range of the materialized source.
+func token_extent(tokens: &[Token], lower: Int, upper: Int) -> (Int, Int) {
+	let first = 0 - 1
+	let after = 0 - 1
+	let index = 0
+	loop index < tokens.count {
+		if tokens[index].span.lower >= lower && tokens[index].span.upper <= upper {
+			if first < 0 { first = index }
+			after = index + 1
+		}
+		index = index + 1
+	}
+	(first, after)
+}
+
+func build_view(consume decl: Decl, consume materialized: MaterializedTokens) -> DeclView {
+	let shape: DeclShape = .other_shape
+	let name: String? = .none
+	let name_lo = 0 - 1
+	let name_hi = 0 - 1
+	let body_lo = 0 - 1
+	let body_hi = 0 - 1
+	match decl.kind {
+		.func_decl(f) -> {
+			shape = .func_shape
+			name = .some(f.name.clone())
+			name_lo = f.name_start
+			name_hi = f.name_end
+			body_lo = f.body.start
+			body_hi = f.body.end
+		},
+		.method(f, _, _) -> {
+			shape = .func_shape
+			name = .some(f.name.clone())
+			name_lo = f.name_start
+			name_hi = f.name_end
+			body_lo = f.body.start
+			body_hi = f.body.end
+		},
+		.init_decl(_, block) -> {
+			shape = .init_shape
+			body_lo = block.start
+			body_hi = block.end
+		},
+		.func_signature(sig) -> {
+			shape = .signature_shape
+			name = .some(sig.name.clone())
+		},
+		.method_requirement(sig, _) -> {
+			shape = .signature_shape
+			name = .some(sig.name.clone())
+		},
+		.init_requirement(sig) -> {
+			shape = .signature_shape
+			name = .some(sig.name.clone())
+		},
+		.struct_decl(declared, lo, hi, _, _, _, _, _) -> {
+			shape = .struct_shape
+			name = .some(declared.clone())
+			name_lo = lo
+			name_hi = hi
+		},
+		.enum_decl(declared, lo, hi, _, _, _, _, _) -> {
+			shape = .enum_shape
+			name = .some(declared.clone())
+			name_lo = lo
+			name_hi = hi
+		},
+		.protocol_decl(declared, lo, hi, _, _, _, _) -> {
+			shape = .protocol_shape
+			name = .some(declared.clone())
+			name_lo = lo
+			name_hi = hi
+		},
+		.enum_variant(declared, lo, hi, _, _, _, _) -> {
+			shape = .variant_shape
+			name = .some(declared.clone())
+			name_lo = lo
+			name_hi = hi
+		},
+		.property(declared, lo, hi, _, _, _) -> {
+			shape = .property_shape
+			name = .some(declared.clone())
+			name_lo = lo
+			name_hi = hi
+		},
+		.typealias_decl(declared, lo, hi, _) -> {
+			shape = .typealias_shape
+			name = .some(declared.clone())
+			name_lo = lo
+			name_hi = hi
+		},
+		.effect_decl(declared, lo, hi, _, _, _, _) -> {
+			shape = .effect_shape
+			name = .some(declared.clone())
+			name_lo = lo
+			name_hi = hi
+		},
+		.let_decl(_, _, _) -> shape = .let_shape,
+		.import_decl(_) -> shape = .import_shape,
+		.extend_decl(_, _, _, _, _) -> shape = .extend_shape,
+		.associated_decl(_, _) -> shape = .associated_shape,
+		.macro_decl(_, _, _, _, _, _, _) -> shape = .other_shape,
+		.macro_call_decl(_, _, _, _, _, _, _) -> shape = .other_shape,
+		.wrapper_decl(_, _, _, _, _, _, _, _) -> shape = .other_shape
+	}
+	let name_index = 0 - 1
+	if name_lo >= 0 {
+		name_index = token_index_for_lexeme(tokens: materialized.input.tokens, lower: name_lo, upper: name_hi)
+	}
+	let body_lower = 0 - 1
+	let body_upper = 0 - 1
+	if body_lo >= 0 {
+		let (first, after) = token_extent(tokens: materialized.input.tokens, lower: body_lo, upper: body_hi)
+		body_lower = first
+		body_upper = after
+	}
+	DeclView(shape: shape, name: name, atoms: materialized.atoms, name_index: name_index, body_lower: body_lower, body_upper: body_upper)
+}
+
+// Build a structural view of a declaration in the context it occupies.
+// `.none` reports syntax the declaration grammar rejects, which a wrapper
+// target can only be when a previous rebuild produced it.
+pub func view_decl(target: &Syntax<Decl>, declaration: &DeclContext) -> DeclView? {
+	let materialized = materialize_collect(raw: target.raw, group_splices: true, collect_atoms: true)
+	let outcome = parse_decl_tokens_in(source: materialized.source, input: materialized.input, context_tag: decl_context_tag(context: declaration))
+	if let .some(_) = outcome.failure { return .none }
+	let items = outcome.items
+	for item in items {
+		match item {
+			.decl_item(decl) -> return .some(build_view(decl: decl, materialized: materialized)),
+			_ -> return .none
+		}
+	}
+	.none
+}
+
+// Returns the declaration category recognized by `view_decl`.
+pub func view_shape(view: &DeclView) -> DeclShape {
+	match view.shape {
+		.func_shape -> .func_shape,
+		.init_shape -> .init_shape,
+		.struct_shape -> .struct_shape,
+		.enum_shape -> .enum_shape,
+		.protocol_shape -> .protocol_shape,
+		.extend_shape -> .extend_shape,
+		.let_shape -> .let_shape,
+		.property_shape -> .property_shape,
+		.variant_shape -> .variant_shape,
+		.typealias_shape -> .typealias_shape,
+		.effect_shape -> .effect_shape,
+		.import_shape -> .import_shape,
+		.signature_shape -> .signature_shape,
+		.associated_shape -> .associated_shape,
+		.other_shape -> .other_shape
+	}
+}
+
+// Returns the declared name when this grammar form has one.
+pub func view_name(view: &DeclView) -> String? {
+	if let .some(name) = view.name {
+		return .some(name.clone())
+	}
+	.none
+}
+
+// The body block as expression syntax (braces included), preserving each
+// token's provenance and hygiene context, so it can be spliced into an
+// expression quotation.
+pub func view_body(view: &DeclView) -> Syntax<Expr>? {
+	if view.body_lower < 0 { return .none }
+	let pieces: [SyntaxPiece] = []
+	let index = view.body_lower
+	loop index < view.body_upper {
+		pieces.push(.token(copy_syntax_token(token: view.atoms[index])))
+		index = index + 1
+	}
+	.some(Syntax<Expr>(raw: RawSyntax(category: .expr, pieces: pieces, trailing: "", group_when_spliced: true)))
+}
+
+func push_atom_pieces(mut pieces: [SyntaxPiece], view: &DeclView, lower: Int, upper: Int) -> Void {
+	let index = lower
+	loop index < upper {
+		pieces.push(.token(copy_syntax_token(token: view.atoms[index])))
+		index = index + 1
+	}
+}
+
+func lens_failure(code: String, message: String) -> SyntaxResult<Decl> {
+	SyntaxResult<Decl>(value: .none, failure: .some(SyntaxFailure(code: code, message: message, span: 0..<0)))
+}
+
+// Rebuild the declaration with a new body block containing the given
+// expression: a block expression re-embeds wholesale, anything else
+// becomes the new body's trailing expression.
+pub func view_with_body(view: &DeclView, consume body: Syntax<Expr>, context: &QuoteContext) -> SyntaxResult<Decl> {
+	if view.body_lower < 0 {
+		return lens_failure(code: "syntax.lens.no-body", message: "The viewed declaration has no body block")
+	}
+	let pieces: [SyntaxPiece] = []
+	push_atom_pieces(pieces: pieces, view: view, lower: 0, upper: view.body_lower)
+	pieces.push(.token(generated_syntax_token(kind: .left_brace, spelling: "{", leading: " ", source_id: 0 - 1, source_span: 0..<0, context: context)))
+	pieces.push(.splice(" ", [body.raw]))
+	pieces.push(.token(generated_syntax_token(kind: .right_brace, spelling: "}", leading: " ", source_id: 0 - 1, source_span: 0..<0, context: context)))
+	push_atom_pieces(pieces: pieces, view: view, lower: view.body_upper, upper: view.atoms.count)
+	SyntaxResult<Decl>(value: .some(Syntax<Decl>(raw: RawSyntax(category: .decl, pieces: pieces, trailing: "", group_when_spliced: false))), failure: .none)
+}
+
+func rebuilt_with_name(view: &DeclView, consume token: SyntaxToken) -> SyntaxResult<Decl> {
+	let pieces: [SyntaxPiece] = []
+	push_atom_pieces(pieces: pieces, view: view, lower: 0, upper: view.name_index)
+	pieces.push(.token(consume token))
+	push_atom_pieces(pieces: pieces, view: view, lower: view.name_index + 1, upper: view.atoms.count)
+	SyntaxResult<Decl>(value: .some(Syntax<Decl>(raw: RawSyntax(category: .decl, pieces: pieces, trailing: "", group_when_spliced: false))), failure: .none)
+}
+
+// Rebuild the declaration with a fresh, hygienically introduced name: the
+// binder carries the definition site plus the expansion scope, so it
+// neither captures caller names nor leaks into caller scope.
+pub func view_with_name(view: &DeclView, name: String, context: &QuoteContext) -> SyntaxResult<Decl> {
+	if view.name_index < 0 {
+		return lens_failure(code: "syntax.lens.no-name", message: "The viewed declaration declares no replaceable name")
+	}
+	let leading = view.atoms[view.name_index].leading.clone()
+	let token = SyntaxToken(
+		kind: .identifier,
+		leading: leading,
+		spelling: name.clone(),
+		lexeme_start: 0,
+		lexeme_end: name.utf8().count(),
+		source_id: 0 - 1,
+		source_span: 0..<0,
+		context: introduced_context(context: context),
+		origin: .definition_site
+	)
+	rebuilt_with_name(view: view, token: token)
+}
+
+// Rebuild the declaration with a caller-provided identifier as the binder
+// (ADR 0026's intentional exposure path). The token must come from use-site
+// syntax — typically the wrapper's argument tree — and keeps its use-site
+// context, so callers can see the rebuilt name.
+pub func view_with_name_token(view: &DeclView, source_id: Int, source: String, token: Token, use_site: &SyntaxContext) -> SyntaxResult<Decl> {
+	if view.name_index < 0 {
+		return lens_failure(code: "syntax.lens.no-name", message: "The viewed declaration declares no replaceable name")
+	}
+	if token.kind != .identifier {
+		return lens_failure(code: "syntax.lens.not-identifier", message: "A declaration name must be spliced from an identifier token")
+	}
+	let leading = view.atoms[view.name_index].leading.clone()
+	let named = SyntaxToken(
+		kind: .identifier,
+		leading: leading,
+		spelling: source_slice(view: source.utf8(), range: token.span),
+		lexeme_start: token.lexeme.lower - token.span.lower,
+		lexeme_end: token.lexeme.upper - token.span.lower,
+		source_id: source_id,
+		source_span: token.span.lower..<token.span.upper,
+		context: copy_syntax_context(context: use_site),
+		origin: .use_site
+	)
+	rebuilt_with_name(view: view, token: named)
+}
+
+// Materializes the syntax's tokens and trivia as source text without reparsing.
+//
+// Splices are expanded without the protective grouping used by category
+// materializers, so this is an inspection view rather than a validation step.
+pub func syntax_text<Category>(syntax: &Syntax<Category>) -> String {
+	materialize(raw: syntax.raw, group_splices: false).source
+}
+
+func identifier_token(kind: TokenKind) -> Bool {
+	kind == .identifier || kind == .bound_var || kind == .attribute || kind == .effect_name || kind == .ir_register
+}
+
+func token_lexeme(token: &SyntaxToken) -> String {
+	token.spelling.utf8().slice(start: token.lexeme_start, byte_count: token.lexeme_end - token.lexeme_start).to_string()
+}
+
+func collect_identifiers(raw: &RawSyntax, mut identifiers: [SyntaxIdentifier]) -> Void {
+	for piece in raw.pieces {
+		match piece {
+			.token(token) -> {
+				if identifier_token(kind: token.kind) {
+					identifiers.push(SyntaxIdentifier(text: token_lexeme(token: token), context: token.context, origin: token.origin, source_id: token.source_id, source_span: token.source_span))
+				}
+			},
+			.splice(_, nested) -> if nested.count == 1 { collect_identifiers(raw: nested[0], identifiers: identifiers) }
+		}
+	}
+}
+
+// Flattens identifier-like tokens from this syntax and all nested splices.
+//
+// Results preserve token order, source provenance, and hygiene contexts. The set
+// includes ordinary, bound, attribute, effect, and IR-register identifiers.
+pub func syntax_identifiers<Category>(syntax: &Syntax<Category>) -> [SyntaxIdentifier] {
+	let identifiers: [SyntaxIdentifier] = []
+	collect_identifiers(raw: syntax.raw, identifiers: identifiers)
+	identifiers
+}
