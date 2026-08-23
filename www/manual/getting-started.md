@@ -24,7 +24,8 @@ print("Hello, TalkTalk!")
 Then run it:
 
 ```sh
-talk run hello.tlk
+$ talk run hello.tlk
+Hello, TalkTalk!
 ```
 
 A source file may contain declarations and top-level statements. The value of the final top-level expression is printed when it is not `Void`:
@@ -50,10 +51,11 @@ Both commands accept `-` as standard input where a source filename is accepted.
 ## Create a package
 
 ```sh
-talk new hello
-cd hello
-talk run
-talk test
+$ talk new hello
+$ cd hello
+$ talk run
+Hello, Talk!
+$ talk test
 ```
 
 The generated package contains:

@@ -220,8 +220,8 @@ impl ProceduralMacroService {
         for (index, (text, mut unit_names)) in macro_sources.into_iter().enumerate() {
             unit_names.sort();
             let mut unit = String::from(
-                "use package::Lexer::{ capture_macro_input }\n\
-                 use package::Syntax::{ ExprMacroOutput, DeclWrapperOutput, empty_syntax_context, \
+                "use package::lexer::{ capture_macro_input }\n\
+                 use package::macros::{ ExprMacroOutput, DeclWrapperOutput, empty_syntax_context, \
                  lexical_scope, module_scope, syntax_context_with_scope, expansion_scope, \
                  quote_context, expr_macro_failure, materialize_expr_macro_result, splice, \
                  quote_expr_encoded, quote_decl_encoded, decl_wrapper_failure, \

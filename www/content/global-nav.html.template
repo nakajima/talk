@@ -1,6 +1,6 @@
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/"{LANGUAGE_CURRENT}>Language</a>
         <a href="/manual/"{GUIDE_CURRENT}>Guide</a>
         <a href="/docs/"{DOCS_CURRENT}>Docs</a>

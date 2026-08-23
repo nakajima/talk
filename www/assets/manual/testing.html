@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - 12. Testing</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386846" rel="stylesheet">
+    <link href="/style.css?t=1787528495" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/" aria-current="page">Guide</a>
         <a href="/docs/">Docs</a>
@@ -21,20 +20,20 @@
       </div>
     </nav>
     <main class="site-page manual-page">
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/testing" aria-current="page">12. Testing</a></nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/manual/">Guide</a> / <a href="/manual/testing" aria-current="page">12. Testing</a></nav>
+          <div class="split">
             <h1>12. Testing</h1>
             
           </div>
         </div>
       </header>
 
-      <div class="site-page-layout manual-layout">
-        <aside class="site-page-sidebar manual-outline">
+      <div>
+        <aside>
           <nav aria-label="Manual table of contents">
-            <span class="site-nav-label manual-outline-title">Contents</span>
+            <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -49,7 +48,7 @@
 <li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
 <li><a href="/manual/macros">10. Macros</a></li>
 <li><a href="/manual/concurrency">11. Concurrency</a></li>
-<li><a href="/manual/testing" aria-current="page">12. Testing</a><ol class="manual-outline-sections"><li><a href="#a-first-test">A first test</a></li>
+<li><a href="/manual/testing" aria-current="page">12. Testing</a><ol><li><a href="#a-first-test">A first test</a></li>
 <li><a href="#assertions">Assertions</a></li>
 <li><a href="#selecting-and-automating-tests">Selecting and automating tests</a></li>
 <li><a href="#testing-effects-and-failures">Testing effects and failures</a></li>
@@ -63,13 +62,13 @@
             </ol>
           </nav>
         </aside>
-        <div class="site-page-content manual-document">
-          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/concurrency">&larr; 11. Concurrency</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/standard-library">13. The Standard Library &rarr;</a>
+        <div>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a href="/manual/concurrency">&larr; 11. Concurrency</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/standard-library">13. The Standard Library &rarr;</a>
           </nav>
-          <article class="prose page-content">
+          <article>
             <p>Put tests in files ending with <code>.test.tlk</code>, then run <code>talk test</code>. TalkTalk finds the tests in your package, runs them, and reports which assertions passed or failed.</p>
 <h2><a href="#a-first-test" aria-hidden="true" class="anchor" id="a-first-test"></a>A first test</h2>
 <p>A generated package contains:</p>
@@ -79,12 +78,9 @@
 }</pre>
         </div>
 <p>Run it with:</p>
-<pre><code class="language-sh">talk test
-</code></pre>
+<pre><code class="language-sh"><span data-prompt="$">talk test</span></code></pre>
 <p>The runner discovers <code>.test.tlk</code> files under the package's <code>tests/</code> and source trees. You can also name files or directories explicitly:</p>
-<pre><code class="language-sh">talk test tests/math.test.tlk
-talk test tests/
-</code></pre>
+<pre><code class="language-sh"><span data-prompt="$">talk test tests/math.test.tlk</span><span data-prompt="$">talk test tests/</span></code></pre>
 <h2><a href="#assertions" aria-hidden="true" class="anchor" id="assertions"></a>Assertions</h2>
 <p><code>@assert</code> is the normal assertion form. Because it is a macro, a failure can include the original condition text.</p>
 <p>The test prelude also exposes functions for dynamically built checks:</p>
@@ -97,11 +93,9 @@ talk test tests/
 <p>A failed assertion records a test failure rather than panicking the entire test runner.</p>
 <h2><a href="#selecting-and-automating-tests" aria-hidden="true" class="anchor" id="selecting-and-automating-tests"></a>Selecting and automating tests</h2>
 <p>Run one exact test name:</p>
-<pre><code class="language-sh">talk test --filter positive
-</code></pre>
+<pre><code class="language-sh"><span data-prompt="$">talk test --filter positive</span></code></pre>
 <p>Emit machine-readable output for editor or CI integration:</p>
-<pre><code class="language-sh">talk test --json
-</code></pre>
+<pre><code class="language-sh"><span data-prompt="$">talk test --json</span></code></pre>
 <p>Compilation diagnostics fail the test command before test execution. A finished run exits nonzero when any assertion failed.</p>
 <h2><a href="#testing-effects-and-failures" aria-hidden="true" class="anchor" id="testing-effects-and-failures"></a>Testing effects and failures</h2>
 <p>Tests can define and handle effects like any other source. Prefer exposing side effects behind a small effect and installing a deterministic handler in a test; this keeps the function under test in direct style while avoiding a real host dependency.</p>
@@ -111,14 +105,14 @@ talk test tests/
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/concurrency">&larr; 11. Concurrency</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/standard-library">13. The Standard Library &rarr;</a>
+            <a href="/manual/concurrency">&larr; 11. Concurrency</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/standard-library">13. The Standard Library &rarr;</a>
           </nav>
         </div>
-        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+        <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787386846"></script>
+      <script type="module" src="/page.js?t=1787528495"></script>
     </main>
   </body>
 </html>

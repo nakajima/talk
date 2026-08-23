@@ -1,6 +1,7 @@
 Package(
     name: "basic",
     version: "0.1.0",
+    description: "A fixture package for documentation generator tests.",
     builds: [.bin(named: "main", from: "src/main.tlk")],
     dependencies: []
 )

@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - 9. Modules and Packages</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386841" rel="stylesheet">
+    <link href="/style.css?t=1787528494" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/" aria-current="page">Guide</a>
         <a href="/docs/">Docs</a>
@@ -21,20 +20,20 @@
       </div>
     </nav>
     <main class="site-page manual-page">
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/modules-and-packages" aria-current="page">9. Modules and Packages</a></nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/manual/">Guide</a> / <a href="/manual/modules-and-packages" aria-current="page">9. Modules and Packages</a></nav>
+          <div class="split">
             <h1>9. Modules and Packages</h1>
             
           </div>
         </div>
       </header>
 
-      <div class="site-page-layout manual-layout">
-        <aside class="site-page-sidebar manual-outline">
+      <div>
+        <aside>
           <nav aria-label="Manual table of contents">
-            <span class="site-nav-label manual-outline-title">Contents</span>
+            <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -46,7 +45,7 @@
 <li><a href="/manual/effects">6. Effects</a></li>
 <li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
 <li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
-<li><a href="/manual/modules-and-packages" aria-current="page">9. Modules and Packages</a><ol class="manual-outline-sections"><li><a href="#visibility">Visibility</a></li>
+<li><a href="/manual/modules-and-packages" aria-current="page">9. Modules and Packages</a><ol><li><a href="#visibility">Visibility</a></li>
 <li><a href="#imports">Imports</a></li>
 <li><a href="#the-core-and-standard-libraries">The core and standard libraries</a></li>
 <li><a href="#package-manifests">Package manifests</a></li>
@@ -64,13 +63,13 @@
             </ol>
           </nav>
         </aside>
-        <div class="site-page-content manual-document">
-          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/collections-and-text">&larr; 8. Collections and Text</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/macros">10. Macros &rarr;</a>
+        <div>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a href="/manual/collections-and-text">&larr; 8. Collections and Text</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/macros">10. Macros &rarr;</a>
           </nav>
-          <article class="prose page-content">
+          <article>
             <p>As a program grows, you can split it across files and bring names in with <code>use</code>. A package groups those files into a library or executable and records any outside code the project needs.</p>
 <h2><a href="#visibility" aria-hidden="true" class="anchor" id="visibility"></a>Visibility</h2>
 <p>Top-level declarations and members are private to their file unless marked <code>pub</code>:</p>
@@ -116,10 +115,12 @@
             <pre class='code-highlight'><span class="type">Package</span>(
 	<span class="parameter">name</span>: <span class="string">"hello"</span>,
 	<span class="parameter">version</span>: <span class="string">"0.1.0"</span>,
+	<span class="parameter">description</span>: <span class="string">""</span>,
 	<span class="parameter">builds</span>: [.<span class="property">bin</span>(<span class="parameter">named</span>: <span class="string">"main"</span>, <span class="parameter">from</span>: <span class="string">"src/main.tlk"</span>)],
 	<span class="parameter">dependencies</span>: []
 )</pre>
         </div>
+<p><code>description</code> is the short package summary shown by documentation indexes and other tooling.</p>
 <p>A package may build libraries and named binaries:</p>
 <div class='code-block no-run'>
             <pre class='code-highlight'><span class="keyword">let</span> builds: [<span class="type">PackageArtifact</span>] <span class="operator">=</span> [
@@ -128,8 +129,7 @@
 ]</pre>
         </div>
 <p>Run a named binary with:</p>
-<pre><code class="language-sh">talk run --bin server
-</code></pre>
+<pre><code class="language-sh"><span data-prompt="$">talk run --bin server</span></code></pre>
 <h2><a href="#dependencies-and-the-lockfile" aria-hidden="true" class="anchor" id="dependencies-and-the-lockfile"></a>Dependencies and the lockfile</h2>
 <p>Dependencies may come from Git, a verified tar archive, or a local path:</p>
 <div class='code-block no-run'>
@@ -140,25 +140,21 @@
 ]</pre>
         </div>
 <p>Use the package commands to manage resolution:</p>
-<pre><code class="language-sh">talk install
-talk dependencies
-talk update
-talk update widgets
-</code></pre>
+<pre><code class="language-sh"><span data-prompt="$">talk install</span><span data-prompt="$">talk dependencies</span><span data-prompt="$">talk update</span><span data-prompt="$">talk update widgets</span></code></pre>
 <p><code>talk install</code> resolves the graph into <code>package.lock</code>. <code>talk update</code> refreshes all or selected dependencies. <code>--offline</code> requires all needed sources to be available locally.</p>
 <h2><a href="#package-aware-commands" aria-hidden="true" class="anchor" id="package-aware-commands"></a>Package-aware commands</h2>
 <p>From anywhere inside a package, <code>talk run</code>, <code>talk check</code>, <code>talk test</code>, and the LSP locate the enclosing manifest. <code>talk check</code> with no filenames checks the package's declared targets and tests rather than every stray <code>.tlk</code> file under the directory.</p>
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/collections-and-text">&larr; 8. Collections and Text</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/macros">10. Macros &rarr;</a>
+            <a href="/manual/collections-and-text">&larr; 8. Collections and Text</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/macros">10. Macros &rarr;</a>
           </nav>
         </div>
-        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+        <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787386841"></script>
+      <script type="module" src="/page.js?t=1787528494"></script>
     </main>
   </body>
 </html>

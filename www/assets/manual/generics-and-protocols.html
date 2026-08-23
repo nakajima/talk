@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - 5. Generics and Protocols</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386833" rel="stylesheet">
+    <link href="/style.css?t=1787528492" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/" aria-current="page">Guide</a>
         <a href="/docs/">Docs</a>
@@ -21,20 +20,20 @@
       </div>
     </nav>
     <main class="site-page manual-page">
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/generics-and-protocols" aria-current="page">5. Generics and Protocols</a></nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/manual/">Guide</a> / <a href="/manual/generics-and-protocols" aria-current="page">5. Generics and Protocols</a></nav>
+          <div class="split">
             <h1>5. Generics and Protocols</h1>
             
           </div>
         </div>
       </header>
 
-      <div class="site-page-layout manual-layout">
-        <aside class="site-page-sidebar manual-outline">
+      <div>
+        <aside>
           <nav aria-label="Manual table of contents">
-            <span class="site-nav-label manual-outline-title">Contents</span>
+            <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -42,7 +41,7 @@
 <li><a href="/manual/values-and-types">2. Values and Types</a></li>
 <li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
 <li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
-<li><a href="/manual/generics-and-protocols" aria-current="page">5. Generics and Protocols</a><ol class="manual-outline-sections"><li><a href="#generic-functions-and-types">Generic functions and types</a></li>
+<li><a href="/manual/generics-and-protocols" aria-current="page">5. Generics and Protocols</a><ol><li><a href="#generic-functions-and-types">Generic functions and types</a></li>
 <li><a href="#protocols">Protocols</a></li>
 <li><a href="#extensions-and-conformances">Extensions and conformances</a></li>
 <li><a href="#protocol-arguments-and-associated-types">Protocol arguments and associated types</a></li>
@@ -65,13 +64,13 @@
             </ol>
           </nav>
         </aside>
-        <div class="site-page-content manual-document">
-          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/data-and-patterns">&larr; 4. Data and Patterns</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/effects">6. Effects &rarr;</a>
+        <div>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a href="/manual/data-and-patterns">&larr; 4. Data and Patterns</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/effects">6. Effects &rarr;</a>
           </nav>
-          <article class="prose page-content">
+          <article>
             <p>Generics let one function or data type work with many kinds of value. Protocols say what those values must be able to do. Together, they let you reuse code without giving up type checking.</p>
 <h2><a href="#generic-functions-and-types" aria-hidden="true" class="anchor" id="generic-functions-and-types"></a>Generic functions and types</h2>
 <p>Type parameters use angle brackets:</p>
@@ -108,7 +107,7 @@ identity(42)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>A bound may appear inline or in a <code>where</code> clause:</p>
 <div class='runnable'>
@@ -152,7 +151,7 @@ func same&lt;T&gt;(_ a: T, _ b: T) -&gt; Bool where T: Equatable&lt;T&gt; &amp; 
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Use <code>&amp;&amp;</code> between separate predicates and <code>&amp;</code> to compose protocols in one conformance bound.</p>
 <h2><a href="#protocols" aria-hidden="true" class="anchor" id="protocols"></a>Protocols</h2>
@@ -232,7 +231,7 @@ print(Cat().description())</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Generic extensions bind their parameters explicitly:</p>
 <div class='runnable' data-accumulates='true' data-accumulate-group='generics'>
@@ -260,7 +259,7 @@ Box(value: 42).get()</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>A protocol can also be extended, adding a method to every conformer that meets the extension's constraints.</p>
 <h2><a href="#protocol-arguments-and-associated-types" aria-hidden="true" class="anchor" id="protocol-arguments-and-associated-types"></a>Protocol arguments and associated types</h2>
@@ -292,7 +291,7 @@ print(item)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Associated bindings can be written in the existential type:</p>
 <div class='code-block no-run'>
@@ -328,7 +327,7 @@ print(length(pair))</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Static constraints use <code>==</code>, <code>&lt;</code>, and <code>&lt;=</code>. Type arguments accept a limited set of compile-time expressions, so types such as <code>Matrix&lt;N + 1, (M) * 2&gt;</code> are possible while type checking remains predictable.</p>
 <h2><a href="#further-reading" aria-hidden="true" class="anchor" id="further-reading"></a>Further reading</h2>
@@ -342,14 +341,14 @@ print(length(pair))</textarea>
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/data-and-patterns">&larr; 4. Data and Patterns</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/effects">6. Effects &rarr;</a>
+            <a href="/manual/data-and-patterns">&larr; 4. Data and Patterns</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/effects">6. Effects &rarr;</a>
           </nav>
         </div>
-        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+        <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787386833"></script>
+      <script type="module" src="/page.js?t=1787528492"></script>
     </main>
   </body>
 </html>

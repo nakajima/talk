@@ -150,6 +150,7 @@ pub struct PackageDependency {
 pub struct PackageManifest {
     pub name: String,
     pub version: String,
+    pub description: String,
     pub builds: Vec<PackageArtifact>,
     pub dependencies: Vec<PackageDependency>,
 }
@@ -223,7 +224,11 @@ impl PackageManifest {
             });
         };
         let args = Self::call_args(path, expression, "Package")?;
-        Self::only_fields(path, args, &["name", "version", "builds", "dependencies"])?;
+        Self::only_fields(
+            path,
+            args,
+            &["name", "version", "description", "builds", "dependencies"],
+        )?;
 
         let name = Self::string_field(path, args, "name")?;
         if name.is_empty() {
@@ -237,6 +242,7 @@ impl PackageManifest {
             ));
         }
         let version = Self::string_field(path, args, "version")?;
+        let description = Self::string_field(path, args, "description")?;
         let builds = Self::array_field(path, args, "builds")?
             .iter()
             .map(|value| Self::artifact(path, value))
@@ -297,6 +303,7 @@ impl PackageManifest {
         Ok(Self {
             name,
             version,
+            description,
             builds,
             dependencies,
         })
@@ -1831,7 +1838,7 @@ impl PackageProject {
 
     fn new_manifest_source(name: &str, version: &str, binary_name: &str) -> String {
         format!(
-            "Package(\n    name: {},\n    version: {},\n    builds: [.bin(named: {}, from: \"src/main.tlk\")],\n    dependencies: []\n)\n",
+            "Package(\n    name: {},\n    version: {},\n    description: \"\",\n    builds: [.bin(named: {}, from: \"src/main.tlk\")],\n    dependencies: []\n)\n",
             Self::quote_manifest_string(name),
             Self::quote_manifest_string(version),
             Self::quote_manifest_string(binary_name),
@@ -2979,12 +2986,14 @@ mod tests {
             r#"Package(
                 name: "talk-html",
                 version: "0.1.0",
+                description: "HTML support.",
                 builds: [.lib(from: "src/lib.tlk")],
                 dependencies: [.git(package: "talk-wasm", url: "https://example.test/wasm", rev: "main")]
             )"#,
         )
         .expect("manifest parses");
         assert_eq!(manifest.import_name(), "talk_html");
+        assert_eq!(manifest.description, "HTML support.");
         assert_eq!(manifest.library(), Some("src/lib.tlk"));
         assert_eq!(manifest.dependencies.len(), 1);
     }
@@ -3002,6 +3011,7 @@ mod tests {
             .expect("create package");
         let manifest = PackageManifest::read(&root).expect("read generated manifest");
         assert_eq!(manifest.name, "hello-world");
+        assert_eq!(manifest.description, "");
         assert_eq!(manifest.library(), None);
         assert!(matches!(
             manifest.binary(None),
@@ -3058,7 +3068,7 @@ mod tests {
         fs::create_dir_all(root.join("src")).expect("create package source");
         fs::write(
             root.join(MANIFEST_FILE),
-            "Package(name: \"demo\", version: \"0.1.0\", builds: [], dependencies: [])",
+            "Package(name: \"demo\", version: \"0.1.0\", description: \"\", builds: [], dependencies: [])",
         )
         .expect("write manifest");
         let file = root.join("src/lib.test.tlk");
@@ -3083,7 +3093,7 @@ mod tests {
         fs::create_dir_all(root.join("src")).expect("create source directory");
         fs::write(
             root.join(MANIFEST_FILE),
-            "Package(name: \"demo\", version: \"0.1.0\", builds: [.bin(named: \"main\", from: \"src/missing.tlk\")], dependencies: [])",
+            "Package(name: \"demo\", version: \"0.1.0\", description: \"\", builds: [.bin(named: \"main\", from: \"src/missing.tlk\")], dependencies: [])",
         )
         .expect("write manifest");
         let error = PackageManifest::read(&root).expect_err("missing target fails validation");
@@ -3104,7 +3114,7 @@ mod tests {
         fs::create_dir_all(root.join("src")).expect("create root source");
         fs::write(
             dependency.join(MANIFEST_FILE),
-            "Package(name: \"local-lib\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+            "Package(name: \"local-lib\", version: \"0.1.0\", description: \"\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
         )
         .expect("write dependency manifest");
         fs::write(
@@ -3114,7 +3124,7 @@ mod tests {
         .expect("write dependency source");
         fs::write(
             root.join(MANIFEST_FILE),
-            "Package(name: \"root\", version: \"0.1.0\", builds: [], dependencies: [.path(package: \"local-lib\", path: \"../dependency\")])",
+            "Package(name: \"root\", version: \"0.1.0\", description: \"\", builds: [], dependencies: [.path(package: \"local-lib\", path: \"../dependency\")])",
         )
         .expect("write root manifest");
         PackageProject::install_at(&root, true, false).expect("install path dependency");
@@ -3144,7 +3154,7 @@ mod tests {
         fs::create_dir_all(root.join("src")).expect("create root source");
         fs::write(
             dependency.join(MANIFEST_FILE),
-            "Package(name: \"local-lib\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+            "Package(name: \"local-lib\", version: \"0.1.0\", description: \"\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
         )
         .expect("write dependency manifest");
         fs::write(
@@ -3154,7 +3164,7 @@ mod tests {
         .expect("write dependency source");
         fs::write(
             root.join(MANIFEST_FILE),
-            "Package(name: \"root\", version: \"0.1.0\", builds: [], dependencies: [.path(package: \"local-lib\", path: \"../dependency\")])",
+            "Package(name: \"root\", version: \"0.1.0\", description: \"\", builds: [], dependencies: [.path(package: \"local-lib\", path: \"../dependency\")])",
         )
         .expect("write root manifest");
         PackageProject::install_at(&root, true, false).expect("install path dependency");
@@ -3210,7 +3220,7 @@ mod tests {
         for (path, source) in [
             (
                 "remote-lib/package.tlk",
-                "Package(name: \"remote-lib\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+                "Package(name: \"remote-lib\", version: \"0.1.0\", description: \"\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
             ),
             ("remote-lib/src/lib.tlk", "pub func answer() -> Int { 42 }"),
         ] {
@@ -3229,7 +3239,7 @@ mod tests {
         fs::write(
             root.join(MANIFEST_FILE),
             format!(
-                "Package(name: \"root\", version: \"0.1.0\", builds: [], dependencies: [.tar(package: \"remote-lib\", url: \"https://example.test/remote-lib.tar.gz\", sha256: \"{sha256}\")])"
+                "Package(name: \"root\", version: \"0.1.0\", description: \"\", builds: [], dependencies: [.tar(package: \"remote-lib\", url: \"https://example.test/remote-lib.tar.gz\", sha256: \"{sha256}\")])"
             ),
         )
         .expect("write root manifest");
@@ -3295,7 +3305,7 @@ mod tests {
         fs::create_dir_all(dependency.join("src")).expect("create dependency source");
         fs::write(
             dependency.join(MANIFEST_FILE),
-            "Package(name: \"remote-lib\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+            "Package(name: \"remote-lib\", version: \"0.1.0\", description: \"\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
         )
         .expect("write dependency manifest");
         fs::write(
@@ -3326,7 +3336,7 @@ mod tests {
         let manifest = PackageManifest::parse(
             Path::new("package.tlk"),
             &format!(
-                "Package(name: \"root\", version: \"0.1.0\", builds: [], dependencies: [.git(package: \"remote-lib\", url: \"{}\", rev: \"HEAD\")])",
+                "Package(name: \"root\", version: \"0.1.0\", description: \"\", builds: [], dependencies: [.git(package: \"remote-lib\", url: \"{}\", rev: \"HEAD\")])",
                 dependency.display()
             ),
         )
@@ -3360,6 +3370,7 @@ mod tests {
             r#"Package(
                 name: "root",
                 version: "0.1.0",
+                description: "",
                 builds: [],
                 dependencies: [
                     .git(package: "talk-html", url: "https://example.test/a", rev: "main"),

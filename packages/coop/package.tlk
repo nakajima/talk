@@ -1,6 +1,7 @@
 Package(
 	name: "coop",
 	version: "0.1.0",
+	description: "Cooperative task scheduling.",
 	builds: [
 		.lib(from: "src/coop.tlk")
 	],

@@ -1,6 +1,7 @@
 Package(
 	name: "talk-md",
 	version: "0.1.0",
+	description: "Dependency-free Markdown parsing.",
 	builds: [
 		.bin(named: "main", from: "src/main.tlk"),
 		.lib(from: "src/markdown.tlk")

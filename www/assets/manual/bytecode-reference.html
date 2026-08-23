@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - C. Bytecode Reference</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386852" rel="stylesheet">
+    <link href="/style.css?t=1787528497" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/" aria-current="page">Guide</a>
         <a href="/docs/">Docs</a>
@@ -21,20 +20,20 @@
       </div>
     </nav>
     <main class="site-page manual-page">
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/bytecode-reference" aria-current="page">C. Bytecode Reference</a></nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/manual/">Guide</a> / <a href="/manual/bytecode-reference" aria-current="page">C. Bytecode Reference</a></nav>
+          <div class="split">
             <h1>C. Bytecode Reference</h1>
             
           </div>
         </div>
       </header>
 
-      <div class="site-page-layout manual-layout">
-        <aside class="site-page-sidebar manual-outline">
+      <div>
+        <aside>
           <nav aria-label="Manual table of contents">
-            <span class="site-nav-label manual-outline-title">Contents</span>
+            <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -55,7 +54,7 @@
 <li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
 <li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
 <li><a href="/manual/mir-reference">B. MIR Reference</a></li>
-<li><a href="/manual/bytecode-reference" aria-current="page">C. Bytecode Reference</a><ol class="manual-outline-sections"><li><a href="#compatibility-policy">Compatibility policy</a></li>
+<li><a href="/manual/bytecode-reference" aria-current="page">C. Bytecode Reference</a><ol><li><a href="#compatibility-policy">Compatibility policy</a></li>
 <li><a href="#primitive-encoding">Primitive encoding</a></li>
 <li><a href="#image-order">Image order</a></li>
 <li><a href="#exports">Exports</a></li>
@@ -70,18 +69,15 @@
             </ol>
           </nav>
         </aside>
-        <div class="site-page-content manual-document">
-          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/mir-reference">&larr; B. MIR Reference</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
+        <div>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a href="/manual/mir-reference">&larr; B. MIR Reference</a>
+            <a href="/manual/">All chapters</a>
             <span></span>
           </nav>
-          <article class="prose page-content">
+          <article>
             <p>TalkTalk's default executable artifact is a validated register-bytecode image. <code>talk build</code> writes it, <code>talk run-image</code> decodes and validates it, and <code>talk bytecode</code> prints the disassembly produced directly from source.</p>
-<pre><code class="language-sh">talk build program.tlk -o program.tbc
-talk bytecode program.tlk
-talk run-image program.tbc
-</code></pre>
+<pre><code class="language-sh"><span data-prompt="$">talk build program.tlk -o program.tbc</span><span data-prompt="$">talk bytecode program.tlk</span><span data-prompt="$">talk run-image program.tbc</span></code></pre>
 <p>This page describes bytecode format 11. The exact encoder, decoder, instruction tags, and validator in <code>talk-vm/src/bytecode.rs</code> and <code>talk-vm/src/lib.rs</code> are authoritative.</p>
 <h2><a href="#compatibility-policy" aria-hidden="true" class="anchor" id="compatibility-policy"></a>Compatibility policy</h2>
 <p>Every image begins with the seven bytes <code>TALKBC\0</code>, followed by a 32-bit format version. The current encoder writes version 11, and the current loader accepts version 11. A different magic, unsupported version, truncated field, invalid tag, invalid index, integer overflow, malformed UTF-8 string, or trailing byte rejects the image before execution.</p>
@@ -251,14 +247,14 @@ MonotonicNanos
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/mir-reference">&larr; B. MIR Reference</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
+            <a href="/manual/mir-reference">&larr; B. MIR Reference</a>
+            <a href="/manual/">All chapters</a>
             <span></span>
           </nav>
         </div>
-        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+        <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787386852"></script>
+      <script type="module" src="/page.js?t=1787528497"></script>
     </main>
   </body>
 </html>

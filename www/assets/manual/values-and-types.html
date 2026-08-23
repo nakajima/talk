@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - 2. Values and Types</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386821" rel="stylesheet">
+    <link href="/style.css?t=1787528490" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/" aria-current="page">Guide</a>
         <a href="/docs/">Docs</a>
@@ -21,25 +20,25 @@
       </div>
     </nav>
     <main class="site-page manual-page">
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/values-and-types" aria-current="page">2. Values and Types</a></nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/manual/">Guide</a> / <a href="/manual/values-and-types" aria-current="page">2. Values and Types</a></nav>
+          <div class="split">
             <h1>2. Values and Types</h1>
             
           </div>
         </div>
       </header>
 
-      <div class="site-page-layout manual-layout">
-        <aside class="site-page-sidebar manual-outline">
+      <div>
+        <aside>
           <nav aria-label="Manual table of contents">
-            <span class="site-nav-label manual-outline-title">Contents</span>
+            <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
 <li><a href="/manual/syntax">1. Syntax</a></li>
-<li><a href="/manual/values-and-types" aria-current="page">2. Values and Types</a><ol class="manual-outline-sections"><li><a href="#primitive-types">Primitive types</a></li>
+<li><a href="/manual/values-and-types" aria-current="page">2. Values and Types</a><ol><li><a href="#primitive-types">Primitive types</a></li>
 <li><a href="#integer-overflow">Integer overflow</a></li>
 <li><a href="#strings-and-characters">Strings and characters</a></li>
 <li><a href="#arrays-inline-arrays-tuples-and-records">Arrays, inline arrays, tuples, and records</a></li>
@@ -65,13 +64,13 @@
             </ol>
           </nav>
         </aside>
-        <div class="site-page-content manual-document">
-          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/syntax">&larr; 1. Syntax</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/bindings-and-functions">3. Bindings and Functions &rarr;</a>
+        <div>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a href="/manual/syntax">&larr; 1. Syntax</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/bindings-and-functions">3. Bindings and Functions &rarr;</a>
           </nav>
-          <article class="prose page-content">
+          <article>
             <p>TalkTalk checks that values are used consistently, but it usually figures out their types for you. It's kind of a joke around these parts that you should never have to annotate a type if you don't want to. Ok maybe not a joke. A goal? Sure.</p>
 <p>You can still write a type when it makes the code clearer or when you want the compiler to check for one specific type.</p>
 <h2><a href="#primitive-types" aria-hidden="true" class="anchor" id="primitive-types"></a>Primitive types</h2>
@@ -112,7 +111,7 @@ let nothing: () = ()
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Integer and floating-point arithmetic do not mix implicitly.</p>
 <h2><a href="#integer-overflow" aria-hidden="true" class="anchor" id="integer-overflow"></a>Integer overflow</h2>
@@ -143,7 +142,7 @@ let nothing: () = ()
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>This evaluates to <code>(Optional.none, Optional.some(40), Optional.none)</code>. The checked family is <code>checked_add(_:)</code>, <code>checked_sub(_:)</code>, <code>checked_mul(_:)</code>, <code>checked_div(_:)</code>, and <code>checked_neg()</code>.</p>
 <p>Low-level code that deliberately needs arithmetic modulo <code>2^64</code> can opt out explicitly:</p>
@@ -166,7 +165,7 @@ max.unchecked_add(1)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>This evaluates to <code>-9223372036854775808</code>. The wrapping family is <code>unchecked_add(_:)</code>, <code>unchecked_sub(_:)</code>, <code>unchecked_mul(_:)</code>, <code>unchecked_div(_:)</code>, and <code>unchecked_neg()</code>. <code>unchecked_div</code> wraps the minimum-value divided by <code>-1</code> case, but division by zero still traps because it has no modular result.</p>
 <p>Use ordinary operators by default, checked methods when failure should be data, and <code>unchecked_*</code> only when modular arithmetic is intentional.</p>
@@ -197,7 +196,7 @@ print(letter)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p><code>String</code> owns text; <code>Substring</code> refers to part of a string. Normal iteration keeps visible characters together, including emoji made from several Unicode scalars. Use <code>.scalars()</code> when you need Unicode scalar values and <code>.utf8()</code> when you need the encoded bytes:</p>
 <div class='runnable'>
@@ -239,7 +238,7 @@ print(text.utf8().count())</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <h2><a href="#arrays-inline-arrays-tuples-and-records" aria-hidden="true" class="anchor" id="arrays-inline-arrays-tuples-and-records"></a>Arrays, inline arrays, tuples, and records</h2>
 <p><code>[T]</code> is a growable <code>Array&lt;T&gt;</code>. <code>[T; N]</code> is an exact-size <code>InlineArray&lt;T, N&gt;</code> whose length is part of its type:</p>
@@ -266,7 +265,7 @@ print(values)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Tuples are positional:</p>
 <div class='runnable'>
@@ -288,7 +287,7 @@ print(point.0)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Records are structural values:</p>
 <div class='runnable'>
@@ -314,7 +313,7 @@ moved</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>The corresponding record type is <code>{ x: Int, y: Int }</code>.</p>
 <h2><a href="#optional-and-result-values" aria-hidden="true" class="anchor" id="optional-and-result-values"></a>Optional and result values</h2>
@@ -342,7 +341,7 @@ maybe_count</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>On any two-case enum, postfix <code>?</code> extracts the first case or returns the second case from the enclosing function. Postfix <code>!</code> extracts the first case or panics:</p>
 <div class='code-block no-run'>
@@ -369,14 +368,14 @@ maybe_count</textarea>
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/syntax">&larr; 1. Syntax</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/bindings-and-functions">3. Bindings and Functions &rarr;</a>
+            <a href="/manual/syntax">&larr; 1. Syntax</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/bindings-and-functions">3. Bindings and Functions &rarr;</a>
           </nav>
         </div>
-        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+        <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787386821"></script>
+      <script type="module" src="/page.js?t=1787528490"></script>
     </main>
   </body>
 </html>

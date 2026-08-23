@@ -1914,7 +1914,7 @@ mod tests {
         std::fs::create_dir_all(&tests).expect("temp tests dir");
         std::fs::write(
             root.join("package.tlk"),
-            "Package(\n\tname: \"p\",\n\tversion: \"0.1.0\",\n\tbuilds: [.lib(from: \"src/lib.tlk\")],\n\tdependencies: []\n)\n",
+            "Package(\n\tname: \"p\",\n\tversion: \"0.1.0\",\n\tdescription: \"\",\n\tbuilds: [.lib(from: \"src/lib.tlk\")],\n\tdependencies: []\n)\n",
         )
         .expect("manifest");
         std::fs::write(src.join("lib.tlk"), "let x = 1\n").expect("lib");
@@ -3624,6 +3624,7 @@ mod tests {
         let code = r#"Package(
     name: "demo",
     version: "0.1.0",
+    description: "",
     builds: [.bin(named: "main", from: "src/main.tlk")],
     dependencies: [.path(package: "local", path: "../local")]
 )
@@ -3659,6 +3660,7 @@ mod tests {
         let code = r#"Package(
     name: "demo",
     version: "0.1.0",
+    description: "",
     builds: [.bin(named: "main", from: "src/missing.tlk")],
     dependencies: []
 )
@@ -4149,7 +4151,7 @@ func foo() 'fizz -> Int {
 
     #[test]
     fn goto_definition_on_core_function() {
-        // print_raw is defined in core/IO.tlk and available via the core prelude
+        // print_raw is defined in core/io.tlk and available via the core prelude
         let code = "print_raw(\"hello\")\n";
         let uri = Url::from_file_path(std::env::temp_dir().join("goto_def_core_func.tlk"))
             .expect("file uri");
@@ -4173,7 +4175,7 @@ func foo() 'fizz -> Int {
         let target = goto_for_test(&module, core.as_ref(), &uri, byte_offset)
             .expect("core member definition");
         assert!(
-            target.uri.path().ends_with("String.tlk"),
+            target.uri.path().ends_with("string.tlk"),
             "should jump to the core String member, got {:?}",
             target.uri
         );
@@ -4191,7 +4193,7 @@ func foo() 'fizz -> Int {
         let target = goto_for_test(&module, core.as_ref(), &uri, byte_offset)
             .expect("core member definition inside extension");
         assert!(
-            target.uri.path().ends_with("String.tlk"),
+            target.uri.path().ends_with("string.tlk"),
             "should jump to the core String member, got {:?}",
             target.uri
         );
@@ -4335,7 +4337,7 @@ func foo() 'fizz -> Int {
         std::fs::create_dir_all(root.join("tests")).expect("create tests dir");
         std::fs::write(
             root.join("package.tlk"),
-            "Package(\n    name: \"demo\",\n    version: \"0.1.0\",\n    builds: [.bin(named: \"main\", from: \"src/main.tlk\")],\n    dependencies: []\n)\n",
+            "Package(\n    name: \"demo\",\n    version: \"0.1.0\",\n    description: \"\",\n    builds: [.bin(named: \"main\", from: \"src/main.tlk\")],\n    dependencies: []\n)\n",
         )
         .expect("write manifest");
         std::fs::write(
@@ -4381,7 +4383,7 @@ func foo() 'fizz -> Int {
     fn write_manifest(root: &std::path::Path) {
         std::fs::write(
             root.join("package.tlk"),
-            "Package(\n\tname: \"p\",\n\tversion: \"0.1.0\",\n\tbuilds: [.lib(from: \"src/a.tlk\")],\n\tdependencies: []\n)\n",
+            "Package(\n\tname: \"p\",\n\tversion: \"0.1.0\",\n\tdescription: \"\",\n\tbuilds: [.lib(from: \"src/a.tlk\")],\n\tdependencies: []\n)\n",
         )
         .expect("manifest");
         std::fs::create_dir_all(root.join("src")).expect("src dir");

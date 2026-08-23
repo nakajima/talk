@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - 10. Macros</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386842" rel="stylesheet">
+    <link href="/style.css?t=1787528494" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/" aria-current="page">Guide</a>
         <a href="/docs/">Docs</a>
@@ -21,20 +20,20 @@
       </div>
     </nav>
     <main class="site-page manual-page">
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/macros" aria-current="page">10. Macros</a></nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/manual/">Guide</a> / <a href="/manual/macros" aria-current="page">10. Macros</a></nav>
+          <div class="split">
             <h1>10. Macros</h1>
             
           </div>
         </div>
       </header>
 
-      <div class="site-page-layout manual-layout">
-        <aside class="site-page-sidebar manual-outline">
+      <div>
+        <aside>
           <nav aria-label="Manual table of contents">
-            <span class="site-nav-label manual-outline-title">Contents</span>
+            <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -47,7 +46,7 @@
 <li><a href="/manual/ownership-and-memory">7. Ownership and Memory</a></li>
 <li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
 <li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
-<li><a href="/manual/macros" aria-current="page">10. Macros</a><ol class="manual-outline-sections"><li><a href="#declarative-macros">Declarative macros</a></li>
+<li><a href="/manual/macros" aria-current="page">10. Macros</a><ol><li><a href="#declarative-macros">Declarative macros</a></li>
 <li><a href="#hygiene-and-evaluation">Hygiene and evaluation</a></li>
 <li><a href="#expansion-positions">Expansion positions</a></li>
 <li><a href="#procedural-macros">Procedural macros</a></li>
@@ -63,13 +62,13 @@
             </ol>
           </nav>
         </aside>
-        <div class="site-page-content manual-document">
-          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/modules-and-packages">&larr; 9. Modules and Packages</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/concurrency">11. Concurrency &rarr;</a>
+        <div>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a href="/manual/modules-and-packages">&larr; 9. Modules and Packages</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/concurrency">11. Concurrency &rarr;</a>
           </nav>
-          <article class="prose page-content">
+          <article>
             <p>Macros write TalkTalk code for you before the compiler checks the program. Simple macros substitute pieces of syntax into a template. More advanced macros can inspect syntax and build a result. Either way, the generated code is checked like code you wrote yourself.</p>
 <h2><a href="#declarative-macros" aria-hidden="true" class="anchor" id="declarative-macros"></a>Declarative macros</h2>
 <p>A declarative macro is a balanced token template with <code>$</code> parameters:</p>
@@ -108,7 +107,7 @@ result</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>A macro can introduce syntax and control flow that a function cannot:</p>
 <div class='runnable'>
@@ -146,7 +145,7 @@ let done = false
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Rules can overload by arity. Macro invocations use <code>@name(...)</code>.</p>
 <h2><a href="#hygiene-and-evaluation" aria-hidden="true" class="anchor" id="hygiene-and-evaluation"></a>Hygiene and evaluation</h2>
@@ -179,14 +178,14 @@ let done = false
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/modules-and-packages">&larr; 9. Modules and Packages</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/concurrency">11. Concurrency &rarr;</a>
+            <a href="/manual/modules-and-packages">&larr; 9. Modules and Packages</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/concurrency">11. Concurrency &rarr;</a>
           </nav>
         </div>
-        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+        <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787386842"></script>
+      <script type="module" src="/page.js?t=1787528494"></script>
     </main>
   </body>
 </html>

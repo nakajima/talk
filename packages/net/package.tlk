@@ -1,6 +1,7 @@
 Package(
 	name: "net",
 	version: "0.1.0",
+	description: "Network connections and transport primitives.",
 	builds: [
 		.lib(from: "src/net.tlk")
 	],

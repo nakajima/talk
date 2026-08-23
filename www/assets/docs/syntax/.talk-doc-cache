@@ -1,9 +1,9 @@
 talk-doc-cache-v3
-shared 2634d6cc74017470
-module 0d032e6bf69b768c 1 50 Ast.html
-module f77e9410b900fd28 1 3 Docs.html
-module 81cafcad457a6d22 1 6 Dump.html
-module f2568b5aefe9af1b 1 25 Lexer.html
-module 5ba31574b6973863 1 19 Parser.html
-module 8b84e6418415c774 1 74 Syntax.html
-module 3830c60a8287e609 0 0 syntax.html
+shared 817f68c82a63da8f
+module fa94a50a00c95646 1 50 ast.html
+module 4d567d48a8ba5feb 1 3 docs.html
+module ca45fe7ed4bf18aa 1 6 dump.html
+module 248c876786f6f4a2 1 25 lexer.html
+module 20e852251bdde7b2 1 74 macros.html
+module 96a2885a998d17ff 1 19 parser.html
+module 538fee917c91c4fd 0 0 syntax.html

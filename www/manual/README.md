@@ -31,7 +31,7 @@ This manual starts with small programs and works up to TalkTalk's more unusual f
 
 ## Reading the examples
 
-TalkTalk source is fenced as `tlk`; terminal sessions are fenced as `sh`. On the website, an ordinary `tlk` block is editable and runnable. Each runnable block is a complete program unless the text says otherwise.
+TalkTalk source is fenced as `tlk`; shell commands and terminal sessions are fenced as `sh`. In a command-only block, every line receives a prompt. A session writes `$ ` before commands and leaves output lines unprefixed. On the website, an ordinary `tlk` block is editable and runnable. Each runnable block is a complete program unless the text says otherwise.
 
 A block marked `norun` is displayed as source without interactive controls. It may describe an API boundary, depend on files not shown, or deliberately show only part of a program. A block marked `accumulate(name)` shares source with earlier blocks in the same named group. Running a later accumulated block also includes those earlier declarations.
 

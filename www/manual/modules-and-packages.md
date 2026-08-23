@@ -60,10 +60,13 @@ use task::{ channel, sleep }
 Package(
     name: "hello",
     version: "0.1.0",
+    description: "",
     builds: [.bin(named: "main", from: "src/main.tlk")],
     dependencies: []
 )
 ```
+
+`description` is the short package summary shown by documentation indexes and other tooling.
 
 A package may build libraries and named binaries:
 

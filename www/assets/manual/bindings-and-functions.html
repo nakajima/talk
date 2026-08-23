@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - 3. Bindings and Functions</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386826" rel="stylesheet">
+    <link href="/style.css?t=1787528491" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/" aria-current="page">Guide</a>
         <a href="/docs/">Docs</a>
@@ -21,26 +20,26 @@
       </div>
     </nav>
     <main class="site-page manual-page">
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/bindings-and-functions" aria-current="page">3. Bindings and Functions</a></nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/manual/">Guide</a> / <a href="/manual/bindings-and-functions" aria-current="page">3. Bindings and Functions</a></nav>
+          <div class="split">
             <h1>3. Bindings and Functions</h1>
             
           </div>
         </div>
       </header>
 
-      <div class="site-page-layout manual-layout">
-        <aside class="site-page-sidebar manual-outline">
+      <div>
+        <aside>
           <nav aria-label="Manual table of contents">
-            <span class="site-nav-label manual-outline-title">Contents</span>
+            <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
 <li><a href="/manual/syntax">1. Syntax</a></li>
 <li><a href="/manual/values-and-types">2. Values and Types</a></li>
-<li><a href="/manual/bindings-and-functions" aria-current="page">3. Bindings and Functions</a><ol class="manual-outline-sections"><li><a href="#bindings-and-assignment">Bindings and assignment</a></li>
+<li><a href="/manual/bindings-and-functions" aria-current="page">3. Bindings and Functions</a><ol><li><a href="#bindings-and-assignment">Bindings and assignment</a></li>
 <li><a href="#defining-functions">Defining functions</a></li>
 <li><a href="#argument-labels">Argument labels</a></li>
 <li><a href="#parameter-modes">Parameter modes</a></li>
@@ -64,13 +63,13 @@
             </ol>
           </nav>
         </aside>
-        <div class="site-page-content manual-document">
-          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/values-and-types">&larr; 2. Values and Types</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/data-and-patterns">4. Data and Patterns &rarr;</a>
+        <div>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a href="/manual/values-and-types">&larr; 2. Values and Types</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/data-and-patterns">4. Data and Patterns &rarr;</a>
           </nav>
-          <article class="prose page-content">
+          <article>
             <p>Variables use <code>let</code>, functions use <code>func</code>, and both usually work without many type annotations. This chapter covers changing values, naming function arguments, passing functions around, and writing methods.</p>
 <h2><a href="#bindings-and-assignment" aria-hidden="true" class="anchor" id="bindings-and-assignment"></a>Bindings and assignment</h2>
 <p>Declare a local with <code>let</code> and optionally ascribe its type:</p>
@@ -101,7 +100,7 @@ score</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Every <code>let</code> binding can be assigned again; TalkTalk has no separate <code>var</code> keyword. Assignment also works with writable fields, tuple positions, and supported subscripts. Function signatures still control whether a function may change a value passed in from its caller: that is what <code>mut</code> means in the parameter and method examples below.</p>
 <p>Destructuring uses patterns. A refutable pattern needs <code>else</code>:</p>
@@ -128,7 +127,7 @@ let .some(value) = Optional.some(42) else { return }
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <h2><a href="#defining-functions" aria-hidden="true" class="anchor" id="defining-functions"></a>Defining functions</h2>
 <p>A function may infer parameter and return types locally:</p>
@@ -153,7 +152,7 @@ add(1, 2)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Annotations are recommended on public boundaries:</p>
 <div class='runnable'>
@@ -185,7 +184,7 @@ clamp(12, min: 0, max: 10)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>The final expression is returned implicitly. <code>return</code> without a value returns <code>Void</code>.</p>
 <h2><a href="#argument-labels" aria-hidden="true" class="anchor" id="argument-labels"></a>Argument labels</h2>
@@ -219,7 +218,7 @@ func bare(_ value: Int) { value } // bare(1)
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>A bare inferred parameter is positional. Adding a colon chooses a same-name label. A typed parameter is labeled unless <code>_</code> suppresses it.</p>
 <h2><a href="#parameter-modes" aria-hidden="true" class="anchor" id="parameter-modes"></a>Parameter modes</h2>
@@ -260,7 +259,7 @@ n // 2</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Ordinary and consuming arguments have no call-site marker. For shareable values, <code>consume</code> does not necessarily make the caller's name unusable: the compiler retains a snapshot when the caller has a later use.</p>
 <h2><a href="#closures" aria-hidden="true" class="anchor" id="closures"></a>Closures</h2>
@@ -286,7 +285,7 @@ increment(41)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Block closures are especially convenient as call arguments. The <code>$0</code>, <code>$1</code>, and so on shorthand is available when the surrounding call supplies the closure's parameter types:</p>
 <div class='runnable'>
@@ -310,7 +309,7 @@ print(doubled)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Functions can capture surrounding values. A final closure argument can move outside the parentheses:</p>
 <div class='runnable'>
@@ -340,7 +339,7 @@ twice { print(&quot;hello&quot;) }</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Functions are values, so they can be stored in records and structs, passed as arguments, and returned. If a stored function uses an effect, such as asking for input, it uses the handler that is active when you call it. It does not permanently remember the handler from where it was created. See <a href="/manual/effects">Effects</a> for the full model.</p>
 <h2><a href="#methods" aria-hidden="true" class="anchor" id="methods"></a>Methods</h2>
@@ -386,19 +385,19 @@ Counter.zero().value</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/values-and-types">&larr; 2. Values and Types</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/data-and-patterns">4. Data and Patterns &rarr;</a>
+            <a href="/manual/values-and-types">&larr; 2. Values and Types</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/data-and-patterns">4. Data and Patterns &rarr;</a>
           </nav>
         </div>
-        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+        <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787386826"></script>
+      <script type="module" src="/page.js?t=1787528491"></script>
     </main>
   </body>
 </html>

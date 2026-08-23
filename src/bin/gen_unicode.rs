@@ -1,8 +1,8 @@
 //! Generates the grapheme-cluster-break data talk's Character layer uses:
 //!
-//!   - `core/UnicodeData.tlk` — merged break-category table packed into a
+//!   - `core/unicode_data.tlk` — merged break-category table packed into a
 //!     7-bit-clean string literal (interned static bytes at runtime), plus
-//!     the category constants `core/Unicode.tlk` matches on.
+//!     the category constants `core/unicode.tlk` matches on.
 //!   - `tests/unicode/grapheme_conformance.tlk` — the official
 //!     GraphemeBreakTest cases as a self-checking talk program.
 //!
@@ -23,7 +23,7 @@ use std::fmt::Write as _;
 
 const UCD_VERSION: &str = "17.0.0";
 
-// Category numbering shared with core/Unicode.tlk's `_GC_*` constants.
+// Category numbering shared with core/unicode.tlk's `_GC_*` constants.
 // InCB (Indic_Conjunct_Break) and Extended_Pictographic refine rather than
 // cross-cut the GCB partition (asserted during generation), so one flat
 // table holds all three properties.
@@ -293,7 +293,7 @@ fn render_unicode_data(gcb_entries: &[(u32, u8)], char_entries: &[(u32, u8)]) ->
          // The table is a sorted boundary list: entries of four base-128\n\
          // septets encoding start_codepoint * 32 + category. See\n\
          // src/bin/gen_unicode.rs for the encoding and regeneration story.\n\
-         use package::String::{ String }\n\n",
+         use package::string::{ String }\n\n",
     );
     for (name, value) in CAT_NAMES {
         let description = match *name {
@@ -465,13 +465,13 @@ fn main() {
     );
     let char_entries = boundaries(&char_cats);
     let data = render_unicode_data(&entries, &char_entries);
-    std::fs::write("core/UnicodeData.tlk", &data).expect("writing core/UnicodeData.tlk");
+    std::fs::write("core/unicode_data.tlk", &data).expect("writing core/unicode_data.tlk");
     let (conformance, cases) = render_conformance(&read("GraphemeBreakTest.txt"));
     std::fs::create_dir_all("tests/unicode").expect("creating tests/unicode");
     std::fs::write("tests/unicode/grapheme_conformance.tlk", conformance)
         .expect("writing conformance program");
     println!(
-        "wrote core/UnicodeData.tlk ({} grapheme entries, {} character-class entries) and \
+        "wrote core/unicode_data.tlk ({} grapheme entries, {} character-class entries) and \
          tests/unicode/grapheme_conformance.tlk ({cases} cases)",
         entries.len(),
         char_entries.len(),

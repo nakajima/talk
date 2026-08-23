@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - 1. Syntax</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386817" rel="stylesheet">
+    <link href="/style.css?t=1787528489" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/" aria-current="page">Guide</a>
         <a href="/docs/">Docs</a>
@@ -21,24 +20,24 @@
       </div>
     </nav>
     <main class="site-page manual-page">
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/syntax" aria-current="page">1. Syntax</a></nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/manual/">Guide</a> / <a href="/manual/syntax" aria-current="page">1. Syntax</a></nav>
+          <div class="split">
             <h1>1. Syntax</h1>
             
           </div>
         </div>
       </header>
 
-      <div class="site-page-layout manual-layout">
-        <aside class="site-page-sidebar manual-outline">
+      <div>
+        <aside>
           <nav aria-label="Manual table of contents">
-            <span class="site-nav-label manual-outline-title">Contents</span>
+            <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
-<li><a href="/manual/syntax" aria-current="page">1. Syntax</a><ol class="manual-outline-sections"><li><a href="#statements-and-blocks">Statements and blocks</a></li>
+<li><a href="/manual/syntax" aria-current="page">1. Syntax</a><ol><li><a href="#statements-and-blocks">Statements and blocks</a></li>
 <li><a href="#comments">Comments</a></li>
 <li><a href="#control-flow">Control flow</a></li>
 <li><a href="#calls-and-member-access">Calls and member access</a></li>
@@ -64,13 +63,13 @@
             </ol>
           </nav>
         </aside>
-        <div class="site-page-content manual-document">
-          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/getting-started">&larr; 0. Getting Started</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/values-and-types">2. Values and Types &rarr;</a>
+        <div>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a href="/manual/getting-started">&larr; 0. Getting Started</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/values-and-types">2. Values and Types &rarr;</a>
           </nav>
-          <article class="prose page-content">
+          <article>
             <p>TalkTalk uses braces around blocks of code, starts a new statement on each line, and uses <code>//</code> for comments. If the last line of a block produces a value, that value becomes the result of the block.</p>
 <h2><a href="#statements-and-blocks" aria-hidden="true" class="anchor" id="statements-and-blocks"></a>Statements and blocks</h2>
 <p>A newline normally ends a statement. Semicolons are accepted but frowned upon (and the formatter will probably get rid of them anyway):</p>
@@ -95,7 +94,7 @@ print(width * height)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Declarations, conditionals, loops, closures, and matches use braces:</p>
 <div class='runnable' data-accumulates='true' data-accumulate-group='syntax'>
@@ -123,7 +122,7 @@ print(width * height)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>A function or closure returns its final expression implicitly:</p>
 <div class='runnable'>
@@ -159,7 +158,7 @@ absolute(-5)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Use <code>return</code> for an early return.</p>
 <h2><a href="#comments" aria-hidden="true" class="anchor" id="comments"></a>Comments</h2>
@@ -183,7 +182,7 @@ let area = width * height</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <h2><a href="#control-flow" aria-hidden="true" class="anchor" id="control-flow"></a>Control flow</h2>
 <p><code>if</code> is an expression when both branches produce compatible values:</p>
@@ -212,7 +211,7 @@ let area = width * height</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p><code>else if</code> chains are supported. A statement-position <code>if</code> may omit <code>else</code>.</p>
 <p><code>loop</code> is either infinite or while-like:</p>
@@ -241,7 +240,7 @@ loop n &gt; 0 {
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Use <code>break</code> and <code>continue</code> inside loops. <code>for</code> works through the <code>Iterable</code> and <code>Iterator</code> protocols:</p>
 <div class='runnable'>
@@ -265,7 +264,7 @@ loop n &gt; 0 {
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p><code>0..&lt;3</code> is half-open; <code>0..3</code> is closed.</p>
 <h2><a href="#calls-and-member-access" aria-hidden="true" class="anchor" id="calls-and-member-access"></a>Calls and member access</h2>
@@ -295,7 +294,7 @@ repeat(&quot;ha&quot;, 3)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>The compiler learns from the body that <code>text</code> is a <code>String</code> and <code>count</code> is an <code>Int</code>. You can add those types yourself; typed parameters use their names as call-site labels by default:</p>
 <div class='runnable'>
@@ -323,7 +322,7 @@ repeat(text: &quot;ha&quot;, count: 3)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Use <code>_</code> to leave a parameter positional, or write a different label before its local name:</p>
 <div class='runnable'>
@@ -351,7 +350,7 @@ repeat(&quot;ha&quot;, times: 3)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p><a href="/manual/bindings-and-functions">Bindings and Functions</a> covers labels and type inference in more detail.</p>
 <p>Member access uses <code>.</code>, tuple fields use numeric members, and subscripts use brackets:</p>
@@ -376,7 +375,7 @@ print(pair.0 + numbers[1])</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>A final function argument can be written as a block after the call. Inside a short block, <code>$0</code> means the first argument, <code>$1</code> the second, and so on:</p>
 <div class='runnable'>
@@ -396,7 +395,7 @@ print(pair.0 + numbers[1])</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Here <code>map</code> calls the block once for each number. The compiler knows each <code>$0</code> is an <code>Int</code> because the array contains integers. You can name the argument when that reads better: <code>.map { number in number * 10 }</code>.</p>
 <h2><a href="#operators" aria-hidden="true" class="anchor" id="operators"></a>Operators</h2>
@@ -435,7 +434,7 @@ print(greeting)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Operators can also work with user-defined types. The matching protocol, such as <code>Add</code> or <code>Comparable</code>, defines what the operator does; <a href="/manual/generics-and-protocols">Generics and Protocols</a> explains how.</p>
 <h2><a href="#names-and-visibility" aria-hidden="true" class="anchor" id="names-and-visibility"></a>Names and visibility</h2>
@@ -448,14 +447,14 @@ print(greeting)</textarea>
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/getting-started">&larr; 0. Getting Started</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/values-and-types">2. Values and Types &rarr;</a>
+            <a href="/manual/getting-started">&larr; 0. Getting Started</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/values-and-types">2. Values and Types &rarr;</a>
           </nav>
         </div>
-        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+        <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787386817"></script>
+      <script type="module" src="/page.js?t=1787528489"></script>
     </main>
   </body>
 </html>

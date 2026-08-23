@@ -1,6 +1,7 @@
 Package(
 	name: "talk-doc",
 	version: "0.1.0",
+	description: "HTML API documentation generation.",
 	builds: [
 		.bin(named: "main", from: "src/main.tlk"),
 		.lib(from: "src/generate.tlk")

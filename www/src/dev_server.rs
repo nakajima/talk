@@ -1,12 +1,16 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     env, fs,
     io::{self, Read, Write},
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::Command,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use crate::SiteBuilder;
@@ -22,6 +26,53 @@ pub(crate) struct DevServer {
     executable: PathBuf,
     listener: TcpListener,
     sources: SourceState,
+    rendered: Arc<RenderedPages>,
+}
+
+// Pages rendered on demand, keyed by normalized route and cleared whenever a
+// site source changes.
+#[derive(Default)]
+struct RenderedPages {
+    pages: Mutex<HashMap<String, RenderedPage>>,
+    // Held while rendering so concurrent requests for a page share one
+    // render: the first request renders while the rest wait here and then
+    // read the cache. Renders spawn several compiler subprocesses each, so
+    // letting them stack up starves the machine.
+    rendering: Mutex<()>,
+}
+
+impl RenderedPages {
+    fn clear(&self) {
+        self.pages.lock().unwrap().clear();
+    }
+
+    fn get_or_render(
+        &self,
+        route: &str,
+        render: impl FnOnce() -> Result<Option<RenderedPage>, ()>,
+    ) -> Result<Option<RenderedPage>, ()> {
+        if let Some(page) = self.pages.lock().unwrap().get(route) {
+            return Ok(Some(page.clone()));
+        }
+        let _rendering = self.rendering.lock().unwrap();
+        if let Some(page) = self.pages.lock().unwrap().get(route) {
+            return Ok(Some(page.clone()));
+        }
+        let result = render()?;
+        if let Some(page) = &result {
+            self.pages
+                .lock()
+                .unwrap()
+                .insert(route.to_string(), page.clone());
+        }
+        Ok(result)
+    }
+}
+
+#[derive(Clone)]
+struct RenderedPage {
+    content_type: &'static str,
+    body: Vec<u8>,
 }
 
 impl DevServer {
@@ -40,7 +91,7 @@ impl DevServer {
         if !assets.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
-                "./assets is missing; run `cargo run -- build` first",
+                "./assets is missing; run the dev server from the www directory",
             ));
         }
 
@@ -53,17 +104,19 @@ impl DevServer {
             executable: env::current_exe()?,
             listener,
             sources: SourceState::capture(),
+            rendered: Arc::new(RenderedPages::default()),
         })
     }
 
     pub(crate) fn run(mut self) -> io::Result<()> {
         let address = self.listener.local_addr()?;
         println!("serving http://localhost:{}", address.port());
+        let documentation = DocumentationWorker::spawn(self.builder, self.assets.clone());
 
         loop {
             self.accept_connections()?;
             thread::sleep(POLL_INTERVAL);
-            self.rebuild_if_needed()?;
+            self.rebuild_if_needed(&documentation)?;
         }
     }
 
@@ -71,9 +124,14 @@ impl DevServer {
         loop {
             match self.listener.accept() {
                 Ok((stream, _)) => {
-                    let assets = self.assets.clone();
+                    let connection = Connection {
+                        stream,
+                        assets: self.assets.clone(),
+                        builder: self.builder,
+                        rendered: Arc::clone(&self.rendered),
+                    };
                     thread::spawn(move || {
-                        if let Err(error) = Connection::new(stream, assets).serve() {
+                        if let Err(error) = connection.serve() {
                             eprintln!("request failed: {error}");
                         }
                     });
@@ -84,7 +142,7 @@ impl DevServer {
         }
     }
 
-    fn rebuild_if_needed(&mut self) -> io::Result<()> {
+    fn rebuild_if_needed(&mut self, documentation: &DocumentationWorker) -> io::Result<()> {
         let current = SourceState::capture();
         let executable_changed = current.executable != self.sources.executable;
         let site_changed = current.site != self.sources.site;
@@ -100,12 +158,9 @@ impl DevServer {
             }
             eprintln!("server rebuild failed; keeping the current process running");
         } else if site_changed {
-            println!("site source changed; rebuilding pages");
-            match std::panic::catch_unwind(|| self.builder.write_all(&self.assets)) {
-                Ok(Ok(())) => println!("rebuilt pages"),
-                Ok(Err(error)) => eprintln!("site rebuild failed: {error}"),
-                Err(_) => eprintln!("site rebuild failed; keeping the previous pages"),
-            }
+            println!("site source changed; pages will re-render on request");
+            self.rendered.clear();
+            documentation.mark_dirty();
         }
 
         Ok(())
@@ -125,6 +180,44 @@ impl DevServer {
             io::ErrorKind::Unsupported,
             "automatic server restart is only supported on Unix",
         ))
+    }
+}
+
+// Documentation pages come from the talk-doc generator, which renders into
+// files with its own incremental cache, so they stay on disk rather than
+// rendering per request. Generation runs on this worker's thread to keep the
+// accept loop responsive while it works.
+struct DocumentationWorker {
+    dirty: Arc<AtomicBool>,
+}
+
+impl DocumentationWorker {
+    fn spawn(builder: SiteBuilder, assets: PathBuf) -> Self {
+        let dirty = Arc::new(AtomicBool::new(true));
+        let flag = Arc::clone(&dirty);
+        thread::spawn(move || {
+            loop {
+                if flag.swap(false, Ordering::SeqCst) {
+                    let started = Instant::now();
+                    match std::panic::catch_unwind(|| builder.write_documentation(&assets)) {
+                        Ok(Ok(())) => println!(
+                            "documentation regenerated in {}",
+                            elapsed_label(started.elapsed())
+                        ),
+                        Ok(Err(error)) => eprintln!("documentation rebuild failed: {error}"),
+                        Err(_) => {
+                            eprintln!("documentation rebuild failed; keeping the previous pages");
+                        }
+                    }
+                }
+                thread::sleep(POLL_INTERVAL);
+            }
+        });
+        Self { dirty }
+    }
+
+    fn mark_dirty(&self) {
+        self.dirty.store(true, Ordering::SeqCst);
     }
 }
 
@@ -148,6 +241,14 @@ impl SourceState {
         FileStamp::collect(Path::new("../packages"), &mut site);
 
         Self { executable, site }
+    }
+}
+
+fn elapsed_label(duration: Duration) -> String {
+    if duration.as_secs_f64() >= 1.0 {
+        format!("{:.1}s", duration.as_secs_f64())
+    } else {
+        format!("{}ms", duration.as_millis())
     }
 }
 
@@ -188,13 +289,11 @@ impl FileStamp {
 struct Connection {
     stream: TcpStream,
     assets: PathBuf,
+    builder: SiteBuilder,
+    rendered: Arc<RenderedPages>,
 }
 
 impl Connection {
-    fn new(stream: TcpStream, assets: PathBuf) -> Self {
-        Self { stream, assets }
-    }
-
     fn serve(mut self) -> io::Result<()> {
         self.stream.set_read_timeout(Some(Duration::from_secs(2)))?;
         let request = match HttpRequest::read_from(&mut self.stream) {
@@ -218,26 +317,62 @@ impl Connection {
             );
         }
 
+        let head_only = request.method == "HEAD";
         let Some(asset_path) = AssetPath::from_target(&request.target) else {
             return self.respond(
                 "400 Bad Request",
                 "text/plain; charset=utf-8",
                 b"invalid path\n".to_vec(),
-                request.method == "HEAD",
+                head_only,
             );
         };
+        match self.dynamic_page(&asset_path.route()) {
+            Ok(Some(page)) => {
+                return self.respond("200 OK", page.content_type, page.body, head_only);
+            }
+            Ok(None) => {}
+            Err(()) => {
+                return self.respond(
+                    "500 Internal Server Error",
+                    "text/plain; charset=utf-8",
+                    b"page render failed; see the dev server log\n".to_vec(),
+                    head_only,
+                );
+            }
+        }
         let Some(path) = asset_path.resolve_in(&self.assets) else {
             return self.respond(
                 "404 Not Found",
                 "text/plain; charset=utf-8",
                 b"not found\n".to_vec(),
-                request.method == "HEAD",
+                head_only,
             );
         };
 
         let content_type = AssetPath::content_type(&path);
         let body = fs::read(path)?;
-        self.respond("200 OK", content_type, body, request.method == "HEAD")
+        self.respond("200 OK", content_type, body, head_only)
+    }
+
+    fn dynamic_page(&self, route: &str) -> Result<Option<RenderedPage>, ()> {
+        if crate::page_route(route).is_none() {
+            return Ok(None);
+        }
+        let builder = self.builder;
+        self.rendered.get_or_render(route, || {
+            let started = Instant::now();
+            match std::panic::catch_unwind(move || builder.render_route(route)) {
+                Ok(Some((content_type, body))) => {
+                    println!("rendered /{route} in {}", elapsed_label(started.elapsed()));
+                    Ok(Some(RenderedPage {
+                        content_type,
+                        body: body.into_bytes(),
+                    }))
+                }
+                Ok(None) => Ok(None),
+                Err(_) => Err(()),
+            }
+        })
     }
 
     fn respond(
@@ -337,6 +472,21 @@ impl AssetPath {
         })
     }
 
+    // Normalizes the request into the route form `crate::page_route` expects:
+    // no leading or trailing slash and no ".html" or "/index" suffix.
+    fn route(&self) -> String {
+        let mut route = self.relative.to_string_lossy().into_owned();
+        if let Some(length) = route.strip_suffix(".html").map(str::len) {
+            route.truncate(length);
+        }
+        if route == "index" {
+            route.clear();
+        } else if let Some(length) = route.strip_suffix("/index").map(str::len) {
+            route.truncate(length);
+        }
+        route
+    }
+
     fn resolve_in(&self, root: &Path) -> Option<PathBuf> {
         if self.relative.as_os_str().is_empty() {
             return Self::existing_file(root.join("index.html"));
@@ -407,14 +557,93 @@ impl AssetPath {
 
 #[cfg(test)]
 mod tests {
-    use super::AssetPath;
-    use std::{fs, path::Path};
+    use super::{elapsed_label, AssetPath, RenderedPage, RenderedPages};
+    use std::{
+        fs,
+        path::Path,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+        thread,
+        time::Duration,
+    };
+
+    #[test]
+    fn concurrent_requests_share_one_render() {
+        let rendered = Arc::new(RenderedPages::default());
+        let renders = Arc::new(AtomicUsize::new(0));
+        let handles = (0..8)
+            .map(|_| {
+                let rendered = Arc::clone(&rendered);
+                let renders = Arc::clone(&renders);
+                thread::spawn(move || {
+                    rendered.get_or_render("manual/effects", || {
+                        renders.fetch_add(1, Ordering::SeqCst);
+                        thread::sleep(Duration::from_millis(50));
+                        Ok(Some(RenderedPage {
+                            content_type: "text/html; charset=utf-8",
+                            body: b"page".to_vec(),
+                        }))
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            let page = handle.join().unwrap().unwrap().unwrap();
+            assert_eq!(page.body, b"page");
+        }
+        assert_eq!(renders.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn cleared_pages_render_again() {
+        let rendered = RenderedPages::default();
+        let render = || {
+            Ok(Some(RenderedPage {
+                content_type: "text/html; charset=utf-8",
+                body: b"page".to_vec(),
+            }))
+        };
+        rendered.get_or_render("qa", render).unwrap();
+        rendered.clear();
+        let renders = AtomicUsize::new(0);
+        rendered
+            .get_or_render("qa", || {
+                renders.fetch_add(1, Ordering::SeqCst);
+                render()
+            })
+            .unwrap();
+        assert_eq!(renders.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn elapsed_labels_use_millis_under_a_second_and_seconds_above() {
+        assert_eq!(elapsed_label(Duration::from_millis(0)), "0ms");
+        assert_eq!(elapsed_label(Duration::from_millis(340)), "340ms");
+        assert_eq!(elapsed_label(Duration::from_millis(1540)), "1.5s");
+        assert_eq!(elapsed_label(Duration::from_secs(62)), "62.0s");
+    }
 
     #[test]
     fn rejects_traversal_paths() {
         assert!(AssetPath::from_target("/../Cargo.toml").is_none());
         assert!(AssetPath::from_target("/%2e%2e/Cargo.toml").is_none());
         assert!(AssetPath::from_target("/..%2fCargo.toml").is_none());
+    }
+
+    #[test]
+    fn routes_normalize_request_targets() {
+        let route = |target: &str| AssetPath::from_target(target).unwrap().route();
+        assert_eq!(route("/"), "");
+        assert_eq!(route("/index.html"), "");
+        assert_eq!(route("/playground"), "playground");
+        assert_eq!(route("/playground.html"), "playground");
+        assert_eq!(route("/playground?example=hello"), "playground");
+        assert_eq!(route("/manual/"), "manual");
+        assert_eq!(route("/manual/index.html"), "manual");
+        assert_eq!(route("/manual/effects"), "manual/effects");
+        assert_eq!(route("/docs/core/Array.html"), "docs/core/Array");
     }
 
     #[test]

@@ -1,8 +1,9 @@
 Package(
 	name: "html",
 	version: "0.1.0",
+	description: "HTML syntax and rendering support.",
 	builds: [
-		.lib(from: "src/Html.tlk")
+		.lib(from: "src/html.tlk")
 	],
 	dependencies: [
 		.path(

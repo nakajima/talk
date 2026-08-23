@@ -81,8 +81,8 @@ const BUILTIN_PACKAGES: &[BuiltinPackage] = &[
                 include_str!("../../packages/Package/package.tlk"),
             ),
             (
-                "src/Package.tlk",
-                include_str!("../../packages/Package/src/Package.tlk"),
+                "src/package.tlk",
+                include_str!("../../packages/Package/src/package.tlk"),
             ),
         ],
     },
@@ -100,28 +100,28 @@ const BUILTIN_PACKAGES: &[BuiltinPackage] = &[
                 include_str!("../../packages/syntax/src/syntax.tlk"),
             ),
             (
-                "src/Ast.tlk",
-                include_str!("../../packages/syntax/src/Ast.tlk"),
+                "src/ast.tlk",
+                include_str!("../../packages/syntax/src/ast.tlk"),
             ),
             (
-                "src/Docs.tlk",
-                include_str!("../../packages/syntax/src/Docs.tlk"),
+                "src/docs.tlk",
+                include_str!("../../packages/syntax/src/docs.tlk"),
             ),
             (
-                "src/Dump.tlk",
-                include_str!("../../packages/syntax/src/Dump.tlk"),
+                "src/dump.tlk",
+                include_str!("../../packages/syntax/src/dump.tlk"),
             ),
             (
-                "src/Lexer.tlk",
-                include_str!("../../packages/syntax/src/Lexer.tlk"),
+                "src/lexer.tlk",
+                include_str!("../../packages/syntax/src/lexer.tlk"),
             ),
             (
-                "src/Parser.tlk",
-                include_str!("../../packages/syntax/src/Parser.tlk"),
+                "src/parser.tlk",
+                include_str!("../../packages/syntax/src/parser.tlk"),
             ),
             (
-                "src/Syntax.tlk",
-                include_str!("../../packages/syntax/src/Syntax.tlk"),
+                "src/macros.tlk",
+                include_str!("../../packages/syntax/src/macros.tlk"),
             ),
         ],
     },
@@ -135,8 +135,8 @@ const BUILTIN_PACKAGES: &[BuiltinPackage] = &[
                 include_str!("../../packages/html/package.tlk"),
             ),
             (
-                "src/Html.tlk",
-                include_str!("../../packages/html/src/Html.tlk"),
+                "src/html.tlk",
+                include_str!("../../packages/html/src/html.tlk"),
             ),
             (
                 "src/html.macro.tlk",
@@ -796,7 +796,7 @@ mod tests {
         assert!(
             documents
                 .iter()
-                .any(|(path, _)| path.ends_with("src/Parser.tlk"))
+                .any(|(path, _)| path.ends_with("src/parser.tlk"))
         );
         let dict = source_documents("dict").expect("dict sources");
         assert_eq!(dict.len(), 1);

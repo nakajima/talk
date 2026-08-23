@@ -1,6 +1,7 @@
 Package(
 	name: "http",
 	version: "0.1.0",
+	description: "HTTP request and response support.",
 	builds: [
 		.lib(from: "src/http.tlk")
 	],

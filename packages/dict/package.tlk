@@ -1,6 +1,7 @@
 Package(
 	name: "dict",
 	version: "0.1.0",
+	description: "Key-value collections.",
 	builds: [
 		.lib(from: "src/dict.tlk")
 	],

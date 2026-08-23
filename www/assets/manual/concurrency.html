@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - 11. Concurrency</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386846" rel="stylesheet">
+    <link href="/style.css?t=1787528495" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/" aria-current="page">Guide</a>
         <a href="/docs/">Docs</a>
@@ -21,20 +20,20 @@
       </div>
     </nav>
     <main class="site-page manual-page">
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/concurrency" aria-current="page">11. Concurrency</a></nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/manual/">Guide</a> / <a href="/manual/concurrency" aria-current="page">11. Concurrency</a></nav>
+          <div class="split">
             <h1>11. Concurrency</h1>
             
           </div>
         </div>
       </header>
 
-      <div class="site-page-layout manual-layout">
-        <aside class="site-page-sidebar manual-outline">
+      <div>
+        <aside>
           <nav aria-label="Manual table of contents">
-            <span class="site-nav-label manual-outline-title">Contents</span>
+            <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -48,7 +47,7 @@
 <li><a href="/manual/collections-and-text">8. Collections and Text</a></li>
 <li><a href="/manual/modules-and-packages">9. Modules and Packages</a></li>
 <li><a href="/manual/macros">10. Macros</a></li>
-<li><a href="/manual/concurrency" aria-current="page">11. Concurrency</a><ol class="manual-outline-sections"><li><a href="#function-coloring-and-direct-style">Function coloring and direct style</a></li>
+<li><a href="/manual/concurrency" aria-current="page">11. Concurrency</a><ol><li><a href="#function-coloring-and-direct-style">Function coloring and direct style</a></li>
 <li><a href="#the-implicit-root-scheduler">The implicit root scheduler</a></li>
 <li><a href="#waiting-and-blocking-fallbacks">Waiting and blocking fallbacks</a></li>
 <li><a href="#structured-parallel-work">Structured parallel work</a></li>
@@ -67,13 +66,13 @@
             </ol>
           </nav>
         </aside>
-        <div class="site-page-content manual-document">
-          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/macros">&larr; 10. Macros</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/testing">12. Testing &rarr;</a>
+        <div>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a href="/manual/macros">&larr; 10. Macros</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/testing">12. Testing &rarr;</a>
           </nav>
-          <article class="prose page-content">
+          <article>
             <p>TalkTalk has two complementary ways to run work: cooperative tasks on one worker and structured parallel jobs across workers. Both use direct-style source. Code can sleep or wait for a channel while still reading from top to bottom.</p>
 <p>Most APIs in this chapter come from <code>task</code>. Core supplies the task effects and runs every executable's top-level statements as an implicit cooperative root task. The <code>coop</code> module is only needed for an explicit nested scheduling scope.</p>
 <h2><a href="#function-coloring-and-direct-style" aria-hidden="true" class="anchor" id="function-coloring-and-direct-style"></a>Function coloring and direct style</h2>
@@ -110,7 +109,7 @@ reminder()</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>This does not mean waiting is invisible to the type system. <code>sleep</code> performs <code>wait_until</code>, and that effect is present in the inferred function row. Effect inference propagates the requirement through callers without requiring <code>async</code>, <code>await</code>, or a future-valued return type. A closed effect annotation still has to admit the operation.</p>
 <h2><a href="#the-implicit-root-scheduler" aria-hidden="true" class="anchor" id="the-implicit-root-scheduler"></a>The implicit root scheduler</h2>
@@ -150,7 +149,7 @@ print(&quot;root&quot;)
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p><code>'spawn</code> adds a child task. <code>'yield</code> suspends the current task voluntarily so another ready task can run. The scheduler also switches tasks when one waits for a channel or deadline. If the root finishes while children remain, the scheduler continues until all children finish.</p>
 <p>Cooperative tasks do not run simultaneously on the same worker. A task changes only at an explicit suspension operation, which makes direct-style local state straightforward. Scheduling order beyond the documented rules is not an API guarantee.</p>
@@ -198,7 +197,7 @@ print(doubled)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>The worker receives each job by ownership and may use the standard host effects for I/O, allocation, yielding, panic, channels, and timers. User-defined handlers from the spawning task do not cross the worker boundary; install those inside the worker when needed.</p>
 <p>Jobs and results must conform to <code>Send</code>. Native targets transfer them into shared-memory workers using thread-safe ownership transitions. The reference VM gives each worker an isolated machine and structurally copies transferable values. <code>Send</code> excludes observable identity, so these implementations have the same source-visible value behavior.</p>
@@ -231,7 +230,7 @@ print(receiver.recv())</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p><code>Sender.clone()</code> creates another logical producer. <code>Receiver.recv()</code> returns the next <code>T</code>, or <code>.none</code> after every sender has been destroyed and the queue is empty. Destroying the receiver closes the other direction; later sends drop their undelivered values safely.</p>
 <p>Channel payloads must be <code>Send</code>. A send moves the payload into the runtime queue. A waiting receive suspends its task under the cooperative scheduler or blocks under the host fallback. Sending, receiving, and closing wake waiters through the same check-register-park protocol so a wake racing with a wait is not lost.</p>
@@ -264,7 +263,7 @@ let delivered = sender.send(value: 42)
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Bounded channels are useful for pipelines, network ingestion, and any producer whose rate should follow a slower consumer. The bound is enforced with an atomic reservation so racing producers cannot overfill it. <code>send</code> returns <code>false</code> if the receiver closes before delivery; otherwise it returns <code>true</code> after enqueueing the value.</p>
 <p>Backpressure can expose a real dependency cycle: if every task waits to send to a full queue and no task can receive, the program waits. Capacity is part of the pipeline design, not a substitute for arranging progress.</p>
@@ -305,7 +304,7 @@ match select_recv(a: left, b: right) {
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>If both sides are ready, the left side wins. This tie rule is deterministic, not fair; swap the receivers when a caller wants to rotate priority. A closed channel counts as ready and produces <code>.none</code>. Wakes are readiness hints rather than claims, so the losing side does not lose its queued value.</p>
 <h2><a href="#resumptions-are-the-mechanism" aria-hidden="true" class="anchor" id="resumptions-are-the-mechanism"></a>Resumptions are the mechanism</h2>
@@ -316,14 +315,14 @@ match select_recv(a: left, b: right) {
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/macros">&larr; 10. Macros</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/testing">12. Testing &rarr;</a>
+            <a href="/manual/macros">&larr; 10. Macros</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/testing">12. Testing &rarr;</a>
           </nav>
         </div>
-        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+        <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787386846"></script>
+      <script type="module" src="/page.js?t=1787528495"></script>
     </main>
   </body>
 </html>

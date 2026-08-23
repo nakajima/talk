@@ -5,14 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - Docs</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386812" rel="stylesheet">
-    <link href="/docs.css?t=1787386812" rel="stylesheet">
+    <link href="/style.css?t=1787528959" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/">Guide</a>
         <a href="/docs/" aria-current="page">Docs</a>
@@ -21,21 +19,41 @@
         <a href="/philosophy">Philosophy</a>
       </div>
     </nav>
-    <main class="site-page docs-proposal docs-design-1">
-      <header class="site-page-header docs-proposal-header">
-        <div class="site-page-heading docs-proposal-heading">
-          <code class="page-kicker">talktalk / docs</code>
-          <p class="docs-proposal-label">Reference</p>
-          <h1>API Documentation</h1>
+    <main class="site-page">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/docs/" aria-current="page">Docs</a></nav>
+          <div class="split">
+            <h1>API Documentation</h1>
+          </div>
         </div>
       </header>
-      <div class="site-page-layout docs-proposal-shell">
-        <aside class="site-page-sidebar docs-catalog" aria-label="Documentation sections">
-          <div class="site-nav-group docs-nav-group">
-            <span class="site-nav-label docs-nav-label">Libraries</span>
-<a href="/docs/core/">Core</a>
-<a href="/docs/Package/">Package</a>
-<a href="/docs/ansi/">ansi</a>
+      <div>
+        <aside aria-label="Documentation sections">
+          <div>
+            <span>Libraries</span>
+<a href="#core">core</a><div><a href="/docs/core/array.html">array</a>
+<a href="/docs/core/async.html">async</a>
+<a href="/docs/core/builtins.html">builtins</a>
+<a href="/docs/core/convert.html">convert</a>
+<a href="/docs/core/host.html">host</a>
+<a href="/docs/core/inline_array.html">inline_array</a>
+<a href="/docs/core/io.html">io</a>
+<a href="/docs/core/iterable.html">iterable</a>
+<a href="/docs/core/memory.html">memory</a>
+<a href="/docs/core/operators.html">operators</a>
+<a href="/docs/core/optional.html">optional</a>
+<a href="/docs/core/ownership.html">ownership</a>
+<a href="/docs/core/range.html">range</a>
+<a href="/docs/core/result.html">result</a>
+<a href="/docs/core/showable.html">showable</a>
+<a href="/docs/core/string.html">string</a>
+<a href="/docs/core/string_builder.html">string_builder</a>
+<a href="/docs/core/text.html">text</a>
+<a href="/docs/core/text_unicode_data.html">text_unicode_data</a>
+<a href="/docs/core/time.html">time</a>
+<a href="/docs/core/unicode.html">unicode</a>
+<a href="/docs/core/unicode_data.html">unicode_data</a></div><a href="#standard-library">Standard Library</a><div><a href="/docs/ansi/">ansi</a>
 <a href="/docs/coop/">coop</a>
 <a href="/docs/dict/">dict</a>
 <a href="/docs/fs/">fs</a>
@@ -43,34 +61,52 @@
 <a href="/docs/http/">http</a>
 <a href="/docs/net/">net</a>
 <a href="/docs/os/">os</a>
+<a href="/docs/Package/">Package</a>
 <a href="/docs/syntax/">syntax</a>
 <a href="/docs/talk-doc/">talk-doc</a>
 <a href="/docs/talk-md/">talk-md</a>
 <a href="/docs/task/">task</a>
-<a href="/docs/testing/">testing</a>
+<a href="/docs/testing/">testing</a></div>
           </div>
         </aside>
-        <article class="site-page-content docs-reference">
-          <div class="docs-breadcrumbs">Docs</div>
-          <div class="docs-section-list">
-<a href="/docs/core/">Core</a>
-<a href="/docs/Package/">Package</a>
-<a href="/docs/ansi/">ansi</a>
-<a href="/docs/coop/">coop</a>
-<a href="/docs/dict/">dict</a>
-<a href="/docs/fs/">fs</a>
-<a href="/docs/html/">html</a>
-<a href="/docs/http/">http</a>
-<a href="/docs/net/">net</a>
-<a href="/docs/os/">os</a>
-<a href="/docs/syntax/">syntax</a>
-<a href="/docs/talk-doc/">talk-doc</a>
-<a href="/docs/talk-md/">talk-md</a>
-<a href="/docs/task/">task</a>
-<a href="/docs/testing/">testing</a>
-          </div>
+        <article class="reference">
+<section id="core"><h2>core</h2><div class="doc">Built-in types, collections, protocols, effects, and runtime interfaces.</div><div class="rows"><article><h3><a href="/docs/core/array.html">array</a></h3><div class="doc">A growable, copy-on-write sequence with value semantics.</div></article>
+<article><h3><a href="/docs/core/async.html">async</a></h3></article>
+<article><h3><a href="/docs/core/builtins.html">builtins</a></h3></article>
+<article><h3><a href="/docs/core/convert.html">convert</a></h3></article>
+<article><h3><a href="/docs/core/host.html">host</a></h3></article>
+<article><h3><a href="/docs/core/inline_array.html">inline_array</a></h3></article>
+<article><h3><a href="/docs/core/io.html">io</a></h3></article>
+<article><h3><a href="/docs/core/iterable.html">iterable</a></h3></article>
+<article><h3><a href="/docs/core/memory.html">memory</a></h3></article>
+<article><h3><a href="/docs/core/operators.html">operators</a></h3></article>
+<article><h3><a href="/docs/core/optional.html">optional</a></h3></article>
+<article><h3><a href="/docs/core/ownership.html">ownership</a></h3></article>
+<article><h3><a href="/docs/core/range.html">range</a></h3></article>
+<article><h3><a href="/docs/core/result.html">result</a></h3></article>
+<article><h3><a href="/docs/core/showable.html">showable</a></h3></article>
+<article><h3><a href="/docs/core/string.html">string</a></h3><div class="doc">String is a UTF-8 byte buffer. Byte-level access lives behind the explicit `utf8()` view; `byte_count` is the buffer length in BYTES, not user-perceived characters. Equality is byte equality: canonically equivalent strings in different normal forms (NFC &quot;é&quot; vs NFD &quot;é&quot;) compare unequal.</div></article>
+<article><h3><a href="/docs/core/string_builder.html">string_builder</a></h3><div class="doc">Unique growable UTF-8 construction. Appending is amortized O(total bytes), and finish transfers the allocation into an immutable String without copying.</div></article>
+<article><h3><a href="/docs/core/text.html">text</a></h3><div class="doc">Deep, grapheme-safe text algorithms shared by String and Substring. Character-shaped methods only mint and consume opaque StringIndex values; byte offsets remain confined to UTF8View and compatibility search.</div></article>
+<article><h3><a href="/docs/core/text_unicode_data.html">text_unicode_data</a></h3><div class="doc">GENERATED by gen_text_unicode from UCD 17.0.0 - do not edit.</div></article>
+<article><h3><a href="/docs/core/time.html">time</a></h3></article>
+<article><h3><a href="/docs/core/unicode.html">unicode</a></h3><div class="doc">UTF-8 and Unicode segmentation support for String&#39;s Character layer.</div></article>
+<article><h3><a href="/docs/core/unicode_data.html">unicode_data</a></h3><div class="doc">GENERATED by gen_unicode from UCD 17.0.0 - do not edit. Grapheme-cluster-break categories (UAX #29), one flat partition merging Grapheme_Cluster_Break, Extended_Pictographic, and InCB. The table is a sorted boundary list: entries of four base-128 septets encoding start_codepoint * 32 + category. See src/bin/gen_unicode.rs for the encoding and regeneration story.</div></article></div></section><section id="standard-library"><h2>Standard Library</h2><div class="doc">14 libraries shipped with TalkTalk.</div><div class="rows"><article><h3><a href="/docs/ansi/">ansi</a></h3><div class="doc">Terminal colors and styled strings. 1 module.</div></article>
+<article><h3><a href="/docs/coop/">coop</a></h3><div class="doc">Cooperative task scheduling. 1 module.</div></article>
+<article><h3><a href="/docs/dict/">dict</a></h3><div class="doc">Key-value collections. 1 module.</div></article>
+<article><h3><a href="/docs/fs/">fs</a></h3><div class="doc">File and directory operations. 1 module.</div></article>
+<article><h3><a href="/docs/html/">html</a></h3><div class="doc">HTML syntax and rendering support. 2 modules.</div></article>
+<article><h3><a href="/docs/http/">http</a></h3><div class="doc">HTTP request and response support. 1 module.</div></article>
+<article><h3><a href="/docs/net/">net</a></h3><div class="doc">Network connections and transport primitives. 1 module.</div></article>
+<article><h3><a href="/docs/os/">os</a></h3><div class="doc">Operating system and environment services. 1 module.</div></article>
+<article><h3><a href="/docs/Package/">Package</a></h3><div class="doc">Package declarations and dependency sources. 1 module.</div></article>
+<article><h3><a href="/docs/syntax/">syntax</a></h3><div class="doc">The TalkTalk lexer, parser, and typed syntax tree. 6 modules.</div></article>
+<article><h3><a href="/docs/talk-doc/">talk-doc</a></h3><div class="doc">HTML API documentation generation. 10 modules.</div></article>
+<article><h3><a href="/docs/talk-md/">talk-md</a></h3><div class="doc">Dependency-free Markdown parsing. 1 module.</div></article>
+<article><h3><a href="/docs/task/">task</a></h3><div class="doc">Tasks, channels, cancellation, and deadlines. 1 module.</div></article>
+<article><h3><a href="/docs/testing/">testing</a></h3><div class="doc">Assertions and automated test support. 1 module.</div></article></div></section>
         </article>
-        <aside class="site-page-rail docs-page-index" aria-hidden="true"></aside>
+        <aside aria-hidden="true"></aside>
       </div>
     </main>
   </body>

@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - 13. The Standard Library</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386847" rel="stylesheet">
+    <link href="/style.css?t=1787528496" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/" aria-current="page">Guide</a>
         <a href="/docs/">Docs</a>
@@ -21,20 +20,20 @@
       </div>
     </nav>
     <main class="site-page manual-page">
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/standard-library" aria-current="page">13. The Standard Library</a></nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/manual/">Guide</a> / <a href="/manual/standard-library" aria-current="page">13. The Standard Library</a></nav>
+          <div class="split">
             <h1>13. The Standard Library</h1>
             
           </div>
         </div>
       </header>
 
-      <div class="site-page-layout manual-layout">
-        <aside class="site-page-sidebar manual-outline">
+      <div>
+        <aside>
           <nav aria-label="Manual table of contents">
-            <span class="site-nav-label manual-outline-title">Contents</span>
+            <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -50,7 +49,7 @@
 <li><a href="/manual/macros">10. Macros</a></li>
 <li><a href="/manual/concurrency">11. Concurrency</a></li>
 <li><a href="/manual/testing">12. Testing</a></li>
-<li><a href="/manual/standard-library" aria-current="page">13. The Standard Library</a><ol class="manual-outline-sections"><li><a href="#core-always-in-scope">Core, always in scope</a></li>
+<li><a href="/manual/standard-library" aria-current="page">13. The Standard Library</a><ol><li><a href="#core-always-in-scope">Core, always in scope</a></li>
 <li><a href="#files-and-paths">Files and paths</a></li>
 <li><a href="#operating-system-access">Operating-system access</a></li>
 <li><a href="#networking-and-http">Networking and HTTP</a></li>
@@ -67,13 +66,13 @@
             </ol>
           </nav>
         </aside>
-        <div class="site-page-content manual-document">
-          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/testing">&larr; 12. Testing</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/toolchain">14. The Toolchain &rarr;</a>
+        <div>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a href="/manual/testing">&larr; 12. Testing</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/toolchain">14. The Toolchain &rarr;</a>
           </nav>
-          <article class="prose page-content">
+          <article>
             <p>Some useful types and functions are available in every TalkTalk file. Others live in modules that you import when you need them. This chapter shows what is available today; the standard library is still small and changes along with the language.</p>
 <h2><a href="#core-always-in-scope" aria-hidden="true" class="anchor" id="core-always-in-scope"></a>Core, always in scope</h2>
 <p>Core provides:</p>
@@ -128,7 +127,7 @@ print(OS.argc())</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p><code>OS.argc()</code> returns the process argument array despite its historical name. The first element identifies the invoked program; arguments after <code>talk run --</code> follow it.</p>
 <h2><a href="#networking-and-http" aria-hidden="true" class="anchor" id="networking-and-http"></a>Networking and HTTP</h2>
@@ -158,21 +157,19 @@ print(OS.argc())</textarea>
 <p>The <code>testing</code> module supplies the test prelude's registration and assertion effects. Normal <code>.test.tlk</code> files receive that prelude automatically; they do not need to import it.</p>
 <h2><a href="#reading-the-exact-api" aria-hidden="true" class="anchor" id="reading-the-exact-api"></a>Reading the exact API</h2>
 <p>Until generated API pages exist, use source and editor hovers:</p>
-<pre><code class="language-sh">talk hover stdlib/fs.tlk --line 294 --column 12
-talk check your-package/
-</code></pre>
+<pre><code class="language-sh"><span data-prompt="$">talk hover stdlib/fs.tlk --line 294 --column 12</span><span data-prompt="$">talk check your-package/</span></code></pre>
 <p>Public declarations are marked <code>pub</code>, and the LSP exposes inferred signatures and documentation at use sites.</p>
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/testing">&larr; 12. Testing</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/toolchain">14. The Toolchain &rarr;</a>
+            <a href="/manual/testing">&larr; 12. Testing</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/toolchain">14. The Toolchain &rarr;</a>
           </nav>
         </div>
-        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+        <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787386847"></script>
+      <script type="module" src="/page.js?t=1787528496"></script>
     </main>
   </body>
 </html>

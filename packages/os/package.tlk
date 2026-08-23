@@ -1,6 +1,7 @@
 Package(
 	name: "os",
 	version: "0.1.0",
+	description: "Operating system and environment services.",
 	builds: [
 		.lib(from: "src/os.tlk")
 	],

@@ -340,7 +340,7 @@ fn blocking_only_channel_programs_pay_no_resumable_tax() {
     // ADR 0068: the resumable set seeds from performs of effects that
     // have a resumption-binding clause somewhere in the program. A
     // program whose only park handlers are the blocking fallbacks
-    // (tail-resumptive `'continue` clauses in core/Host.tlk) must
+    // (tail-resumptive `'continue` clauses in core/host.tlk) must
     // compile with no resumable functions — no heap frames, no status
     // checks — even though it uses channels.
     let dir = scratch("blocking_only");

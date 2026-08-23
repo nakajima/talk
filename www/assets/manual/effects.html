@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - 6. Effects</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386835" rel="stylesheet">
+    <link href="/style.css?t=1787528493" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/" aria-current="page">Guide</a>
         <a href="/docs/">Docs</a>
@@ -21,20 +20,20 @@
       </div>
     </nav>
     <main class="site-page manual-page">
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/effects" aria-current="page">6. Effects</a></nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/manual/">Guide</a> / <a href="/manual/effects" aria-current="page">6. Effects</a></nav>
+          <div class="split">
             <h1>6. Effects</h1>
             
           </div>
         </div>
       </header>
 
-      <div class="site-page-layout manual-layout">
-        <aside class="site-page-sidebar manual-outline">
+      <div>
+        <aside>
           <nav aria-label="Manual table of contents">
-            <span class="site-nav-label manual-outline-title">Contents</span>
+            <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -43,7 +42,7 @@
 <li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
 <li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
 <li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
-<li><a href="/manual/effects" aria-current="page">6. Effects</a><ol class="manual-outline-sections"><li><a href="#separating-a-request-from-its-answer">Separating a request from its answer</a></li>
+<li><a href="/manual/effects" aria-current="page">6. Effects</a><ol><li><a href="#separating-a-request-from-its-answer">Separating a request from its answer</a></li>
 <li><a href="#effect-rows">Effect rows</a></li>
 <li><a href="#stopping-a-computation">Stopping a computation</a></li>
 <li><a href="#re-performing-and-delegation">Re-performing and delegation</a></li>
@@ -66,13 +65,13 @@
             </ol>
           </nav>
         </aside>
-        <div class="site-page-content manual-document">
-          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/generics-and-protocols">&larr; 5. Generics and Protocols</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/ownership-and-memory">7. Ownership and Memory &rarr;</a>
+        <div>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a href="/manual/generics-and-protocols">&larr; 5. Generics and Protocols</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/ownership-and-memory">7. Ownership and Memory &rarr;</a>
           </nav>
-          <article class="prose page-content">
+          <article>
             <p>Effects let application code describe what it needs without choosing where that service comes from. A function can request configuration, stop a computation, or pause a task in direct style. A surrounding handler decides what the request means, and the type checker records the possible requests in the function's effect row.</p>
 <h2><a href="#separating-a-request-from-its-answer" aria-hidden="true" class="anchor" id="separating-a-request-from-its-answer"></a>Separating a request from its answer</h2>
 <p>Suppose a greeting needs the current user's name. The function should not care whether the name comes from a terminal, a test fixture, or an embedding host:</p>
@@ -129,7 +128,7 @@ greeting()</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Calling an effect is called <em>performing</em> it. The perform suspends at the request, the nearest handler runs, and <code>'continue answer</code> resumes the suspended code with <code>answer</code> as the result of the effect call. A test can install a deterministic handler while production code installs one backed by real configuration. <code>greeting</code> stays ordinary direct-style code in both cases.</p>
 <p>The handler's extent is the code after the <code>#handle</code> statement in the same block, including functions called from there. Code before the statement is unaffected. If handlers are nested, the nearest handler for the same effect label wins.</p>
@@ -170,7 +169,7 @@ pure()</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p><code>'[]</code> is explicitly pure, <code>'io</code> names one closed effect, and <code>'[io, panic]</code> names several. <code>'[io, ..]</code> requires <code>io</code> while leaving the rest of the row open for inference. A function with no written row receives an open inferred row, so effects normally propagate through callers without annotations.</p>
 <p>A function value carries the same invocation requirement:</p>
@@ -193,7 +192,7 @@ action()</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>The row says what may happen when the value is invoked. A closure does not freeze the handler active when it was created; performs use the handlers active at the call site. This is what lets a higher-order function install a handler around a callback.</p>
 <h2><a href="#stopping-a-computation" aria-hidden="true" class="anchor" id="stopping-a-computation"></a>Stopping a computation</h2>
@@ -245,7 +244,7 @@ configured_port(70000)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p><code>checked_port</code> declares the exceptional operation once. <code>configured_port</code> chooses the policy for that boundary. Cleanup still runs while the abandoned frames unwind, so aborting an effect does not skip <code>Deinit</code> hooks.</p>
 <p><code>unreachable</code> follows this model: it performs the public <code>'panic</code> effect and never returns. A program may handle it explicitly; otherwise the outer host reports the panic and terminates.</p>
@@ -288,14 +287,14 @@ configured_port(70000)</textarea>
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/generics-and-protocols">&larr; 5. Generics and Protocols</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/ownership-and-memory">7. Ownership and Memory &rarr;</a>
+            <a href="/manual/generics-and-protocols">&larr; 5. Generics and Protocols</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/ownership-and-memory">7. Ownership and Memory &rarr;</a>
           </nav>
         </div>
-        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+        <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787386835"></script>
+      <script type="module" src="/page.js?t=1787528493"></script>
     </main>
   </body>
 </html>

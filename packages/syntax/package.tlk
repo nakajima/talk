@@ -1,6 +1,7 @@
 Package(
 	name: "syntax",
 	version: "0.1.0",
+	description: "The TalkTalk lexer, parser, and typed syntax tree.",
 	builds: [
 		.lib(from: "src/syntax.tlk")
 	],

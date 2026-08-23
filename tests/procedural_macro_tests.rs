@@ -28,9 +28,9 @@ fn discovers_and_executes_brace_token_tree_macro() {
     fs::write(
         root.join("identity.macro.tlk"),
         r#"
-use package::Lexer::{ MacroInput, TokenTree, group_contents }
-use package::Ast::{ Expr }
-use package::Syntax::{ Syntax, SyntaxResult, SyntaxFailure, SyntaxContext, QuoteContext, capture_expr }
+use package::lexer::{ MacroInput, TokenTree, group_contents }
+use package::ast::{ Expr }
+use package::macros::{ Syntax, SyntaxResult, SyntaxFailure, SyntaxContext, QuoteContext, capture_expr }
 
 pub func call_helper(input: MacroInput, use_site: SyntaxContext, context: QuoteContext) -> SyntaxResult<Expr> {
     match input.tree {
@@ -114,9 +114,9 @@ fn run_wrapper_fixture(label: &str, main_source: &str, macro_unit: &str) -> Resu
 }
 
 const WRAPPERS_UNIT: &str = r#"
-use package::Lexer::{ MacroInput, group_contents }
-use package::Ast::{ Decl }
-use package::Syntax::{ Syntax, SyntaxFailure, DeclWrapperResult, DeclContext, SyntaxContext, QuoteContext, capture_decl }
+use package::lexer::{ MacroInput, group_contents }
+use package::ast::{ Decl }
+use package::macros::{ Syntax, SyntaxFailure, DeclWrapperResult, DeclContext, SyntaxContext, QuoteContext, capture_decl }
 
 pub func passthrough(input: MacroInput?, consume target: Syntax<Decl>, declaration: DeclContext, use_site: SyntaxContext, context: QuoteContext) -> DeclWrapperResult {
     .replace(target)
@@ -281,9 +281,9 @@ fn undefined_wrapper_reports_a_diagnostic() {
 }
 
 const LENS_UNIT: &str = r#"
-use package::Lexer::{ MacroInput, TokenTree }
-use package::Ast::{ Decl }
-use package::Syntax::{
+use package::lexer::{ MacroInput, TokenTree }
+use package::ast::{ Decl }
+use package::macros::{
     Syntax, SyntaxFailure, DeclWrapperResult, DeclContext, SyntaxContext, QuoteContext,
     DeclShape, view_decl, view_shape, view_name, view_body, view_with_body, view_with_name,
     view_with_name_token, syntax_text
@@ -474,7 +474,7 @@ fn imports_and_executes_a_path_dependency_wrapper() {
     fs::create_dir_all(root.join("src")).expect("create root source");
     fs::write(
         dependency.join("package.tlk"),
-        "Package(name: \"wrapper-lib\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+        "Package(name: \"wrapper-lib\", version: \"0.1.0\", description: \"\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
     )
     .expect("write dependency manifest");
     fs::write(
@@ -485,9 +485,9 @@ fn imports_and_executes_a_path_dependency_wrapper() {
     fs::write(
         dependency.join("src/keep.macro.tlk"),
         r#"
-use package::Lexer::{ MacroInput }
-use package::Ast::{ Decl }
-use package::Syntax::{ Syntax, DeclWrapperResult, DeclContext, SyntaxContext, QuoteContext }
+use package::lexer::{ MacroInput }
+use package::ast::{ Decl }
+use package::macros::{ Syntax, DeclWrapperResult, DeclContext, SyntaxContext, QuoteContext }
 
 pub func keep(input: MacroInput?, consume target: Syntax<Decl>, declaration: DeclContext, use_site: SyntaxContext, context: QuoteContext) -> DeclWrapperResult {
     .replace(target)
@@ -497,7 +497,7 @@ pub func keep(input: MacroInput?, consume target: Syntax<Decl>, declaration: Dec
     .expect("write dependency wrapper");
     fs::write(
         root.join("package.tlk"),
-        "Package(name: \"root\", version: \"0.1.0\", builds: [.bin(named: \"main\", from: \"src/main.tlk\")], dependencies: [.path(package: \"wrapper-lib\", path: \"../dependency\")])",
+        "Package(name: \"root\", version: \"0.1.0\", description: \"\", builds: [.bin(named: \"main\", from: \"src/main.tlk\")], dependencies: [.path(package: \"wrapper-lib\", path: \"../dependency\")])",
     )
     .expect("write root manifest");
     fs::write(
@@ -532,7 +532,7 @@ fn imports_and_executes_a_path_dependency_macro() {
     fs::create_dir_all(root.join("src")).expect("create root source");
     fs::write(
         dependency.join("package.tlk"),
-        "Package(name: \"macro-lib\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+        "Package(name: \"macro-lib\", version: \"0.1.0\", description: \"\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
     )
     .expect("write dependency manifest");
     fs::write(
@@ -543,9 +543,9 @@ fn imports_and_executes_a_path_dependency_macro() {
     fs::write(
         dependency.join("src/twice.macro.tlk"),
         r#"
-use package::Lexer::{ MacroInput, group_contents }
-use package::Ast::{ Expr }
-use package::Syntax::{ SyntaxResult, SyntaxContext, QuoteContext, capture_expr }
+use package::lexer::{ MacroInput, group_contents }
+use package::ast::{ Expr }
+use package::macros::{ SyntaxResult, SyntaxContext, QuoteContext, capture_expr }
 
 pub func twice(input: MacroInput, use_site: SyntaxContext, context: QuoteContext) -> SyntaxResult<Expr> {
     match input.tree {
@@ -569,7 +569,7 @@ pub func twice(input: MacroInput, use_site: SyntaxContext, context: QuoteContext
     .expect("write dependency macro");
     fs::write(
         root.join("package.tlk"),
-        "Package(name: \"root\", version: \"0.1.0\", builds: [.bin(named: \"main\", from: \"src/main.tlk\")], dependencies: [.path(package: \"macro-lib\", path: \"../dependency\")])",
+        "Package(name: \"root\", version: \"0.1.0\", description: \"\", builds: [.bin(named: \"main\", from: \"src/main.tlk\")], dependencies: [.path(package: \"macro-lib\", path: \"../dependency\")])",
     )
     .expect("write root manifest");
     fs::write(

@@ -5,14 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - {TITLE}</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
     <link href="/style.css" rel="stylesheet">
   </head>
   <body>
 {GLOBAL_NAV}
-    <main class="content-page">
+    <main>
 {PAGE_HEADER}
-      <article class="prose page-content">
+      <article>
         {CONTENT_GOES_HERE}
       </article>
       <script type="module" src="/page.js"></script>

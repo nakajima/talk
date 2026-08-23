@@ -15,7 +15,7 @@
 use fs::{ Directory, File, Path }
 use os::{ OS }
 use package::autolink::{ SymbolLink }
-use package::render::{ ModuleLink, render_index_page_with_symbols, render_module_page, render_symbol_pages }
+use package::render::{ ModuleLink, render_index_page_with_symbols, render_module_page, render_symbol_pages, summary_documentation }
 use package::store::{ DocumentableCollection }
 use package::symbols::{ symbol_links }
 
@@ -208,8 +208,8 @@ func builtin_module(core_source_root: String) -> SourceModule {
 	}
 	SourceModule(
 		path: documentation_root,
-		name: "Builtins",
-		page: "Builtins.html",
+		name: "builtins",
+		page: "builtins.html",
 		collection: collection
 	)
 }
@@ -312,7 +312,7 @@ pub func main() '[io, alloc, panic] -> () {
 
 		let builtin_source_root = if core_source_root.byte_count > 0 {
 			core_source_root
-		} else if display_name == "Core" {
+		} else if display_name == "core" {
 			source_root
 		} else {
 			""
@@ -368,6 +368,25 @@ pub func main() '[io, alloc, panic] -> () {
 		if builtin_source_root.byte_count > 0 && builtin_source_root != source_root {
 			append_external_symbols(source_root: builtin_source_root, page_base: core_docs_base, symbols: symbols)
 		}
+
+		// One `page<TAB>first documentation paragraph` line per module, for
+		// consumers (the site's docs index) that list modules without
+		// re-parsing sources. Written on every generator run; cached runs
+		// keep the file from the last generation, like the pages themselves.
+		let summaries = StringBuilder()
+		for link in links {
+			let first = summary_documentation(documentation: link.documentation)
+			let joined = ""
+			for line in first {
+				if joined.byte_count > 0 { joined = joined + " " }
+				joined = joined + line
+			}
+			summaries.append(string: link.file + "\t" + joined + "\n")
+		}
+		if write_page(dir: out_dir, file: ".module-summaries", contents: summaries.finish()) == false {
+			wrote_all = false
+		}
+
 		for module in modules {
 			if restricted && selected_path(paths: selected, path: module.path) == false { continue }
 			let page = render_module_page(

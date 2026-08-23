@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - B. MIR Reference</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386852" rel="stylesheet">
+    <link href="/style.css?t=1787528497" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/" aria-current="page">Guide</a>
         <a href="/docs/">Docs</a>
@@ -21,20 +20,20 @@
       </div>
     </nav>
     <main class="site-page manual-page">
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/mir-reference" aria-current="page">B. MIR Reference</a></nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/manual/">Guide</a> / <a href="/manual/mir-reference" aria-current="page">B. MIR Reference</a></nav>
+          <div class="split">
             <h1>B. MIR Reference</h1>
             
           </div>
         </div>
       </header>
 
-      <div class="site-page-layout manual-layout">
-        <aside class="site-page-sidebar manual-outline">
+      <div>
+        <aside>
           <nav aria-label="Manual table of contents">
-            <span class="site-nav-label manual-outline-title">Contents</span>
+            <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -54,7 +53,7 @@
 <li><a href="/manual/toolchain">14. The Toolchain</a></li>
 <li><a href="/manual/unsafe-and-interop">15. Unsafe Code and Interop</a></li>
 <li><a href="/manual/type-inference">A. Type Inference Reference</a></li>
-<li><a href="/manual/mir-reference" aria-current="page">B. MIR Reference</a><ol class="manual-outline-sections"><li><a href="#pipeline-position">Pipeline position</a></li>
+<li><a href="/manual/mir-reference" aria-current="page">B. MIR Reference</a><ol><li><a href="#pipeline-position">Pipeline position</a></li>
 <li><a href="#module">Module</a></li>
 <li><a href="#functions-blocks-and-locals">Functions, blocks, and locals</a></li>
 <li><a href="#operands-and-constants">Operands and constants</a></li>
@@ -74,19 +73,16 @@
             </ol>
           </nav>
         </aside>
-        <div class="site-page-content manual-document">
-          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/type-inference">&larr; A. Type Inference Reference</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/bytecode-reference">C. Bytecode Reference &rarr;</a>
+        <div>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a href="/manual/type-inference">&larr; A. Type Inference Reference</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/bytecode-reference">C. Bytecode Reference &rarr;</a>
           </nav>
-          <article class="prose page-content">
+          <article>
             <p>MIR is TalkTalk's finalized, target-independent middle representation. The compiler publishes it after type checking, ownership checking, cleanup insertion, optimization, register allocation, and frame shaping. Bytecode and C consume this same artifact; targets do not inspect source types or repeat semantic decisions.</p>
 <p>Inspect it with:</p>
-<pre><code class="language-sh">talk mir source.tlk
-talk mir --no-opt source.tlk
-talk mir --debug source.tlk
-</code></pre>
+<pre><code class="language-sh"><span data-prompt="$">talk mir source.tlk</span><span data-prompt="$">talk mir --no-opt source.tlk</span><span data-prompt="$">talk mir --debug source.tlk</span></code></pre>
 <p>The text printed by <code>talk mir</code> is diagnostic output, not a stable file format. The public in-process data model in <code>talk-mir/src/lib.rs</code> and <code>talk-mir/src/layout.rs</code> is authoritative.</p>
 <h2><a href="#pipeline-position" aria-hidden="true" class="anchor" id="pipeline-position"></a>Pipeline position</h2>
 <p>The relevant pipeline is:</p>
@@ -229,14 +225,14 @@ talk mir --debug source.tlk
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/type-inference">&larr; A. Type Inference Reference</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/bytecode-reference">C. Bytecode Reference &rarr;</a>
+            <a href="/manual/type-inference">&larr; A. Type Inference Reference</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/bytecode-reference">C. Bytecode Reference &rarr;</a>
           </nav>
         </div>
-        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+        <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787386852"></script>
+      <script type="module" src="/page.js?t=1787528497"></script>
     </main>
   </body>
 </html>

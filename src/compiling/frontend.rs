@@ -667,7 +667,7 @@ mod tests {
     fn documented_parse_skips_multiline_imports() {
         let session = ParserSession::from_artifact(EMBEDDED_ARTIFACT, EMBEDDED_ABI)
             .expect("embedded parser session");
-        let source = "// Docs.\nuse package::Lexer::{\n\tlex\n}\nfunc f() {}\n";
+        let source = "// Docs.\nuse package::lexer::{\n\tlex\n}\nfunc f() {}\n";
         let (_ast, _diagnostics, docs) = parse_ast_in(
             Some(&session),
             source,

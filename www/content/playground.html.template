@@ -5,13 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - {TITLE}</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
     <link href="/style.css" rel="stylesheet">
-    <link href="/playground.css" rel="stylesheet">
   </head>
   <body>
     {GLOBAL_NAV}
-    <main class="playground-page workbench-page playground-scope">
+    <main class="playground-page playground-scope">
 {PAGE_HEADER}
 
       <div class="playground-runner runnable">
@@ -38,11 +36,12 @@
             <span class="action-control" data-tooltip="WASM bundle initializing" aria-label="WASM bundle initializing"
               tabindex="0"><button type="button" class="format" disabled>Format</button></span>
           </div>
-        </section>
-        <aside class="playground-output" aria-live="polite">
-          <div class="playground-panel-title"><strong>Output</strong><span class="panel-label">latest run</span></div>
-          <div class="result"></div>
+          <output class="result" aria-live="polite"></output>
           <div class="output-empty">Run the program to see its output and final value here.</div>
+        </section>
+        <aside class="playground-inspector">
+          <div class="playground-panel-title"><strong>Inspector</strong><span class="panel-label">types on hover</span></div>
+          <div class="inspector-body" aria-live="polite">Hover over the code to inspect what things are.</div>
         </aside>
       </div>
     </main>

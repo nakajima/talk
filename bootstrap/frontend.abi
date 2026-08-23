@@ -84,7 +84,7 @@ enum DeclKind @ enum:65535.45
 	macro_call_decl(String, Int, Int, Int, Int, [MacroToken], [Expr])
 	wrapper_decl(String, Int, Int, Int, Int, [MacroToken], [MacroToken], [Decl])
 
-struct DocumentedDecl @ struct:65535.73
+struct DocumentedDecl @ struct:65535.103
 	decl_start: Int
 	decl_end: Int
 	comments: [Comment]
@@ -132,7 +132,7 @@ enum ExprKind @ enum:65535.30
 	macro_call(String, Int, Int, Int, Int, [MacroToken], [Expr])
 	syntax_quote(String, [MacroToken], [String], Int)
 
-struct Fail @ struct:65535.72
+struct Fail @ struct:65535.102
 	code: String
 	message: String
 	start: Int
@@ -280,7 +280,7 @@ struct Parameter @ struct:65535.15
 	start: Int
 	end: Int
 
-struct ParseOutcome @ struct:65535.74
+struct ParseOutcome @ struct:65535.104
 	items: [Item]
 	failure: Fail?
 	diags: [Fail]

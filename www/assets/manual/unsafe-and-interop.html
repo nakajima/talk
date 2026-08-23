@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - 15. Unsafe Code and Interop</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386847" rel="stylesheet">
+    <link href="/style.css?t=1787528496" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/" aria-current="page">Guide</a>
         <a href="/docs/">Docs</a>
@@ -21,20 +20,20 @@
       </div>
     </nav>
     <main class="site-page manual-page">
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/unsafe-and-interop" aria-current="page">15. Unsafe Code and Interop</a></nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/manual/">Guide</a> / <a href="/manual/unsafe-and-interop" aria-current="page">15. Unsafe Code and Interop</a></nav>
+          <div class="split">
             <h1>15. Unsafe Code and Interop</h1>
             
           </div>
         </div>
       </header>
 
-      <div class="site-page-layout manual-layout">
-        <aside class="site-page-sidebar manual-outline">
+      <div>
+        <aside>
           <nav aria-label="Manual table of contents">
-            <span class="site-nav-label manual-outline-title">Contents</span>
+            <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -52,7 +51,7 @@
 <li><a href="/manual/testing">12. Testing</a></li>
 <li><a href="/manual/standard-library">13. The Standard Library</a></li>
 <li><a href="/manual/toolchain">14. The Toolchain</a></li>
-<li><a href="/manual/unsafe-and-interop" aria-current="page">15. Unsafe Code and Interop</a><ol class="manual-outline-sections"><li><a href="#the-unsafe-boundary">The unsafe boundary</a></li>
+<li><a href="/manual/unsafe-and-interop" aria-current="page">15. Unsafe Code and Interop</a><ol><li><a href="#the-unsafe-boundary">The unsafe boundary</a></li>
 <li><a href="#wrapping-unsafe-operations">Wrapping unsafe operations</a></li>
 <li><a href="#inline-ir">Inline IR</a></li>
 <li><a href="#emitting-c">Emitting C</a></li>
@@ -65,13 +64,13 @@
             </ol>
           </nav>
         </aside>
-        <div class="site-page-content manual-document">
-          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/toolchain">&larr; 14. The Toolchain</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/type-inference">A. Type Inference Reference &rarr;</a>
+        <div>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a href="/manual/toolchain">&larr; 14. The Toolchain</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/type-inference">A. Type Inference Reference &rarr;</a>
           </nav>
-          <article class="prose page-content">
+          <article>
             <p>Most TalkTalk programs never need the features in this chapter. Raw pointers and inline IR let low-level code bypass safety checks, while native library exports and embedding APIs connect TalkTalk to a host. Use the regular library first, and keep these boundaries small.</p>
 <h2><a href="#the-unsafe-boundary" aria-hidden="true" class="anchor" id="the-unsafe-boundary"></a>The unsafe boundary</h2>
 <p>Raw-pointer operations and inline IR outside Core perform an intrinsic <code>'unsafe</code> effect. A lexical block acknowledges and discharges it:</p>
@@ -90,24 +89,15 @@
 <p>Inline IR is compiler-facing syntax, not a general optimization escape hatch. It is unavailable to deterministic procedural macro services. Incorrect use can violate memory and ownership invariants even when surrounding TalkTalk code looks well typed.</p>
 <h2><a href="#emitting-c" aria-hidden="true" class="anchor" id="emitting-c"></a>Emitting C</h2>
 <p>Generate a complete C program:</p>
-<pre><code class="language-sh">talk c program.tlk &gt; program.c
-</code></pre>
+<pre><code class="language-sh"><span data-prompt="$">talk c program.tlk &gt; program.c</span></code></pre>
 <p>Or let TalkTalk invoke a C compiler:</p>
-<pre><code class="language-sh">talk build --native program.tlk -o program
-</code></pre>
+<pre><code class="language-sh"><span data-prompt="$">talk build --native program.tlk -o program</span></code></pre>
 <p>The generated C includes the TalkTalk runtime and implements the same finalized MIR semantics as the bytecode target.</p>
 <h2><a href="#exporting-a-native-library" aria-hidden="true" class="anchor" id="exporting-a-native-library"></a>Exporting a native library</h2>
 <p>For a quick library build, select a public function. The prefix defaults to <code>talk</code>, and the generated header and manifest are optional:</p>
-<pre><code class="language-sh">talk c library.tlk --export add &gt; library.c
-</code></pre>
+<pre><code class="language-sh"><span data-prompt="$">talk c library.tlk --export add &gt; library.c</span></code></pre>
 <p>For a distributable boundary, request the sidecar files and choose a namespace:</p>
-<pre><code class="language-sh">talk c library.tlk \
-    --export add \
-    --prefix example \
-    --header library.h \
-    --manifest library.manifest \
-    &gt; library.c
-</code></pre>
+<pre><code class="language-sh"><span data-prompt="$">talk c library.tlk \</span><span data-prompt="&gt;">    --export add \</span><span data-prompt="&gt;">    --prefix example \</span><span data-prompt="&gt;">    --header library.h \</span><span data-prompt="&gt;">    --manifest library.manifest \</span><span data-prompt="&gt;">    &gt; library.c</span></code></pre>
 <p><code>--export</code> is repeatable. <code>--allow-effect EFFECT</code> declares which effects an exported boundary may perform. The generated header defines the versioned C call convention and lifecycle functions. The manifest maps TalkTalk export names to external symbols. A pure exported function is the simplest boundary; only allow effects whose generated runtime behavior the host intends to expose.</p>
 <p>The arguments serve separate jobs: export selection belongs to the TalkTalk API, the prefix prevents link-time symbol collisions, and the two sidecars describe the C API and name mapping. Defaults keep inspection short while explicit paths make a shippable artifact reproducible.</p>
 <h2><a href="#native-boundary-obligations" aria-hidden="true" class="anchor" id="native-boundary-obligations"></a>Native boundary obligations</h2>
@@ -124,14 +114,14 @@
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/toolchain">&larr; 14. The Toolchain</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/type-inference">A. Type Inference Reference &rarr;</a>
+            <a href="/manual/toolchain">&larr; 14. The Toolchain</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/type-inference">A. Type Inference Reference &rarr;</a>
           </nav>
         </div>
-        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+        <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787386847"></script>
+      <script type="module" src="/page.js?t=1787528496"></script>
     </main>
   </body>
 </html>

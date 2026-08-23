@@ -1,7 +1,7 @@
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb">{BREADCRUMBS}</nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb">{BREADCRUMBS}</nav>
+          <div class="split">
             <h1>{TITLE}</h1>
             {HEADER_EXTRA}
           </div>

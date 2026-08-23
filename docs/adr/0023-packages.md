@@ -40,6 +40,7 @@ constraint solver.
 Package(
     name: "talk-html",
     version: "0.1.0",
+    description: "HTML syntax and rendering support.",
     builds: [
         .lib(from: "src/lib.tlk"),
         .bin(named: "talkhtml", from: "src/bin/talkhtml.tlk")
@@ -80,6 +81,7 @@ enum PackageDependency {
 struct Package {
     let name: String
     let version: String
+    let description: String
     let builds: Array<PackageArtifact>
     let dependencies: Array<PackageDependency>
 }

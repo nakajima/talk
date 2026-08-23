@@ -1,6 +1,7 @@
 Package(
 	name: "fs",
 	version: "0.1.0",
+	description: "File and directory operations.",
 	builds: [
 		.lib(from: "src/fs.tlk")
 	],

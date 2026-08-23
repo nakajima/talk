@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - 7. Ownership and Memory</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386837" rel="stylesheet">
+    <link href="/style.css?t=1787528493" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/" aria-current="page">Guide</a>
         <a href="/docs/">Docs</a>
@@ -21,20 +20,20 @@
       </div>
     </nav>
     <main class="site-page manual-page">
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/ownership-and-memory" aria-current="page">7. Ownership and Memory</a></nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/manual/">Guide</a> / <a href="/manual/ownership-and-memory" aria-current="page">7. Ownership and Memory</a></nav>
+          <div class="split">
             <h1>7. Ownership and Memory</h1>
             
           </div>
         </div>
       </header>
 
-      <div class="site-page-layout manual-layout">
-        <aside class="site-page-sidebar manual-outline">
+      <div>
+        <aside>
           <nav aria-label="Manual table of contents">
-            <span class="site-nav-label manual-outline-title">Contents</span>
+            <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
@@ -44,7 +43,7 @@
 <li><a href="/manual/data-and-patterns">4. Data and Patterns</a></li>
 <li><a href="/manual/generics-and-protocols">5. Generics and Protocols</a></li>
 <li><a href="/manual/effects">6. Effects</a></li>
-<li><a href="/manual/ownership-and-memory" aria-current="page">7. Ownership and Memory</a><ol class="manual-outline-sections"><li><a href="#bindings-hold-values">Bindings hold values</a></li>
+<li><a href="/manual/ownership-and-memory" aria-current="page">7. Ownership and Memory</a><ol><li><a href="#bindings-hold-values">Bindings hold values</a></li>
 <li><a href="#reading-values-through-parameters">Reading values through parameters</a></li>
 <li><a href="#changing-a-callers-value">Changing a caller&#39;s value</a></li>
 <li><a href="#giving-ownership-to-a-function">Giving ownership to a function</a></li>
@@ -68,13 +67,13 @@
             </ol>
           </nav>
         </aside>
-        <div class="site-page-content manual-document">
-          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/effects">&larr; 6. Effects</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/collections-and-text">8. Collections and Text &rarr;</a>
+        <div>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a href="/manual/effects">&larr; 6. Effects</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/collections-and-text">8. Collections and Text &rarr;</a>
           </nav>
-          <article class="prose page-content">
+          <article>
             <p>TalkTalk starts from a simple observable rule: ordinary values behave as independent values. Saving an array and later changing the original does not change the saved value. The compiler may share storage internally, but that optimization is not visible in the result of a correct program.</p>
 <p>Ownership rules answer three practical questions: who may read a value, who may change it, and who is responsible for cleaning it up.</p>
 <h2><a href="#bindings-hold-values" aria-hidden="true" class="anchor" id="bindings-hold-values"></a>Bindings hold values</h2>
@@ -108,7 +107,7 @@ print(snapshot) // [1, 2, 3]</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p><code>current</code> and <code>snapshot</code> may initially point at the same internal array buffer. Before mutation, the implementation separates them if necessary. This copy-on-write optimization preserves the source-level snapshot rule.</p>
 <p>Strings, arrays, structs, enums, tuples, records, and functions follow value semantics. Scalars such as <code>Int</code> are already small independent values. Returning a value, storing it globally, or capturing it in a closure also preserves the snapshot that escaped.</p>
@@ -143,7 +142,7 @@ print(length(text))</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>The caller can use <code>text</code> again because <code>length</code> only borrowed it. Most parameters and methods should use this default.</p>
 <p>Several shared reads may overlap. A later value-semantic mutation is also fine: if a saved reader still needs the old snapshot, copy-on-write keeps that snapshot intact.</p>
@@ -178,7 +177,7 @@ print(count) // 2</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>During the call, no overlapping access may use the same place. This exclusivity is what makes in-place writeback predictable. A <code>mut</code> argument must therefore be a writable binding, field, tuple position, or supported subscript rather than an arbitrary temporary.</p>
 <p>Methods follow the same rule. A plain method reads <code>self</code>; <code>mut func</code> may update it; <code>consuming func</code> takes responsibility for it.</p>
@@ -209,7 +208,7 @@ store(value: &quot;saved&quot;)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>For an ordinary shareable value, <code>consume</code> is a callee-side contract, not always a promise that the caller's binding becomes unusable. If the caller uses its value later, the compiler may retain an independent snapshot before the call. If the call is the last use, ownership can move directly without that retain.</p>
 <p>Use <code>consume</code> when the callee stores, returns, transfers, or dismantles the value. Use <code>consume mut</code> when it also needs to modify its owned local copy.</p>
@@ -255,7 +254,7 @@ attend()</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Calling <code>tear</code> twice is a compile error. Reaching the end of <code>attend</code> without consuming <code>ticket</code> is also an error. Linear types represent one-shot capabilities such as resumptions and resources whose abandonment would be incorrect.</p>
 <p><code>*T</code> is a statically unique owned value. Unique values likewise rule out implicit sharing while that uniqueness is required. Most application code encounters these types through an API rather than writing them directly.</p>
@@ -296,7 +295,7 @@ first.value + second.value</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Every alias to one heap object observes its field changes. Heap declarations live in managed regions so connected cycles can be reclaimed together. Recursive nominal layouts infer heap indirection where recursion requires it, but an explicit <code>'heap</code> declaration is the clear API signal that identity and shared mutation are intentional.</p>
 <p>Choose heap semantics for graphs and identity-bearing objects, not merely to avoid thinking about value copies.</p>
@@ -347,7 +346,7 @@ use_guard()</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Cleanup runs on ordinary scope exit, early return, effect abort, and cancellation of a suspended resumption. A <code>Deinit</code> hook runs once for each independently owned value, followed by structural cleanup of its fields.</p>
 <h2><a href="#ownership-marker-protocols" aria-hidden="true" class="anchor" id="ownership-marker-protocols"></a>Ownership marker protocols</h2>
@@ -383,14 +382,14 @@ use_guard()</textarea>
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/effects">&larr; 6. Effects</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/collections-and-text">8. Collections and Text &rarr;</a>
+            <a href="/manual/effects">&larr; 6. Effects</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/collections-and-text">8. Collections and Text &rarr;</a>
           </nav>
         </div>
-        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+        <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787386837"></script>
+      <script type="module" src="/page.js?t=1787528493"></script>
     </main>
   </body>
 </html>

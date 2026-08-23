@@ -1,9 +1,9 @@
-use package::Lexer::{
+use package::lexer::{
 	MacroInput, Token, TokenKind, TokenRange, TokenTree, Group,
 	group_contents, token_tree_range
 }
-use package::Ast::{ Expr, Pattern }
-use package::Syntax::{
+use package::ast::{ Expr, Pattern }
+use package::macros::{
 	Syntax, SyntaxFailure, SyntaxResult, SyntaxContext, QuoteContext,
 	capture_expr, capture_pattern, capture_type, string_literal_expr,
 	ungrouped_expr_splice, pattern_expr_fragment, type_expr_fragment,

@@ -293,6 +293,9 @@ impl DocumentationCache {
 struct DocumentationSection {
     slug: String,
     title: String,
+    description: String,
+    module_count: usize,
+    module_pages: Vec<String>,
     root: PathBuf,
     source_root: PathBuf,
 }
@@ -301,7 +304,11 @@ impl DocumentationSection {
     fn all(repository: &Path) -> std::io::Result<Vec<Self>> {
         let mut sections = vec![Self {
             slug: "core".to_string(),
-            title: "Core".to_string(),
+            title: "core".to_string(),
+            description: "Built-in types, collections, protocols, effects, and runtime interfaces."
+                .to_string(),
+            module_count: 0,
+            module_pages: Vec::new(),
             root: repository.to_path_buf(),
             source_root: repository.join("core"),
         }];
@@ -323,12 +330,71 @@ impl DocumentationSection {
             sections.push(Self {
                 title: slug.clone(),
                 slug,
+                description: Self::manifest_description(&root)?,
+                module_count: 0,
+                module_pages: Vec::new(),
                 source_root: root.join("src"),
                 root,
             });
         }
 
+        sections.sort_by_key(|section| section.title.to_lowercase());
+        for section in &mut sections {
+            let modules = section.modules()?;
+            section.module_count = modules.len();
+            section.module_pages = modules.into_keys().collect();
+        }
         Ok(sections)
+    }
+
+    fn manifest_description(root: &Path) -> std::io::Result<String> {
+        let path = root.join("package.tlk");
+        let manifest = std::fs::read_to_string(&path)?;
+        let value = manifest
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("description:"))
+            .map(str::trim)
+            .map(|value| value.strip_suffix(',').unwrap_or(value).trim())
+            .ok_or_else(|| {
+                std::io::Error::other(format!("{} has no description field", path.display()))
+            })?;
+        let quoted = value
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .ok_or_else(|| {
+                std::io::Error::other(format!(
+                    "{} description must be a quoted string",
+                    path.display()
+                ))
+            })?;
+        let mut description = String::new();
+        let mut characters = quoted.chars();
+        while let Some(character) = characters.next() {
+            if character != '\\' {
+                description.push(character);
+                continue;
+            }
+            let escaped = characters.next().ok_or_else(|| {
+                std::io::Error::other(format!(
+                    "{} description ends with an escape",
+                    path.display()
+                ))
+            })?;
+            description.push(match escaped {
+                '\\' => '\\',
+                '"' => '"',
+                'n' => '\n',
+                'r' => '\r',
+                't' => '\t',
+                _ => {
+                    return Err(std::io::Error::other(format!(
+                        "{} description contains unsupported escape \\{escaped}",
+                        path.display()
+                    )));
+                }
+            });
+        }
+        Ok(description)
     }
 
     fn modules(&self) -> std::io::Result<BTreeMap<String, DocumentationModule>> {
@@ -339,7 +405,7 @@ impl DocumentationSection {
             let mut fingerprint = DocumentationFingerprint::new("talk-doc-builtins-v1");
             fingerprint.add_tree("builtins", &builtins)?;
             modules.insert(
-                "Builtins.html".to_string(),
+                "builtins.html".to_string(),
                 DocumentationModule {
                     source: builtins,
                     digest: fingerprint.finish(),
@@ -460,7 +526,8 @@ impl DocumentationSection {
             }
         }
         let index_missing = !output_directory.join("index.html").is_file();
-        if selected_pages.is_empty() && !index_missing {
+        let summaries_missing = !output_directory.join(".module-summaries").is_file();
+        if selected_pages.is_empty() && !index_missing && !summaries_missing {
             println!("documentation {} is up to date", self.title);
             return Ok(());
         }
@@ -560,6 +627,14 @@ impl DocumentationSection {
             let index_source = temporary_directory.join("index.html");
             let index_destination = output_directory.join("index.html");
             std::fs::rename(index_source, index_destination)?;
+
+            let summaries_source = temporary_directory.join(".module-summaries");
+            if summaries_source.is_file() {
+                std::fs::rename(
+                    summaries_source,
+                    output_directory.join(".module-summaries"),
+                )?;
+            }
 
             let mut cached_modules = BTreeMap::new();
             for (page, module) in &modules {
@@ -672,6 +747,45 @@ impl ManualPage {
             self.title
         }
     }
+}
+
+// Every page header is rooted at the site, so the manual index is
+// "talktalk / Guide" rather than repeating the manual link twice.
+fn manual_breadcrumbs(page: ManualPage) -> String {
+    if page.slug.is_empty() {
+        "<a href=\"/\">talktalk</a> / <a href=\"/manual/\" aria-current=\"page\">Guide</a>"
+            .to_string()
+    } else {
+        format!(
+            "<a href=\"/\">talktalk</a> / <a href=\"/manual/\">Guide</a> / <a href=\"{}\" aria-current=\"page\">{}</a>",
+            escape_html(&page.url()),
+            escape_html(page.title)
+        )
+    }
+}
+
+// Every docs-index list row — core modules and standard-library packages
+// alike — renders through this. Arguments are already HTML-escaped.
+fn documentation_row(href: &str, name: &str, summary: &str) -> String {
+    if summary.is_empty() {
+        format!("<article><h3><a href=\"{href}\">{name}</a></h3></article>")
+    } else {
+        format!(
+            "<article><h3><a href=\"{href}\">{name}</a></h3><div class=\"doc\">{summary}</div></article>"
+        )
+    }
+}
+
+// Parses the `.module-summaries` sidecar talk-doc writes next to each
+// generated section: one `page<TAB>first documentation paragraph` per line.
+fn parse_module_summaries(contents: &str) -> BTreeMap<String, String> {
+    contents
+        .lines()
+        .filter_map(|line| {
+            let (page, summary) = line.split_once('\t')?;
+            (!summary.is_empty()).then(|| (page.to_string(), summary.to_string()))
+        })
+        .collect()
 }
 
 struct ManualExample {
@@ -840,6 +954,37 @@ const MANUAL_PAGES: [ManualPage; 20] = [
         title: "C. Bytecode Reference",
     },
 ];
+
+#[derive(Debug, Eq, PartialEq)]
+enum PageRoute {
+    Home,
+    Content(usize),
+    Manual(usize),
+    PlaygroundExamples,
+}
+
+// `route` is a normalized request path: no leading or trailing slash and no
+// ".html" suffix ("", "playground", "manual/effects").
+fn page_route(route: &str) -> Option<PageRoute> {
+    if route.is_empty() {
+        return Some(PageRoute::Home);
+    }
+    if route == "playground-examples.json" {
+        return Some(PageRoute::PlaygroundExamples);
+    }
+    if let Some(index) = CONTENT_PAGES.iter().position(|page| page.slug == route) {
+        return Some(PageRoute::Content(index));
+    }
+    let slug = if route == "manual" {
+        ""
+    } else {
+        route.strip_prefix("manual/")?
+    };
+    MANUAL_PAGES
+        .iter()
+        .position(|page| page.slug == slug)
+        .map(PageRoute::Manual)
+}
 
 struct PlaygroundExample {
     id: String,
@@ -1033,21 +1178,13 @@ impl SiteBuilder {
         let previous_link = previous.map_or_else(
             || "<span></span>".to_string(),
             |previous| {
-                format!(
-                    "<a class=\"manual-previous\" href=\"{}\">&larr; {}</a>",
-                    previous.url(),
-                    previous.title
-                )
+                format!("<a href=\"{}\">&larr; {}</a>", previous.url(), previous.title)
             },
         );
         let next_link = next.map_or_else(
             || "<span></span>".to_string(),
             |next| {
-                format!(
-                    "<a class=\"manual-next\" href=\"{}\">{} &rarr;</a>",
-                    next.url(),
-                    next.title
-                )
+                format!("<a href=\"{}\">{} &rarr;</a>", next.url(), next.title)
             },
         );
         let sections = ManualSection::from_markdown(content);
@@ -1072,7 +1209,7 @@ impl SiteBuilder {
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
-                    format!("<ol class=\"manual-outline-sections\">{links}</ol>")
+                    format!("<ol>{links}</ol>")
                 } else {
                     String::new()
                 };
@@ -1089,15 +1226,7 @@ impl SiteBuilder {
             .replace("{TITLE}", page.title)
             .replace(
                 "{PAGE_HEADER}",
-                &self.page_header(
-                    &format!(
-                        "<a href=\"/manual/\">Guide</a> / <a href=\"{}\" aria-current=\"page\">{}</a>",
-                        escape_html(&page.url()),
-                        escape_html(page.title)
-                    ),
-                    page.title,
-                    "",
-                ),
+                &self.page_header(&manual_breadcrumbs(page), page.title, ""),
             )
             .replace("{MANUAL_OUTLINE}", &outline)
             .replace("{CONTENT_GOES_HERE}", &compiled_html)
@@ -1181,12 +1310,48 @@ impl SiteBuilder {
             .replace("/page.js", &format!("/page.js?t={timestamp}"))
             .replace("/playground.js", &format!("/playground.js?t={timestamp}"))
             .replace("/style.css", &format!("/style.css?t={timestamp}"))
-            .replace("/docs.css", &format!("/docs.css?t={timestamp}"))
-            .replace("/playground.css", &format!("/playground.css?t={timestamp}"))
     }
 
-    fn render_documentation_index(self, sections: &[DocumentationSection]) -> String {
-        let section_nav = sections
+    fn documentation_summary(self, section: &DocumentationSection) -> String {
+        let modules = if section.module_count == 1 {
+            "1 module".to_string()
+        } else {
+            format!("{} modules", section.module_count)
+        };
+        documentation_row(
+            &format!("/docs/{}/", escape_html(&section.slug)),
+            &escape_html(&section.title),
+            &format!("{} {modules}.", escape_html(&section.description)),
+        )
+    }
+
+    fn render_documentation_index(
+        self,
+        sections: &[DocumentationSection],
+        core_summaries: &BTreeMap<String, String>,
+    ) -> String {
+        let core = sections
+            .iter()
+            .find(|section| section.slug == "core")
+            .expect("documentation always includes Core");
+        let standard_library = sections
+            .iter()
+            .filter(|section| section.slug != "core")
+            .collect::<Vec<_>>();
+        let core_nav = core
+            .module_pages
+            .iter()
+            .map(|page| {
+                let title = page.strip_suffix(".html").unwrap_or(page);
+                format!(
+                    "<a href=\"/docs/core/{}\">{}</a>",
+                    escape_html(page),
+                    escape_html(title)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let library_nav = standard_library
             .iter()
             .map(|section| {
                 format!(
@@ -1197,17 +1362,33 @@ impl SiteBuilder {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        let section_links = sections
+        let section_nav = format!(
+            "<a href=\"#core\">core</a><div>{core_nav}</div><a href=\"#standard-library\">Standard Library</a><div>{library_nav}</div>"
+        );
+        let core_modules = core
+            .module_pages
             .iter()
-            .map(|section| {
-                format!(
-                    "<a href=\"/docs/{}/\">{}</a>",
-                    escape_html(&section.slug),
-                    escape_html(&section.title)
+            .map(|page| {
+                let title = page.strip_suffix(".html").unwrap_or(page);
+                let summary = core_summaries.get(page).map_or("", String::as_str);
+                documentation_row(
+                    &format!("/docs/core/{}", escape_html(page)),
+                    &escape_html(title),
+                    &escape_html(summary),
                 )
             })
             .collect::<Vec<_>>()
             .join("\n");
+        let library_summaries = standard_library
+            .iter()
+            .map(|section| self.documentation_summary(section))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let section_links = format!(
+            "<section id=\"core\"><h2>core</h2><div class=\"doc\">{}</div><div class=\"rows\">{core_modules}</div></section><section id=\"standard-library\"><h2>Standard Library</h2><div class=\"doc\">{} libraries shipped with TalkTalk.</div><div class=\"rows\">{library_summaries}</div></section>",
+            escape_html(&core.description),
+            standard_library.len()
+        );
         let template = std::fs::read_to_string("./content/docs.html.template").unwrap();
         self.cache_bust(
             template
@@ -1217,7 +1398,24 @@ impl SiteBuilder {
         )
     }
 
-    fn write_documentation(self, directory: &Path) -> std::io::Result<()> {
+    pub(crate) fn render_route(self, route: &str) -> Option<(&'static str, String)> {
+        const HTML: &str = "text/html; charset=utf-8";
+        Some(match page_route(route)? {
+            PageRoute::Home => (HTML, self.render()),
+            PageRoute::Content(index) => (HTML, self.render_content_page(CONTENT_PAGES[index])),
+            PageRoute::Manual(index) => (HTML, self.render_manual_page(index)),
+            PageRoute::PlaygroundExamples => {
+                let playground = std::fs::read_to_string("./content/playground.md").unwrap();
+                let examples = PlaygroundExample::from_markdown(&playground);
+                (
+                    "application/json; charset=utf-8",
+                    PlaygroundExample::collection_json(&examples),
+                )
+            }
+        })
+    }
+
+    pub(crate) fn write_documentation(self, directory: &Path) -> std::io::Result<()> {
         let repository = Path::new("..").canonicalize()?;
         let compiler = talk_compiler(&repository)?;
         let tool_package = repository.join("packages/talk-doc");
@@ -1225,7 +1423,7 @@ impl SiteBuilder {
         std::fs::create_dir_all(&docs_directory)?;
         let docs_directory = docs_directory.canonicalize()?;
 
-        let sections = DocumentationSection::all(&repository)?;
+        let mut sections = DocumentationSection::all(&repository)?;
         let current_slugs = sections
             .iter()
             .map(|section| section.slug.as_str())
@@ -1271,10 +1469,20 @@ impl SiteBuilder {
         for result in results {
             result?;
         }
+        for section in &mut sections {
+            let section_directory = docs_directory.join(&section.slug);
+            section
+                .module_pages
+                .retain(|page| section_directory.join(page).is_file());
+            section.module_count = section.module_pages.len();
+        }
 
+        let core_summaries = std::fs::read_to_string(docs_directory.join("core/.module-summaries"))
+            .map(|contents| parse_module_summaries(&contents))
+            .unwrap_or_default();
         self.write_asset(
             &docs_directory.join("index.html"),
-            self.render_documentation_index(&sections),
+            self.render_documentation_index(&sections, &core_summaries),
         )
     }
 
@@ -1517,7 +1725,7 @@ fn runnable(code: &str, accumulate_group: Option<&str>) -> String {
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>"
     )
 }
@@ -1541,6 +1749,37 @@ fn norun(code: &str, accumulate_group: Option<&str>) -> String {
     )
 }
 
+fn shell(code: &str) -> String {
+    let code = code.trim_end_matches(&['\n', '\r'][..]);
+    let explicit_session = code
+        .lines()
+        .any(|line| line.starts_with("$ ") || line.starts_with("> "));
+    let mut continuation = false;
+    let lines = code
+        .lines()
+        .map(|line| {
+            if explicit_session {
+                if let Some(command) = line.strip_prefix("$ ") {
+                    return format!("<span data-prompt=\"$\">{}</span>", escape_html(command));
+                }
+                if let Some(command) = line.strip_prefix("> ") {
+                    return format!("<span data-prompt=\"&gt;\">{}</span>", escape_html(command));
+                }
+                return format!("<span>{}</span>", escape_html(line));
+            }
+
+            let prompt = if continuation { "&gt;" } else { "$" };
+            continuation = line.trim_end().ends_with('\\');
+            format!(
+                "<span data-prompt=\"{prompt}\">{}</span>",
+                escape_html(line)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    format!("<pre><code class=\"language-sh\">{lines}</code></pre>")
+}
+
 fn replace_code_blocks<'a>(node: &'a AstNode<'a>) {
     for child in node.children() {
         replace_code_blocks(child);
@@ -1549,16 +1788,113 @@ fn replace_code_blocks<'a>(node: &'a AstNode<'a>) {
     let mut data = node.data.borrow_mut();
     if let NodeValue::CodeBlock(block) = &data.value {
         let language = block.info.split_whitespace().next().unwrap_or_default();
-        if language != "tlk" && language != "talktalk" {
+        if language == "sh" || language == "shell" {
+            data.value = NodeValue::HtmlBlock(NodeHtmlBlock {
+                block_type: 1,
+                literal: shell(&block.literal),
+            });
             return;
         }
-        data.value = NodeValue::HtmlBlock(NodeHtmlBlock {
-            block_type: 1,
-            literal: if block.info.contains("norun") {
-                norun(&block.literal, accumulate_group(&block.info).as_deref())
-            } else {
-                runnable(&block.literal, accumulate_group(&block.info).as_deref())
-            },
-        })
+        if language == "tlk" || language == "talktalk" {
+            data.value = NodeValue::HtmlBlock(NodeHtmlBlock {
+                block_type: 1,
+                literal: if block.info.contains("norun") {
+                    norun(&block.literal, accumulate_group(&block.info).as_deref())
+                } else {
+                    runnable(&block.literal, accumulate_group(&block.info).as_deref())
+                },
+            })
+        }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        manual_breadcrumbs, page_route, parse_module_summaries, shell, ManualPage, PageRoute,
+        MANUAL_PAGES,
+    };
+
+    #[test]
+    fn page_route_maps_normalized_paths_to_dynamic_pages() {
+        assert_eq!(page_route(""), Some(PageRoute::Home));
+        assert_eq!(page_route("playground"), Some(PageRoute::Content(0)));
+        assert_eq!(page_route("qa"), Some(PageRoute::Content(1)));
+        assert_eq!(page_route("philosophy"), Some(PageRoute::Content(2)));
+        assert_eq!(
+            page_route("playground-examples.json"),
+            Some(PageRoute::PlaygroundExamples)
+        );
+        assert_eq!(page_route("manual"), Some(PageRoute::Manual(0)));
+        let effects = MANUAL_PAGES
+            .iter()
+            .position(|page| page.slug == "effects")
+            .unwrap();
+        assert_eq!(page_route("manual/effects"), Some(PageRoute::Manual(effects)));
+    }
+
+    #[test]
+    fn page_route_leaves_other_paths_to_static_assets() {
+        assert_eq!(page_route("docs"), None);
+        assert_eq!(page_route("docs/core/Array"), None);
+        assert_eq!(page_route("manual/not-a-chapter"), None);
+        assert_eq!(page_route("manualx"), None);
+        assert_eq!(page_route("style.css"), None);
+    }
+
+    #[test]
+    fn module_summaries_parse_pages_and_skip_blank_entries() {
+        let parsed = parse_module_summaries(
+            "array.html\tA growable, copy-on-write sequence.\nasync.html\t\nmalformed line\nio.html\tPOSIX-shaped file and stream operations.\n",
+        );
+        assert_eq!(
+            parsed.get("array.html").map(String::as_str),
+            Some("A growable, copy-on-write sequence.")
+        );
+        assert_eq!(
+            parsed.get("io.html").map(String::as_str),
+            Some("POSIX-shaped file and stream operations.")
+        );
+        assert!(!parsed.contains_key("async.html"));
+        assert!(!parsed.contains_key("malformed line"));
+    }
+
+    #[test]
+    fn manual_breadcrumbs_are_rooted_at_the_site() {
+        let index = ManualPage {
+            source: "README.md",
+            slug: "",
+            title: "The TalkTalk Manual",
+        };
+        assert_eq!(
+            manual_breadcrumbs(index),
+            "<a href=\"/\">talktalk</a> / <a href=\"/manual/\" aria-current=\"page\">Guide</a>"
+        );
+
+        let chapter = ManualPage {
+            source: "effects.md",
+            slug: "effects",
+            title: "6. Effects",
+        };
+        assert_eq!(
+            manual_breadcrumbs(chapter),
+            "<a href=\"/\">talktalk</a> / <a href=\"/manual/\">Guide</a> / <a href=\"/manual/effects\" aria-current=\"page\">6. Effects</a>"
+        );
+    }
+
+    #[test]
+    fn shell_prompts_each_command_and_marks_continuations() {
+        assert_eq!(
+            shell("talk check\ntalk run\n"),
+            "<pre><code class=\"language-sh\"><span data-prompt=\"$\">talk check</span><span data-prompt=\"$\">talk run</span></code></pre>"
+        );
+        assert_eq!(
+            shell("talk c source.tlk \\\n  --export add\n"),
+            "<pre><code class=\"language-sh\"><span data-prompt=\"$\">talk c source.tlk \\</span><span data-prompt=\"&gt;\">  --export add</span></code></pre>"
+        );
+        assert_eq!(
+            shell("$ talk run hello.tlk\nHello, TalkTalk!\n"),
+            "<pre><code class=\"language-sh\"><span data-prompt=\"$\">talk run hello.tlk</span><span>Hello, TalkTalk!</span></code></pre>"
+        );
+    }
 }

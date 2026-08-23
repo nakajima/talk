@@ -5,13 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - 4. Data and Patterns</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/reset.css" rel="stylesheet">
-    <link href="/style.css?t=1787386830" rel="stylesheet">
+    <link href="/style.css?t=1787528492" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
-      <a class="global-nav-brand" href="/">talktalk</a>
-      <div class="global-nav-links">
+      <a href="/">talktalk</a>
+      <div>
         <a href="/">Language</a>
         <a href="/manual/" aria-current="page">Guide</a>
         <a href="/docs/">Docs</a>
@@ -21,27 +20,27 @@
       </div>
     </nav>
     <main class="site-page manual-page">
-      <header class="site-page-header">
-        <div class="site-page-heading">
-          <nav class="site-breadcrumbs" aria-label="Breadcrumb"><a href="/manual/">Guide</a> / <a href="/manual/data-and-patterns" aria-current="page">4. Data and Patterns</a></nav>
-          <div class="page-header-title-row">
+      <header>
+        <div>
+          <nav aria-label="Breadcrumb"><a href="/">talktalk</a> / <a href="/manual/">Guide</a> / <a href="/manual/data-and-patterns" aria-current="page">4. Data and Patterns</a></nav>
+          <div class="split">
             <h1>4. Data and Patterns</h1>
             
           </div>
         </div>
       </header>
 
-      <div class="site-page-layout manual-layout">
-        <aside class="site-page-sidebar manual-outline">
+      <div>
+        <aside>
           <nav aria-label="Manual table of contents">
-            <span class="site-nav-label manual-outline-title">Contents</span>
+            <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
 <li><a href="/manual/getting-started">0. Getting Started</a></li>
 <li><a href="/manual/syntax">1. Syntax</a></li>
 <li><a href="/manual/values-and-types">2. Values and Types</a></li>
 <li><a href="/manual/bindings-and-functions">3. Bindings and Functions</a></li>
-<li><a href="/manual/data-and-patterns" aria-current="page">4. Data and Patterns</a><ol class="manual-outline-sections"><li><a href="#structs">Structs</a></li>
+<li><a href="/manual/data-and-patterns" aria-current="page">4. Data and Patterns</a><ol><li><a href="#structs">Structs</a></li>
 <li><a href="#records">Records</a></li>
 <li><a href="#enums">Enums</a></li>
 <li><a href="#exhaustive-matching">Exhaustive matching</a></li>
@@ -65,13 +64,13 @@
             </ol>
           </nav>
         </aside>
-        <div class="site-page-content manual-document">
-          <nav class="manual-pagination manual-pagination-top" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/bindings-and-functions">&larr; 3. Bindings and Functions</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/generics-and-protocols">5. Generics and Protocols &rarr;</a>
+        <div>
+          <nav class="manual-pagination" aria-label="Manual chapters">
+            <a href="/manual/bindings-and-functions">&larr; 3. Bindings and Functions</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/generics-and-protocols">5. Generics and Protocols &rarr;</a>
           </nav>
-          <article class="prose page-content">
+          <article>
             <p>TalkTalk has a few ways to group data. Structs define a reusable kind of value, records are handy structural bundles of fields, and enums describe values that can be one of several cases. Patterns let you look inside all three.</p>
 <h2><a href="#structs" aria-hidden="true" class="anchor" id="structs"></a>Structs</h2>
 <p>A struct declares stored fields and methods. It receives a memberwise initializer when it does not declare its own <code>init</code>:</p>
@@ -114,7 +113,7 @@ person.greeting()</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>A custom initializer assigns fields and returns <code>self</code>:</p>
 <div class='runnable'>
@@ -156,7 +155,7 @@ Rectangle(square: 12)</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <h2><a href="#records" aria-hidden="true" class="anchor" id="records"></a>Records</h2>
 <p>Records need no declaration. A literal's field labels and value types determine its type:</p>
@@ -181,7 +180,7 @@ print(user.greeting(user.name))</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>The type of <code>user</code> is <code>{ active: Bool, greeting: (String) -&gt; String, name: String }</code>. Source order is not part of record identity: labels, not positions, connect fields. The compiler stores a closed row in a canonical label order, so <code>{ x: 1, y: 2 }</code> and <code>{ y: 2, x: 1 }</code> have the same type.</p>
 <p>Field access can infer an <em>open</em> record row. This function does not require one declared record shape; it accepts any record with an <code>x</code> field:</p>
@@ -228,7 +227,7 @@ match point {
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Use records for local structural values. Prefer structs when a value needs nominal identity, declared conformance, constructors, methods as a public API, or a stable exported name. <a href="type-inference#record-rows">Type Inference Reference</a> describes row inference and specialization in detail.</p>
 <h2><a href="#enums" aria-hidden="true" class="anchor" id="enums"></a>Enums</h2>
@@ -286,7 +285,7 @@ message(.ok(&quot;sure&quot;))</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Adding a case to <code>Response</code> makes an old match incomplete until the new case is handled.</p>
 <p>Patterns include literals, bindings, <code>_</code>, tuples, enum cases, records, structs, and alternatives:</p>
@@ -323,7 +322,7 @@ match point {
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>A struct pattern names the type and may ignore remaining fields with <code>..</code>:</p>
 <div class='runnable' data-accumulates='true' data-accumulate-group='person'>
@@ -347,7 +346,7 @@ match point {
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <h2><a href="#pattern-conditions" aria-hidden="true" class="anchor" id="pattern-conditions"></a>Pattern conditions</h2>
 <p><code>if let</code> tests a pattern. Comma-separated condition clauses run left to right, short-circuit, and make earlier bindings visible to later clauses:</p>
@@ -384,7 +383,7 @@ match point {
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <h2><a href="#gadts-generalized-algebraic-data-types" aria-hidden="true" class="anchor" id="gadts-generalized-algebraic-data-types"></a>GADTs (Generalized Algebraic Data Types)</h2>
 <p>A case may refine the enum's result type. This supports generalized algebraic data types:</p>
@@ -429,7 +428,7 @@ evaluate(.int(42))</textarea>
                     <button type='button' class='format' disabled>Format</button>
                 </span>
             </div>
-            <div class='result'></div>
+            <output class='result' aria-live='polite'></output>
         </div>
 <p>Inside each arm, the compiler learns the result type promised by that case. That is why the <code>Int</code> arm can return an <code>Int</code> and the <code>String</code> arm can return a <code>String</code> from the same generic function.</p>
 <h2><a href="#further-reading" aria-hidden="true" class="anchor" id="further-reading"></a>Further reading</h2>
@@ -437,14 +436,14 @@ evaluate(.int(42))</textarea>
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
-            <a class="manual-previous" href="/manual/bindings-and-functions">&larr; 3. Bindings and Functions</a>
-            <a class="manual-contents" href="/manual/">All chapters</a>
-            <a class="manual-next" href="/manual/generics-and-protocols">5. Generics and Protocols &rarr;</a>
+            <a href="/manual/bindings-and-functions">&larr; 3. Bindings and Functions</a>
+            <a href="/manual/">All chapters</a>
+            <a href="/manual/generics-and-protocols">5. Generics and Protocols &rarr;</a>
           </nav>
         </div>
-        <div class="site-page-rail manual-rail" aria-hidden="true"></div>
+        <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787386830"></script>
+      <script type="module" src="/page.js?t=1787528492"></script>
     </main>
   </body>
 </html>

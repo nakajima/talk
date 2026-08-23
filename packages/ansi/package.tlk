@@ -1,6 +1,7 @@
 Package(
 	name: "ansi",
 	version: "0.1.0",
+	description: "Terminal colors and styled strings.",
 	builds: [
 		.lib(from: "src/ansi.tlk")
 	],

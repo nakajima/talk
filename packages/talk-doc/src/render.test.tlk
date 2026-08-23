@@ -70,7 +70,7 @@ test "effect declarations render documentation, signatures, source, and links" {
 	let rendered = render_entries(collection: docs)
 	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">effect</span> &#39;<span class=\"effect\">io</span>"))
 	assert(contains_sub(haystack: rendered, needle: "Performs <a href=\"#effect-io-t-value-t-t\" title=\"\"><code>&#39;io</code></a> requests."))
-	assert(contains_sub(haystack: rendered, needle: "<summary>View Source</summary>"))
+	assert(contains_sub(haystack: rendered, needle: "View Source"))
 }
 
 test "nominal pages render members and skip private ones" {
@@ -109,10 +109,10 @@ test "doc comments render markdown within the declaration hierarchy" {
 test "declarations are grouped by kind without a primary entry" {
 	let docs = collect(source: "pub func run() {}\npub struct Box {}\npub effect 'stop() -> ()\npub let answer: Int = 42")
 	let rendered = render_entries(collection: docs)
-	assert(contains_sub(haystack: rendered, needle: "<section class=\"docs-declaration-group\"><h2>Structs</h2>"))
-	assert(contains_sub(haystack: rendered, needle: "<section class=\"docs-declaration-group\"><h2>Effects</h2>"))
-	assert(contains_sub(haystack: rendered, needle: "<section class=\"docs-declaration-group\"><h2>Globals</h2>"))
-	assert(contains_sub(haystack: rendered, needle: "<section class=\"docs-declaration-group\"><h2>Functions</h2>"))
+	assert(contains_sub(haystack: rendered, needle: "<section><h2>Structs</h2>"))
+	assert(contains_sub(haystack: rendered, needle: "<section><h2>Effects</h2>"))
+	assert(contains_sub(haystack: rendered, needle: "<section><h2>Globals</h2>"))
+	assert(contains_sub(haystack: rendered, needle: "<section><h2>Functions</h2>"))
 	assert(contains_sub(haystack: rendered, needle: "docs-primary") == false)
 
 	let links = [ModuleLink(name: "main", file: "main.html", declarations: 4)]
@@ -137,18 +137,10 @@ test "module and index pages link each other" {
 	let symbols = symbol_links(module: "lib", page: "lib.html", collection: docs)
 	let page = render_module_page(package: "pkg", module: "lib", collection: docs, modules: links, symbols: symbols)
 	assert(contains_sub(haystack: page, needle: "<title>lib - pkg</title>"))
-	assert(contains_sub(haystack: page, needle: "<main class=\"site-page docs-proposal docs-design-1\">"))
-	assert(contains_sub(haystack: page, needle: "class=\"site-page-layout docs-proposal-shell\""))
-	assert(contains_sub(haystack: page, needle: "class=\"site-page-sidebar docs-catalog\""))
-	assert(contains_sub(haystack: page, needle: "class=\"site-page-content docs-reference\""))
 	assert(contains_sub(haystack: page, needle: "href=\"index.html\""))
 	assert(contains_sub(haystack: page, needle: "href=\"lib.html\" aria-current=\"page\">lib</a>"))
-	assert(count_sub(haystack: page, needle: "docs-breadcrumbs") == 1)
 	let index = render_index_page_with_symbols(package: "pkg", modules: links, symbols: symbols)
-	assert(contains_sub(haystack: index, needle: "href=\"index.html\" aria-current=\"page\">pkg</a>"))
-	assert(contains_sub(haystack: index, needle: "class=\"docs-module-summary\""))
 	assert(contains_sub(haystack: index, needle: "Utilities built around <a href=\"lib.symbol-func-add-a-int-int.html#func-add-a-int-int\" title=\"\"><code>add</code></a>."))
-	assert(count_sub(haystack: index, needle: "docs-breadcrumbs") == 1)
 	assert(contains_sub(haystack: index, needle: "href=\"lib.html\""))
 }
 
@@ -157,10 +149,10 @@ test "WIP modules render banners on module and symbol pages" {
 	let links = [ModuleLink(name: "main", file: "main.html", declarations: 1, documentation: ["Module overview."], wip: .some("The <API> may change."))]
 	let symbols = symbol_links(module: "main", page: "main.html", collection: docs)
 	let index = render_index_page_with_symbols(package: "pkg", modules: links, symbols: symbols)
-	assert(contains_sub(haystack: index, needle: "<span class=\"docs-module-wip\" title=\"The &lt;API&gt; may change.\">WIP</span>"))
+	assert(contains_sub(haystack: index, needle: "<span title=\"The &lt;API&gt; may change.\">WIP</span>"))
 	let module_page = render_module_page(package: "pkg", module: "main", collection: docs, modules: links, symbols: symbols)
-	assert(count_sub(haystack: module_page, needle: "docs-wip-banner") == 1)
-	assert(contains_sub(haystack: module_page, needle: "<span class=\"docs-nav-wip\" title=\"The &lt;API&gt; may change.\">WIP</span>"))
+	assert(count_sub(haystack: module_page, needle: "class=\"site-notice\"") == 1)
+	assert(contains_sub(haystack: module_page, needle: "<span title=\"The &lt;API&gt; may change.\">WIP</span>"))
 	assert(contains_sub(haystack: module_page, needle: "<strong>Work in progress</strong>"))
 	assert(contains_sub(haystack: module_page, needle: "The &lt;API&gt; may change."))
 	assert(contains_sub(haystack: module_page, needle: "Module overview."))
@@ -168,7 +160,7 @@ test "WIP modules render banners on module and symbol pages" {
 	for entry in docs.items {
 		if let .some(_) = symbol_file(module_page: "main.html", collection: docs, entry: entry) {
 			let page = render_symbol_page(package: "pkg", module: "main", module_page: "main.html", collection: docs, entry: entry, modules: links, symbols: symbols)
-			assert(count_sub(haystack: page, needle: "docs-wip-banner") == 1)
+			assert(count_sub(haystack: page, needle: "class=\"site-notice\"") == 1)
 			assert(contains_sub(haystack: page, needle: "The &lt;API&gt; may change."))
 		}
 	}
@@ -179,8 +171,8 @@ test "module summaries link to standalone declaration pages" {
 	let links = [ModuleLink(name: "main", file: "main.html", declarations: 1)]
 	let symbols = symbol_links(module: "main", page: "main.html", collection: docs)
 	let module_page = render_module_page(package: "pkg", module: "main", collection: docs, modules: links, symbols: symbols)
-	assert(contains_sub(haystack: module_page, needle: "<h2 class=\"docs-reference-title\">API Reference</h2>"))
-	assert(contains_sub(haystack: module_page, needle: "<code class=\"docs-api-signature\"><span class=\"keyword\">enum</span> <a class=\"docs-symbol-link\" href=\"main.symbol-enum-choice.html#enum-choice\"><span class=\"type\">Choice</span></a></code>"))
+	assert(contains_sub(haystack: module_page, needle: "<h2>API Reference</h2>"))
+	assert(contains_sub(haystack: module_page, needle: "<span class=\"keyword\">enum</span> <a href=\"main.symbol-enum-choice.html#enum-choice\"><span class=\"type\">Choice</span></a>"))
 	assert(contains_sub(haystack: module_page, needle: "<h4>") == false)
 	assert(contains_sub(haystack: module_page, needle: "A choice."))
 	assert(contains_sub(haystack: module_page, needle: "More detail belongs on the symbol page.") == false)
@@ -192,9 +184,10 @@ test "module summaries link to standalone declaration pages" {
 			let page = render_symbol_page(package: "pkg", module: "main", module_page: "main.html", collection: docs, entry: entry, modules: links, symbols: symbols)
 			assert(contains_sub(haystack: page, needle: "<title>Choice - pkg</title>"))
 			assert(contains_sub(haystack: page, needle: "href=\"#enum-choice\" aria-current=\"page\">Choice</a>"))
-			assert(count_sub(haystack: page, needle: "docs-breadcrumbs") == 1)
+			assert(count_sub(haystack: page, needle: "aria-label=\"Breadcrumb\"") == 1)
+			assert(contains_sub(haystack: page, needle: "<nav aria-label=\"Breadcrumb\"><a href=\"/\">talktalk</a> / <a href=\"../\">Docs</a> / "))
 			assert(contains_sub(haystack: page, needle: "More detail belongs on the symbol page."))
-			assert(contains_sub(haystack: page, needle: "<section class=\"docs-symbol-member-group\" id=\"members-cases\"><h2>Cases</h2>"))
+			assert(contains_sub(haystack: page, needle: "<section id=\"members-cases\"><h2>Cases</h2>"))
 			assert(contains_sub(haystack: page, needle: "Contains a value."))
 		}
 	}
@@ -207,7 +200,7 @@ test "detached leading comments render as module documentation" {
 	let links = [ModuleLink(name: "main", file: "main.html", declarations: 1)]
 	let symbols = symbol_links(module: "main", page: "main.html", collection: docs)
 	let page = render_module_page(package: "pkg", module: "main", collection: docs, modules: links, symbols: symbols)
-	assert(contains_sub(haystack: page, needle: "docs-module-documentation"))
+	assert(contains_sub(haystack: page, needle: "docs-module-documentation") == false)
 	assert(contains_sub(haystack: page, needle: "Module summary."))
 	assert(contains_sub(haystack: page, needle: "<h3>Details</h3>"))
 }
@@ -250,8 +243,8 @@ test "signature symbols always link across modules" {
 	for symbol in symbol_links(module: "right", page: "right.html", collection: right) { symbols.push(symbol.clone()) }
 	let links = [ModuleLink(name: "right", file: "right.html", declarations: 1)]
 	let page = render_module_page(package: "pkg", module: "right", collection: right, modules: links, symbols: symbols)
-	assert(count_sub(haystack: page, needle: "<a class=\"docs-symbol-link\" href=\"left.symbol-struct-box.html#struct-box\"><span class=\"type\">Box</span></a>") == 2)
-	assert(contains_sub(haystack: page, needle: "<a class=\"docs-symbol-link\" href=\"#func-build") == false)
+	assert(count_sub(haystack: page, needle: "<a href=\"left.symbol-struct-box.html#struct-box\"><span class=\"type\">Box</span></a>") == 2)
+	assert(contains_sub(haystack: page, needle: "<a href=\"#func-build") == false)
 }
 
 test "display signatures preserve labels ownership and constraints" {
@@ -273,7 +266,7 @@ test "protocols and their methods are linkable symbols" {
 	assert(contains_sub(haystack: rendered, needle: "href=\"#protocol-iterator-consuming-func-skip-count-int-self\" title=\"\"><code>Iterator.skip()</code></a>"))
 	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">mut</span> <span class=\"keyword\">func</span> <span class=\"function\">next</span>()"))
 	assert(contains_sub(haystack: rendered, needle: "<span class=\"keyword\">consuming</span> <span class=\"keyword\">func</span> <span class=\"function\">skip</span>(count: <span class=\"type\">Int</span>)"))
-	assert(contains_sub(haystack: rendered, needle: "<a class=\"docs-symbol-link\" href=\"#protocol-iterator\"><span class=\"type\">Iterator</span></a>"))
+	assert(contains_sub(haystack: rendered, needle: "<a href=\"#protocol-iterator\"><span class=\"type\">Iterator</span></a>"))
 }
 
 test "synthetic builtins render and link without source declarations" {
@@ -286,11 +279,11 @@ test "synthetic builtins render and link without source declarations" {
 
 	let package = collect(source: "// Accepts an `Int`.\npub func identity(value: Int) -> Int { value }")
 	let symbols: [SymbolLink] = []
-	for symbol in symbol_links(module: "Builtins", page: "/docs/core/Builtins.html", collection: core) { symbols.push(symbol.clone()) }
+	for symbol in symbol_links(module: "builtins", page: "/docs/core/builtins.html", collection: core) { symbols.push(symbol.clone()) }
 	for symbol in symbol_links(module: "main", page: "main.html", collection: package) { symbols.push(symbol.clone()) }
 	let links = [ModuleLink(name: "main", file: "main.html", declarations: 1)]
 	let page = render_module_page(package: "pkg", module: "main", collection: package, modules: links, symbols: symbols)
-	assert(count_sub(haystack: page, needle: "href=\"/docs/core/Builtins.symbol-builtin-int.html#builtin-int\"") == 3)
+	assert(count_sub(haystack: page, needle: "href=\"/docs/core/builtins.symbol-builtin-int.html#builtin-int\"") == 3)
 }
 
 test "core symbols use their external catalog URL" {
@@ -334,7 +327,7 @@ test "source highlighting handles generated table declarations" {
 test "functions and methods include formatted highlighted source" {
 	let docs = collect(source: "pub func top() -> Int { let text = \"<tag>\"; 1 < 2 }\npub struct Box {\n\tpub let value: Int\n\tpub func get() -> Int {\n\t\tlet result = self.value\n\t\tresult\n\t}\n}")
 	let rendered = render_entries(collection: docs)
-	assert(count_sub(haystack: rendered, needle: "<summary>View Source</summary>") == 2)
+	assert(count_sub(haystack: rendered, needle: "View Source") == 2)
 	assert(contains_sub(haystack: rendered, needle: "<span class=\"modifier\">pub</span> <span class=\"keyword\">func</span> <span class=\"function\">top</span>"))
 	assert(contains_sub(haystack: rendered, needle: "<span class=\"string\">&quot;&lt;tag&gt;&quot;</span>"))
 	assert(contains_sub(haystack: rendered, needle: "<span class=\"operator\">&lt;</span>"))

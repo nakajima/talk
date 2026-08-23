@@ -300,6 +300,15 @@ function createHoverTooltips() {
     ) {
       return;
     }
+    // The playground shows hover information in its inspector panel; the
+    // floating popover is for prose pages, where there is no panel to use.
+    const inspector = editor
+      .closest(".playground-runner")
+      ?.querySelector(".inspector-body");
+    if (inspector) {
+      inspector.textContent = contents;
+      return;
+    }
     showAt(tokenEl.getBoundingClientRect(), contents);
   };
 
@@ -725,7 +734,7 @@ function initLowerable(el) {
 
     try {
       let output = await talk.showIr(source);
-      result.innerHTML = `<pre class="output ir">${output.highlightedIr}</pre>`;
+      result.innerHTML = `<samp class="output ir">${output.highlightedIr}</samp>`;
       result.classList.add("active");
     } catch (error) {
       showActionError(result, error);
@@ -795,13 +804,13 @@ function initRunnable(el) {
 
     try {
       const run = talk.runProgram(source);
-      const stdout = document.createElement("pre");
+      const stdout = document.createElement("samp");
       stdout.className = "output";
       stdout.hidden = true;
-      const stderr = document.createElement("pre");
+      const stderr = document.createElement("samp");
       stderr.className = "output error";
       stderr.hidden = true;
-      const value = document.createElement("pre");
+      const value = document.createElement("samp");
       value.className = "value";
       value.hidden = true;
       result.replaceChildren(stdout, stderr, value);
