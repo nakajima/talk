@@ -5,14 +5,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - 0. Getting Started</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/style.css?t=1787596177" rel="stylesheet">
+    <link href="/style.css?t=1787606867" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
       <a href="/">talktalk</a>
       <div>
         <a href="/">Language</a>
-        <a href="/manual/" aria-current="page">Guide</a>
+        <a href="/manual/" aria-current="page">Manual</a>
         <a href="/docs/">Docs</a>
         <a href="/playground">Playground</a>
         <a href="/qa">Q/A</a>
@@ -36,7 +36,7 @@
             <span>Contents</span>
             <ol>
               <li><a href="/manual/">Overview</a></li>
-<li><a href="/manual/getting-started" aria-current="page">0. Getting Started</a><ol><li><a href="#build-the-compiler">Build the compiler</a></li>
+<li><a href="/manual/getting-started" aria-current="page">0. Getting Started</a><ol><li><a href="#install">Install</a></li>
 <li><a href="#run-one-file">Run one file</a></li>
 <li><a href="#create-a-package">Create a package</a></li>
 <li><a href="#editor-support">Editor support</a></li>
@@ -70,10 +70,11 @@
           </nav>
           <article>
             <p>This chapter gets a TalkTalk program running. We will build the compiler, run one file, and then create a small project. For now, building from the repository is the dependable way to install it.</p>
-<h2><a href="#build-the-compiler" aria-hidden="true" class="anchor" id="build-the-compiler"></a>Build the compiler</h2>
-<p>TalkTalk's compiler is written in Rust and currently uses a pinned nightly Rust toolchain. From the repository root:</p>
-<pre><code class="language-sh"><span data-prompt="$">cargo build --release</span><span data-prompt="$">./target/release/talk --version</span></code></pre>
-<p>Put <code>target/release/talk</code> somewhere on your <code>PATH</code> if you want to invoke it as <code>talk</code>. Released builds are also attached to the project's GitHub releases.</p>
+<h2><a href="#install" aria-hidden="true" class="anchor" id="install"></a>Install</h2>
+<pre><code class="language-sh"><span data-prompt="$">curl -fsSL https://tlk.sh/install | sh</span></code></pre>
+<p>or if you want to install it somewhere else:</p>
+<pre><code class="language-sh"><span data-prompt="$">curl -fsSL https://tlk.sh/install | INSTALL_DIR=&quot;$HOME/.local/bin&quot; sh</span></code></pre>
+<p>Make sure to check <code>which talk</code> to make sure it returns the bin you just installed. Some systems already have a <code>talk</code> executable on the PATH<sup class="footnote-ref"><a href="#fn-1" id="fnref-1" data-footnote-ref>1</a></sup>.</p>
 <h2><a href="#run-one-file" aria-hidden="true" class="anchor" id="run-one-file"></a>Run one file</h2>
 <p>Create <code>hello.tlk</code>:</p>
 <div class='runnable'>
@@ -144,6 +145,13 @@ square(6)</textarea>
 <p><code>talk completions</code> also supports Bash, Elvish, PowerShell, and Zsh. The repository includes a VS Code extension under <code>dev/editors/vscode</code>.</p>
 <h2><a href="#where-to-next" aria-hidden="true" class="anchor" id="where-to-next"></a>Where to next</h2>
 <p>Read <a href="/manual/syntax">Syntax</a> and <a href="/manual/values-and-types">Values and Types</a> for the language's basic shape. <a href="/manual/data-and-patterns">Data and Patterns</a>, <a href="/manual/generics-and-protocols">Generics and Protocols</a>, and <a href="/manual/effects">Effects</a> cover the features that most distinguish TalkTalk.</p>
+<section class="footnotes" data-footnotes>
+<ol>
+<li id="fn-1">
+<p>If you use the <code>talk</code> that comes with BSD.. uh, well, maybe talktalk isn't for you. <a href="#fnref-1" class="footnote-backref" data-footnote-backref data-footnote-backref-idx="1" aria-label="Back to reference 1">↩</a></p>
+</li>
+</ol>
+</section>
 
           </article>
           <nav class="manual-pagination" aria-label="Manual chapters">
@@ -154,7 +162,7 @@ square(6)</textarea>
         </div>
         <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787596177"></script>
+      <script type="module" src="/page.js?t=1787606867"></script>
     </main>
   </body>
 </html>

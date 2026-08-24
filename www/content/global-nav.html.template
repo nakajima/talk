@@ -2,7 +2,7 @@
       <a href="/">talktalk</a>
       <div>
         <a href="/"{LANGUAGE_CURRENT}>Language</a>
-        <a href="/manual/"{GUIDE_CURRENT}>Guide</a>
+        <a href="/manual/"{GUIDE_CURRENT}>Manual</a>
         <a href="/docs/"{DOCS_CURRENT}>Docs</a>
         <a href="/playground"{PLAYGROUND_CURRENT}>Playground</a>
         <a href="/qa"{QA_CURRENT}>Q/A</a>

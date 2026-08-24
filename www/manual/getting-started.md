@@ -2,16 +2,19 @@
 
 This chapter gets a TalkTalk program running. We will build the compiler, run one file, and then create a small project. For now, building from the repository is the dependable way to install it.
 
-## Build the compiler
-
-TalkTalk's compiler is written in Rust and currently uses a pinned nightly Rust toolchain. From the repository root:
+## Install
 
 ```sh
-cargo build --release
-./target/release/talk --version
+$ curl -fsSL https://tlk.sh/install | sh
 ```
 
-Put `target/release/talk` somewhere on your `PATH` if you want to invoke it as `talk`. Released builds are also attached to the project's GitHub releases.
+or if you want to install it somewhere else:
+
+```sh
+$ curl -fsSL https://tlk.sh/install | INSTALL_DIR="$HOME/.local/bin" sh
+```
+
+Make sure to check `which talk` to make sure it returns the bin you just installed. Some systems already have a `talk` executable on the PATH[^1].
 
 ## Run one file
 
@@ -93,3 +96,5 @@ talk completions fish
 ## Where to next
 
 Read [Syntax](syntax.md) and [Values and Types](values-and-types.md) for the language's basic shape. [Data and Patterns](data-and-patterns.md), [Generics and Protocols](generics-and-protocols.md), and [Effects](effects.md) cover the features that most distinguish TalkTalk.
+
+[^1]: If you use the `talk` that comes with BSD.. uh, well, maybe talktalk isn't for you.
