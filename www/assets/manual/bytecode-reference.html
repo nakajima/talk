@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - C. Bytecode Reference</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/style.css?t=1787529448" rel="stylesheet">
+    <link href="/style.css?t=1787596211" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
@@ -78,7 +78,7 @@
           <article>
             <p>TalkTalk's default executable artifact is a validated register-bytecode image. <code>talk build</code> writes it, <code>talk run-image</code> decodes and validates it, and <code>talk bytecode</code> prints the disassembly produced directly from source.</p>
 <pre><code class="language-sh"><span data-prompt="$">talk build program.tlk -o program.tbc</span><span data-prompt="$">talk bytecode program.tlk</span><span data-prompt="$">talk run-image program.tbc</span></code></pre>
-<p>This page describes bytecode format 11. The exact encoder, decoder, instruction tags, and validator in <code>talk-vm/src/bytecode.rs</code> and <code>talk-vm/src/lib.rs</code> are authoritative.</p>
+<p>This page describes bytecode format 11. The exact encoder, decoder, instruction tags, and validator in <code>crates/talk-vm/src/bytecode.rs</code> and <code>crates/talk-vm/src/lib.rs</code> are authoritative.</p>
 <h2><a href="#compatibility-policy" aria-hidden="true" class="anchor" id="compatibility-policy"></a>Compatibility policy</h2>
 <p>Every image begins with the seven bytes <code>TALKBC\0</code>, followed by a 32-bit format version. The current encoder writes version 11, and the current loader accepts version 11. A different magic, unsupported version, truncated field, invalid tag, invalid index, integer overflow, malformed UTF-8 string, or trailing byte rejects the image before execution.</p>
 <p>The format is experimental. Opcode layout can change when the format version changes; producers and consumers should use matching TalkTalk releases rather than treating <code>.tbc</code> as a long-term distribution ABI.</p>
@@ -254,7 +254,7 @@ MonotonicNanos
         </div>
         <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787529448"></script>
+      <script type="module" src="/page.js?t=1787596211"></script>
     </main>
   </body>
 </html>

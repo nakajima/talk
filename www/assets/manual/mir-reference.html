@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>talktalk - B. MIR Reference</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link href="/style.css?t=1787529448" rel="stylesheet">
+    <link href="/style.css?t=1787596211" rel="stylesheet">
   </head>
   <body>
     <nav class="global-nav" aria-label="Global navigation">
@@ -83,7 +83,7 @@
             <p>MIR is TalkTalk's finalized, target-independent middle representation. The compiler publishes it after type checking, ownership checking, cleanup insertion, optimization, register allocation, and frame shaping. Bytecode and C consume this same artifact; targets do not inspect source types or repeat semantic decisions.</p>
 <p>Inspect it with:</p>
 <pre><code class="language-sh"><span data-prompt="$">talk mir source.tlk</span><span data-prompt="$">talk mir --no-opt source.tlk</span><span data-prompt="$">talk mir --debug source.tlk</span></code></pre>
-<p>The text printed by <code>talk mir</code> is diagnostic output, not a stable file format. The public in-process data model in <code>talk-mir/src/lib.rs</code> and <code>talk-mir/src/layout.rs</code> is authoritative.</p>
+<p>The text printed by <code>talk mir</code> is diagnostic output, not a stable file format. The public in-process data model in <code>crates/talk-mir/src/lib.rs</code> and <code>crates/talk-mir/src/layout.rs</code> is authoritative.</p>
 <h2><a href="#pipeline-position" aria-hidden="true" class="anchor" id="pipeline-position"></a>Pipeline position</h2>
 <p>The relevant pipeline is:</p>
 <pre><code class="language-text">source
@@ -232,7 +232,7 @@
         </div>
         <aside aria-hidden="true"></aside>
       </div>
-      <script type="module" src="/page.js?t=1787529448"></script>
+      <script type="module" src="/page.js?t=1787596211"></script>
     </main>
   </body>
 </html>

@@ -575,6 +575,7 @@ impl AssetPath {
             Some("webp") => "image/webp",
             Some("woff") => "font/woff",
             Some("woff2") => "font/woff2",
+            Some("otf") => "font/otf",
             Some("wasm") => "application/wasm",
             _ => "application/octet-stream",
         }
@@ -704,6 +705,10 @@ mod tests {
         assert_eq!(
             AssetPath::content_type(Path::new("style.css")),
             "text/css; charset=utf-8"
+        );
+        assert_eq!(
+            AssetPath::content_type(Path::new("BerkeleyMono-Regular.otf")),
+            "font/otf"
         );
     }
 }

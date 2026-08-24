@@ -166,9 +166,41 @@ impl DocumentationFingerprint {
 struct DocumentationModule {
     source: PathBuf,
     digest: String,
+    wip: Option<String>,
 }
 
 impl DocumentationModule {
+    fn wip_from_source(source: &[u8]) -> Option<String> {
+        let mut cursor = 0;
+        while source.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        if source[cursor..].starts_with(b"// no-core") {
+            cursor += "// no-core".len();
+            while source.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+                cursor += 1;
+            }
+        }
+        if !source[cursor..].starts_with(b"// WIP:") {
+            return None;
+        }
+
+        cursor += "// WIP:".len();
+        while source
+            .get(cursor)
+            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+        {
+            cursor += 1;
+        }
+        let end = source[cursor..]
+            .iter()
+            .position(|byte| matches!(byte, b'\n' | b'\r'))
+            .map_or(source.len(), |end| cursor + end);
+        std::str::from_utf8(&source[cursor..end])
+            .ok()
+            .map(str::to_string)
+    }
+
     fn collect(
         source_root: &Path,
         path: &Path,
@@ -219,6 +251,7 @@ impl DocumentationModule {
         let module = Self {
             source: path.to_path_buf(),
             digest: fingerprint.finish(),
+            wip: Self::wip_from_source(&source),
         };
         if modules.insert(page.clone(), module).is_some() {
             return Err(std::io::Error::other(format!(
@@ -303,6 +336,7 @@ struct DocumentationSection {
     description: String,
     module_count: usize,
     module_pages: Vec<String>,
+    module_wips: BTreeMap<String, String>,
     root: PathBuf,
     source_root: PathBuf,
 }
@@ -316,6 +350,7 @@ impl DocumentationSection {
                 .to_string(),
             module_count: 0,
             module_pages: Vec::new(),
+            module_wips: BTreeMap::new(),
             root: repository.to_path_buf(),
             source_root: repository.join("core"),
         }];
@@ -340,6 +375,7 @@ impl DocumentationSection {
                 description: Self::manifest_description(&root)?,
                 module_count: 0,
                 module_pages: Vec::new(),
+                module_wips: BTreeMap::new(),
                 source_root: root.join("src"),
                 root,
             });
@@ -349,6 +385,15 @@ impl DocumentationSection {
         for section in &mut sections {
             let modules = section.modules()?;
             section.module_count = modules.len();
+            section.module_wips = modules
+                .iter()
+                .filter_map(|(page, module)| {
+                    module
+                        .wip
+                        .as_ref()
+                        .map(|description| (page.clone(), description.clone()))
+                })
+                .collect();
             section.module_pages = modules.into_keys().collect();
         }
         Ok(sections)
@@ -416,10 +461,28 @@ impl DocumentationSection {
                 DocumentationModule {
                     source: builtins,
                     digest: fingerprint.finish(),
+                    wip: None,
                 },
             );
         }
         Ok(modules)
+    }
+
+    fn wip_description(&self) -> Option<String> {
+        match self.module_wips.len() {
+            0 => None,
+            1 => self.module_wips.values().next().cloned(),
+            _ => Some(
+                self.module_wips
+                    .iter()
+                    .map(|(page, description)| {
+                        let module = page.strip_suffix(".html").unwrap_or(page);
+                        format!("{module}: {description}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+        }
     }
 
     fn shared_fingerprint(
@@ -762,12 +825,15 @@ fn manual_breadcrumbs(page: ManualPage) -> String {
 
 // Every docs-index list row — core modules and standard-library packages
 // alike — renders through this. Arguments are already HTML-escaped.
-fn documentation_row(href: &str, name: &str, summary: &str) -> String {
+fn documentation_row(href: &str, name: &str, summary: &str, wip: Option<&str>) -> String {
+    let badge = wip.map_or_else(String::new, |description| {
+        format!("<span class=\"wip\" title=\"{description}\">WIP</span>")
+    });
     if summary.is_empty() {
-        format!("<article><h3><a href=\"{href}\">{name}</a></h3></article>")
+        format!("<article><h3><a href=\"{href}\">{name}</a>{badge}</h3></article>")
     } else {
         format!(
-            "<article><h3><a href=\"{href}\">{name}</a></h3><div class=\"doc\">{summary}</div></article>"
+            "<article><h3><a href=\"{href}\">{name}</a>{badge}</h3><div class=\"doc\">{summary}</div></article>"
         )
     }
 }
@@ -1316,10 +1382,14 @@ impl SiteBuilder {
         } else {
             format!("{} modules", section.module_count)
         };
+        let wip = section
+            .wip_description()
+            .map(|description| escape_html(&description));
         documentation_row(
             &format!("/docs/{}/", escape_html(&section.slug)),
             &escape_html(&section.title),
             &format!("{} {modules}.", escape_html(&section.description)),
+            wip.as_deref(),
         )
     }
 
@@ -1341,8 +1411,17 @@ impl SiteBuilder {
             .iter()
             .map(|page| {
                 let title = page.strip_suffix(".html").unwrap_or(page);
+                let badge = core
+                    .module_wips
+                    .get(page)
+                    .map_or_else(String::new, |description| {
+                        format!(
+                            "<span class=\"wip\" title=\"{}\">WIP</span>",
+                            escape_html(description)
+                        )
+                    });
                 format!(
-                    "<a href=\"/docs/core/{}\">{}</a>",
+                    "<a href=\"/docs/core/{}\">{}{badge}</a>",
                     escape_html(page),
                     escape_html(title)
                 )
@@ -1352,8 +1431,16 @@ impl SiteBuilder {
         let library_nav = standard_library
             .iter()
             .map(|section| {
+                let badge = section
+                    .wip_description()
+                    .map_or_else(String::new, |description| {
+                        format!(
+                            "<span class=\"wip\" title=\"{}\">WIP</span>",
+                            escape_html(&description)
+                        )
+                    });
                 format!(
-                    "<a href=\"/docs/{}/\">{}</a>",
+                    "<a href=\"/docs/{}/\">{}{badge}</a>",
                     escape_html(&section.slug),
                     escape_html(&section.title)
                 )
@@ -1369,10 +1456,15 @@ impl SiteBuilder {
             .map(|page| {
                 let title = page.strip_suffix(".html").unwrap_or(page);
                 let summary = core_summaries.get(page).map_or("", String::as_str);
+                let wip = core
+                    .module_wips
+                    .get(page)
+                    .map(|description| escape_html(description));
                 documentation_row(
                     &format!("/docs/core/{}", escape_html(page)),
                     &escape_html(title),
                     &escape_html(summary),
+                    wip.as_deref(),
                 )
             })
             .collect::<Vec<_>>()
@@ -1807,7 +1899,7 @@ fn replace_code_blocks<'a>(node: &'a AstNode<'a>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        MANUAL_PAGES, ManualPage, PageRoute, manual_breadcrumbs, page_route,
+        DocumentationModule, MANUAL_PAGES, ManualPage, PageRoute, manual_breadcrumbs, page_route,
         parse_module_summaries, shell,
     };
 
@@ -1839,6 +1931,21 @@ mod tests {
         assert_eq!(page_route("manual/not-a-chapter"), None);
         assert_eq!(page_route("manualx"), None);
         assert_eq!(page_route("style.css"), None);
+    }
+
+    #[test]
+    fn documentation_modules_read_leading_wip_metadata() {
+        assert_eq!(
+            DocumentationModule::wip_from_source(
+                b"\n// no-core\n// WIP: This API may change.\n// Module overview.\n"
+            )
+            .as_deref(),
+            Some("This API may change.")
+        );
+        assert_eq!(
+            DocumentationModule::wip_from_source(b"// Stable module.\nfunc run() {}"),
+            None
+        );
     }
 
     #[test]

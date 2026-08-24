@@ -714,7 +714,7 @@ func module_navigation(modules: &[ModuleLink], current: String) -> Markup {
 					(module.name)
 					("\n ")
 					@if let .some(description) = module.wip {
-						span title=(description) { "WIP" }
+						span.wip title=(description) { "WIP" }
 					}
 				}
 			}
@@ -723,7 +723,7 @@ func module_navigation(modules: &[ModuleLink], current: String) -> Markup {
 				a href=(module.file) {
 					(module.name)
 					@if let .some(description) = module.wip {
-						span title=(description) { "WIP" }
+						span.wip title=(description) { "WIP" }
 					}
 				}
 			}
