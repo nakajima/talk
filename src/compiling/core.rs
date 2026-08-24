@@ -95,10 +95,6 @@ pub fn core_sources() -> Vec<(&'static str, &'static str)> {
             "unicode_data.tlk",
             include_str!("../../core/unicode_data.tlk"),
         ),
-        (
-            "text_unicode_data.tlk",
-            include_str!("../../core/text_unicode_data.tlk"),
-        ),
         ("unicode.tlk", include_str!("../../core/unicode.tlk")),
         ("array.tlk", include_str!("../../core/array.tlk")),
         (

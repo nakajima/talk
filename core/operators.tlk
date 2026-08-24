@@ -1,4 +1,6 @@
 // no-core
+// Protocols for operators like +, -, *, /, etc.
+
 // Defines the `+` operator for a right-hand operand type.
 //
 // `RHS` and `Ret` may differ from `Self`, allowing mixed-type addition and

@@ -1,4 +1,6 @@
 // no-core
+// A fixed size array
+
 use package::optional::{ Optional }
 use package::operators::{ Comparable }
 

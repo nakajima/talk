@@ -1,4 +1,5 @@
 // no-core
+// Generic ranges like 1..5 or 1..<5
 
 use package::optional::{ Optional }
 use package::operators::{ Add, Comparable, Equatable }

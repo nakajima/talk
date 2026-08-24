@@ -135,7 +135,7 @@ and the differential sweep remains the behavior gate.
 | `cargo test -p talk-llvm --locked` | pass (covered by workspace run) |
 | `cargo test -p talk-ffi --locked` | n/a until stage 2 (package is `talk-c`; `cargo test -p talk-c --locked` passes) |
 | `swift test -Xlinker -L -Xlinker "$PWD/target/debug"` | pass |
-| `./talk-swift/scripts/build-xcframework.sh` | not run locally: Apple targets unavailable on Linux; CI gate |
+| `./crates/talk-swift/scripts/build-xcframework.sh` | not run locally: Apple targets unavailable on Linux; CI gate |
 | `swift package reset && swift test` | pass |
 | `xcodebuild ... iOS Simulator` | not run locally: no Xcode on Linux; CI gate |
 | `git diff --check` | clean |

@@ -20,7 +20,6 @@ pub const CORE_SOURCE_NAMES: &[&str] = &[
     "string.tlk",
     "memory.tlk",
     "unicode_data.tlk",
-    "text_unicode_data.tlk",
     "unicode.tlk",
     "array.tlk",
     "inline_array.tlk",

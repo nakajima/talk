@@ -17,7 +17,7 @@ resolver = "2"
 
 [package]
 name = "talk"
-version = "0.1.106"
+version = "0.1.107"
 edition = "2024"
 default-run = "talk"
 

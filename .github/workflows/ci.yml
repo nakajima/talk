@@ -66,7 +66,7 @@ jobs:
         run: swift test -Xlinker -L -Xlinker "$GITHUB_WORKSPACE/target/debug"
 
       - name: Build TalkC XCFramework
-        run: ./talk-swift/scripts/build-xcframework.sh
+        run: ./crates/talk-swift/scripts/build-xcframework.sh
 
       - name: Test TalkSwift with the XCFramework
         run: |

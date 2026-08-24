@@ -1,4 +1,6 @@
 // no-core
+// WIP: talktalk wants to hide this stuff more.
+// Some protocols for ownership. You probably shouldn't need to use them.
 
 // Marks a nominal value as a non-owning view for lowering and drop analysis.
 //

@@ -1,25 +1,24 @@
 talk-doc-cache-v3
-shared c0edd7e48c6e34f7
+shared eed98affde83dad1
 module ea1eaa0b79dc8e3c 1 6 array.html
 module efb1911083f3ce00 1 12 async.html
 module 2c7df33fe1b22418 1 7 builtins.html
 module c737783faad06439 0 0 checked_arithmetic.html
-module 3a2bf100f8682c4c 1 2 convert.html
-module a083a8b6466ac4db 1 7 host.html
-module d1834050fd52c1b5 1 1 inline_array.html
-module 6189cb0877e4ec13 1 72 io.html
-module be8abd1e9efa6b67 1 8 iterable.html
-module 58eb4f3ea6280829 1 17 memory.html
-module 7cb430577ed0936b 1 16 operators.html
-module da8e3b2f0b9e66ab 1 1 optional.html
-module d1f0f2f7cf18b558 1 7 ownership.html
-module beb19d6f5134d11c 1 3 range.html
-module 7a04cb94b26e07f4 1 1 result.html
-module 58227949a6ad4973 1 1 showable.html
+module 9988fa39664f280b 1 2 convert.html
+module fa03ef425ef3518f 1 7 host.html
+module f6d62fef336ba5ff 1 1 inline_array.html
+module 900e57387d848cf2 1 72 io.html
+module 467b79f3afe6148c 1 8 iterable.html
+module 64228ee93ebf9aa1 1 17 memory.html
+module 4a6cc23e3fdf6a88 1 16 operators.html
+module 65bdd3769f4233df 1 1 optional.html
+module 8830f1f409bad5d6 1 7 ownership.html
+module 6849b43e67b1acbd 1 3 range.html
+module 212aca96668bee1d 1 1 result.html
+module 7ccc262d212fc9f0 1 1 showable.html
 module 090ae26c95d37174 1 6 string.html
 module 9404684b43aebe19 1 1 string_builder.html
 module 03aa29623eb1e763 1 5 text.html
-module c4a9f035dcefa603 1 16 text_unicode_data.html
 module 1bec9ad2de35a3a8 1 2 time.html
-module 05cba1525e505df5 1 49 unicode.html
-module 9db7badbcf9244aa 1 25 unicode_data.html
+module 2c1bfc53bf1e149d 1 49 unicode.html
+module c02ce2340572e957 1 41 unicode_data.html

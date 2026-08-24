@@ -118,7 +118,7 @@ jobs:
 
       - name: Build TalkC XCFramework
         if: steps.version.outputs.changed == 'true'
-        run: ./talk-swift/scripts/build-xcframework.sh
+        run: ./crates/talk-swift/scripts/build-xcframework.sh
 
       - name: Test TalkSwift with the XCFramework
         if: steps.version.outputs.changed == 'true'
@@ -132,8 +132,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p talk-swift/.build/release
-          cd talk-swift/Artifacts
+          mkdir -p crates/talk-swift/.build/release
+          cd crates/talk-swift/Artifacts
           ditto -c -k --sequesterRsrc --keepParent TalkFFI.xcframework ../.build/release/TalkFFI.xcframework.zip
 
       - name: Compute SwiftPM checksum
@@ -142,7 +142,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          checksum="$(swift package compute-checksum talk-swift/.build/release/TalkFFI.xcframework.zip)"
+          checksum="$(swift package compute-checksum crates/talk-swift/.build/release/TalkFFI.xcframework.zip)"
           echo "checksum=${checksum}" >> "$GITHUB_OUTPUT"
           echo "TalkFFI.xcframework.zip checksum: ${checksum}"
 
@@ -234,7 +234,7 @@ jobs:
         run: |
           set -euo pipefail
           for attempt in 1 2 3 4 5; do
-            if gh release upload "$TAG" talk-swift/.build/release/TalkFFI.xcframework.zip --clobber; then
+            if gh release upload "$TAG" crates/talk-swift/.build/release/TalkFFI.xcframework.zip --clobber; then
               exit 0
             fi
             if [[ "$attempt" == 5 ]]; then

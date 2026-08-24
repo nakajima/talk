@@ -1,4 +1,6 @@
 // no-core
+// Iterator protocols. Maybe some monads? Unclear.
+
 use package::convert
 use package::optional::{ Optional }
 use package::array::{ Array }

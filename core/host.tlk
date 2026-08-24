@@ -1,4 +1,6 @@
 // no-core
+// Platform capabilitieis for the VM, C backend and WASM.
+
 use package::array::{ Array }
 use package::io::{ IORequest, io, STDERR_FD, write_string }
 use package::memory::{ alloc }

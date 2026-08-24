@@ -6,7 +6,7 @@ Version tags produced by the release workflow point the root package at the matc
 
 The package has three dependency resolution modes:
 
-1. If `talk-swift/Artifacts/TalkFFI.xcframework` exists, it consumes the local binary target.
+1. If `crates/talk-swift/Artifacts/TalkFFI.xcframework` exists, it consumes the local binary target.
 2. Otherwise, if a host `talk-ffi` archive exists under `target/debug` or `target/release`, it imports `crates/talk-ffi/include/talk_ffi.h` and links that archive.
 3. Version-tagged packages without local artifacts download the matching XCFramework from the GitHub release.
 
@@ -20,7 +20,7 @@ swift test -Xlinker -L -Xlinker "$PWD/target/debug"
 To build and test the production XCFramework on macOS:
 
 ```sh
-./talk-swift/scripts/build-xcframework.sh
+./crates/talk-swift/scripts/build-xcframework.sh
 swift package reset
 swift test
 xcodebuild -scheme TalkSwift -destination "generic/platform=iOS Simulator" build

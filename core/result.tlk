@@ -1,4 +1,8 @@
 // no-core
+// WIP: I think i want to rename the `error` case to `err`. Or even `e`. No
+// that's too far.
+// !
+
 use package::operators::{ Equatable }
 
 // A recoverable computation that contains either a success or a failure value.

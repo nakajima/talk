@@ -1,4 +1,7 @@
 // no-core
+// WIP: Don't love the name "showable" tbh.
+// Lets types describe themselves as strings.
+
 use package::string::{ Static, String }
 use package::string_builder::{ StringBuilder }
 use package::operators::{ Add, Subtract, Multiply, Divide, Comparable, Equatable, Negatable }

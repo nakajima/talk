@@ -3,7 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 package_dir="$(cd "$script_dir/.." && pwd)"
-repo_dir="$(cd "$package_dir/.." && pwd)"
+repo_dir="$(cd "$package_dir/../.." && pwd)"
 
 cd "$repo_dir"
 

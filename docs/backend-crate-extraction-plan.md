@@ -601,8 +601,8 @@ talkCReleaseChecksum           -> talkFFIReleaseChecksum
 Do not rename public Swift declarations. Existing TalkSwift tests should build
 without source changes beyond the private C module import.
 
-The root `Package.swift`, `talk-swift/Package.swift`, module map,
-`talk-swift/scripts/build-xcframework.sh`, CI workflow, release workflow, and
+The root `Package.swift`, `crates/talk-swift/Package.swift`, module map,
+`crates/talk-swift/scripts/build-xcframework.sh`, CI workflow, release workflow, and
 TalkSwift README all move together in one stage.
 
 ### Multi-language readiness
@@ -727,7 +727,7 @@ No production behavior changes. The plan and ADR agree on ownership and names.
 - rename the Rust crate and static archive;
 - rename and document the public header;
 - update root and nested Swift package manifests;
-- update `talk-swift/Sources/CTalkC` to `CTalkFFI`;
+- update `crates/talk-swift/Sources/CTalkC` to `CTalkFFI`;
 - update the XCFramework build script;
 - update CI and release workflow names, paths, release asset, URL stamping, and
   checksum variables;
@@ -988,7 +988,7 @@ target/debug/talk bootstrap --check
 cargo test -p talk-llvm --locked
 cargo test -p talk-ffi --locked
 swift test -Xlinker -L -Xlinker "$PWD/target/debug"
-./talk-swift/scripts/build-xcframework.sh
+./crates/talk-swift/scripts/build-xcframework.sh
 swift package reset
 swift test
 xcodebuild -scheme TalkSwift -destination "generic/platform=iOS Simulator" build

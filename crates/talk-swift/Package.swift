@@ -1,7 +1,7 @@
 // swift-tools-version: 5.9
 // Builds against the talk-ffi static library:
 //   cargo build -p talk-ffi --release
-//   swift test -Xlinker -L../target/release
+//   swift test -Xlinker -L../../target/release
 import PackageDescription
 
 let package = Package(

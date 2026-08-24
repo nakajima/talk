@@ -9,7 +9,8 @@
 // declaration receives a standalone reference page. A leading `// WIP:` marker
 // adds work-in-progress status to the module index and its generated pages. A
 // Core source catalog makes Core symbols linkable without rendering duplicate
-// pages. `--only` still indexes every module but writes pages only for the listed
+// pages. `--only` still indexes every module but writes pages only for the
+// listed
 // source paths.
 
 use fs::{ Directory, File, Path }
@@ -45,15 +46,15 @@ func collect_tlk_paths(directory: Directory, mut paths: [String]) -> Void {
 			.directory(child) -> collect_tlk_paths(directory: child, paths: paths),
 			.file(file) -> {
 				let path = file.path.to_string()
-				if path.ends_with(needle: ".tlk") && path.ends_with(needle: ".test.tlk") == false {
-					paths.push(path)
-				}
+				if path.ends_with(needle: ".tlk") && path.ends_with(needle: ".test.tlk") == false { paths.push(
+					path
+				) }
 			},
 			.symlink(path) -> {
 				let value = path.to_string()
-				if value.ends_with(needle: ".tlk") && value.ends_with(needle: ".test.tlk") == false {
-					paths.push(value)
-				}
+				if value.ends_with(needle: ".tlk") && value.ends_with(needle: ".test.tlk") == false { paths.push(
+					value
+				) }
 			}
 		}
 	}
@@ -135,7 +136,10 @@ func trim_start(s: &String) -> String {
 	let i = 0
 	loop i < view.count() {
 		let b = view.at(index: i)._toInt()
-		if b == 32 || b == 9 { i = i + 1; continue }
+		if b == 32 || b == 9 {
+			i = i + 1
+			continue
+		}
 		break
 	}
 	slice_bytes(s: s, start: i)
@@ -197,13 +201,22 @@ func builtin_name(path: &String) -> String {
 func builtin_module(core_source_root: String) -> SourceModule {
 	let documentation_root = core_source_root + "/builtins"
 	let paths: [String] = []
-	collect_markdown_paths(directory: Directory(path: Path(documentation_root)), paths: paths)
+	collect_markdown_paths(
+		directory: Directory(path: Path(documentation_root)),
+		paths: paths
+	)
 	let collection = DocumentableCollection()
+	collection.module_documentation = ["The compiler's favs."]
 	for path in sort_paths(paths: paths) {
 		if let .some(markdown) = read_source(path: path) {
 			let documentation: [String] = []
-			for line in markdown.lines() { documentation.push(line.to_string()) }
-			collection.add_builtin(name: builtin_name(path: path), documentation: documentation)
+			for line in markdown.lines() {
+				documentation.push(line.to_string())
+			}
+			collection.add_builtin(
+				name: builtin_name(path: path),
+				documentation: documentation
+			)
 		}
 	}
 	SourceModule(
@@ -232,22 +245,36 @@ func package_name(root: String) -> String {
 	"package"
 }
 
-func append_external_symbols(source_root: String, page_base: String, mut symbols: [SymbolLink]) -> Void {
+func append_external_symbols(
+	source_root: String,
+	page_base: String,
+	mut symbols: [SymbolLink]
+) -> Void {
 	let paths: [String] = []
 	collect_tlk_paths(directory: Directory(path: Path(source_root)), paths: paths)
 	for path in sort_paths(paths: paths) {
 		if let .some(source) = read_source(path: path) {
 			let collection = DocumentableCollection()
 			collection.collect_public(source: source)
-			if collection.items.is_empty() { continue }
+			if collection.items.is_empty() {
+				continue
+			}
 			let name = module_name(path: path, source_root: source_root)
-			for symbol in symbol_links(module: name, page: page_base + name + ".html", collection: collection) {
+			for symbol in symbol_links(
+				module: name,
+				page: page_base + name + ".html",
+				collection: collection
+			) {
 				symbols.push(symbol.clone())
 			}
 		}
 	}
 	let builtins = builtin_module(core_source_root: source_root)
-	for symbol in symbol_links(module: builtins.name, page: page_base + builtins.page, collection: builtins.collection) {
+	for symbol in symbol_links(
+		module: builtins.name,
+		page: page_base + builtins.page,
+		collection: builtins.collection
+	) {
 		symbols.push(symbol.clone())
 	}
 }
@@ -292,12 +319,18 @@ pub func main() '[io, alloc, panic] -> () {
 		loop argument_index < arguments.count {
 			let value = arguments[argument_index].to_string()
 			if value == "--core-source" && argument_index + 1 < arguments.count {
-				core_source_root = strip_suffix(s: arguments[argument_index + 1].to_string(), suffix: "/")
+				core_source_root = strip_suffix(
+					s: arguments[argument_index + 1].to_string(),
+					suffix: "/"
+				)
 				argument_index = argument_index + 2
 				continue
 			}
 			if value == "--core-docs-base" && argument_index + 1 < arguments.count {
-				core_docs_base = strip_suffix(s: arguments[argument_index + 1].to_string(), suffix: "/") + "/"
+				core_docs_base = strip_suffix(
+					s: arguments[argument_index + 1].to_string(),
+					suffix: "/"
+				) + "/"
 				argument_index = argument_index + 2
 				continue
 			}
@@ -312,10 +345,17 @@ pub func main() '[io, alloc, panic] -> () {
 
 		let builtin_source_root = if core_source_root.byte_count > 0 {
 			core_source_root
-		} else if display_name == "core" {
-			source_root
 		} else {
-			""
+			if display_name == "core" {
+				source_root
+			} else {
+				""
+			}
+
+			// One `page<TAB>first documentation paragraph` line per module, for
+			// consumers (the site's docs index) that list modules without
+			// re-parsing sources. Written on every generator run; cached runs
+			// keep the file from the last generation, like the pages themselves.
 		}
 
 		let paths: [String] = []
@@ -327,20 +367,24 @@ pub func main() '[io, alloc, panic] -> () {
 			if let .some(source) = read_source(path: path) {
 				let collection = DocumentableCollection()
 				collection.collect_public(source: source)
-				if collection.items.is_empty() { continue }
+				if collection.items.is_empty() {
+					continue
+				}
 				let name = module_name(path: path, source_root: source_root)
-				modules.push(SourceModule(
-					path: path,
-					name: name,
-					page: name + ".html",
-					collection: collection
-				))
+				modules.push(
+					SourceModule(
+						path: path,
+						name: name,
+						page: name + ".html",
+						collection: collection
+					)
+				)
 			}
 		}
 
-		if builtin_source_root == source_root {
-			modules.push(builtin_module(core_source_root: builtin_source_root))
-		}
+		if builtin_source_root == source_root { modules.push(
+			builtin_module(core_source_root: builtin_source_root)
+		) }
 
 		let wrote_all = true
 		let links: [ModuleLink] = []
@@ -354,25 +398,29 @@ pub func main() '[io, alloc, panic] -> () {
 				.some(value) -> .some(value.to_string()),
 				.none -> .none
 			}
-			links.push(ModuleLink(
-				name: module.name,
-				file: module.page,
-				declarations: module.collection.items.count,
-				documentation: module_documentation,
-				wip: module_wip
-			))
-			for symbol in symbol_links(module: module.name, page: module.page, collection: module.collection) {
+			links.push(
+				ModuleLink(
+					name: module.name,
+					file: module.page,
+					declarations: module.collection.items.count,
+					documentation: module_documentation,
+					wip: module_wip
+				)
+			)
+			for symbol in symbol_links(
+				module: module.name,
+				page: module.page,
+				collection: module.collection
+			) {
 				symbols.push(symbol.clone())
 			}
 		}
-		if builtin_source_root.byte_count > 0 && builtin_source_root != source_root {
-			append_external_symbols(source_root: builtin_source_root, page_base: core_docs_base, symbols: symbols)
-		}
+		if builtin_source_root.byte_count > 0 && builtin_source_root != source_root { append_external_symbols(
+			source_root: builtin_source_root,
+			page_base: core_docs_base,
+			symbols: symbols
+		) }
 
-		// One `page<TAB>first documentation paragraph` line per module, for
-		// consumers (the site's docs index) that list modules without
-		// re-parsing sources. Written on every generator run; cached runs
-		// keep the file from the last generation, like the pages themselves.
 		let summaries = StringBuilder()
 		for link in links {
 			let first = summary_documentation(documentation: link.documentation)
@@ -383,12 +431,16 @@ pub func main() '[io, alloc, panic] -> () {
 			}
 			summaries.append(string: link.file + "\t" + joined + "\n")
 		}
-		if write_page(dir: out_dir, file: ".module-summaries", contents: summaries.finish()) == false {
-			wrote_all = false
-		}
+		if write_page(
+			dir: out_dir,
+			file: ".module-summaries",
+			contents: summaries.finish()
+		) == false { wrote_all = false }
 
 		for module in modules {
-			if restricted && selected_path(paths: selected, path: module.path) == false { continue }
+			if restricted && selected_path(paths: selected, path: module.path) == false {
+				continue
+			}
 			let page = render_module_page(
 				package: display_name,
 				module: module.name,
@@ -396,9 +448,7 @@ pub func main() '[io, alloc, panic] -> () {
 				modules: links,
 				symbols: symbols
 			)
-			if write_page(dir: out_dir, file: module.page, contents: page) == false {
-				wrote_all = false
-			}
+			if write_page(dir: out_dir, file: module.page, contents: page) == false { wrote_all = false }
 			for symbol in render_symbol_pages(
 				package: display_name,
 				module: module.name,
@@ -407,19 +457,21 @@ pub func main() '[io, alloc, panic] -> () {
 				modules: links,
 				symbols: symbols
 			) {
-				if write_page(dir: out_dir, file: symbol.file, contents: symbol.contents) == false {
-					wrote_all = false
-				}
+				if write_page(dir: out_dir, file: symbol.file, contents: symbol.contents) == false { wrote_all = false }
 			}
 		}
 
-		let index = render_index_page_with_symbols(package: display_name, modules: links, symbols: symbols)
-		if write_page(dir: out_dir, file: "index.html", contents: index) == false {
-			wrote_all = false
-		}
+		let index = render_index_page_with_symbols(
+			package: display_name,
+			modules: links,
+			symbols: symbols
+		)
+		if write_page(dir: out_dir, file: "index.html", contents: index) == false { wrote_all = false }
 
 		if wrote_all == false {
-			print("error: could not write every page; create the output directory `" + out_dir + "` first")
+			print(
+				"error: could not write every page; create the output directory `" + out_dir + "` first"
+			)
 			'panic(message: "talk-doc: output directory is not writable")
 		}
 	}

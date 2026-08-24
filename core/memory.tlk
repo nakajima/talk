@@ -1,4 +1,6 @@
 // no-core
+// Low level cross target memory operations.
+
 use package::ownership::{ Clone, Owner, Send }
 
 // Describes a memory-management event exposed to the allocation effect.

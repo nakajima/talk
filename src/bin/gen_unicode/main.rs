@@ -1,9 +1,8 @@
-//! Generates the grapheme-cluster-break data talk's Character layer uses:
+//! Generates the Unicode data talk's Character and text layers use:
 //!
-//!   - `core/unicode_data.tlk` — merged break-category table packed into a
-//!     7-bit-clean string literal (interned static bytes at runtime), plus
-//!     the category constants `core/unicode.tlk` matches on.
-//!   - `tests/unicode/grapheme_conformance.tlk` — the official
+//!   - `core/unicode_data.tlk` - grapheme and word-break categories,
+//!     character properties, case mappings, and normalization data.
+//!   - `tests/unicode/grapheme_conformance.tlk` - the official
 //!     GraphemeBreakTest cases as a self-checking talk program.
 //!
 //! Run manually after vendoring new UCD files under `dev/ucd/<version>/`:
@@ -20,6 +19,8 @@
 //! numeric order, so talk binary-searches the raw bytes directly.
 
 use std::fmt::Write as _;
+
+mod properties;
 
 const UCD_VERSION: &str = "17.0.0";
 
@@ -292,7 +293,7 @@ fn render_unicode_data(gcb_entries: &[(u32, u8)], char_entries: &[(u32, u8)]) ->
          // merging Grapheme_Cluster_Break, Extended_Pictographic, and InCB.\n\
          // The table is a sorted boundary list: entries of four base-128\n\
          // septets encoding start_codepoint * 32 + category. See\n\
-         // src/bin/gen_unicode.rs for the encoding and regeneration story.\n\
+         // src/bin/gen_unicode/ for the encoding and regeneration story.\n\
          use package::string::{ String }\n\n",
     );
     for (name, value) in CAT_NAMES {
@@ -399,7 +400,9 @@ fn render_conformance(test_text: &str) -> (String, usize) {
         }
         let expected: String = cluster_lens.iter().map(|len| format!("{len},")).collect();
         count += 1;
-        cases.push(format!("check(\"{literal}\", \"{expected}\", {count})"));
+        cases.push(format!(
+            "check(s: \"{literal}\", expected: \"{expected}\", case_number: {count})"
+        ));
     }
     // Batch the cases into functions: the reference evaluator recurses
     // per sequential statement, and a single 766-statement block
@@ -464,14 +467,16 @@ fn main() {
         &read("DerivedGeneralCategory.txt"),
     );
     let char_entries = boundaries(&char_cats);
-    let data = render_unicode_data(&entries, &char_entries);
+    let mut data = render_unicode_data(&entries, &char_entries);
+    data.push('\n');
+    data.push_str(&properties::render());
     std::fs::write("core/unicode_data.tlk", &data).expect("writing core/unicode_data.tlk");
     let (conformance, cases) = render_conformance(&read("GraphemeBreakTest.txt"));
     std::fs::create_dir_all("tests/unicode").expect("creating tests/unicode");
     std::fs::write("tests/unicode/grapheme_conformance.tlk", conformance)
         .expect("writing conformance program");
     println!(
-        "wrote core/unicode_data.tlk ({} grapheme entries, {} character-class entries) and \
+        "wrote core/unicode_data.tlk ({} grapheme entries, {} character-class entries, text properties, case mappings, and normalization data) and \
          tests/unicode/grapheme_conformance.tlk ({cases} cases)",
         entries.len(),
         char_entries.len(),
@@ -572,6 +577,8 @@ mod tests {
         let (program, cases) =
             render_conformance("÷ 0061 × 0301 ÷ 1F600 ÷ # a\u{301} then emoji\n");
         assert_eq!(cases, 1);
-        assert!(program.contains("check(\"\\u{61}\\u{301}\\u{1F600}\", \"3,4,\", 1)"));
+        assert!(program.contains(
+            "check(s: \"\\u{61}\\u{301}\\u{1F600}\", expected: \"3,4,\", case_number: 1)"
+        ));
     }
 }

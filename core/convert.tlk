@@ -1,4 +1,6 @@
 // no-core
+// Into/From conversions
+
 // Constructs `Self` from a caller-supplied source value.
 //
 // `From` is invoked explicitly as a static-style conversion owned by the target

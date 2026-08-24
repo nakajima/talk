@@ -17,12 +17,18 @@
 		<span class="keyword">loop</span> argument_index <span class="operator">&lt;</span> arguments.<span class="property">count</span> {
 			<span class="keyword">let</span> value <span class="operator">=</span> arguments[argument_index].<span class="property">to_string</span>()
 			<span class="keyword">if</span> value <span class="operator">==</span> <span class="string">&quot;--core-source&quot;</span> <span class="operator">&amp;&amp;</span> argument_index <span class="operator">+</span> <span class="number">1</span> <span class="operator">&lt;</span> arguments.<span class="property">count</span> {
-				core_source_root <span class="operator">=</span> strip_suffix(<span class="parameter">s</span>: arguments[argument_index <span class="operator">+</span> <span class="number">1</span>].<span class="property">to_string</span>(), <span class="parameter">suffix</span>: <span class="string">&quot;/&quot;</span>)
+				core_source_root <span class="operator">=</span> strip_suffix(
+					<span class="parameter">s</span>: arguments[argument_index <span class="operator">+</span> <span class="number">1</span>].<span class="property">to_string</span>(),
+					<span class="parameter">suffix</span>: <span class="string">&quot;/&quot;</span>
+				)
 				argument_index <span class="operator">=</span> argument_index <span class="operator">+</span> <span class="number">2</span>
 				<span class="keyword">continue</span>
 			}
 			<span class="keyword">if</span> value <span class="operator">==</span> <span class="string">&quot;--core-docs-base&quot;</span> <span class="operator">&amp;&amp;</span> argument_index <span class="operator">+</span> <span class="number">1</span> <span class="operator">&lt;</span> arguments.<span class="property">count</span> {
-				core_docs_base <span class="operator">=</span> strip_suffix(<span class="parameter">s</span>: arguments[argument_index <span class="operator">+</span> <span class="number">1</span>].<span class="property">to_string</span>(), <span class="parameter">suffix</span>: <span class="string">&quot;/&quot;</span>) <span class="operator">+</span> <span class="string">&quot;/&quot;</span>
+				core_docs_base <span class="operator">=</span> strip_suffix(
+					<span class="parameter">s</span>: arguments[argument_index <span class="operator">+</span> <span class="number">1</span>].<span class="property">to_string</span>(),
+					<span class="parameter">suffix</span>: <span class="string">&quot;/&quot;</span>
+				) <span class="operator">+</span> <span class="string">&quot;/&quot;</span>
 				argument_index <span class="operator">=</span> argument_index <span class="operator">+</span> <span class="number">2</span>
 				<span class="keyword">continue</span>
 			}
@@ -36,10 +42,16 @@
 		}
 		<span class="keyword">let</span> builtin_source_root <span class="operator">=</span> <span class="keyword">if</span> core_source_root.<span class="property">byte_count</span> <span class="operator">&gt;</span> <span class="number">0</span> {
 			core_source_root
-		} <span class="keyword">else</span> <span class="keyword">if</span> display_name <span class="operator">==</span> <span class="string">&quot;core&quot;</span> {
-			source_root
 		} <span class="keyword">else</span> {
-			<span class="string">&quot;&quot;</span>
+			<span class="keyword">if</span> display_name <span class="operator">==</span> <span class="string">&quot;core&quot;</span> {
+				source_root
+			} <span class="keyword">else</span> {
+				<span class="string">&quot;&quot;</span>
+			}
+			<span class="comment">// One `page&lt;TAB&gt;first documentation paragraph` line per module, for</span>
+			<span class="comment">// consumers (the site&#39;s docs index) that list modules without</span>
+			<span class="comment">// re-parsing sources. Written on every generator run; cached runs</span>
+			<span class="comment">// keep the file from the last generation, like the pages themselves.</span>
 		}
 		<span class="keyword">let</span> <span class="parameter">paths</span>: [<span class="type">String</span>] <span class="operator">=</span> []
 		collect_tlk_paths(<span class="parameter">directory</span>: <span class="type">Directory</span>(<span class="parameter">path</span>: <span class="type">Path</span>(source_root)), <span class="parameter">paths</span>: paths)
@@ -49,19 +61,23 @@
 			<span class="keyword">if</span> <span class="keyword">let</span> .<span class="property">some</span>(source) <span class="operator">=</span> read_source(<span class="parameter">path</span>: path) {
 				<span class="keyword">let</span> collection <span class="operator">=</span> <span class="type">DocumentableCollection</span>()
 				collection.<span class="property">collect_public</span>(<span class="parameter">source</span>: source)
-				<span class="keyword">if</span> collection.<span class="property">items</span>.<span class="property">is_empty</span>() { <span class="keyword">continue</span> }
+				<span class="keyword">if</span> collection.<span class="property">items</span>.<span class="property">is_empty</span>() {
+					<span class="keyword">continue</span>
+				}
 				<span class="keyword">let</span> name <span class="operator">=</span> module_name(<span class="parameter">path</span>: path, <span class="parameter">source_root</span>: source_root)
-				modules.<span class="property">push</span>(<span class="type">SourceModule</span>(
-					<span class="parameter">path</span>: path,
-					<span class="parameter">name</span>: name,
-					<span class="parameter">page</span>: name <span class="operator">+</span> <span class="string">&quot;.html&quot;</span>,
-					<span class="parameter">collection</span>: collection
-				))
+				modules.<span class="property">push</span>(
+					<span class="type">SourceModule</span>(
+						<span class="parameter">path</span>: path,
+						<span class="parameter">name</span>: name,
+						<span class="parameter">page</span>: name <span class="operator">+</span> <span class="string">&quot;.html&quot;</span>,
+						<span class="parameter">collection</span>: collection
+					)
+				)
 			}
 		}
-		<span class="keyword">if</span> builtin_source_root <span class="operator">==</span> source_root {
-			modules.<span class="property">push</span>(builtin_module(<span class="parameter">core_source_root</span>: builtin_source_root))
-		}
+		<span class="keyword">if</span> builtin_source_root <span class="operator">==</span> source_root { modules.<span class="property">push</span>(
+			builtin_module(<span class="parameter">core_source_root</span>: builtin_source_root)
+		) }
 		<span class="keyword">let</span> wrote_all <span class="operator">=</span> <span class="keyword">true</span>
 		<span class="keyword">let</span> <span class="parameter">links</span>: [<span class="type">ModuleLink</span>] <span class="operator">=</span> []
 		<span class="keyword">let</span> <span class="parameter">symbols</span>: [<span class="type">SymbolLink</span>] <span class="operator">=</span> []
@@ -74,24 +90,28 @@
 				.<span class="property">some</span>(value) <span class="operator">-&gt;</span> .<span class="property">some</span>(value.<span class="property">to_string</span>()),
 				.<span class="property">none</span> <span class="operator">-&gt;</span> .<span class="property">none</span>
 			}
-			links.<span class="property">push</span>(<span class="type">ModuleLink</span>(
-				<span class="parameter">name</span>: module.<span class="property">name</span>,
-				<span class="parameter">file</span>: module.<span class="property">page</span>,
-				<span class="parameter">declarations</span>: module.<span class="property">collection</span>.<span class="property">items</span>.<span class="property">count</span>,
-				<span class="parameter">documentation</span>: module_documentation,
-				<span class="parameter">wip</span>: module_wip
-			))
-			<span class="keyword">for</span> symbol <span class="keyword">in</span> symbol_links(<span class="parameter">module</span>: module.<span class="property">name</span>, <span class="parameter">page</span>: module.<span class="property">page</span>, <span class="parameter">collection</span>: module.<span class="property">collection</span>) {
+			links.<span class="property">push</span>(
+				<span class="type">ModuleLink</span>(
+					<span class="parameter">name</span>: module.<span class="property">name</span>,
+					<span class="parameter">file</span>: module.<span class="property">page</span>,
+					<span class="parameter">declarations</span>: module.<span class="property">collection</span>.<span class="property">items</span>.<span class="property">count</span>,
+					<span class="parameter">documentation</span>: module_documentation,
+					<span class="parameter">wip</span>: module_wip
+				)
+			)
+			<span class="keyword">for</span> symbol <span class="keyword">in</span> symbol_links(
+				<span class="parameter">module</span>: module.<span class="property">name</span>,
+				<span class="parameter">page</span>: module.<span class="property">page</span>,
+				<span class="parameter">collection</span>: module.<span class="property">collection</span>
+			) {
 				symbols.<span class="property">push</span>(symbol.<span class="property">clone</span>())
 			}
 		}
-		<span class="keyword">if</span> builtin_source_root.<span class="property">byte_count</span> <span class="operator">&gt;</span> <span class="number">0</span> <span class="operator">&amp;&amp;</span> builtin_source_root <span class="operator">!=</span> source_root {
-			append_external_symbols(<span class="parameter">source_root</span>: builtin_source_root, <span class="parameter">page_base</span>: core_docs_base, <span class="parameter">symbols</span>: symbols)
-		}
-		<span class="comment">// One `page&lt;TAB&gt;first documentation paragraph` line per module, for</span>
-		<span class="comment">// consumers (the site&#39;s docs index) that list modules without</span>
-		<span class="comment">// re-parsing sources. Written on every generator run; cached runs</span>
-		<span class="comment">// keep the file from the last generation, like the pages themselves.</span>
+		<span class="keyword">if</span> builtin_source_root.<span class="property">byte_count</span> <span class="operator">&gt;</span> <span class="number">0</span> <span class="operator">&amp;&amp;</span> builtin_source_root <span class="operator">!=</span> source_root { append_external_symbols(
+			<span class="parameter">source_root</span>: builtin_source_root,
+			<span class="parameter">page_base</span>: core_docs_base,
+			<span class="parameter">symbols</span>: symbols
+		) }
 		<span class="keyword">let</span> summaries <span class="operator">=</span> <span class="type">StringBuilder</span>()
 		<span class="keyword">for</span> link <span class="keyword">in</span> links {
 			<span class="keyword">let</span> first <span class="operator">=</span> summary_documentation(<span class="parameter">documentation</span>: link.<span class="property">documentation</span>)
@@ -102,11 +122,15 @@
 			}
 			summaries.<span class="property">append</span>(<span class="parameter">string</span>: link.<span class="property">file</span> <span class="operator">+</span> <span class="string">&quot;\t&quot;</span> <span class="operator">+</span> joined <span class="operator">+</span> <span class="string">&quot;\n&quot;</span>)
 		}
-		<span class="keyword">if</span> write_page(<span class="parameter">dir</span>: out_dir, <span class="parameter">file</span>: <span class="string">&quot;.module-summaries&quot;</span>, <span class="parameter">contents</span>: summaries.<span class="property">finish</span>()) <span class="operator">==</span> <span class="keyword">false</span> {
-			wrote_all <span class="operator">=</span> <span class="keyword">false</span>
-		}
+		<span class="keyword">if</span> write_page(
+			<span class="parameter">dir</span>: out_dir,
+			<span class="parameter">file</span>: <span class="string">&quot;.module-summaries&quot;</span>,
+			<span class="parameter">contents</span>: summaries.<span class="property">finish</span>()
+		) <span class="operator">==</span> <span class="keyword">false</span> { wrote_all <span class="operator">=</span> <span class="keyword">false</span> }
 		<span class="keyword">for</span> module <span class="keyword">in</span> modules {
-			<span class="keyword">if</span> restricted <span class="operator">&amp;&amp;</span> selected_path(<span class="parameter">paths</span>: selected, <span class="parameter">path</span>: module.<span class="property">path</span>) <span class="operator">==</span> <span class="keyword">false</span> { <span class="keyword">continue</span> }
+			<span class="keyword">if</span> restricted <span class="operator">&amp;&amp;</span> selected_path(<span class="parameter">paths</span>: selected, <span class="parameter">path</span>: module.<span class="property">path</span>) <span class="operator">==</span> <span class="keyword">false</span> {
+				<span class="keyword">continue</span>
+			}
 			<span class="keyword">let</span> page <span class="operator">=</span> render_module_page(
 				<span class="parameter">package</span>: display_name,
 				<span class="parameter">module</span>: module.<span class="property">name</span>,
@@ -114,9 +138,7 @@
 				<span class="parameter">modules</span>: links,
 				<span class="parameter">symbols</span>: symbols
 			)
-			<span class="keyword">if</span> write_page(<span class="parameter">dir</span>: out_dir, <span class="parameter">file</span>: module.<span class="property">page</span>, <span class="parameter">contents</span>: page) <span class="operator">==</span> <span class="keyword">false</span> {
-				wrote_all <span class="operator">=</span> <span class="keyword">false</span>
-			}
+			<span class="keyword">if</span> write_page(<span class="parameter">dir</span>: out_dir, <span class="parameter">file</span>: module.<span class="property">page</span>, <span class="parameter">contents</span>: page) <span class="operator">==</span> <span class="keyword">false</span> { wrote_all <span class="operator">=</span> <span class="keyword">false</span> }
 			<span class="keyword">for</span> symbol <span class="keyword">in</span> render_symbol_pages(
 				<span class="parameter">package</span>: display_name,
 				<span class="parameter">module</span>: module.<span class="property">name</span>,
@@ -125,17 +147,19 @@
 				<span class="parameter">modules</span>: links,
 				<span class="parameter">symbols</span>: symbols
 			) {
-				<span class="keyword">if</span> write_page(<span class="parameter">dir</span>: out_dir, <span class="parameter">file</span>: symbol.<span class="property">file</span>, <span class="parameter">contents</span>: symbol.<span class="property">contents</span>) <span class="operator">==</span> <span class="keyword">false</span> {
-					wrote_all <span class="operator">=</span> <span class="keyword">false</span>
-				}
+				<span class="keyword">if</span> write_page(<span class="parameter">dir</span>: out_dir, <span class="parameter">file</span>: symbol.<span class="property">file</span>, <span class="parameter">contents</span>: symbol.<span class="property">contents</span>) <span class="operator">==</span> <span class="keyword">false</span> { wrote_all <span class="operator">=</span> <span class="keyword">false</span> }
 			}
 		}
-		<span class="keyword">let</span> index <span class="operator">=</span> render_index_page_with_symbols(<span class="parameter">package</span>: display_name, <span class="parameter">modules</span>: links, <span class="parameter">symbols</span>: symbols)
-		<span class="keyword">if</span> write_page(<span class="parameter">dir</span>: out_dir, <span class="parameter">file</span>: <span class="string">&quot;index.html&quot;</span>, <span class="parameter">contents</span>: index) <span class="operator">==</span> <span class="keyword">false</span> {
-			wrote_all <span class="operator">=</span> <span class="keyword">false</span>
-		}
+		<span class="keyword">let</span> index <span class="operator">=</span> render_index_page_with_symbols(
+			<span class="parameter">package</span>: display_name,
+			<span class="parameter">modules</span>: links,
+			<span class="parameter">symbols</span>: symbols
+		)
+		<span class="keyword">if</span> write_page(<span class="parameter">dir</span>: out_dir, <span class="parameter">file</span>: <span class="string">&quot;index.html&quot;</span>, <span class="parameter">contents</span>: index) <span class="operator">==</span> <span class="keyword">false</span> { wrote_all <span class="operator">=</span> <span class="keyword">false</span> }
 		<span class="keyword">if</span> wrote_all <span class="operator">==</span> <span class="keyword">false</span> {
-			print(<span class="string">&quot;error: could not write every page; create the output directory `&quot;</span> <span class="operator">+</span> out_dir <span class="operator">+</span> <span class="string">&quot;` first&quot;</span>)
+			print(
+				<span class="string">&quot;error: could not write every page; create the output directory `&quot;</span> <span class="operator">+</span> out_dir <span class="operator">+</span> <span class="string">&quot;` first&quot;</span>
+			)
 			<span class="effect">&#39;panic</span>(<span class="parameter">message</span>: <span class="string">&quot;talk-doc: output directory is not writable&quot;</span>)
 		}
 	}
