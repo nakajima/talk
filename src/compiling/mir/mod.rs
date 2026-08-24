@@ -106,11 +106,13 @@ pub(crate) fn compile_mir(
 }
 
 fn finalize(program: &mut build::Program) -> OptimizationStats {
+    crate::compiling::progress::report(crate::compiling::progress::Phase::OptimizingMir);
     let optimizations = optimize::run(program);
     // Parameter escape summaries must read the pre-allocation program,
     // where a parameter's slot is still only ever the parameter; the
     // shaping itself runs on the final numbering (ADR 0045).
     let summaries = build::escape::parameter_summaries(program);
+    crate::compiling::progress::report(crate::compiling::progress::Phase::AllocatingRegisters);
     allocate_registers(program);
     build::escape::shape_frames(program, &summaries);
     optimizations

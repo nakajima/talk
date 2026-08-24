@@ -10,7 +10,7 @@ talk mir --no-opt source.tlk
 talk mir --debug source.tlk
 ```
 
-The text printed by `talk mir` is diagnostic output, not a stable file format. The public in-process data model in `talk-mir/src/lib.rs` and `talk-mir/src/layout.rs` is authoritative.
+The text printed by `talk mir` is diagnostic output, not a stable file format. The public in-process data model in `crates/talk-mir/src/lib.rs` and `crates/talk-mir/src/layout.rs` is authoritative.
 
 ## Pipeline position
 

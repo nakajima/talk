@@ -10,7 +10,8 @@ fn c_smoke_client_links_and_runs() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let workspace_root = manifest_dir
         .parent()
-        .expect("talk-ffi has a workspace parent");
+        .and_then(|crates| crates.parent())
+        .expect("talk-ffi is under the workspace crates directory");
 
     let status = Command::new(env!("CARGO"))
         .args(["build", "-p", "talk-ffi", "--locked"])

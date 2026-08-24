@@ -65,6 +65,32 @@ fn talk_compiler(repository: &Path) -> std::io::Result<PathBuf> {
     Ok(repository.join("target").join(profile).join("talk"))
 }
 
+fn talk_doc() -> std::io::Result<PathBuf> {
+    let path = std::env::var_os("PATH").ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "talk-doc was not found because PATH is not set",
+        )
+    })?;
+    let names: &[&str] = if cfg!(windows) {
+        &["talk-doc.exe", "talk-doc"]
+    } else {
+        &["talk-doc"]
+    };
+    for directory in std::env::split_paths(&path) {
+        for name in names {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return candidate.canonicalize();
+            }
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "talk-doc was not found in PATH",
+    ))
+}
+
 struct DocumentationFingerprint(DefaultHasher);
 
 impl DocumentationFingerprint {
@@ -126,28 +152,9 @@ impl DocumentationFingerprint {
         Ok(())
     }
 
-    fn renderer(
-        repository: &Path,
-        compiler: &Path,
-        tool_package: &Path,
-    ) -> std::io::Result<String> {
+    fn renderer(generator: &Path) -> std::io::Result<String> {
         let mut fingerprint = Self::new(DOCUMENTATION_CACHE_FORMAT);
-        fingerprint.add_file("compiler", compiler)?;
-        fingerprint.add_tree("talk-doc", &tool_package.join("src"))?;
-        fingerprint.add_file("talk-doc-package", &tool_package.join("package.tlk"))?;
-        fingerprint.add_file("talk-doc-lock", &tool_package.join("package.lock"))?;
-
-        let talk_md = repository.join("packages/talk-md");
-        fingerprint.add_tree("talk-md", &talk_md.join("src"))?;
-        fingerprint.add_file("talk-md-package", &talk_md.join("package.tlk"))?;
-        fingerprint.add_file("talk-md-lock", &talk_md.join("package.lock"))?;
-
-        fingerprint.add_tree("core", &repository.join("core"))?;
-        let packages = repository.join("packages");
-        fingerprint.add_tree("syntax", &packages.join("syntax/src"))?;
-        fingerprint.add_tree("html", &packages.join("html/src"))?;
-        fingerprint.add_file("fs", &packages.join("fs/src/fs.tlk"))?;
-        fingerprint.add_file("os", &packages.join("os/src/os.tlk"))?;
+        fingerprint.add_file("talk-doc", generator)?;
         Ok(fingerprint.finish())
     }
 
@@ -447,22 +454,14 @@ impl DocumentationSection {
 
     fn run_generator(
         &self,
-        compiler: &Path,
-        tool_package: &Path,
+        generator: &Path,
+        repository: &Path,
         output_directory: &Path,
         modules: &BTreeMap<String, DocumentationModule>,
         selected_pages: &[String],
     ) -> std::io::Result<()> {
-        let repository = tool_package
-            .parent()
-            .and_then(Path::parent)
-            .ok_or_else(|| {
-                std::io::Error::other("talk-doc is not inside the repository packages directory")
-            })?;
-        let mut command = Command::new(compiler);
+        let mut command = Command::new(generator);
         command
-            .current_dir(tool_package)
-            .args(["run", "--bin", "main", "--"])
             .arg(&self.root)
             .arg(output_directory)
             .arg(&self.source_root)
@@ -493,8 +492,8 @@ impl DocumentationSection {
 
     fn generate(
         &self,
-        compiler: &Path,
-        tool_package: &Path,
+        generator: &Path,
+        repository: &Path,
         docs_directory: &Path,
         renderer_fingerprint: &str,
     ) -> std::io::Result<()> {
@@ -541,8 +540,8 @@ impl DocumentationSection {
 
         let generation = (|| {
             self.run_generator(
-                compiler,
-                tool_package,
+                generator,
+                repository,
                 &temporary_directory,
                 &modules,
                 &selected_pages,
@@ -561,8 +560,8 @@ impl DocumentationSection {
                 full = true;
                 selected_pages = modules.keys().cloned().collect();
                 self.run_generator(
-                    compiler,
-                    tool_package,
+                    generator,
+                    repository,
                     &temporary_directory,
                     &modules,
                     &selected_pages,
@@ -630,10 +629,7 @@ impl DocumentationSection {
 
             let summaries_source = temporary_directory.join(".module-summaries");
             if summaries_source.is_file() {
-                std::fs::rename(
-                    summaries_source,
-                    output_directory.join(".module-summaries"),
-                )?;
+                std::fs::rename(summaries_source, output_directory.join(".module-summaries"))?;
             }
 
             let mut cached_modules = BTreeMap::new();
@@ -1178,14 +1174,16 @@ impl SiteBuilder {
         let previous_link = previous.map_or_else(
             || "<span></span>".to_string(),
             |previous| {
-                format!("<a href=\"{}\">&larr; {}</a>", previous.url(), previous.title)
+                format!(
+                    "<a href=\"{}\">&larr; {}</a>",
+                    previous.url(),
+                    previous.title
+                )
             },
         );
         let next_link = next.map_or_else(
             || "<span></span>".to_string(),
-            |next| {
-                format!("<a href=\"{}\">{} &rarr;</a>", next.url(), next.title)
-            },
+            |next| format!("<a href=\"{}\">{} &rarr;</a>", next.url(), next.title),
         );
         let sections = ManualSection::from_markdown(content);
         let outline = MANUAL_PAGES
@@ -1417,8 +1415,7 @@ impl SiteBuilder {
 
     pub(crate) fn write_documentation(self, directory: &Path) -> std::io::Result<()> {
         let repository = Path::new("..").canonicalize()?;
-        let compiler = talk_compiler(&repository)?;
-        let tool_package = repository.join("packages/talk-doc");
+        let generator = talk_doc()?;
         let docs_directory = directory.join("docs");
         std::fs::create_dir_all(&docs_directory)?;
         let docs_directory = docs_directory.canonicalize()?;
@@ -1440,16 +1437,15 @@ impl SiteBuilder {
             }
         }
 
-        let renderer_fingerprint =
-            DocumentationFingerprint::renderer(&repository, &compiler, &tool_package)?;
+        let renderer_fingerprint = DocumentationFingerprint::renderer(&generator)?;
         let results = thread::scope(|scope| {
             sections
                 .iter()
                 .map(|section| {
                     scope.spawn(|| {
                         section.generate(
-                            &compiler,
-                            &tool_package,
+                            &generator,
+                            &repository,
                             &docs_directory,
                             &renderer_fingerprint,
                         )
@@ -1811,8 +1807,8 @@ fn replace_code_blocks<'a>(node: &'a AstNode<'a>) {
 #[cfg(test)]
 mod tests {
     use super::{
-        manual_breadcrumbs, page_route, parse_module_summaries, shell, ManualPage, PageRoute,
-        MANUAL_PAGES,
+        MANUAL_PAGES, ManualPage, PageRoute, manual_breadcrumbs, page_route,
+        parse_module_summaries, shell,
     };
 
     #[test]
@@ -1830,7 +1826,10 @@ mod tests {
             .iter()
             .position(|page| page.slug == "effects")
             .unwrap();
-        assert_eq!(page_route("manual/effects"), Some(PageRoute::Manual(effects)));
+        assert_eq!(
+            page_route("manual/effects"),
+            Some(PageRoute::Manual(effects))
+        );
     }
 
     #[test]

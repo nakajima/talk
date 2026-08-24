@@ -189,8 +189,8 @@ At the Rust trust seam:
 
 ## 2. Macro expansion
 
-**Implementation:** `talk-front/src/macro_expansion.rs` plus the host adapter in
-`talk-front/src/front/macro_host.rs` and `src/procedural_macros.rs`.
+**Implementation:** `crates/talk-front/src/macro_expansion.rs` plus the host adapter in
+`crates/talk-front/src/front/macro_host.rs` and `src/procedural_macros.rs`.
 
 ### Consumes
 
@@ -231,7 +231,7 @@ The same `AST<Parsed>` carrier, mutated so that:
 
 ## 3. Surface desugaring
 
-**Implementation:** `talk-front/src/desugar/`.
+**Implementation:** `crates/talk-front/src/desugar/`.
 
 ### Consumes
 
@@ -270,7 +270,7 @@ resolution and typing.
 
 ## 4. Name resolution
 
-**Implementation:** `talk-front/src/name_resolution/`.
+**Implementation:** `crates/talk-front/src/name_resolution/`.
 
 ### Consumes
 
@@ -321,7 +321,7 @@ resolution and typing.
 
 ## 5. Type collection, constraint generation, solving, and finalization
 
-**Implementation:** `talk-front/src/types/`.
+**Implementation:** `crates/talk-front/src/types/`.
 
 ### Consumes
 
@@ -451,7 +451,7 @@ typed-program construction.
 
 **Implementation:** `src/compiling/typed_program.rs` and
 `src/compiling/typed_program/build.rs`; node vocabulary in
-`talk-front/src/typed_ast/`.
+`crates/talk-front/src/typed_ast/`.
 
 ### Consumes
 
@@ -1063,8 +1063,8 @@ not become an accidental rewrite of another.
 
 **Files**
 
-- `talk-front/src/types/generate/mod.rs`
-- `talk-front/src/types/output.rs`
+- `crates/talk-front/src/types/generate/mod.rs`
+- `crates/talk-front/src/types/output.rs`
 - `src/compiling/typed_program.rs`
 - `src/compiling/mir/build/mod.rs`
 - `src/compiling/mir/build/layout.rs`
@@ -1113,8 +1113,8 @@ answer.
 
 **Files**
 
-- `talk-front/src/types/generate/finalize.rs`
-- `talk-front/src/types/output.rs`
+- `crates/talk-front/src/types/generate/finalize.rs`
+- `crates/talk-front/src/types/output.rs`
 - `src/compiling/typed_program.rs`
 - `src/compiling/typed_program/build.rs`
 - `src/compiling/mir/build/mod.rs`
@@ -1279,8 +1279,8 @@ nominal indexes, projection reduction, and layout caches themselves.
 
 **Files**
 
-- `talk-bytecode/src/lower.rs`
-- `talk-c/src/lib.rs`
+- `crates/talk-bytecode/src/lower.rs`
+- `crates/talk-c/src/lib.rs`
 - `talk-llvm/src/emit.rs`
 - `talk-native-runtime`
 
@@ -1313,16 +1313,16 @@ Approximate nonblank Rust lines in the current major semantic areas:
 
 | Area | Lines |
 | --- | ---: |
-| `talk-front/src/types` | 29,199 |
+| `crates/talk-front/src/types` | 29,199 |
 | `src/compiling/mir` | 20,551 |
-| `talk-front/src/parsing` Rust vocabulary/tooling | 6,946 |
-| `talk-front/src/name_resolution` | 4,630 |
-| `talk-c/src` | 2,492 |
+| `crates/talk-front/src/parsing` Rust vocabulary/tooling | 6,946 |
+| `crates/talk-front/src/name_resolution` | 4,630 |
+| `crates/talk-c/src` | 2,492 |
 | `talk-llvm/src` | 1,948 |
-| `talk-bytecode/src` | 1,881 |
-| `talk-mir/src` | 1,226 |
-| `talk-front/src/desugar` | 1,008 |
-| `talk-front/src/typed_ast` | 793 |
+| `crates/talk-bytecode/src` | 1,881 |
+| `crates/talk-mir/src` | 1,226 |
+| `crates/talk-front/src/desugar` | 1,008 |
+| `crates/talk-front/src/typed_ast` | 793 |
 
 These numbers do not prove that a module is shallow. They identify where a
 small reduction in duplicated interface knowledge has the largest potential

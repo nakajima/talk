@@ -270,8 +270,8 @@ Dependencies with no Rust code usage found:
 `anyhow`, `tracing-subscriber`, and `tracing-tree` are used by CLI/LSP or tests
 but are unconditional. As a result, `talk-ffi` and `talk-wasm` compile them even
 though they depend on `talk` with `default-features = false`:
-[`talk-ffi/Cargo.toml`](../talk-ffi/Cargo.toml#L10) and
-[`wasm/Cargo.toml`](../wasm/Cargo.toml#L10).
+[`crates/talk-ffi/Cargo.toml`](../crates/talk-ffi/Cargo.toml#L10) and
+[`crates/wasm/Cargo.toml`](../crates/wasm/Cargo.toml#L10).
 
 Recommended manifest cleanup:
 
@@ -308,7 +308,7 @@ The measured next targets in
    shape is only 0.51%.
 
 Neither a semantic comparison-branch operation nor a field-path projection is
-present today. [`CheckedIndexedLoad`](../talk-bytecode/src/checked_indexed_load.rs#L1)
+present today. [`CheckedIndexedLoad`](../crates/talk-bytecode/src/checked_indexed_load.rs#L1)
 is the appropriate precedent: recognize a proven MIR/bytecode shape, retain
 validation and failure semantics, and replace its hot path with one operation.
 
@@ -340,7 +340,7 @@ fourth hand-maintained field or text scraper.
 C and LLVM necessarily have different syntax emitters, but they independently
 compute some identical target-neutral properties. For example,
 `needs_identity` is duplicated in
-[`talk-c/src/lib.rs`](../talk-c/src/lib.rs#L1926) and
+[`crates/talk-c/src/lib.rs`](../crates/talk-c/src/lib.rs#L1926) and
 [`talk-llvm/src/emit.rs`](../talk-llvm/src/emit.rs#L1616). Symbol row ordering,
 layout eligibility, and portions of display/type metadata preparation have
 similar parallel structure.
@@ -358,7 +358,7 @@ simplify each backend.
 - Several reference-flow tests contain identical sources under different test
   names. Convert these to manifest-driven cases only where the runner category
   and expected disposition can remain explicit.
-- `src/profile.rs` and `talk-vm/src/profile.rs` are exact nine-line copies. This
+- `src/profile.rs` and `crates/talk-vm/src/profile.rs` are exact nine-line copies. This
   is low priority and may not justify a new shared crate by itself.
 - `rust-toolchain.toml` and `www/rust-toolchain.toml` are identical. Retain the
   nested copy only if `www` must build correctly when detached from this
@@ -407,11 +407,11 @@ The largest files include:
 | `src/compiling/mir/build/mod.rs` | 9,932 |
 | `src/types/types_tests.rs` | 8,862 |
 | `src/parsing/formatter.rs` | 3,944 |
-| `talk-vm/src/interp.rs` | 3,808 |
+| `crates/talk-vm/src/interp.rs` | 3,808 |
 | `src/lsp/server.rs` | 3,194 |
 | `src/compiling/package.rs` | 2,864 |
 | `src/lsp/code_actions.rs` | 2,791 |
-| `talk-c/src/lib.rs` | 2,691 |
+| `crates/talk-c/src/lib.rs` | 2,691 |
 
 Large files are not automatically duplicated or slow. Split them only around
 real ownership boundaries:
@@ -494,7 +494,7 @@ Validation performed:
 - No implementation code was changed as part of the audit.
 
 During the audit, unrelated or concurrent working-tree changes were present in
-`Cargo.toml`, `src/compiling/stdlib.rs`, and `wasm/package.json`; an untracked
+`Cargo.toml`, `src/compiling/stdlib.rs`, and `crates/wasm/package.json`; an untracked
 `examples/http_diag.rs` also appeared before this document was written. They
 were preserved. Findings that reference the current stdlib dependency import
 path account for the working-tree implementation visible during the audit.

@@ -6,7 +6,7 @@
 //! finalized MIR feeds both adapters, so these tests are differential:
 //! compile the program both ways and compare the answer. The
 //! structure-level emission tests live at the emitter's own seam in
-//! `talk-c/tests/emission.rs`.
+//! `crates/talk-c/tests/emission.rs`.
 //!
 //! The focused cases below pin individual constructs; the two corpus
 //! tests run every program the project already pins, which is what makes

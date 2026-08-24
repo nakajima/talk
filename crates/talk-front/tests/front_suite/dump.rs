@@ -61,7 +61,7 @@ mod tests {
     /// validated byte-for-byte against the retired Rust parser.
     #[test]
     fn parser_dump_corpus_matches_expected() {
-        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/..")).join("tests/parser");
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../..")).join("tests/parser");
         check_corpus_dir(&root, &frontend_dump("parse"));
         check_corpus_dir(&root.join("expr"), &frontend_dump("parse_expr"));
         check_corpus_dir(&root.join("pattern"), &frontend_dump("parse_pattern"));

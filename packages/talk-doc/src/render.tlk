@@ -712,6 +712,7 @@ func module_navigation(modules: &[ModuleLink], current: String) -> Markup {
 			@html {
 				a aria-current="page" href=(module.file) {
 					(module.name)
+					("\n ")
 					@if let .some(description) = module.wip {
 						span title=(description) { "WIP" }
 					}
@@ -817,7 +818,6 @@ func module_shell(
 				@if has_documentation {
 					div .doc { (documentation) }
 				}
-				h2 { "API Reference" }
 				(entries)
 			}
 			aside aria-label="Symbols on this page" { (page_index) }

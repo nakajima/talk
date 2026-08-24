@@ -131,7 +131,14 @@ impl DevServer {
                         rendered: Arc::clone(&self.rendered),
                     };
                     thread::spawn(move || {
-                        if let Err(error) = connection.serve() {
+                        if let Err(error) = connection.serve()
+                            && !matches!(
+                                error.kind(),
+                                io::ErrorKind::BrokenPipe
+                                    | io::ErrorKind::ConnectionReset
+                                    | io::ErrorKind::ConnectionAborted
+                            )
+                        {
                             eprintln!("request failed: {error}");
                         }
                     });
@@ -146,9 +153,14 @@ impl DevServer {
         let current = SourceState::capture();
         let executable_changed = current.executable != self.sources.executable;
         let site_changed = current.site != self.sources.site;
-        self.sources = current;
-
         if executable_changed {
+            // Replacing this process while documentation commands are running
+            // would orphan those compiler children. Wait for the worker to go
+            // idle, then rebuild and exec from a clean process tree.
+            if documentation.is_busy() {
+                return Ok(());
+            }
+            self.sources = current;
             println!("server source changed; rebuilding");
             let status = Command::new("cargo")
                 .args(["build", "--package", "builder"])
@@ -158,9 +170,14 @@ impl DevServer {
             }
             eprintln!("server rebuild failed; keeping the current process running");
         } else if site_changed {
-            println!("site source changed; pages will re-render on request");
+            self.sources = current;
+            println!(
+                "site source changed; request-rendered pages invalidated; regenerating documentation"
+            );
             self.rendered.clear();
             documentation.mark_dirty();
+        } else {
+            self.sources = current;
         }
 
         Ok(())
@@ -188,16 +205,20 @@ impl DevServer {
 // rendering per request. Generation runs on this worker's thread to keep the
 // accept loop responsive while it works.
 struct DocumentationWorker {
+    busy: Arc<AtomicBool>,
     dirty: Arc<AtomicBool>,
 }
 
 impl DocumentationWorker {
     fn spawn(builder: SiteBuilder, assets: PathBuf) -> Self {
+        let busy = Arc::new(AtomicBool::new(true));
         let dirty = Arc::new(AtomicBool::new(true));
-        let flag = Arc::clone(&dirty);
+        let busy_flag = Arc::clone(&busy);
+        let dirty_flag = Arc::clone(&dirty);
         thread::spawn(move || {
             loop {
-                if flag.swap(false, Ordering::SeqCst) {
+                if dirty_flag.swap(false, Ordering::SeqCst) {
+                    busy_flag.store(true, Ordering::SeqCst);
                     let started = Instant::now();
                     match std::panic::catch_unwind(|| builder.write_documentation(&assets)) {
                         Ok(Ok(())) => println!(
@@ -209,11 +230,16 @@ impl DocumentationWorker {
                             eprintln!("documentation rebuild failed; keeping the previous pages");
                         }
                     }
+                    busy_flag.store(false, Ordering::SeqCst);
                 }
                 thread::sleep(POLL_INTERVAL);
             }
         });
-        Self { dirty }
+        Self { busy, dirty }
+    }
+
+    fn is_busy(&self) -> bool {
+        self.busy.load(Ordering::SeqCst)
     }
 
     fn mark_dirty(&self) {
@@ -557,13 +583,13 @@ impl AssetPath {
 
 #[cfg(test)]
 mod tests {
-    use super::{elapsed_label, AssetPath, RenderedPage, RenderedPages};
+    use super::{AssetPath, RenderedPage, RenderedPages, elapsed_label};
     use std::{
         fs,
         path::Path,
         sync::{
-            atomic::{AtomicUsize, Ordering},
             Arc,
+            atomic::{AtomicUsize, Ordering},
         },
         thread,
         time::Duration,

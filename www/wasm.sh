@@ -7,7 +7,7 @@ rm -rf assets/pkg/
 pushd ..
 cargo run --release -- core-artifact
 popd
-pushd ../wasm
+pushd ../crates/wasm
 npm run build
-mv pkg/ ../www/assets/pkg
+mv pkg/ ../../www/assets/pkg
 popd

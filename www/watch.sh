@@ -11,7 +11,7 @@ cleanup() {
 
 trap cleanup EXIT
 
-echo "building Talk compiler for documentation and examples"
+echo "building Talk compiler for examples"
 pushd .. >/dev/null
 cargo build --bin talk
 popd >/dev/null
@@ -22,7 +22,7 @@ TALK_COMPILER=../target/debug/talk cargo run -- dev &
 server_pid=$!
 
 echo "waiting for the dev server to accept connections"
-until curl --silent --fail --max-time 1 http://127.0.0.1:8000/ >/dev/null; do
+until curl --silent --fail --max-time 1 http://127.0.0.1:8000/favicon.svg >/dev/null; do
     if ! kill -0 "$server_pid" 2>/dev/null; then
         wait "$server_pid"
         exit $?

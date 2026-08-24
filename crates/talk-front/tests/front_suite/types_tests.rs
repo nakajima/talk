@@ -5897,7 +5897,7 @@ mod with_core {
 
     fn example(name: &str) -> Source {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../examples")
+            .join("../../examples")
             .join(name);
         Source::from(path)
     }

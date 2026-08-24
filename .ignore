@@ -3,7 +3,7 @@
 dev/editors/vscode/node_modules
 dev/editors/vscode/.vscode-test
 examples/cove-talk
-wasm/pkg
+crates/wasm/pkg
 log.txt
 *.vsix
 talk-ex/index.wit

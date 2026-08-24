@@ -20,11 +20,11 @@ non-comment `.rs` lines, in-file test tails split out):
 | Module | Production | In-file tests | Comments |
 | --- | --- | --- | --- |
 | Compiler MIR work (`src/compiling/mir`) | 12,224 | 2,934 | 2,348 |
-| Public MIR data (`talk-mir/src`) | 603 | 0 | 199 |
-| Bytecode adapter (`talk-bytecode/src`) | 1,611 | 136 | 160 |
-| C adapter (`talk-c/src`) | 2,126 | 0 | 282 |
-| VM (`talk-vm/src`) | 8,449 (code) | — | 702 |
-| Native runtime (`talk-native-runtime/src`) | 3 (code) | — | 5 |
+| Public MIR data (`crates/talk-mir/src`) | 603 | 0 | 199 |
+| Bytecode adapter (`crates/talk-bytecode/src`) | 1,611 | 136 | 160 |
+| C adapter (`crates/talk-c/src`) | 2,126 | 0 | 282 |
+| VM (`crates/talk-vm/src`) | 8,449 (code) | — | 702 |
+| Native runtime (`crates/talk-native-runtime/src`) | 3 (code) | — | 5 |
 
 The native runtime's C source (`runtime.c`, ~1,900 nonblank lines) is
 outside the script's `.rs` accounting, as `c_prelude.c` was before the
@@ -52,7 +52,7 @@ talk-c (embedding; becomes talk-ffi)
 talk-llvm
     talk
 
-talk-wasm (wasm/)
+talk-wasm (crates/wasm/)
     console_error_panic_hook, js-sys, talk, wasm-bindgen, web-sys
 
 builder (www/)
@@ -73,9 +73,9 @@ builder (www/)
 | Bytecode adapter (`src/backend/lower.rs`, `src/backend/checked_indexed_load.rs`) | 1,748 |
 | VM (`talk-runtime/src`) | 9,151 |
 | LLVM (`talk-llvm/src`) | 2,183 |
-| FFI (`talk-c/src`) | 2,308 |
-| talk-static (`talk-static/src`) | 62 |
-| wasm (`wasm/src`) | 339 |
+| FFI (`crates/talk-c/src`) | 2,308 |
+| talk-static (`crates/talk-static/src`) | 62 |
+| wasm (`crates/wasm/src`) | 339 |
 
 ## ABI migration oracle
 
@@ -89,13 +89,13 @@ Stage 2's acceptance compares against this list plus the new
 
 | Method | Callers |
 | --- | --- |
-| `compile_executable` | `src/bin/talk.rs` (CLI), `src/repl.rs`, `src/testing.rs`, `src/compiling/driver.rs` (self), `src/compiling/package.rs`, `talk-c/src/lib.rs`, `tests/procedural_macro_tests.rs`, `talk-llvm/tests/backend.rs` |
+| `compile_executable` | `src/bin/talk.rs` (CLI), `src/repl.rs`, `src/testing.rs`, `src/compiling/driver.rs` (self), `src/compiling/package.rs`, `crates/talk-c/src/lib.rs`, `tests/procedural_macro_tests.rs`, `talk-llvm/tests/backend.rs` |
 | `compile_service` | `src/compiling/bootstrap.rs`, `src/procedural_macros.rs`, `src/compiling/driver.rs` (self) |
 | `render_c` | `src/bin/talk.rs` |
 | `render_c_service` | `src/bin/talk.rs` |
 | `codegen` | `src/compiling/package.rs` |
 | `codegen_binary` | `talk-llvm/src/main.rs` |
-| `render_mir` | `src/bin/talk.rs`, `src/testing.rs`, `talk-c/src/lib.rs`, `wasm/src/lib.rs` |
+| `render_mir` | `src/bin/talk.rs`, `src/testing.rs`, `crates/talk-c/src/lib.rs`, `crates/wasm/src/lib.rs` |
 | `check_ownership` | `src/analysis/workspace.rs` |
 | `execute_module` | `src/bin/talk.rs`, `src/repl.rs`, `src/testing.rs`, `src/compiling/driver.rs` (tests) |
 | `execute_image` | `src/bin/talk.rs` |

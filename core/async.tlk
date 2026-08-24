@@ -1,4 +1,6 @@
 // no-core
+// WIP: I don't like any of these APIs yet.
+// Asynchronous primitives.
 use package::array::{ Array }
 use package::time::{ Instant }
 

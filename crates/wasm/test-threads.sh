@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Threads-WASM validation harness (ADR 0058/0059): runs the parallel
 # corpus in headless Chrome on Web-Worker threads over shared wasm
-# memory (wasm/tests/parallel.rs), against the native backends' pins.
+# memory (crates/wasm/tests/parallel.rs), against the native backends' pins.
 #
 # The production build uses the same atomics and shared-memory contract.
 # Test flags remain local to this script so unrelated workspace builds do

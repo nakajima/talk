@@ -200,10 +200,7 @@ impl Workspace {
                     // locked dependencies (one shared module numbering
                     // across the graph); stdlib modules still register
                     // on demand as parsing discovers their imports.
-                    config.modules = Rc::new(package.modules);
-                    config.libraries = package.libraries;
-                    config.catalog = package.catalog;
-                    config.workspace_root = Some(package.workspace_root);
+                    package.configure(&mut config);
                     Driver::new_bare(sources, config)
                 }
                 None => {

@@ -273,4 +273,4 @@ The REPL's `/type` command is useful for isolated expressions. Rendered inferred
 
 ## Further reading
 
-The implementation overview in `talk-front/src/types/README.md` maps this model to compiler modules. The main research lineages are Hindley-Milner generalization, OutsideIn(X) constraints and implications, qualified types and type classes, row-polymorphic records, Koka-style effect rows, and bidirectional GADT checking. Papers cited by that implementation document are mirrored under `papers/`.
+The implementation overview in `crates/talk-front/src/types/README.md` maps this model to compiler modules. The main research lineages are Hindley-Milner generalization, OutsideIn(X) constraints and implications, qualified types and type classes, row-polymorphic records, Koka-style effect rows, and bidirectional GADT checking. Papers cited by that implementation document are mirrored under `papers/`.

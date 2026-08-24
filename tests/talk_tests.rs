@@ -2946,7 +2946,7 @@ fn test_command_resolves_the_package_root_from_a_path_argument() {
     std::fs::create_dir_all(root.join("tests")).expect("root tests");
     std::fs::write(
         root.join("package.tlk"),
-        "Package(name: \"path-arg\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+        "Package(name: \"path-arg\", version: \"0.1.0\", description: \"\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
     )
     .expect("root manifest");
     std::fs::write(
@@ -3019,7 +3019,7 @@ fn repl_package_imports_the_current_library() {
     std::fs::create_dir_all(root.join("src")).expect("package src");
     std::fs::write(
         root.join("package.tlk"),
-        "Package(name: \"repl-package\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+        "Package(name: \"repl-package\", version: \"0.1.0\", description: \"\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
     )
     .expect("package manifest");
     std::fs::write(
@@ -3100,7 +3100,7 @@ fn package_run_resolves_methods_declared_after_the_caller() {
     std::fs::create_dir_all(root.join("src")).expect("root src");
     std::fs::write(
         root.join("package.tlk"),
-        "Package(name: \"method-order\", version: \"0.1.0\", builds: [.bin(named: \"main\", from: \"src/main.tlk\")], dependencies: [])",
+        "Package(name: \"method-order\", version: \"0.1.0\", description: \"\", builds: [.bin(named: \"main\", from: \"src/main.tlk\")], dependencies: [])",
     )
     .expect("manifest");
     std::fs::write(
@@ -3194,7 +3194,7 @@ fn package_run_and_test_use_the_locked_graph() {
     std::fs::create_dir_all(root.join("tests")).expect("root tests");
     std::fs::write(
         dependency.join("package.tlk"),
-        "Package(name: \"cli-dependency\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+        "Package(name: \"cli-dependency\", version: \"0.1.0\", description: \"\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
     )
     .expect("dependency manifest");
     std::fs::write(
@@ -3204,7 +3204,7 @@ fn package_run_and_test_use_the_locked_graph() {
     .expect("dependency source");
     std::fs::write(
         root.join("package.tlk"),
-        "Package(name: \"cli-root\", version: \"0.1.0\", builds: [.bin(named: \"app\", from: \"src/main.tlk\")], dependencies: [.path(package: \"cli-dependency\", path: \"../dependency\")])",
+        "Package(name: \"cli-root\", version: \"0.1.0\", description: \"\", builds: [.bin(named: \"app\", from: \"src/main.tlk\")], dependencies: [.path(package: \"cli-dependency\", path: \"../dependency\")])",
     )
     .expect("root manifest");
     std::fs::write(
@@ -3257,6 +3257,99 @@ fn package_run_and_test_use_the_locked_graph() {
 }
 
 #[test]
+fn build_and_run_compile_explicit_files_against_the_locked_graph() {
+    // A file argument does not opt out of package mode: `talk build
+    // src/main.tlk` and `talk run src/main.tlk` from inside a package
+    // compile against the same locked dependency graph `talk check`
+    // diagnoses.
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock after epoch")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("talk-pkg-build-{}-{unique}", std::process::id()));
+    let dependency = dir.join("dependency");
+    let root = dir.join("root");
+    std::fs::create_dir_all(dependency.join("src")).expect("dependency src");
+    std::fs::create_dir_all(root.join("src")).expect("root src");
+    std::fs::write(
+        dependency.join("package.tlk"),
+        "Package(name: \"build-dependency\", version: \"0.1.0\", description: \"\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+    )
+    .expect("dependency manifest");
+    std::fs::write(
+        dependency.join("src/lib.tlk"),
+        "pub func answer_for(n: Int) -> Int {\n\tn + 2\n}\n",
+    )
+    .expect("dependency source");
+    std::fs::write(
+        root.join("package.tlk"),
+        "Package(name: \"build-root\", version: \"0.1.0\", description: \"\", builds: [.bin(named: \"app\", from: \"src/main.tlk\")], dependencies: [.path(package: \"build-dependency\", path: \"../dependency\")])",
+    )
+    .expect("root manifest");
+    std::fs::write(
+        root.join("src/main.tlk"),
+        "use build_dependency::{ answer_for }\nuse package::util::{ double }\n\nprint(answer_for(n: double(n: 20)))\n",
+    )
+    .expect("root source");
+    std::fs::write(
+        root.join("src/util.tlk"),
+        "pub func double(n: Int) -> Int {\n\tn * 2\n}\n",
+    )
+    .expect("util source");
+
+    let install = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["install", "--offline"])
+        .current_dir(&root)
+        .output()
+        .expect("install");
+    assert!(
+        install.status.success(),
+        "{}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    let build = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["build", "src/main.tlk", "--output", "app.tbc"])
+        .current_dir(&root)
+        .output()
+        .expect("build explicit file");
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    assert!(root.join("app.tbc").is_file());
+
+    let run = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["run", "src/main.tlk"])
+        .current_dir(&root)
+        .output()
+        .expect("run explicit file");
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(run.stdout, b"42\n");
+
+    // Bare `talk build` inside a package builds the manifest binary,
+    // the same default `talk run` and `talk check` already use.
+    let bare = Command::new(env!("CARGO_BIN_EXE_talk"))
+        .args(["build", "--output", "bare.tbc"])
+        .current_dir(&root)
+        .output()
+        .expect("bare package build");
+    assert!(
+        bare.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bare.stderr)
+    );
+    assert!(root.join("bare.tbc").is_file());
+
+    std::fs::remove_dir_all(dir).expect("remove package fixture");
+}
+
+#[test]
 fn check_command_checks_the_package_workspace() {
     // Bare `talk check` inside a package checks the manifest-scoped
     // sources compiled against the locked dependency graph, walking up
@@ -3273,7 +3366,7 @@ fn check_command_checks_the_package_workspace() {
     std::fs::create_dir_all(root.join("tests")).expect("root tests");
     std::fs::write(
         dependency.join("package.tlk"),
-        "Package(name: \"check-dependency\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+        "Package(name: \"check-dependency\", version: \"0.1.0\", description: \"\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
     )
     .expect("dependency manifest");
     std::fs::write(
@@ -3283,7 +3376,7 @@ fn check_command_checks_the_package_workspace() {
     .expect("dependency source");
     std::fs::write(
         root.join("package.tlk"),
-        "Package(name: \"check-root\", version: \"0.1.0\", builds: [.bin(named: \"app\", from: \"src/main.tlk\")], dependencies: [.path(package: \"check-dependency\", path: \"../dependency\")])",
+        "Package(name: \"check-root\", version: \"0.1.0\", description: \"\", builds: [.bin(named: \"app\", from: \"src/main.tlk\")], dependencies: [.path(package: \"check-dependency\", path: \"../dependency\")])",
     )
     .expect("root manifest");
     std::fs::write(
@@ -3450,7 +3543,7 @@ fn package_tests_reuse_the_cached_root_library() {
     std::fs::create_dir_all(root.join("tests")).expect("root tests");
     std::fs::write(
         root.join("package.tlk"),
-        "Package(name: \"cached-root\", version: \"0.1.0\", builds: [.bin(named: \"app\", from: \"src/main.tlk\"), .lib(from: \"src/lib.tlk\")], dependencies: [])",
+        "Package(name: \"cached-root\", version: \"0.1.0\", description: \"\", builds: [.bin(named: \"app\", from: \"src/main.tlk\"), .lib(from: \"src/lib.tlk\")], dependencies: [])",
     )
     .expect("root manifest");
     // The library reaches a stdlib module its importers never name:
@@ -3607,7 +3700,7 @@ fn package_tests_keep_library_visibility_rules_through_the_redirect() {
     std::fs::create_dir_all(root.join("tests")).expect("root tests");
     std::fs::write(
         root.join("package.tlk"),
-        "Package(name: \"visibility-root\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+        "Package(name: \"visibility-root\", version: \"0.1.0\", description: \"\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
     )
     .expect("root manifest");
     std::fs::write(
@@ -3668,7 +3761,7 @@ fn package_test_reports_library_errors_through_the_fused_fallback() {
     std::fs::create_dir_all(root.join("tests")).expect("root tests");
     std::fs::write(
         root.join("package.tlk"),
-        "Package(name: \"broken-root\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+        "Package(name: \"broken-root\", version: \"0.1.0\", description: \"\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
     )
     .expect("root manifest");
     std::fs::write(
@@ -3728,7 +3821,7 @@ fn package_dependency_stdlib_bodies_reach_the_backend() {
     std::fs::create_dir_all(root.join("src")).expect("root src");
     std::fs::write(
         dependency.join("package.tlk"),
-        "Package(name: \"dict-dependency\", version: \"0.1.0\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
+        "Package(name: \"dict-dependency\", version: \"0.1.0\", description: \"\", builds: [.lib(from: \"src/lib.tlk\")], dependencies: [])",
     )
     .expect("dependency manifest");
     std::fs::write(
@@ -3738,7 +3831,7 @@ fn package_dependency_stdlib_bodies_reach_the_backend() {
     .expect("dependency source");
     std::fs::write(
         root.join("package.tlk"),
-        "Package(name: \"stdlib-root\", version: \"0.1.0\", builds: [.bin(named: \"app\", from: \"src/main.tlk\")], dependencies: [.path(package: \"dict-dependency\", path: \"../dependency\")])",
+        "Package(name: \"stdlib-root\", version: \"0.1.0\", description: \"\", builds: [.bin(named: \"app\", from: \"src/main.tlk\")], dependencies: [.path(package: \"dict-dependency\", path: \"../dependency\")])",
     )
     .expect("root manifest");
     std::fs::write(
@@ -4563,7 +4656,7 @@ fn run_package_entry_flag_selects_the_named_function() {
     std::fs::create_dir_all(dir.join("src")).expect("package dirs");
     std::fs::write(
         dir.join("package.tlk"),
-        "Package(\n\tname: \"entrypkg\",\n\tversion: \"0.1.0\",\n\tbuilds: [.bin(named: \"main\", from: \"src/main.tlk\")],\n\tdependencies: []\n)\n",
+        "Package(\n\tname: \"entrypkg\",\n\tversion: \"0.1.0\",\n\tdescription: \"\",\n\tbuilds: [.bin(named: \"main\", from: \"src/main.tlk\")],\n\tdependencies: []\n)\n",
     )
     .expect("manifest");
     std::fs::write(
@@ -4610,7 +4703,7 @@ fn run_package_path_forwards_arguments_after_double_dash() {
     std::fs::create_dir_all(dir.join("src")).expect("package dirs");
     std::fs::write(
         dir.join("package.tlk"),
-        "Package(\n\tname: \"argpkg\",\n\tversion: \"0.1.0\",\n\tbuilds: [.bin(named: \"main\", from: \"src/main.tlk\")],\n\tdependencies: []\n)\n",
+        "Package(\n\tname: \"argpkg\",\n\tversion: \"0.1.0\",\n\tdescription: \"\",\n\tbuilds: [.bin(named: \"main\", from: \"src/main.tlk\")],\n\tdependencies: []\n)\n",
     )
     .expect("manifest");
     std::fs::write(

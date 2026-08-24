@@ -623,6 +623,7 @@ impl Driver {
     }
 
     pub fn parse(mut self) -> Result<Driver<Parsed>, CompileError> {
+        crate::compiling::progress::report(crate::compiling::progress::Phase::Parsing);
         crate::profile::init();
         profiling::scope!("compiler.parse");
         if self.config.source_root.is_none() {
@@ -916,6 +917,7 @@ impl Driver<Parsed> {
         let procedural_macros = self.phase.procedural_macros.local_artifact();
         let file_dependencies = self.phase.file_dependencies;
         let (paths, mut asts): (Vec<_>, Vec<_>) = self.phase.asts.into_iter().unzip();
+        crate::compiling::progress::report(crate::compiling::progress::Phase::ExpandingMacros);
         self.phase
             .diagnostics
             .extend(crate::macro_expansion::expand_macros_with_sources(
@@ -925,7 +927,9 @@ impl Driver<Parsed> {
                     procedural: Some(&self.phase.procedural_macros),
                 },
             ));
+        crate::compiling::progress::report(crate::compiling::progress::Phase::Desugaring);
         crate::desugar::desugar(&mut asts);
+        crate::compiling::progress::report(crate::compiling::progress::Phase::ResolvingNames);
         let (asts, resolved) = resolver.resolve(asts);
         let asts = paths.into_iter().zip(asts).collect();
         self.phase.diagnostics.extend(resolver.phase.diagnostics);
@@ -1031,6 +1035,7 @@ impl Driver<NameResolved> {
     /// Type check: generate constraints and solve them per SCC binding group
     /// (see src/types). Infallible — failures surface as diagnostics.
     pub fn type_check(self) -> Driver<Typed> {
+        crate::compiling::progress::report(crate::compiling::progress::Phase::TypeChecking);
         crate::profile::init();
         profiling::scope!("compiler.type_check");
         let NameResolved {
@@ -1053,6 +1058,7 @@ impl Driver<NameResolved> {
         );
         diagnostics.extend(type_diagnostics);
         let blocked_files = error_diagnostic_files(&diagnostics);
+        crate::compiling::progress::report(crate::compiling::progress::Phase::BuildingTypedProgram);
         let program = crate::compiling::typed_program::TypedProgram::from_checked_asts(
             asts,
             resolved_names,
@@ -1091,6 +1097,7 @@ impl Driver<Typed> {
             },
         };
         self.with_backend_inputs(entry, |programs, entry| {
+            crate::compiling::progress::report(crate::compiling::progress::Phase::BuildingMir);
             crate::compiling::mir::compile_mir(programs, entry)
         })
         .map(|(module, optimizations)| MirOutput {
@@ -1120,6 +1127,7 @@ impl Driver<Typed> {
             None => MirEntry::Script,
         };
         let output = self.compile_mir(entry)?;
+        crate::compiling::progress::report(crate::compiling::progress::Phase::GeneratingBytecode);
         talk_bytecode::compile(&output.module).map_err(|error| error.message().to_string())
     }
 
@@ -1139,6 +1147,7 @@ impl Driver<Typed> {
             names: exports,
             allowed_effects,
         })?;
+        crate::compiling::progress::report(crate::compiling::progress::Phase::GeneratingBytecode);
         talk_bytecode::compile(&output.module).map_err(|error| error.message().to_string())
     }
 
@@ -1147,6 +1156,9 @@ impl Driver<Typed> {
     /// a source document, that document's path and byte range.
     pub fn check_ownership(&self) -> Result<(), OwnershipRejection> {
         self.with_backend_inputs(crate::compiling::mir::Entry::Script, |programs, entry| {
+            crate::compiling::progress::report(
+                crate::compiling::progress::Phase::CheckingOwnership,
+            );
             crate::compiling::mir::check(programs, entry)
         })
         .map_err(|error| {
@@ -1173,6 +1185,7 @@ impl Driver<Typed> {
             None => crate::compiling::mir::Entry::Script,
         };
         self.with_backend_inputs(entry, |programs, entry| {
+            crate::compiling::progress::report(crate::compiling::progress::Phase::BuildingMir);
             crate::compiling::mir::render_mir(programs, entry, optimized, debug)
         })
         .map_err(|error| self.locate_backend_error(&error))

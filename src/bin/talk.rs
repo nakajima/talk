@@ -486,93 +486,67 @@ async fn main() {
             use talk::{
                 analysis::{DocumentInput, Workspace},
                 cli::diagnostics::{ColorMode, render_json_entry, render_json_output, render_text},
+                compiling::invocation::CompileInvocation,
             };
 
-            // Package context comes from the selected file as well as the
-            // current directory. Keep explicit stdin dependency-free.
-            let package_root = if filenames.is_empty() {
-                talk::compiling::package::PackageProject::enclosing_root(".")
-            } else if filenames.iter().all(|filename| filename != "-") {
-                filenames
-                    .first()
-                    .and_then(talk::compiling::package::PackageProject::enclosing_root)
-            } else {
-                None
-            };
-
-            let (docs, package) = match package_root {
-                Some(root) => {
-                    let project =
-                        match talk::compiling::package::PackageProject::open_at(&root, false) {
-                            Ok(project) => project,
-                            Err(err) => {
-                                eprintln!("error: {err}");
-                                std::process::exit(1);
-                            }
-                        };
-                    let context = match project.package_compile_context() {
-                        Ok(context) => context,
-                        Err(err) => {
-                            eprintln!("error: {err}");
-                            std::process::exit(1);
-                        }
-                    };
-                    let sources = if filenames.is_empty() {
-                        let paths = talk::cli::package::workspace_source_files(&root);
-                        if paths.is_empty() {
-                            eprintln!("error: no package sources found under {}", root.display());
-                            std::process::exit(1);
-                        }
-                        paths
-                            .into_iter()
-                            .map(talk::compiling::driver::Source::from)
-                            .collect()
-                    } else {
-                        sources_for_filenames(filenames)
-                    };
-                    let mut docs = Vec::with_capacity(sources.len());
-                    for source in sources {
-                        let path = source.path().to_string();
-                        let text = match source.read() {
-                            Ok(text) => text,
-                            Err(err) => {
-                                eprintln!("failed to read {path}: {err:?}");
-                                std::process::exit(1);
-                            }
-                        };
-                        docs.push(DocumentInput {
-                            id: path.clone(),
-                            path,
-                            version: 0,
-                            text: text.into(),
-                        });
-                    }
-                    (docs, Some(context))
-                }
-                None => {
-                    let sources = sources_for_filenames(filenames);
-                    let mut docs = Vec::with_capacity(sources.len());
-                    for source in sources {
-                        let path = source.path().to_string();
-                        let text = match source.read() {
-                            Ok(text) => text,
-                            Err(err) => {
-                                eprintln!("failed to read {path}: {err:?}");
-                                std::process::exit(1);
-                            }
-                        };
-                        docs.push(DocumentInput {
-                            id: path.clone(),
-                            path,
-                            version: 0,
-                            text: text.into(),
-                        });
-                    }
-                    (docs, None)
+            let invocation = match CompileInvocation::resolve(".", filenames, false, read_stdin) {
+                Ok(invocation) => invocation,
+                Err(err) => {
+                    print_package_error(&err);
+                    std::process::exit(1);
                 }
             };
+            let (sources, package) = match invocation {
+                CompileInvocation::PackageTarget { project } => {
+                    let paths = talk::cli::package::workspace_source_files(project.root());
+                    if paths.is_empty() {
+                        eprintln!(
+                            "error: no package sources found under {}",
+                            project.root().display()
+                        );
+                        std::process::exit(1);
+                    }
+                    let sources = paths
+                        .into_iter()
+                        .map(talk::compiling::driver::Source::from)
+                        .collect();
+                    (sources, Some(project))
+                }
+                CompileInvocation::PackageSources { project, sources } => (sources, Some(project)),
+                CompileInvocation::Loose { sources } => (sources, None),
+            };
+            let package = package.map(|project| {
+                match talk::cli::progress::with_spinner(!*json, || {
+                    project.package_compile_context()
+                }) {
+                    Ok(context) => context,
+                    Err(err) => {
+                        eprintln!("error: {err}");
+                        std::process::exit(1);
+                    }
+                }
+            });
+            let mut docs = Vec::with_capacity(sources.len());
+            for source in sources {
+                let path = source.path().to_string();
+                let text = match source.read() {
+                    Ok(text) => text,
+                    Err(err) => {
+                        eprintln!("failed to read {path}: {err:?}");
+                        std::process::exit(1);
+                    }
+                };
+                docs.push(DocumentInput {
+                    id: path.clone(),
+                    path,
+                    version: 0,
+                    text: text.into(),
+                });
+            }
 
-            let Some(workspace) = Workspace::new_with_package(docs, package) else {
+            let Some(workspace) = talk::cli::progress::with_spinner(!*json, || {
+                Workspace::new_with_package(docs, package)
+            }) else {
                 return;
             };
 
@@ -622,97 +596,43 @@ async fn main() {
             offline,
             arguments,
         } => {
-            use talk::compiling::driver::{Driver, DriverConfig};
+            use talk::compiling::invocation::CompileInvocation;
+            use talk::compiling::package::PackageError;
 
-            let package_root = if filenames.is_empty()
-                && talk::compiling::package::PackageProject::exists_at(std::path::Path::new("."))
+            let invocation = match CompileInvocation::resolve(".", filenames, *offline, read_stdin)
             {
-                Some(std::path::PathBuf::from("."))
-            } else if let [path] = filenames.as_slice()
-                && talk::compiling::package::PackageProject::exists_at(std::path::Path::new(path))
-            {
-                Some(std::path::PathBuf::from(path))
-            } else {
-                None
-            };
-            if *offline && package_root.is_none() {
-                eprintln!("error: --offline requires package execution");
-                std::process::exit(1);
-            }
-            if let Some(package_root) = package_root {
-                let project = match talk::compiling::package::PackageProject::open_at(
-                    package_root.clone(),
-                    *offline,
-                ) {
-                    Ok(project) => project,
-                    Err(err) => {
-                        eprintln!("error: {err}");
-                        std::process::exit(1);
-                    }
-                };
-                let executable =
-                    match project.compile_binary_entry(bin.as_deref(), entry.as_deref()) {
-                        Ok(executable) => executable,
-                        Err(err) => {
-                            print_package_error(&err);
-                            std::process::exit(1);
-                        }
-                    };
-                let argv0 = filenames
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| package_root.to_string_lossy().into_owned());
-                let mut program_arguments = Vec::with_capacity(arguments.len() + 1);
-                program_arguments.push(argv0);
-                program_arguments.extend(arguments.iter().cloned());
-                let mut io = talk_vm::io::StdioIO::with_args(program_arguments);
-                match executable.run(&mut io) {
-                    Ok(Some(rendered)) => println!("{rendered}"),
-                    Ok(None) => {}
-                    Err(message) => {
-                        eprintln!("error: {message}");
-                        std::process::exit(1);
-                    }
-                }
-                return;
-            }
-
-            let sources = sources_for_filenames(filenames);
-            let driver = Driver::new(sources, DriverConfig::new("Main"));
-            let parsed = match driver.parse() {
-                Ok(parsed) => parsed,
+                Ok(invocation) => invocation,
                 Err(err) => {
-                    eprintln!("error: {err:?}");
+                    print_package_error(&err);
                     std::process::exit(1);
                 }
             };
-            let resolved = match parsed.resolve_names() {
-                Ok(resolved) => resolved,
+            let package_execution = invocation.is_package();
+            let executable = match talk::cli::progress::with_spinner(true, || {
+                invocation.typecheck(bin.as_deref()).and_then(|typed| {
+                    typed
+                        .compile_executable(entry.as_deref())
+                        .map_err(PackageError::Compile)
+                })
+            }) {
+                Ok(executable) => executable,
                 Err(err) => {
-                    eprintln!("error: {err:?}");
+                    print_package_error(&err);
                     std::process::exit(1);
                 }
             };
-            let asts_by_source = resolved.phase.asts.clone();
-            let typed = resolved.type_check();
-            report_diagnostics_or_exit(&asts_by_source, &typed);
-
-            let module = match typed.compile_executable(entry.as_deref()) {
-                Ok(module) => module,
-                Err(message) => {
-                    eprintln!("error: {message}");
-                    std::process::exit(1);
+            let argv0 = filenames.first().cloned().unwrap_or_else(|| {
+                if package_execution {
+                    ".".to_string()
+                } else {
+                    STDIN_NAME.to_string()
                 }
-            };
-            let argv0 = filenames
-                .first()
-                .cloned()
-                .unwrap_or_else(|| STDIN_NAME.to_string());
+            });
             let mut program_arguments = Vec::with_capacity(arguments.len() + 1);
             program_arguments.push(argv0);
             program_arguments.extend(arguments.iter().cloned());
             let mut io = talk_vm::io::StdioIO::with_args(program_arguments);
-            match module.run(&mut io) {
+            match executable.run(&mut io) {
                 Ok(Some(rendered)) => println!("{rendered}"),
                 Ok(None) => {}
                 Err(message) => {
@@ -746,7 +666,9 @@ async fn main() {
                 let package_paths: Vec<std::path::PathBuf> =
                     paths.iter().map(std::path::PathBuf::from).collect();
                 if *json {
-                    match project.run_tests_json_at_paths(&package_paths, filter.clone()) {
+                    match talk::cli::progress::with_spinner(false, || {
+                        project.run_tests_json_at_paths(&package_paths, filter.clone())
+                    }) {
                         Ok(outcome) => {
                             println!("{}", outcome.to_json());
                             if let talk::testing::JsonOutcome::Finished(summary) = outcome
@@ -768,7 +690,9 @@ async fn main() {
                         }
                     }
                 } else {
-                    match project.run_tests_at_paths_with_filter(&package_paths, filter.clone()) {
+                    match talk::cli::progress::with_spinner(true, || {
+                        project.run_tests_at_paths_with_filter(&package_paths, filter.clone())
+                    }) {
                         Ok(talk::testing::Outcome::NoTests) => {
                             eprintln!("no .test.tlk files found")
                         }
@@ -799,7 +723,7 @@ async fn main() {
             let runner = talk::testing::Runner::new(paths.iter().map(std::path::PathBuf::from))
                 .with_filter(filter.clone());
             if *json {
-                match runner.run_json() {
+                match talk::cli::progress::with_spinner(false, || runner.run_json()) {
                     Ok(outcome) => {
                         println!("{}", outcome.to_json());
                         if let talk::testing::JsonOutcome::Finished(summary) = outcome
@@ -817,7 +741,7 @@ async fn main() {
                     }
                 }
             } else {
-                match runner.run() {
+                match talk::cli::progress::with_spinner(true, || runner.run()) {
                     Ok(talk::testing::Outcome::NoTests) => {
                         eprintln!("no .test.tlk files found")
                     }
@@ -887,7 +811,12 @@ async fn main() {
                 return;
             }
             let executable = compile_or_exit(filenames, entry.as_deref());
-            let bytes = match executable.encode_bytecode() {
+            let bytes = match talk::cli::progress::with_spinner(true, || {
+                talk::compiling::progress::report(
+                    talk::compiling::progress::Phase::EncodingBytecode,
+                );
+                executable.encode_bytecode()
+            }) {
                 Ok(bytes) => bytes,
                 Err(err) => {
                     eprintln!("error: failed to encode bytecode: {err:?}");
@@ -900,10 +829,12 @@ async fn main() {
             }
         }
         Commands::CoreArtifact { check } => {
-            let bytes = talk::compiling::core::artifact_bytes().unwrap_or_else(|error| {
-                eprintln!("error: {error}");
-                std::process::exit(1);
-            });
+            let bytes =
+                talk::cli::progress::with_spinner(true, talk::compiling::core::artifact_bytes)
+                    .unwrap_or_else(|error| {
+                        eprintln!("error: {error}");
+                        std::process::exit(1);
+                    });
             let artifact_path = std::path::Path::new(talk::compiling::core::ARTIFACT_PATH);
             let manifest_path = std::path::Path::new(talk::compiling::core::ARTIFACT_MANIFEST_PATH);
 
@@ -1001,13 +932,15 @@ async fn main() {
                         }
                     }
                 }
-                match talk::compiling::bootstrap::bootstrap(
-                    &sources,
-                    exports,
-                    allow_effects,
-                    None,
-                    None,
-                ) {
+                match talk::cli::progress::with_spinner(true, || {
+                    talk::compiling::bootstrap::bootstrap(
+                        &sources,
+                        exports,
+                        allow_effects,
+                        None,
+                        None,
+                    )
+                }) {
                     Ok(outcome) => (outcome, output),
                     Err(err) => {
                         eprintln!("error: {err}");
@@ -1025,7 +958,9 @@ async fn main() {
                     eprintln!("error: cannot resolve current directory: {err}");
                     std::process::exit(1);
                 });
-                match talk::compiling::frontend::regenerate(&root) {
+                match talk::cli::progress::with_spinner(true, || {
+                    talk::compiling::frontend::regenerate(&root)
+                }) {
                     Ok(outcome) => (
                         outcome,
                         talk::compiling::frontend::artifact_path(&root)
@@ -1134,14 +1069,19 @@ async fn main() {
                 eprintln!("error: --prefix, --header, and --manifest require --export");
                 std::process::exit(2);
             }
-            let typed = check_or_exit(filenames);
+            let typed = typecheck_or_exit(filenames);
             if exports.is_empty() {
                 let mir_entry = match entry.as_deref() {
                     Some(name) => talk::compiling::driver::MirEntry::Named(name),
                     None => talk::compiling::driver::MirEntry::Script,
                 };
-                match typed.compile_mir(mir_entry).and_then(|output| {
-                    talk_c::emit(&output.module).map_err(|error| error.to_string())
+                match talk::cli::progress::with_spinner(true, || {
+                    typed.compile_mir(mir_entry).and_then(|output| {
+                        talk::compiling::progress::report(
+                            talk::compiling::progress::Phase::EmittingC,
+                        );
+                        talk_c::emit(&output.module).map_err(|error| error.to_string())
+                    })
                 }) {
                     Ok(artifact) => print!("{}", artifact.source),
                     Err(message) => {
@@ -1154,9 +1094,14 @@ async fn main() {
                     names: exports,
                     allowed_effects: allow_effects,
                 };
-                let artifact = match typed.compile_mir(mir_entry).and_then(|output| {
-                    talk_c::emit_library(&output.module, prefix.as_deref().unwrap_or("talk"))
-                        .map_err(|error| error.to_string())
+                let artifact = match talk::cli::progress::with_spinner(true, || {
+                    typed.compile_mir(mir_entry).and_then(|output| {
+                        talk::compiling::progress::report(
+                            talk::compiling::progress::Phase::EmittingC,
+                        );
+                        talk_c::emit_library(&output.module, prefix.as_deref().unwrap_or("talk"))
+                            .map_err(|error| error.to_string())
+                    })
                 }) {
                     Ok(artifact) => artifact,
                     Err(message) => {
@@ -1181,8 +1126,10 @@ async fn main() {
             no_opt,
             debug,
         } => {
-            let typed = check_or_exit(filenames);
-            match typed.render_mir(entry.as_deref(), !no_opt, *debug) {
+            let typed = typecheck_or_exit(filenames);
+            match talk::cli::progress::with_spinner(true, || {
+                typed.render_mir(entry.as_deref(), !no_opt, *debug)
+            }) {
                 Ok(rendered) => print!("{rendered}"),
                 Err(message) => {
                     eprintln!("error: {message}");
@@ -1654,31 +1601,6 @@ fn single_source_for(filename: Option<&str>) -> (String, talk::compiling::driver
     (module_name, source)
 }
 
-/// Print the compiler's diagnostics in the same annotated form
-/// `talk check` renders, exiting on errors. One pipeline for every
-/// command that type-checks. Successful-but-noisy programs print
-/// nothing here: the corpus contract keeps stderr for failures (and
-/// the runtime's own reports), so warnings wait for `talk check`.
-#[cfg(feature = "cli")]
-fn report_diagnostics_or_exit(
-    asts_by_source: &indexmap::IndexMap<
-        talk::compiling::driver::Source,
-        talk::ast::AST<talk::ast::NameResolved>,
-    >,
-    typed: &talk::compiling::driver::Driver<talk::compiling::driver::Typed>,
-) {
-    if !typed.has_errors() {
-        return;
-    }
-    let diagnostics =
-        talk::analysis::CompileDiagnostics::from_driver_asts(asts_by_source, typed.diagnostics());
-    eprint!(
-        "{}",
-        diagnostics.render_text(talk::cli::diagnostics::ColorMode::Auto)
-    );
-    std::process::exit(1);
-}
-
 /// Package errors with frontend diagnostics print in the same
 /// annotated form; everything else keeps the one-line form.
 #[cfg(feature = "cli")]
@@ -1693,31 +1615,27 @@ fn print_package_error(err: &talk::compiling::package::PackageError) {
     }
 }
 
+/// Resolve file arguments and type-check them, exiting with rendered
+/// diagnostics on failure. One pipeline for every command that
+/// compiles: package files always see their locked dependency graph.
+/// Successful-but-noisy programs print nothing here: the corpus
+/// contract keeps stderr for failures (and the runtime's own reports),
+/// so warnings wait for `talk check`.
 #[cfg(feature = "cli")]
-fn check_or_exit(
+fn typecheck_or_exit(
     filenames: &[String],
 ) -> talk::compiling::driver::Driver<talk::compiling::driver::Typed> {
-    use talk::compiling::driver::{Driver, DriverConfig};
-    let sources = sources_for_filenames(filenames);
-    let driver = Driver::new(sources, DriverConfig::new("Main"));
-    let parsed = match driver.parse() {
-        Ok(parsed) => parsed,
+    use talk::compiling::invocation::CompileInvocation;
+    match talk::cli::progress::with_spinner(true, || {
+        CompileInvocation::resolve(".", filenames, false, read_stdin)
+            .and_then(|invocation| invocation.typecheck(None))
+    }) {
+        Ok(typed) => typed,
         Err(err) => {
-            eprintln!("error: {err:?}");
+            print_package_error(&err);
             std::process::exit(1);
         }
-    };
-    let resolved = match parsed.resolve_names() {
-        Ok(resolved) => resolved,
-        Err(err) => {
-            eprintln!("error: {err:?}");
-            std::process::exit(1);
-        }
-    };
-    let asts_by_source = resolved.phase.asts.clone();
-    let typed = resolved.type_check();
-    report_diagnostics_or_exit(&asts_by_source, &typed);
-    typed
+    }
 }
 
 /// Create the scratch translation unit, refusing to write through an
@@ -1845,10 +1763,13 @@ fn build_native(
         Some(name) => talk::compiling::driver::MirEntry::Named(name),
         None => talk::compiling::driver::MirEntry::Script,
     };
-    let source = match check_or_exit(filenames)
-        .compile_mir(mir_entry)
-        .and_then(|output| talk_c::emit(&output.module).map_err(|error| error.to_string()))
-    {
+    let typed = typecheck_or_exit(filenames);
+    let source = match talk::cli::progress::with_spinner(true, || {
+        typed.compile_mir(mir_entry).and_then(|output| {
+            talk::compiling::progress::report(talk::compiling::progress::Phase::EmittingC);
+            talk_c::emit(&output.module).map_err(|error| error.to_string())
+        })
+    }) {
         Ok(artifact) => artifact.source,
         Err(message) => {
             eprintln!("error: {message}");
@@ -1884,7 +1805,10 @@ fn build_native(
         .arg("-o")
         .arg(output)
         .args(extra_flags);
-    let status = match command.status() {
+    let status = match talk::cli::progress::with_spinner(true, || {
+        talk::compiling::progress::report(talk::compiling::progress::Phase::CompilingNative);
+        command.status()
+    }) {
         Ok(status) => status,
         Err(err) => {
             eprintln!("error: failed to run `{program}`: {err}");
@@ -1907,36 +1831,14 @@ fn compile_or_exit(
     filenames: &[String],
     entry: Option<&str>,
 ) -> talk::compiling::driver::Executable {
-    match check_or_exit(filenames).compile_executable(entry) {
+    let typed = typecheck_or_exit(filenames);
+    match talk::cli::progress::with_spinner(true, || typed.compile_executable(entry)) {
         Ok(executable) => executable,
         Err(message) => {
             eprintln!("error: {message}");
             std::process::exit(1);
         }
     }
-}
-
-#[cfg(feature = "cli")]
-fn sources_for_filenames(filenames: &[String]) -> Vec<talk::compiling::driver::Source> {
-    use std::path::PathBuf;
-    use talk::compiling::driver::Source;
-
-    if filenames.is_empty() {
-        return vec![Source::in_memory(PathBuf::from(STDIN_NAME), read_stdin())];
-    }
-
-    let mut stdin_text = None;
-    let mut sources = Vec::with_capacity(filenames.len());
-    for filename in filenames {
-        if filename == "-" {
-            let text = stdin_text.get_or_insert_with(read_stdin);
-            sources.push(Source::in_memory(PathBuf::from(STDIN_NAME), text.clone()));
-        } else {
-            sources.push(Source::from(PathBuf::from(filename)));
-        }
-    }
-
-    sources
 }
 
 #[cfg(feature = "cli")]

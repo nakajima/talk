@@ -25,8 +25,12 @@
 
 /* `-std=c11` is strict ISO, so the POSIX declarations the host IO
  * operations use are only visible with the feature test macros. They
- * have to precede every include. `_XOPEN_SOURCE` is what exposes
- * realpath(3), which is XSI rather than base POSIX. */
+ * have to precede every include. Darwin keeps extensions such as
+ * `_SC_NPROCESSORS_ONLN` behind `_DARWIN_C_SOURCE`; `_XOPEN_SOURCE`
+ * exposes realpath(3), which is XSI rather than base POSIX. */
+#if defined(__APPLE__) && !defined(_DARWIN_C_SOURCE)
+#define _DARWIN_C_SOURCE 1
+#endif
 #ifndef _POSIX_C_SOURCE
 #define _POSIX_C_SOURCE 200809L
 #endif

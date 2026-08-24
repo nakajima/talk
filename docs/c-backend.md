@@ -10,8 +10,8 @@ find which parts of the IR resist translation. It now covers the entire
 instruction set, and the answer to the second question turned out to be
 "none of it".
 
-the emitter lives in `talk-c/src/lib.rs` and the shared native runtime
-in `talk-native-runtime/src/runtime.c`;
+the emitter lives in `crates/talk-c/src/lib.rs` and the shared native runtime
+in `crates/talk-native-runtime/src/runtime.c`;
 `tests/c_backend_tests.rs` (563 lines) is the contract. The change to
 existing compiler code is 47 added lines across three files, all
 additive — the backend is a sibling of `lower`, not a modification of

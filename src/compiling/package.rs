@@ -2028,6 +2028,11 @@ impl PackageProject {
         root.as_ref().join(MANIFEST_FILE).is_file()
     }
 
+    /// The package's root directory: where its manifest lives.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// The nearest ancestor of `path` (including `path` itself) that
     /// holds a package manifest. `talk test <path>` uses this to anchor
     /// `package::` imports at that package's own source root no matter
@@ -2236,6 +2241,20 @@ pub struct PackageCompileContext {
     pub source_root: PathBuf,
 }
 
+impl PackageCompileContext {
+    /// Wire the locked graph into a compile: the one place a package's
+    /// modules, libraries, and roots reach a `DriverConfig`, so every
+    /// consumer (workspace checks and explicit-source compiles alike)
+    /// sees the same inputs.
+    pub fn configure(self, config: &mut DriverConfig) {
+        config.modules = Rc::new(self.modules);
+        config.libraries = self.libraries;
+        config.catalog = self.catalog;
+        config.workspace_root = Some(self.workspace_root);
+        config.source_root = Some(self.source_root);
+    }
+}
+
 #[derive(Clone)]
 pub struct ReplPackageContext {
     pub compile: PackageCompileContext,
@@ -2415,7 +2434,10 @@ impl PackageProject {
         })
     }
 
-    fn typecheck_binary(&self, requested: Option<&str>) -> Result<Driver<Typed>, PackageError> {
+    pub(crate) fn typecheck_binary(
+        &self,
+        requested: Option<&str>,
+    ) -> Result<Driver<Typed>, PackageError> {
         let binary = self.manifest.binary(requested)?;
         let PackageArtifact::Binary { from, .. } = binary else {
             return Err(PackageError::Compile(
@@ -2445,24 +2467,17 @@ impl PackageProject {
         config.source_root = Some(workspace_root);
         config.libraries = inputs.libraries;
         config.precompiled_sources = precompiled_sources;
-        let driver = Driver::new_bare(vec![Source::from(source)], config);
-        let parsed = driver
-            .parse()
-            .map_err(|error| PackageError::Compile(format!("{error:?}")))?;
-        let resolved = parsed
-            .resolve_names()
-            .map_err(|error| PackageError::Compile(format!("{error:?}")))?;
-        let asts_by_source = resolved.phase.asts.clone();
-        let typed = resolved.type_check();
-        if typed.has_errors() {
-            return Err(PackageError::CompileDiagnostics(
-                crate::analysis::CompileDiagnostics::from_driver_asts(
-                    &asts_by_source,
-                    typed.diagnostics(),
-                ),
-            ));
-        }
-        Ok(typed)
+        typecheck_driver(Driver::new_bare(vec![Source::from(source)], config))
+    }
+
+    /// Typecheck explicit source files against the locked dependency
+    /// graph: the fused compile `talk check` diagnoses, so a file
+    /// argument sees exactly what the workspace check sees.
+    pub fn typecheck_sources(&self, sources: Vec<Source>) -> Result<Driver<Typed>, PackageError> {
+        let context = self.package_compile_context()?;
+        let mut config = DriverConfig::new(format!("{} sources", self.manifest.name));
+        context.configure(&mut config);
+        typecheck_driver(Driver::new_bare(sources, config))
     }
 
     /// Discover and run the package's `.test.tlk` suites with the locked
@@ -2884,6 +2899,29 @@ fn compile_library(
         files,
         cache_key: None,
     })
+}
+
+/// Drive a configured compile to the typed phase, converting frontend
+/// failures into source-annotated diagnostics. Every command's compile
+/// (package or loose) reports through here, so errors render alike.
+pub(crate) fn typecheck_driver(driver: Driver) -> Result<Driver<Typed>, PackageError> {
+    let parsed = driver
+        .parse()
+        .map_err(|error| PackageError::Compile(format!("{error:?}")))?;
+    let resolved = parsed
+        .resolve_names()
+        .map_err(|error| PackageError::Compile(format!("{error:?}")))?;
+    let asts_by_source = resolved.phase.asts.clone();
+    let typed = resolved.type_check();
+    if typed.has_errors() {
+        return Err(PackageError::CompileDiagnostics(
+            crate::analysis::CompileDiagnostics::from_driver_asts(
+                &asts_by_source,
+                typed.diagnostics(),
+            ),
+        ));
+    }
+    Ok(typed)
 }
 
 pub fn normalized_import_name(package_name: &str) -> String {

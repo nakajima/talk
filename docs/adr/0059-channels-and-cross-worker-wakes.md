@@ -6,7 +6,7 @@ inline IR through MIR, bytecode (opcodes 67–69), VM, C, and LLVM; stdlib
 local executor parks on outstanding external registrations with a
 check-queue-then-park protocol in both runtimes; corpus pin
 tests/programs/parallel_channels.tlk. Threads-WASM validated in headless
-Chrome — wasm/test-threads.sh runs the parallel corpus, channels included, on
+Chrome — crates/wasm/test-threads.sh runs the parallel corpus, channels included, on
 Web-Worker-backed threads over shared wasm memory against the native pins.)
 
 ## Context

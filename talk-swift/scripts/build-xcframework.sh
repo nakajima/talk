@@ -29,7 +29,7 @@ headers_dir="$work_dir/Headers"
 rm -rf "$work_dir" "$package_dir/Artifacts/TalkFFI.xcframework"
 mkdir -p "$headers_dir" "$package_dir/Artifacts"
 
-cp "$repo_dir/talk-ffi/include/talk_ffi.h" "$headers_dir/talk_ffi.h"
+cp "$repo_dir/crates/talk-ffi/include/talk_ffi.h" "$headers_dir/talk_ffi.h"
 cat > "$headers_dir/module.modulemap" <<'MODULEMAP'
 module CTalkFFI {
   umbrella header "talk_ffi.h"

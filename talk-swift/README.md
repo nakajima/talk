@@ -7,7 +7,7 @@ Version tags produced by the release workflow point the root package at the matc
 The package has three dependency resolution modes:
 
 1. If `talk-swift/Artifacts/TalkFFI.xcframework` exists, it consumes the local binary target.
-2. Otherwise, if a host `talk-ffi` archive exists under `target/debug` or `target/release`, it imports `talk-ffi/include/talk_ffi.h` and links that archive.
+2. Otherwise, if a host `talk-ffi` archive exists under `target/debug` or `target/release`, it imports `crates/talk-ffi/include/talk_ffi.h` and links that archive.
 3. Version-tagged packages without local artifacts download the matching XCFramework from the GitHub release.
 
 For local development on the host, run these commands from the repository root:

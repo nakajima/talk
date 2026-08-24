@@ -35,8 +35,8 @@ async fn run_pinned(source: &'static str, pinned: &'static str) {
 #[wasm_bindgen_test]
 async fn parallel_workers_corpus_matches_pin() {
     run_pinned(
-        include_str!("../../tests/programs/parallel_workers.tlk"),
-        include_str!("../../tests/parity/programs/parallel_workers.stdout"),
+        include_str!("../../../tests/programs/parallel_workers.tlk"),
+        include_str!("../../../tests/parity/programs/parallel_workers.stdout"),
     )
     .await;
 }
@@ -44,8 +44,8 @@ async fn parallel_workers_corpus_matches_pin() {
 #[wasm_bindgen_test]
 async fn coop_scheduler_corpus_matches_pin() {
     run_pinned(
-        include_str!("../../tests/programs/coop_interleave.tlk"),
-        include_str!("../../tests/parity/programs/coop_interleave.stdout"),
+        include_str!("../../../tests/programs/coop_interleave.tlk"),
+        include_str!("../../../tests/parity/programs/coop_interleave.stdout"),
     )
     .await;
 }
@@ -53,8 +53,8 @@ async fn coop_scheduler_corpus_matches_pin() {
 #[wasm_bindgen_test]
 async fn parallel_strings_corpus_matches_pin() {
     run_pinned(
-        include_str!("../../tests/programs/parallel_strings.tlk"),
-        include_str!("../../tests/parity/programs/parallel_strings.stdout"),
+        include_str!("../../../tests/programs/parallel_strings.tlk"),
+        include_str!("../../../tests/parity/programs/parallel_strings.stdout"),
     )
     .await;
 }
@@ -62,8 +62,8 @@ async fn parallel_strings_corpus_matches_pin() {
 #[wasm_bindgen_test]
 async fn parallel_nested_corpus_matches_pin() {
     run_pinned(
-        include_str!("../../tests/programs/parallel_nested.tlk"),
-        include_str!("../../tests/parity/programs/parallel_nested.stdout"),
+        include_str!("../../../tests/programs/parallel_nested.tlk"),
+        include_str!("../../../tests/parity/programs/parallel_nested.stdout"),
     )
     .await;
 }
@@ -71,8 +71,8 @@ async fn parallel_nested_corpus_matches_pin() {
 #[wasm_bindgen_test]
 async fn parallel_channels_corpus_matches_pin() {
     run_pinned(
-        include_str!("../../tests/programs/parallel_channels.tlk"),
-        include_str!("../../tests/parity/programs/parallel_channels.stdout"),
+        include_str!("../../../tests/programs/parallel_channels.tlk"),
+        include_str!("../../../tests/parity/programs/parallel_channels.stdout"),
     )
     .await;
 }
@@ -80,8 +80,8 @@ async fn parallel_channels_corpus_matches_pin() {
 #[wasm_bindgen_test]
 async fn select_corpus_matches_pin() {
     run_pinned(
-        include_str!("../../tests/programs/select_channels.tlk"),
-        include_str!("../../tests/parity/programs/select_channels.stdout"),
+        include_str!("../../../tests/programs/select_channels.tlk"),
+        include_str!("../../../tests/parity/programs/select_channels.stdout"),
     )
     .await;
 }
@@ -89,8 +89,8 @@ async fn select_corpus_matches_pin() {
 #[wasm_bindgen_test]
 async fn bounded_channel_corpus_matches_pin() {
     run_pinned(
-        include_str!("../../tests/programs/bounded_channel.tlk"),
-        include_str!("../../tests/parity/programs/bounded_channel.stdout"),
+        include_str!("../../../tests/programs/bounded_channel.tlk"),
+        include_str!("../../../tests/parity/programs/bounded_channel.stdout"),
     )
     .await;
 }
@@ -98,8 +98,8 @@ async fn bounded_channel_corpus_matches_pin() {
 #[wasm_bindgen_test]
 async fn timers_corpus_matches_pin() {
     run_pinned(
-        include_str!("../../tests/programs/timers.tlk"),
-        include_str!("../../tests/parity/programs/timers.stdout"),
+        include_str!("../../../tests/programs/timers.tlk"),
+        include_str!("../../../tests/parity/programs/timers.stdout"),
     )
     .await;
 }

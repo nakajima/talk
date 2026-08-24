@@ -27,8 +27,8 @@ cross, exactly the handler-boundary rule, enforced against untrusted
 bytecode. Measured >6x CPU utilization on the VM as well; wasm32 without
 shared-memory atomics keeps the spawn-site sequential path, and wasm32
 WITH atomics takes the threaded path on Web-Worker-backed threads
-(`wasm_thread`), validated in headless Chrome by wasm/test-threads.sh
-against the native corpus pins (wasm/tests/parallel.rs — every worker
+(`wasm_thread`), validated in headless Chrome by crates/wasm/test-threads.sh
+against the native corpus pins (crates/wasm/tests/parallel.rs — every worker
 is a child of the main thread, which must stay unblocked to relay
 spawns, so the harness runs each program inside one worker from an
 async main-thread test). The wake-queue/parking operations are

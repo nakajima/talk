@@ -8,7 +8,7 @@ talk bytecode program.tlk
 talk run-image program.tbc
 ```
 
-This page describes bytecode format 11. The exact encoder, decoder, instruction tags, and validator in `talk-vm/src/bytecode.rs` and `talk-vm/src/lib.rs` are authoritative.
+This page describes bytecode format 11. The exact encoder, decoder, instruction tags, and validator in `crates/talk-vm/src/bytecode.rs` and `crates/talk-vm/src/lib.rs` are authoritative.
 
 ## Compatibility policy
 

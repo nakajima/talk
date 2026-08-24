@@ -8,7 +8,7 @@ publish = false
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-talk = { path = "..", default-features = false }
+talk = { path = "../..", default-features = false }
 talk-vm = { path = "../talk-vm" }
 
 [lints.clippy]

@@ -24,6 +24,6 @@ sha2 = "0.10.9"
 num-bigint = { version = "0.5.1", features = ["serde"] }
 
 [dev-dependencies]
-talk = { path = "..", features = ["test-access"] }
+talk = { path = "../..", features = ["test-access"] }
 prettydiff = "0.8.0"
 talk-vm = { path = "../talk-vm" }

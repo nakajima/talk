@@ -523,10 +523,10 @@ pointer-ABI bridge, not the shared native runtime itself.
 Rename the current `talk-c` embedding package to `talk-ffi`:
 
 ```text
-talk-c/Cargo.toml             -> talk-ffi/Cargo.toml
-talk-c/src/lib.rs             -> talk-ffi/src/lib.rs
-talk-c/include/talk_c.h       -> talk-ffi/include/talk_ffi.h
-talk-c/README.md              -> talk-ffi/README.md
+crates/talk-c/Cargo.toml             -> crates/talk-ffi/Cargo.toml
+crates/talk-c/src/lib.rs             -> crates/talk-ffi/src/lib.rs
+crates/talk-c/include/talk_c.h       -> crates/talk-ffi/include/talk_ffi.h
+crates/talk-c/README.md              -> crates/talk-ffi/README.md
 ```
 
 Use package and crate name `talk-ffi` / `talk_ffi`, producing
@@ -694,7 +694,7 @@ No production behavior changes. The plan and ADR agree on ownership and names.
 
 #### Files
 
-- `talk-runtime/` -> `talk-vm/`;
+- `talk-runtime/` -> `crates/talk-vm/`;
 - package name `talk-runtime` -> `talk-vm`;
 - Rust imports `talk_runtime` -> `talk_vm`;
 - root features and path dependencies;
@@ -722,7 +722,7 @@ No production behavior changes. The plan and ADR agree on ownership and names.
 
 #### Files
 
-- move `talk-c/` to `talk-ffi/`;
+- move `crates/talk-c/` to `crates/talk-ffi/`;
 - update workspace members and Cargo lockfile;
 - rename the Rust crate and static archive;
 - rename and document the public header;

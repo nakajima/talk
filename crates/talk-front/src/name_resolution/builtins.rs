@@ -27,7 +27,7 @@ mod tests {
 
     #[test]
     fn every_public_builtin_has_exactly_one_documentation_stub() {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../core/builtins");
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/builtins");
         let mut documented = std::fs::read_dir(root)
             .unwrap()
             .map(|entry| entry.unwrap().path())

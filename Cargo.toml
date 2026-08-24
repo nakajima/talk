@@ -1,11 +1,23 @@
 [workspace]
-members = [".", "talk-front", "wasm", "www", "talk-vm", "talk-static", "talk-ffi", "talk-mir", "talk-native-runtime", "talk-bytecode", "talk-c"]
+members = [
+  ".",
+  "crates/talk-bytecode",
+  "crates/talk-c",
+  "crates/talk-ffi",
+  "crates/talk-front",
+  "crates/talk-mir",
+  "crates/talk-native-runtime",
+  "crates/talk-static",
+  "crates/talk-vm",
+  "crates/wasm",
+  "www",
+]
 default-members = ["."]
 resolver = "2"
 
 [package]
 name = "talk"
-version = "0.1.105"
+version = "0.1.106"
 edition = "2024"
 default-run = "talk"
 
@@ -21,7 +33,7 @@ sha2 = "0.10.9"
 [dev-dependencies]
 ctor = "0.4.2"
 prettydiff = "0.8.0"
-talk-native-runtime = { path = "talk-native-runtime" }
+talk-native-runtime = { path = "crates/talk-native-runtime" }
 color-eyre = "0.6"
 # The test harness initializes tracing without the cli feature.
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
@@ -57,11 +69,11 @@ bincode = "1.3"
 flate2 = "1.1.5"
 tar = { version = "0.4.44", default-features = false }
 ignore = { version = "0.4", optional = true }
-talk-front = { path = "talk-front" }
-talk-vm = { path = "talk-vm" }
-talk-mir = { path = "talk-mir" }
-talk-bytecode = { path = "talk-bytecode" }
-talk-c = { path = "talk-c", optional = true }
+talk-front = { path = "crates/talk-front" }
+talk-vm = { path = "crates/talk-vm" }
+talk-mir = { path = "crates/talk-mir" }
+talk-bytecode = { path = "crates/talk-bytecode" }
+talk-c = { path = "crates/talk-c", optional = true }
 num-bigint = { version = "0.5.1", features = ["serde"] }
 profiling = { version = "1.0.18", default-features = false }
 tracy-client = { version = "0.18.4", default-features = false, features = ["timer-fallback"], optional = true }

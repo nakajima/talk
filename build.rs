@@ -51,7 +51,7 @@ fn emit_compiler_content_stamp() -> String {
         // meaning (Span, FileID, TypedFile, the typed tree): a change
         // there must invalidate core/stdlib caches just like a change
         // under src/ does.
-        "talk-front/src",
+        "crates/talk-front/src",
     ];
     const STAMP_FILES: &[&str] = &["bootstrap/frontend.tbc", "bootstrap/frontend.abi"];
     // The MIR crates feed on TypedProgram; they never change what the
