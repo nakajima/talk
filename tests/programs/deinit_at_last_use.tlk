@@ -1,0 +1,29 @@
+// Drop timing is last use, not scope exit. A Deinit hook runs before
+// later statements in the same scope once the value is no longer needed.
+struct Loud {
+	let id: Int
+}
+extend Loud: Deinit {
+	consuming func deinit() -> Void {
+		print(self.id)
+	}
+}
+struct Pair {
+	let left: Loud
+	let right: Loud
+}
+func scalar_last_use() -> Int {
+	let a = Loud(id: 1)
+	let n = a.id
+	print(100)
+	print(101)
+	n
+}
+func aggregate_last_use() -> Int {
+	let pair = Pair(left: Loud(id: 2), right: Loud(id: 3))
+	let n = pair.left.id + pair.right.id
+	print(200)
+	n
+}
+print(scalar_last_use())
+print(aggregate_last_use())

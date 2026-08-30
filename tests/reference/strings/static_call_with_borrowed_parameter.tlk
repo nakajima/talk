@@ -1,0 +1,25 @@
+// Borrow adaptation belongs to the argument, never to a deferred static
+// callee occurrence.
+struct Bytes {
+	static func count(bytes: &[Byte]) -> Int { bytes.count }
+}
+
+struct Source {
+	let text: String
+
+	func slice(start: Int, end: Int) -> String {
+		let view = self.text.utf8()
+		let buf: [Byte] = []
+		let i = start
+		loop i < end {
+			buf.push(view.at(index: i))
+			i = i + 1
+		}
+		String.from_bytes(bytes: buf)
+	}
+}
+
+let empty: [Byte] = []
+print(Bytes.count(bytes: []))
+print(Bytes.count(bytes: empty))
+print(Source(text: "hello").slice(start: 1, end: 4))

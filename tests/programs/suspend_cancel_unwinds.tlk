@@ -1,0 +1,45 @@
+// Cancelling a stored resumption unwinds every captured frame and runs
+// its Deinit cleanup exactly once. Resuming settles last-use cleanup too.
+effect 'park() -> ()
+
+struct Guard {
+	let name: String
+}
+
+extend Guard: Deinit {
+	consuming func deinit() -> Void {
+		print("deinit " + self.name)
+	}
+}
+
+enum Parked {
+	case none
+	case some(Resumption<(), Parked>)
+}
+
+func hold(consume name: String) -> Parked {
+	#handle 'park { k in Parked.some(k) }
+	let guard = Guard(name: name)
+	print("park " + guard.name)
+	'park()
+	print("resumed " + guard.name)
+	Parked.none
+}
+
+match hold(name: "a") {
+	.some(k) -> {
+		match resume(k: k, value: ()) {
+			.some(again) -> cancel(k: again),
+			.none -> print("a finished")
+		}
+	},
+	.none -> print("never")
+}
+
+match hold(name: "b") {
+	.some(k) -> {
+		cancel(k: k)
+		print("b cancelled")
+	},
+	.none -> print("never")
+}

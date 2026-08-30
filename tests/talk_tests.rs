@@ -1146,6 +1146,92 @@ fn postfix_question_mark_propagates_second_enum_variant() {
 }
 
 #[test]
+fn run_clone_of_an_element_settles_before_its_array_releases() {
+    assert_runs(
+        b"enum Doc {\n\
+          \tcase text(String)\n\
+          \tcase concat([Doc])\n\
+          }\n\
+          extend Doc: Clone {}\n\
+          func first(d: Doc) -> Doc {\n\
+          \tmatch d {\n\
+          \t\t.concat(parts) -> parts[0].clone(),\n\
+          \t\t.text(s) -> .text(s)\n\
+          \t}\n\
+          }\n\
+          func show(d: &Doc) -> String {\n\
+          \tmatch d {\n\
+          \t\t.text(s) -> s.clone(),\n\
+          \t\t.concat(_) -> \"concat\"\n\
+          \t}\n\
+          }\n\
+          let inner: Doc = .concat([.text(\"a\" + \"b\"), .text(\"c\")])\n\
+          let outer: Doc = .concat([first(d: inner), .text(\"d\")])\n\
+          print(show(d: first(d: first(d: outer))))\n",
+        &[],
+        b"ab\n",
+    );
+}
+
+#[test]
+fn run_projections_of_a_borrowed_scrutinee_keep_its_owner_alive() {
+    assert_runs(
+        b"struct Expr {\n\
+          \tlet kind: ExprKind\n\
+          }\n\
+          enum ExprKind {\n\
+          \tcase lit(String)\n\
+          \tcase binary(String, [Expr])\n\
+          }\n\
+          struct Stmt {\n\
+          \tlet kind: StmtKind\n\
+          }\n\
+          enum StmtKind {\n\
+          \tcase empty\n\
+          \tcase expr(Expr)\n\
+          }\n\
+          struct Decl {\n\
+          \tlet count: Int\n\
+          \tlet name: String\n\
+          }\n\
+          enum Item {\n\
+          \tcase decl(Decl)\n\
+          \tcase stmt(Stmt)\n\
+          }\n\
+          struct Outcome {\n\
+          \tlet items: [Item]\n\
+          }\n\
+          func lit_text(e: &Expr) -> String {\n\
+          \tmatch e.kind {\n\
+          \t\t.lit(v) -> v.clone(),\n\
+          \t\t_ -> \"?\"\n\
+          \t}\n\
+          }\n\
+          func run() -> String {\n\
+          \tlet outcome = Outcome(items: [.stmt(Stmt(kind: .expr(Expr(kind: .binary(\"+\", [Expr(kind: .lit(\"1\")), Expr(kind: .lit(\"2\"))])))))])\n\
+          \tlet first: &Item = outcome.items[0]\n\
+          \tmatch first {\n\
+          \t\t.stmt(stmt) -> {\n\
+          \t\t\tmatch stmt.kind {\n\
+          \t\t\t\t.expr(e) -> {\n\
+          \t\t\t\t\tmatch e.kind {\n\
+          \t\t\t\t\t\t.binary(op, ops) -> lit_text(e: ops[1]),\n\
+          \t\t\t\t\t\t_ -> \"?\"\n\
+          \t\t\t\t\t}\n\
+          \t\t\t\t},\n\
+          \t\t\t\t_ -> \"?\"\n\
+          \t\t\t}\n\
+          \t\t},\n\
+          \t\t_ -> \"?\"\n\
+          \t}\n\
+          }\n\
+          print(run())\n",
+        &[],
+        b"2\n",
+    );
+}
+
+#[test]
 fn run_explicit_capture_modes_over_owned_values() {
     // `[s]` (copy) retains a snapshot: the frame's binding stays usable.
     assert_runs(
@@ -2741,7 +2827,7 @@ fn reference_effects_cluster_matches_frozen_stdout() {
 /// category lookups.
 #[test]
 fn reference_strings_cluster_matches_frozen_stdout() {
-    assert_corpus_dir("tests/reference/strings", &[], 11);
+    assert_corpus_dir("tests/reference/strings", &[], 12);
 }
 
 /// G6 collections/iterators cluster: arrays, adapters, and the
@@ -2929,6 +3015,16 @@ fn parity_graphemes() {
 #[test]
 fn parity_iterate_and_match() {
     assert_parity_program("iterate_and_match");
+}
+
+#[test]
+fn parity_deinit_at_last_use() {
+    assert_parity_program("deinit_at_last_use");
+}
+
+#[test]
+fn parity_suspend_cancel_unwinds() {
+    assert_parity_program("suspend_cancel_unwinds");
 }
 
 #[test]
@@ -4339,6 +4435,11 @@ fn run_executes_mut_arguments() {
         b"func bump(mut x: Int) -> Void {\n\tx = x + 1\n}\nlet n = 1\nbump(x: mut n)\nbump(x: mut n)\nprint(n)\nlet g = 10\nbump(x: mut g)\nprint(g)\n",
         &[],
         b"3\n11\n",
+    );
+    assert_runs(
+        b"let values = []\nvalues.push(42)\nprint(values.count)\n",
+        &[],
+        b"1\n",
     );
     // Function values follow the same type-derived writeback convention
     // (CLO-02 indirect calling convention).
