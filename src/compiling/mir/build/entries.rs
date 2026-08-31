@@ -273,7 +273,7 @@ impl<'a> ProgramBuilder<'a> {
                     let initializer_is_view =
                         { contains_borrow_classified(fx.program_builder, &initializer_ty) };
                     if initializer_is_view
-                        && let Operand::Local(view) = initializer
+                        && let Some(view) = initializer.local()
                         && let Some(&root) = fx.borrow_roots.get(&view)
                     {
                         if !fx.global_loads.contains_key(&root) && fx.owns(root) {
@@ -354,7 +354,7 @@ impl<'a> ProgramBuilder<'a> {
                 unwind: None,
             });
             let (n_locals, blocks, _return_repr, debug_names) =
-                fx.finish(Operand::Local(result))?;
+                fx.finish(Operand::Borrow(result))?;
             self.functions[combined] = Function {
                 debug_names,
                 frame_sites: Default::default(),
@@ -404,7 +404,7 @@ impl<'a> ProgramBuilder<'a> {
             });
             fx.push(Inst::GlobalStore {
                 global: slot,
-                src: Operand::Local(result),
+                src: Operand::Borrow(result),
             });
             let (n_locals, blocks, _return_repr, debug_names) =
                 fx.finish(Operand::Const(Constant::Unit))?;
@@ -439,7 +439,7 @@ impl<'a> ProgramBuilder<'a> {
                 wrapper.push(Inst::Call {
                     dest: unit_result,
                     func: host,
-                    args: vec![Operand::Local(closure)],
+                    args: vec![Operand::Borrow(closure)],
                     unwind: None,
                 });
                 wrapper.push(Inst::GlobalLoad {
@@ -473,11 +473,11 @@ impl<'a> ProgramBuilder<'a> {
                     dest: loaded,
                     global: slot,
                 });
-                wrapper.drop_value(Operand::Local(loaded), &ty);
+                wrapper.drop_value(Operand::Borrow(loaded), &ty);
             }
         }
         let (n_locals, blocks, _return_repr, debug_names) =
-            wrapper.finish(Operand::Local(result))?;
+            wrapper.finish(Operand::Borrow(result))?;
         self.functions[outer] = Function {
             debug_names,
             frame_sites: Default::default(),
@@ -517,7 +517,7 @@ impl<'a> ProgramBuilder<'a> {
             args: Vec::new(),
             unwind: None,
         });
-        let (n_locals, blocks, _return_repr, debug_names) = fx.finish(Operand::Local(result))?;
+        let (n_locals, blocks, _return_repr, debug_names) = fx.finish(Operand::Borrow(result))?;
         self.functions[id] = Function {
             debug_names,
             frame_sites: Default::default(),
@@ -601,10 +601,10 @@ impl<'a> ProgramBuilder<'a> {
                         continue;
                     };
                     let slot = fx.program_builder.global_slots[&symbol];
-                    fx.consume_operand(Operand::Local(local));
+                    fx.consume_operand(Operand::Borrow(local));
                     fx.push(Inst::GlobalStore {
                         global: slot,
-                        src: Operand::Local(local),
+                        src: Operand::Borrow(local),
                     });
                 }
                 fx.flush_stmt_temps(None);
@@ -815,7 +815,7 @@ impl<'a> ProgramBuilder<'a> {
             // No core, no ambient effects to install: call directly.
             let mut fx = FunctionBuilder::new(self, arity, 0);
             fx.generated_origin = GeneratedMir::ExportAdapter;
-            let args: Vec<Operand> = (0..arity).map(Operand::Local).collect();
+            let args: Vec<Operand> = (0..arity).map(Operand::Borrow).collect();
             let result = fx.fresh_local();
             fx.push(Inst::Call {
                 dest: result,
@@ -824,7 +824,7 @@ impl<'a> ProgramBuilder<'a> {
                 unwind: None,
             });
             let (n_locals, blocks, _return_repr, debug_names) =
-                fx.finish(Operand::Local(result))?;
+                fx.finish(Operand::Borrow(result))?;
             self.functions[outer] = Function {
                 debug_names,
                 frame_sites: Default::default(),
@@ -858,7 +858,7 @@ impl<'a> ProgramBuilder<'a> {
         for index in 0..arity {
             let local = fx.fresh_local();
             fx.push(Inst::EnvGet { dest: local, index });
-            args.push(Operand::Local(local));
+            args.push(Operand::Borrow(local));
         }
         let result = fx.fresh_local();
         fx.push(Inst::Call {
@@ -869,7 +869,7 @@ impl<'a> ProgramBuilder<'a> {
         });
         fx.push(Inst::GlobalStore {
             global: slot,
-            src: Operand::Local(result),
+            src: Operand::Borrow(result),
         });
         let (n_locals, blocks, _return_repr, debug_names) =
             fx.finish(Operand::Const(Constant::Unit))?;
@@ -887,7 +887,7 @@ impl<'a> ProgramBuilder<'a> {
         let mut wrapper = FunctionBuilder::new(self, arity, 0);
         wrapper.generated_origin = GeneratedMir::ExportAdapter;
         let closure = wrapper.fresh_local();
-        let env: Vec<Operand> = (0..arity).map(Operand::Local).collect();
+        let env: Vec<Operand> = (0..arity).map(Operand::Borrow).collect();
         wrapper.push(Inst::MakeClosure {
             dest: closure,
             func: body_id,
@@ -897,7 +897,7 @@ impl<'a> ProgramBuilder<'a> {
         wrapper.push(Inst::Call {
             dest: unit_result,
             func: host,
-            args: vec![Operand::Local(closure)],
+            args: vec![Operand::Borrow(closure)],
             unwind: None,
         });
         let result = wrapper.fresh_local();
@@ -919,11 +919,11 @@ impl<'a> ProgramBuilder<'a> {
                     dest: loaded,
                     global: slot,
                 });
-                wrapper.drop_value(Operand::Local(loaded), &ty);
+                wrapper.drop_value(Operand::Borrow(loaded), &ty);
             }
         }
         let (n_locals, blocks, _return_repr, debug_names) =
-            wrapper.finish(Operand::Local(result))?;
+            wrapper.finish(Operand::Borrow(result))?;
         self.functions[outer] = Function {
             debug_names,
             frame_sites: Default::default(),

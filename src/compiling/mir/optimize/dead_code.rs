@@ -119,7 +119,7 @@ mod tests {
                     Inst::Scalar {
                         dest: 1,
                         op: ScalarOp::FloatAdd,
-                        a: Operand::Local(0),
+                        a: Operand::Borrow(0),
                         b: Some(Operand::Const(Constant::Float(2.0))),
                     },
                 ],
@@ -146,7 +146,7 @@ mod tests {
                 params: Vec::new(),
                 insts: vec![Inst::Field {
                     dest: 1,
-                    src: Operand::Local(0),
+                    src: Operand::Borrow(0),
                     container: 0,
                     offset: 0,
                     member: None,

@@ -4,6 +4,7 @@
 //! their own crates: `talk-bytecode` lowers the module to VM bytecode,
 //! and the `talk-c` emitter consumes it directly.
 
+mod cfg;
 mod optimize;
 
 /// The compiler-to-runtime symbol mapping, for the frontend result

@@ -31,7 +31,8 @@
 //! Trap-terminated paths are exempt from the leak check: a trap aborts
 //! the program, not the frame.
 
-use super::{BlockData, BlockId, Inst, LocalId, Term};
+use super::{BlockData, BlockId, LocalId, Term};
+use crate::compiling::mir::cfg::{Cfg, Forward};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FlowEvent {
@@ -133,103 +134,14 @@ fn run(
         bucket.sort_by_key(|(index, _)| *index);
     }
 
-    let mut in_states: Vec<Option<Vec<u8>>> = vec![None; blocks.len()];
-    in_states[0] = Some(vec![ABSENT; n_locals]);
-    let mut worklist: Vec<BlockId> = vec![0];
-    let mut reported_joins: Vec<bool> = vec![false; blocks.len()];
-
-    while let Some(block) = worklist.pop() {
-        let Some(mut state) = in_states[block].clone() else {
-            continue;
-        };
-        let data = &blocks[block];
-        let mut cursor = 0usize;
-        let bucket = &events[block];
-
-        let mut apply_until = |limit: u32, state: &mut Vec<u8>, errors: &mut Vec<String>| {
-            while cursor < bucket.len() && bucket[cursor].0 <= limit {
-                let (index, event) = bucket[cursor];
-                cursor += 1;
-                apply(event, state, block, index, name, errors);
-            }
-        };
-
-        for (i, inst) in data.insts.iter().enumerate() {
-            apply_until(i as u32, &mut state, errors);
-            let unwind = match inst {
-                Inst::Call { unwind, .. } | Inst::CallIndirect { unwind, .. } => *unwind,
-                _ => None,
-            };
-            if let Some(target) = unwind {
-                join_into(
-                    target,
-                    &state,
-                    &mut in_states,
-                    &mut worklist,
-                    &mut reported_joins,
-                    errors,
-                    name,
-                );
-            }
-        }
-        apply_until(u32::MAX, &mut state, errors);
-
-        match &data.term {
-            Some(Term::Goto(target, _)) => join_into(
-                *target,
-                &state,
-                &mut in_states,
-                &mut worklist,
-                &mut reported_joins,
-                errors,
-                name,
-            ),
-            Some(Term::Branch {
-                then_block,
-                else_block,
-                ..
-            }) => {
-                for target in [*then_block, *else_block] {
-                    join_into(
-                        target,
-                        &state,
-                        &mut in_states,
-                        &mut worklist,
-                        &mut reported_joins,
-                        errors,
-                        name,
-                    );
-                }
-            }
-            Some(Term::Switch {
-                targets, default, ..
-            }) => {
-                for target in targets.iter().copied().chain(std::iter::once(*default)) {
-                    join_into(
-                        target,
-                        &state,
-                        &mut in_states,
-                        &mut worklist,
-                        &mut reported_joins,
-                        errors,
-                        name,
-                    );
-                }
-            }
-            Some(Term::Return(_)) | Some(Term::UnwindRet) => {
-                for (local, &s) in state.iter().enumerate() {
-                    if s == OWNED {
-                        errors.push(format!(
-                            "{name}: local {local} still owned at frame exit in block {block} (leak)"
-                        ));
-                    }
-                }
-            }
-            Some(Term::Trap(_)) => {}
-            None => {}
-        }
-    }
-    in_states
+    let mut balance = Balance {
+        blocks,
+        events,
+        name,
+        errors,
+        reported_joins: vec![false; blocks.len()],
+    };
+    Cfg::new(blocks).forward(&mut balance, vec![ABSENT; n_locals])
 }
 
 fn apply(
@@ -284,58 +196,101 @@ fn apply(
     }
 }
 
-fn join_into(
-    target: BlockId,
+pub(super) fn join_states(
+    existing: &mut [u8],
     incoming: &[u8],
-    in_states: &mut [Option<Vec<u8>>],
-    worklist: &mut Vec<BlockId>,
-    reported_joins: &mut [bool],
-    errors: &mut Vec<String>,
-    name: &str,
-) {
-    match &mut in_states[target] {
-        None => {
-            in_states[target] = Some(incoming.to_vec());
-            worklist.push(target);
+    mut conflict: impl FnMut(usize, u8, u8),
+) -> bool {
+    let mut changed = false;
+    for (local, (have, new)) in existing.iter_mut().zip(incoming).enumerate() {
+        if *have == *new || *have == CONFLICT {
+            continue;
         }
-        Some(existing) => {
-            let mut changed = false;
-            for (local, (have, new)) in existing.iter_mut().zip(incoming).enumerate() {
-                if *have == *new || *have == CONFLICT {
-                    continue;
-                }
-                // Absent and Dead agree: both mean "nothing owned here"
-                // (an arm-local value born and released inside one arm).
-                // Only an Owned/not-Owned disagreement breaks the
-                // exactly-once invariant.
-                if *have != OWNED && *new != OWNED {
-                    if *have != DEAD {
-                        *have = DEAD;
-                        changed = true;
-                    }
-                    continue;
-                }
-                if !reported_joins[target] {
-                    reported_joins[target] = true;
-                    errors.push(format!(
-                        "{name}: block {target} joined with local {local} {} on one path and {} on another",
-                        state_name(*have),
-                        state_name(*new)
-                    ));
-                }
-                *have = CONFLICT;
+        if *have != OWNED && *new != OWNED {
+            if *have != DEAD {
+                *have = DEAD;
                 changed = true;
             }
-            if changed {
-                worklist.push(target);
+            continue;
+        }
+        conflict(local, *have, *new);
+        *have = CONFLICT;
+        changed = true;
+    }
+    changed
+}
+
+struct Balance<'a> {
+    blocks: &'a [BlockData],
+    events: Vec<Vec<(u32, FlowEvent)>>,
+    name: &'a str,
+    errors: &'a mut Vec<String>,
+    reported_joins: Vec<bool>,
+}
+
+impl Forward for Balance<'_> {
+    type State = Vec<u8>;
+
+    fn join(&mut self, target: BlockId, existing: &mut Vec<u8>, incoming: &Vec<u8>) -> bool {
+        let (reported, errors, name) = (&mut self.reported_joins, &mut self.errors, self.name);
+        join_states(existing, incoming, |local, have, new| {
+            if !reported[target] {
+                reported[target] = true;
+                errors.push(format!(
+                    "{name}: block {target} joined with local {local} {} on one path and {} on another",
+                    state_name(have),
+                    state_name(new)
+                ));
+            }
+        })
+    }
+
+    fn transfer(&mut self, block: BlockId, mut state: Vec<u8>) -> Vec<(BlockId, Vec<u8>)> {
+        let data = &self.blocks[block];
+        let bucket = &self.events[block];
+        let mut cursor = 0usize;
+        let mut edges = Vec::new();
+        let mut apply_until = |limit: u32, state: &mut Vec<u8>, errors: &mut Vec<String>| {
+            while cursor < bucket.len() && bucket[cursor].0 <= limit {
+                let (index, event) = bucket[cursor];
+                cursor += 1;
+                apply(event, state, block, index, self.name, errors);
+            }
+        };
+        for (index, inst) in data.insts.iter().enumerate() {
+            apply_until(index as u32, &mut state, self.errors);
+            if let Some(target) = Cfg::unwind_target(inst) {
+                edges.push((target, state.clone()));
             }
         }
+        apply_until(u32::MAX, &mut state, self.errors);
+        match &data.term {
+            Some(Term::Return(_)) | Some(Term::UnwindRet) => {
+                for (local, value) in state.iter().enumerate() {
+                    if *value == OWNED {
+                        self.errors.push(format!(
+                            "{}: local {local} still owned at frame exit in block {block} (leak)",
+                            self.name
+                        ));
+                    }
+                }
+            }
+            Some(term) => {
+                edges.extend(
+                    Cfg::term_successors(Some(term))
+                        .into_iter()
+                        .map(|target| (target, state.clone())),
+                );
+            }
+            None => {}
+        }
+        edges
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, debug_assertions))]
 mod tests {
-    use super::super::{Constant, Operand};
+    use super::super::{Constant, Inst, Operand};
     use super::*;
 
     fn block(insts: usize, term: Term) -> BlockData {
@@ -414,7 +369,7 @@ mod tests {
             block(
                 1,
                 Term::Branch {
-                    cond: Operand::Local(9),
+                    cond: Operand::Borrow(9),
                     then_block: 1,
                     else_block: 2,
                 },
@@ -448,7 +403,7 @@ mod tests {
             block(
                 1,
                 Term::Branch {
-                    cond: Operand::Local(9),
+                    cond: Operand::Borrow(9),
                     then_block: 1,
                     else_block: 2,
                 },
@@ -516,7 +471,7 @@ mod tests {
             block(
                 0,
                 Term::Branch {
-                    cond: Operand::Local(9),
+                    cond: Operand::Borrow(9),
                     then_block: 2,
                     else_block: 3,
                 },

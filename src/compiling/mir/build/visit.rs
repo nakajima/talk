@@ -27,12 +27,12 @@ impl Slot {
 /// this exhaustive walk, so a new operand shape has one update point.
 pub(crate) fn visit_inst(inst: &mut Inst, visit: &mut impl FnMut(Slot, &mut LocalId)) {
     let read = |op: &mut Operand, visit: &mut dyn FnMut(Slot, &mut LocalId)| {
-        if let Operand::Local(local) = op {
+        if let Operand::Consume(local) | Operand::Borrow(local) | Operand::Copy(local) = op {
             visit(Slot::Use(Escape::No), local);
         }
     };
     let sink = |op: &mut Operand, visit: &mut dyn FnMut(Slot, &mut LocalId)| {
-        if let Operand::Local(local) = op {
+        if let Operand::Consume(local) | Operand::Borrow(local) | Operand::Copy(local) = op {
             visit(Slot::Use(Escape::May), local);
         }
     };
@@ -241,7 +241,7 @@ pub(crate) fn visit_inst(inst: &mut Inst, visit: &mut impl FnMut(Slot, &mut Loca
 pub(crate) fn visit_term(term: &mut Term, visit: &mut impl FnMut(Slot, &mut LocalId)) {
     match term {
         Term::Branch { cond: op, .. } | Term::Switch { tag: op, .. } => {
-            if let Operand::Local(local) = op {
+            if let Operand::Consume(local) | Operand::Borrow(local) | Operand::Copy(local) = op {
                 visit(Slot::Use(Escape::No), local);
             }
         }
@@ -249,13 +249,14 @@ pub(crate) fn visit_term(term: &mut Term, visit: &mut impl FnMut(Slot, &mut Loca
         // block argument can carry it across a back edge, where the
         // site's single storage slot would be reused.
         Term::Return(op) => {
-            if let Operand::Local(local) = op {
+            if let Operand::Consume(local) | Operand::Borrow(local) | Operand::Copy(local) = op {
                 visit(Slot::Use(Escape::May), local);
             }
         }
         Term::Goto(_, edge_args) => {
             for arg in edge_args {
-                if let Operand::Local(local) = arg {
+                if let Operand::Consume(local) | Operand::Borrow(local) | Operand::Copy(local) = arg
+                {
                     visit(Slot::Use(Escape::May), local);
                 }
             }

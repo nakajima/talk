@@ -48,7 +48,7 @@ fn verify_function(module: &Module, id: usize, function: &Function, findings: &m
 
     let local_ok = |local: LocalId| usize::from(local) < n_locals;
     let operand_ok = |operand: &Operand| match operand {
-        Operand::Local(local) => local_ok(*local),
+        Operand::Consume(local) | Operand::Borrow(local) | Operand::Copy(local) => local_ok(*local),
         Operand::Const(_) => true,
     };
     let layout_ok = |layout: LayoutId| (layout as usize) < module.layout_table.len();
@@ -469,7 +469,7 @@ mod tests {
                 dest: 0,
                 src: Operand::Const(talk_mir::Constant::Int(1)),
             }],
-            term: Some(Term::Return(Operand::Local(0))),
+            term: Some(Term::Return(Operand::Borrow(0))),
             debug: None,
         };
         let module = module_with(vec![function(vec![block], 1)]);
@@ -492,13 +492,13 @@ mod tests {
         let target = BlockData {
             params: vec![0, 1],
             insts: vec![],
-            term: Some(Term::Return(Operand::Local(0))),
+            term: Some(Term::Return(Operand::Borrow(0))),
             debug: None,
         };
         let source = BlockData {
             params: vec![],
             insts: vec![],
-            term: Some(Term::Goto(1, vec![Operand::Local(0)])),
+            term: Some(Term::Goto(1, vec![Operand::Borrow(0)])),
             debug: None,
         };
         let module = module_with(vec![function(vec![source, target], 2)]);
@@ -518,7 +518,7 @@ mod tests {
             insts: vec![
                 Inst::Copy {
                     dest: 9,
-                    src: Operand::Local(8),
+                    src: Operand::Borrow(8),
                 },
                 Inst::Call {
                     dest: 0,
@@ -529,7 +529,7 @@ mod tests {
                 Inst::Blank { dest: 0, layout: 3 },
             ],
             term: Some(Term::Branch {
-                cond: Operand::Local(0),
+                cond: Operand::Borrow(0),
                 then_block: 0,
                 else_block: 4,
             }),

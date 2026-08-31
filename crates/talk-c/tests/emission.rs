@@ -111,7 +111,7 @@ fn native_products_store_members_and_box_at_boundaries() {
             },
             Inst::Field {
                 dest: 2,
-                src: Operand::Local(1),
+                src: Operand::Borrow(1),
                 container: 0,
                 offset: 0,
                 member: None,
@@ -119,11 +119,11 @@ fn native_products_store_members_and_box_at_boundaries() {
             Inst::Call {
                 dest: 3,
                 func: 1,
-                args: vec![Operand::Local(1)],
+                args: vec![Operand::Borrow(1)],
                 unwind: None,
             },
         ],
-        Term::Return(Operand::Local(2)),
+        Term::Return(Operand::Borrow(2)),
     );
     // The aggregate classes its local, and the callee only reads its
     // parameter — nothing escapes, so the value is frame-local and its
@@ -189,17 +189,17 @@ fn spliced_fields_copy_native_sources_and_unbox_uniform_ones() {
                 tag: 0,
                 dest: 2,
                 layout: 1,
-                args: vec![Operand::Local(1), Operand::Const(Constant::Int(7))],
+                args: vec![Operand::Borrow(1), Operand::Const(Constant::Int(7))],
             },
             Inst::Field {
                 dest: 3,
-                src: Operand::Local(2),
+                src: Operand::Borrow(2),
                 container: 1,
                 offset: 0,
                 member: Some(0),
             },
         ],
-        Term::Return(Operand::Local(3)),
+        Term::Return(Operand::Borrow(3)),
     );
     stamp(
         &mut from_uniform,
@@ -228,10 +228,10 @@ fn spliced_fields_copy_native_sources_and_unbox_uniform_ones() {
                 tag: 0,
                 dest: 2,
                 layout: 1,
-                args: vec![Operand::Local(1), Operand::Const(Constant::Int(9))],
+                args: vec![Operand::Borrow(1), Operand::Const(Constant::Int(9))],
             },
         ],
-        Term::Return(Operand::Local(2)),
+        Term::Return(Operand::Borrow(2)),
     );
     stamp(
         &mut from_native,
@@ -289,17 +289,17 @@ fn native_sums_write_and_read_statically() {
             },
             Inst::GetTag {
                 dest: 2,
-                src: Operand::Local(1),
+                src: Operand::Borrow(1),
             },
             Inst::Field {
                 dest: 3,
-                src: Operand::Local(1),
+                src: Operand::Borrow(1),
                 container: 0,
                 offset: 1,
                 member: None,
             },
         ],
-        Term::Return(Operand::Local(3)),
+        Term::Return(Operand::Borrow(3)),
     );
     stamp(
         &mut entry,
@@ -339,12 +339,12 @@ fn dynamically_indexed_sources_stay_uniform_and_tagged() {
             },
             Inst::GetElement {
                 dest: 3,
-                src: Operand::Local(1),
+                src: Operand::Borrow(1),
                 element: LayoutId::MAX,
-                index: Operand::Local(2),
+                index: Operand::Borrow(2),
             },
         ],
-        Term::Return(Operand::Local(3)),
+        Term::Return(Operand::Borrow(3)),
     );
     stamp(
         &mut entry,
@@ -379,11 +379,11 @@ fn native_signatures_pass_structs_directly() {
             Inst::Call {
                 dest: 2,
                 func: 1,
-                args: vec![Operand::Local(1)],
+                args: vec![Operand::Borrow(1)],
                 unwind: None,
             },
         ],
-        Term::Return(Operand::Local(2)),
+        Term::Return(Operand::Borrow(2)),
     );
     stamp(
         &mut entry,
@@ -395,12 +395,12 @@ fn native_signatures_pass_structs_directly() {
         2,
         vec![Inst::Field {
             dest: 1,
-            src: Operand::Local(0),
+            src: Operand::Borrow(0),
             container: 0,
             offset: 0,
             member: None,
         }],
-        Term::Return(Operand::Local(1)),
+        Term::Return(Operand::Borrow(1)),
     );
     callee.param_reprs = vec![ParamRepr::Borrow(0)];
     stamp(&mut callee, &[(Some(0), false), (None, false)], &[]);
@@ -443,11 +443,11 @@ fn values_arriving_natively_box_in_the_arena() {
             Inst::Call {
                 dest: 1,
                 func: 1,
-                args: vec![Operand::Local(1)],
+                args: vec![Operand::Borrow(1)],
                 unwind: None,
             },
         ],
-        Term::Return(Operand::Local(1)),
+        Term::Return(Operand::Borrow(1)),
     );
     stamp(&mut entry, &[(None, true), (None, false)], &[]);
     let mut callee = function(
@@ -456,10 +456,10 @@ fn values_arriving_natively_box_in_the_arena() {
         vec![Inst::Call {
             dest: 1,
             func: 2,
-            args: vec![Operand::Local(0)],
+            args: vec![Operand::Borrow(0)],
             unwind: None,
         }],
-        Term::Return(Operand::Local(1)),
+        Term::Return(Operand::Borrow(1)),
     );
     callee.param_reprs = vec![ParamRepr::Value(0)];
     stamp(
@@ -467,7 +467,7 @@ fn values_arriving_natively_box_in_the_arena() {
         &[(Some(0), false), (None, false), (None, true)],
         &[],
     );
-    let mut sink = function(1, 2, Vec::new(), Term::Return(Operand::Local(0)));
+    let mut sink = function(1, 2, Vec::new(), Term::Return(Operand::Borrow(0)));
     stamp(&mut sink, &[(None, false), (None, true)], &[]);
     let out = emitted(vec![entry, callee, sink], vec![flat_pair(pair)]);
     assert!(out.contains("talk_box_l0(x0)"), "{out}");
@@ -493,13 +493,13 @@ fn native_returns_hand_back_structs() {
             },
             Inst::Field {
                 dest: 2,
-                src: Operand::Local(1),
+                src: Operand::Borrow(1),
                 container: 0,
                 offset: 0,
                 member: None,
             },
         ],
-        Term::Return(Operand::Local(2)),
+        Term::Return(Operand::Borrow(2)),
     );
     stamp(
         &mut entry,
@@ -520,10 +520,10 @@ fn native_returns_hand_back_structs() {
                 tag: 0,
                 dest: 1,
                 layout: 0,
-                args: vec![Operand::Local(0), Operand::Const(Constant::Int(2))],
+                args: vec![Operand::Borrow(0), Operand::Const(Constant::Int(2))],
             },
         ],
-        Term::Return(Operand::Local(1)),
+        Term::Return(Operand::Borrow(1)),
     );
     callee.return_repr = Some(0);
     stamp(&mut callee, &[(None, false), (Some(0), false)], &[]);
@@ -574,7 +574,7 @@ fn blank_cells_box_native_and_zero() {
                 ],
             },
         ],
-        Term::Return(Operand::Local(1)),
+        Term::Return(Operand::Borrow(1)),
     );
     stamp(
         &mut entry,
@@ -604,7 +604,7 @@ fn library(exports: &[(&str, usize)]) -> Program {
         Vec::new(),
         Term::Return(Operand::Const(Constant::Unit)),
     );
-    let wrapped = function(1, 2, Vec::new(), Term::Return(Operand::Local(0)));
+    let wrapped = function(1, 2, Vec::new(), Term::Return(Operand::Borrow(0)));
     module(
         vec![entry, wrapped],
         Vec::new(),

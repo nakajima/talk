@@ -41,7 +41,7 @@ impl ForwardingCalls {
         else {
             return None;
         };
-        let Some(Term::Return(Operand::Local(returned))) = &block.term else {
+        let Some(Term::Return(Operand::Borrow(returned))) = &block.term else {
             return None;
         };
         if dest != returned
@@ -49,7 +49,7 @@ impl ForwardingCalls {
             || args
                 .iter()
                 .zip(0..function.arity)
-                .any(|(arg, index)| *arg != Operand::Local(index))
+                .any(|(arg, index)| *arg != Operand::Borrow(index))
             || program.functions.get(*func)?.arity != function.arity
         {
             return None;
@@ -156,10 +156,10 @@ mod tests {
                     insts: vec![call(
                         2,
                         1,
-                        vec![Operand::Local(0), Operand::Local(1)],
+                        vec![Operand::Borrow(0), Operand::Borrow(1)],
                         Some(1),
                     )],
-                    term: Some(Term::Return(Operand::Local(2))),
+                    term: Some(Term::Return(Operand::Borrow(2))),
                 },
                 BlockData {
                     debug: None,
@@ -171,10 +171,15 @@ mod tests {
         };
         let forwarder = function(
             2,
-            vec![call(2, 2, vec![Operand::Local(0), Operand::Local(1)], None)],
-            Term::Return(Operand::Local(2)),
+            vec![call(
+                2,
+                2,
+                vec![Operand::Borrow(0), Operand::Borrow(1)],
+                None,
+            )],
+            Term::Return(Operand::Borrow(2)),
         );
-        let target = function(2, Vec::new(), Term::Return(Operand::Local(0)));
+        let target = function(2, Vec::new(), Term::Return(Operand::Borrow(0)));
         let mut program = program(vec![caller, forwarder, target]);
 
         let result = super::run(&mut program);
@@ -192,29 +197,34 @@ mod tests {
 
     #[test]
     fn rejects_reordered_arguments_and_forwarder_unwind() {
-        let target = function(2, Vec::new(), Term::Return(Operand::Local(0)));
+        let target = function(2, Vec::new(), Term::Return(Operand::Borrow(0)));
         let reordered = function(
             2,
-            vec![call(2, 0, vec![Operand::Local(1), Operand::Local(0)], None)],
-            Term::Return(Operand::Local(2)),
+            vec![call(
+                2,
+                0,
+                vec![Operand::Borrow(1), Operand::Borrow(0)],
+                None,
+            )],
+            Term::Return(Operand::Borrow(2)),
         );
         let unwinding = function(
             2,
             vec![call(
                 2,
                 0,
-                vec![Operand::Local(0), Operand::Local(1)],
+                vec![Operand::Borrow(0), Operand::Borrow(1)],
                 Some(0),
             )],
-            Term::Return(Operand::Local(2)),
+            Term::Return(Operand::Borrow(2)),
         );
         let caller = function(
             2,
             vec![
-                call(2, 1, vec![Operand::Local(0), Operand::Local(1)], None),
-                call(2, 2, vec![Operand::Local(0), Operand::Local(1)], None),
+                call(2, 1, vec![Operand::Borrow(0), Operand::Borrow(1)], None),
+                call(2, 2, vec![Operand::Borrow(0), Operand::Borrow(1)], None),
             ],
-            Term::Return(Operand::Local(2)),
+            Term::Return(Operand::Borrow(2)),
         );
         let mut program = program(vec![target, reordered, unwinding, caller]);
 

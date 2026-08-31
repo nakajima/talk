@@ -110,7 +110,7 @@ fn frame_local_values(
                 }
                 Inst::Copy {
                     dest,
-                    src: Operand::Local(src),
+                    src: Operand::Borrow(src),
                 } => origins.push(Origin::From(*dest, *src)),
                 other => {
                     let mut probe = other.clone();
@@ -125,7 +125,9 @@ fn frame_local_values(
         if let Some(Term::Goto(target, args)) = &block.term {
             for (param, arg) in function.blocks[*target].params.iter().zip(args) {
                 match arg {
-                    Operand::Local(src) => origins.push(Origin::From(*param, *src)),
+                    Operand::Consume(src) | Operand::Borrow(src) | Operand::Copy(src) => {
+                        origins.push(Origin::From(*param, *src))
+                    }
                     Operand::Const(_) => origins.push(Origin::Site(*param, false)),
                 }
             }
@@ -187,7 +189,7 @@ fn escaping_locals(function: &Function, summaries: &[Vec<bool>]) -> FxHashSet<Lo
                 // the destination escapes, so does the source.
                 Inst::Copy {
                     dest,
-                    src: Operand::Local(src),
+                    src: Operand::Borrow(src),
                 } => copied_into.entry(*dest).or_default().push(*src),
                 Inst::Copy { .. } => {}
                 // A direct call escapes an argument only when the callee
@@ -200,8 +202,8 @@ fn escaping_locals(function: &Function, summaries: &[Vec<bool>]) -> FxHashSet<Lo
                             .and_then(|summary| summary.get(index))
                             .copied()
                             .unwrap_or(true);
-                        if escapes && let Operand::Local(local) = arg {
-                            escaping.insert(*local);
+                        if escapes && let Some(local) = arg.local() {
+                            escaping.insert(local);
                         }
                     }
                 }
@@ -296,11 +298,11 @@ mod tests {
                     Inst::Call {
                         dest: 2,
                         func: 1,
-                        args: vec![Operand::Local(1)],
+                        args: vec![Operand::Borrow(1)],
                         unwind: None,
                     },
                 ],
-                Term::Return(Operand::Local(2)),
+                Term::Return(Operand::Borrow(2)),
             ),
             function(
                 1,
@@ -339,13 +341,13 @@ mod tests {
                     Inst::Call {
                         dest: 2,
                         func: 1,
-                        args: vec![Operand::Local(1)],
+                        args: vec![Operand::Borrow(1)],
                         unwind: None,
                     },
                 ],
-                Term::Return(Operand::Local(2)),
+                Term::Return(Operand::Borrow(2)),
             ),
-            function(1, 1, Vec::new(), Term::Return(Operand::Local(0))),
+            function(1, 1, Vec::new(), Term::Return(Operand::Borrow(0))),
         ]);
         let summaries = parameter_summaries(&program);
         assert_eq!(summaries[1], vec![true]);

@@ -480,7 +480,7 @@ impl Lowering<'_> {
 
     fn reg(&mut self, operand: Operand) -> u16 {
         match operand {
-            Operand::Local(local) => local,
+            Operand::Consume(local) | Operand::Borrow(local) | Operand::Copy(local) => local,
             Operand::Const(constant) => {
                 let k = self.consts.intern(constant);
                 if let Some(&cached) = self.block_consts.get(&k) {
@@ -526,18 +526,19 @@ impl Lowering<'_> {
         let mut pending: Vec<(u16, Operand)> = params
             .iter()
             .zip(args)
-            .filter(|(dest, arg)| !matches!(arg, Operand::Local(src) if src == *dest))
+            .filter(|(dest, arg)| arg.local() != Some(**dest))
             .map(|(dest, arg)| (*dest, *arg))
             .collect();
         while !pending.is_empty() {
-            if let Some(ready) = pending.iter().position(|(dest, _)| {
-                !pending
-                    .iter()
-                    .any(|(_, src)| matches!(src, Operand::Local(read) if read == dest))
-            }) {
+            if let Some(ready) = pending
+                .iter()
+                .position(|(dest, _)| !pending.iter().any(|(_, src)| src.local() == Some(*dest)))
+            {
                 let (dest, src) = pending.swap_remove(ready);
                 match src {
-                    Operand::Local(src) => self.code.push(Insn::Move { dest, src }),
+                    Operand::Consume(src) | Operand::Borrow(src) | Operand::Copy(src) => {
+                        self.code.push(Insn::Move { dest, src })
+                    }
                     Operand::Const(constant) => {
                         let k = self.consts.intern(constant);
                         self.code.push(Insn::Const { dest, k });
@@ -555,8 +556,8 @@ impl Lowering<'_> {
                 src: blocked,
             });
             for (_, src) in &mut pending {
-                if matches!(src, Operand::Local(read) if *read == blocked) {
-                    *src = Operand::Local(scratch);
+                if src.local() == Some(blocked) {
+                    *src = Operand::Borrow(scratch);
                 }
             }
         }
@@ -682,7 +683,7 @@ impl Lowering<'_> {
     fn lower_inst(&mut self, inst: &Inst) -> Result<(), BackendError> {
         match inst {
             Inst::Copy { dest, src } => match src {
-                Operand::Local(src) => {
+                Operand::Consume(src) | Operand::Borrow(src) | Operand::Copy(src) => {
                     if src != dest {
                         self.code.push(Insn::Move {
                             dest: *dest,

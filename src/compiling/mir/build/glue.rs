@@ -46,7 +46,7 @@ impl<'a> ProgramBuilder<'a> {
             fx.push(Inst::Call {
                 dest,
                 func,
-                args: vec![Operand::Local(0)],
+                args: vec![Operand::Borrow(0)],
                 unwind: None,
             });
         }
@@ -54,10 +54,10 @@ impl<'a> ProgramBuilder<'a> {
             let field = fx.fresh_local();
             fx.push(Inst::ObjectGet {
                 dest: field,
-                src: Operand::Local(0),
+                src: Operand::Borrow(0),
                 index: u16::try_from(index).unwrap_or_default(),
             });
-            fx.drop_value(Operand::Local(field), &field_ty);
+            fx.drop_value(Operand::Borrow(field), &field_ty);
         }
         let (n_locals, blocks, _return_repr, debug_names) =
             fx.finish(Operand::Const(Constant::Unit))?;
@@ -138,7 +138,7 @@ impl<'a> ProgramBuilder<'a> {
             Glue::HeapTeardown => unreachable!("heap teardown has its own builder"),
             Glue::Drop => {
                 fx.drop_glue_root = Some(ty.clone());
-                fx.drop_value(Operand::Local(0), ty);
+                fx.drop_value(Operand::Borrow(0), ty);
             }
             Glue::Retain => {
                 let mut retained = ty.clone();
@@ -148,7 +148,7 @@ impl<'a> ProgramBuilder<'a> {
                 // The body's root expands structurally; a glue call here
                 // would be the function calling itself.
                 fx.retain_glue_root = Some(retained.clone());
-                fx.retain_value(Operand::Local(0), &retained, Span::SYNTHESIZED)?;
+                fx.retain_value(Operand::Borrow(0), &retained, Span::SYNTHESIZED)?;
             }
         }
         let (n_locals, blocks, _return_repr, debug_names) =
@@ -214,7 +214,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 } else {
                     self.branch_if_equal(
                         ScalarOp::IntCmp(CmpKind::Eq),
-                        Operand::Local(tag),
+                        Operand::Borrow(tag),
                         Operand::Const(Constant::Int(
                             i64::try_from(variant_tag).unwrap_or_default(),
                         )),
@@ -242,7 +242,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         Some(u16::try_from(variant_tag).unwrap_or_default()),
                     );
                     let rendered =
-                        self.emit_sub_show(Operand::Local(payload), payload_ty, protocol, span)?;
+                        self.emit_sub_show(Operand::Borrow(payload), payload_ty, protocol, span)?;
                     acc = self.emit_string_concat(acc, rendered, span)?;
                 }
                 if !payload_tys.is_empty() {
@@ -260,7 +260,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             // falls through to its arm above).
             self.terminate(Term::Goto(done, Vec::new()));
             self.switch_to(done);
-            return Ok(Operand::Local(out));
+            return Ok(Operand::Borrow(out));
         }
         if let (Some(field_tys), Some(names)) = (
             self.program_builder.field_types(*symbol, args),
@@ -286,7 +286,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     None,
                 );
                 let rendered =
-                    self.emit_sub_show(Operand::Local(field), field_ty, protocol, span)?;
+                    self.emit_sub_show(Operand::Borrow(field), field_ty, protocol, span)?;
                 acc = self.emit_string_concat(acc, rendered, span)?;
             }
             let close = self.emit_string_lit(")");
@@ -328,12 +328,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         self.push(Inst::Scalar {
             dest: tags_equal,
             op: ScalarOp::IntCmp(CmpKind::Eq),
-            a: Operand::Local(tag_a),
-            b: Some(Operand::Local(tag_b)),
+            a: Operand::Borrow(tag_a),
+            b: Some(Operand::Borrow(tag_b)),
         });
         let tags_ok = self.new_block();
         self.terminate(Term::Branch {
-            cond: Operand::Local(tags_equal),
+            cond: Operand::Borrow(tags_equal),
             then_block: tags_ok,
             else_block: fail,
         });
@@ -347,7 +347,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             let next = self.new_block();
             self.branch_if_equal(
                 ScalarOp::IntCmp(CmpKind::Eq),
-                Operand::Local(tag_a),
+                Operand::Borrow(tag_a),
                 Operand::Const(Constant::Int(
                     i64::try_from(variant_tag).unwrap_or_default(),
                 )),
@@ -373,8 +373,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     Some(u16::try_from(variant_tag).unwrap_or_default()),
                 );
                 let equal = self.emit_equality(
-                    Operand::Local(pa),
-                    Operand::Local(pb),
+                    Operand::Borrow(pa),
+                    Operand::Borrow(pb),
                     payload_ty,
                     protocol,
                     span,
@@ -406,7 +406,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         });
         self.terminate(Term::Goto(done, Vec::new()));
         self.switch_to(done);
-        Ok(Operand::Local(result))
+        Ok(Operand::Borrow(result))
     }
 
     /// One committed dictionary entry's implementation closure for a
@@ -492,7 +492,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             func,
             env,
         });
-        Ok(Operand::Local(closure))
+        Ok(Operand::Borrow(closure))
     }
 
     /// A forwarding chunk for a requirement implementation with hidden
@@ -507,7 +507,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     ) -> FuncId {
         let id = self.program_builder.reserve("requirement_forwarder");
         let mut insts = Vec::new();
-        let mut args: Vec<Operand> = (0..visible).map(Operand::Local).collect();
+        let mut args: Vec<Operand> = (0..visible).map(Operand::Borrow).collect();
         let mut next = visible;
         let mut env_index: u16 = 0;
         for param in hidden {
@@ -524,7 +524,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     dest: next,
                     index: env_index,
                 });
-                args.push(Operand::Local(next));
+                args.push(Operand::Borrow(next));
                 next += 1;
                 env_index += 1;
             }
@@ -548,7 +548,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             debug,
             params: Vec::new(),
             insts,
-            term: Some(Term::Return(Operand::Local(result))),
+            term: Some(Term::Return(Operand::Borrow(result))),
         };
         self.program_builder.functions[id] = Function {
             debug_names: None,
@@ -581,6 +581,6 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
         let dest = self.fresh_local();
         self.push(Inst::MakeClosure { dest, func, env });
-        Ok(Operand::Local(dest))
+        Ok(Operand::Borrow(dest))
     }
 }

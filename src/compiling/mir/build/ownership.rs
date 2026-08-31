@@ -31,8 +31,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use super::verify::{FlowEvent, FlowRecord};
 use super::{
     BackendError, BlockId, FunctionBuilder, Glue, Inst, LocalId, Operand, Span, Term, Ty,
-    contains_object, donates, is_linear, needs_drop,
+    contains_object, contains_source_deinit, donates, is_linear, needs_drop,
 };
+use crate::compiling::mir::cfg::{Cfg, bits};
 use crate::name_resolution::symbol::Symbol;
 
 /// Why a consume can never donate.
@@ -97,10 +98,22 @@ pub(super) struct LoanSite {
     /// must interleave events, reads, and sites exactly as the walk
     /// emitted them.
     pub seq: u32,
+    pub index: u32,
     pub root: LocalId,
     pub view: LocalId,
     pub view_name: String,
     pub exclusive: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct ProjectionSite {
+    pub block: BlockId,
+    pub seq: u32,
+    pub index: u32,
+    pub owner: LocalId,
+    pub projection: LocalId,
+    pub ty: Ty,
+    pub span: Span,
 }
 
 #[derive(Default)]
@@ -108,6 +121,7 @@ pub(super) struct OwnershipSites {
     pub sites: Vec<OwnershipSite>,
     pub reads: Vec<ReadSite>,
     pub loans: Vec<LoanSite>,
+    pub projections: Vec<ProjectionSite>,
     /// Loan kills, as `(seq, root)`: a writeback invalidates every loan
     /// rooted at base.
     pub loan_kills: Vec<(u32, LocalId)>,
@@ -207,8 +221,8 @@ impl FunctionBuilder<'_, '_> {
                     },
                     Inst::CallIndirect {
                         dest,
-                        callee: Operand::Local(witness),
-                        args: vec![Operand::Local(payload)],
+                        callee: Operand::Borrow(witness),
+                        args: vec![Operand::Borrow(payload)],
                         unwind: None,
                     },
                 ]
@@ -224,7 +238,7 @@ impl FunctionBuilder<'_, '_> {
                 let dest = self.fresh_local();
                 vec![Inst::CallIndirect {
                     dest,
-                    callee: Operand::Local(retain_witness),
+                    callee: Operand::Borrow(retain_witness),
                     args: vec![value],
                     unwind: None,
                 }]
@@ -278,7 +292,7 @@ impl FunctionBuilder<'_, '_> {
             ));
         }
         let mut insts = Vec::new();
-        let value = Operand::Local(local);
+        let value = Operand::Borrow(local);
         if contains_object(self.program_builder, &resolved) {
             insts.push(Inst::RegionRelease { src: value });
             if let Ty::Nominal(symbol, _) = &resolved
@@ -308,8 +322,8 @@ impl FunctionBuilder<'_, '_> {
                         },
                         Inst::CallIndirect {
                             dest,
-                            callee: Operand::Local(witness),
-                            args: vec![Operand::Local(payload)],
+                            callee: Operand::Borrow(witness),
+                            args: vec![Operand::Borrow(payload)],
                             unwind: None,
                         },
                     ]);
@@ -325,7 +339,7 @@ impl FunctionBuilder<'_, '_> {
                     let dest = self.fresh_local();
                     insts.push(Inst::CallIndirect {
                         dest,
-                        callee: Operand::Local(drop_witness),
+                        callee: Operand::Borrow(drop_witness),
                         args: vec![value],
                         unwind: None,
                     });
@@ -350,15 +364,30 @@ impl FunctionBuilder<'_, '_> {
     /// walk's former inline diagnostics. Must run before the release
     /// planner and the balance verifier.
     pub(super) fn elaborate_ownership(&mut self) {
-        let sites = std::mem::take(&mut self.ownership_sites);
-        if sites.sites.is_empty() && sites.reads.is_empty() && sites.loans.is_empty() {
+        let mut sites = std::mem::take(&mut self.ownership_sites);
+        if sites.sites.is_empty()
+            && sites.reads.is_empty()
+            && sites.loans.is_empty()
+            && sites.projections.is_empty()
+        {
             return;
         }
+        for projection in &sites.projections {
+            sites.event_seqs.push(projection.seq);
+            self.flow_events.push(FlowRecord {
+                block: projection.block,
+                index: projection.index,
+                event: FlowEvent::Def(projection.projection),
+            });
+        }
         let n_locals = self.locals_len();
+        let cfg = Cfg::new(&self.blocks);
         let live = Liveness::compute(
+            &cfg,
             &self.blocks,
             n_locals,
             &self.view_edges(),
+            &self.borrow_roots,
             &sites,
             &sites.event_seqs,
             &self.flow_events,
@@ -393,6 +422,22 @@ impl FunctionBuilder<'_, '_> {
         let mut insertions: Vec<Insertion> = Vec::new();
         let mut new_events: Vec<(u32, FlowRecord)> = Vec::new();
         let mut errors: Vec<(u32, BackendError)> = Vec::new();
+        for projection in &sites.projections {
+            match self.realize_retain(
+                Operand::Borrow(projection.projection),
+                &projection.ty,
+                projection.span,
+            ) {
+                Ok(insts) => insertions.push(Insertion {
+                    block: projection.block,
+                    index: projection.index,
+                    insts,
+                }),
+                Err(error) => errors.push((projection.seq, error)),
+            }
+        }
+        let mut drop_points: Vec<Vec<DropPoint>> =
+            (0..self.blocks.len()).map(|_| Vec::new()).collect();
         // Loans alive per path are approximated flow-insensitively: a
         // loan is active at P if its creation precedes P in the agenda
         // walk of P's block or a dominating one, it is not killed, and
@@ -417,30 +462,54 @@ impl FunctionBuilder<'_, '_> {
         let mut worklist: Vec<BlockId> = vec![0];
         let mut decided: FxHashSet<u32> = FxHashSet::default();
         let mut reported: FxHashSet<(BlockId, u32)> = FxHashSet::default();
+        let settled_projections: FxHashSet<LocalId> = sites
+            .projections
+            .iter()
+            .map(|projection| projection.projection)
+            .collect();
+        let mut deferred_to_join: FxHashSet<LocalId> = self
+            .init_field_shadows
+            .values()
+            .map(|(local, _)| *local)
+            .collect();
+        deferred_to_join.extend(
+            self.borrow_roots
+                .keys()
+                .copied()
+                .filter(|local| !settled_projections.contains(local)),
+        );
 
         while let Some(block) = worklist.pop() {
             let Some(mut state) = in_states[block].clone() else {
                 continue;
             };
-            for ((index, entry_seq), entry) in &agenda[block] {
-                let entry_seq = *entry_seq;
-                match entry {
-                    Agenda::Event(event) => match event {
-                        FlowEvent::Def(local) => state[*local as usize] = OWNED,
-                        FlowEvent::Move(local) | FlowEvent::Drop(local) => {
-                            state[*local as usize] = 0
-                        }
-                        _ => {}
-                    },
-                    Agenda::Read(read) => {
-                        let owned = state[read.local as usize] == OWNED;
-                        if !owned && self.tracks(read.local) && reported.insert((block, *index)) {
-                            // The walk's former hard errors, in priority
-                            // order: a view whose owner moved, then a
-                            // plain use-after-move.
-                            if let Some(root) = self.view_root_of(read.local) {
-                                if state[root as usize] != OWNED {
-                                    errors.push((
+            let mut cursor = 0usize;
+            let mut placed = Vec::new();
+            let end = self.blocks[block].insts.len() as u32;
+            let trap = matches!(self.blocks[block].term, Some(Term::Trap(_)));
+            for point in 0..=end {
+                while cursor < agenda[block].len() && agenda[block][cursor].0.0 <= point {
+                    let ((index, entry_seq), entry) = &agenda[block][cursor];
+                    cursor += 1;
+                    let entry_seq = *entry_seq;
+                    match entry {
+                        Agenda::Event(event) => match event {
+                            FlowEvent::Def(local) => state[*local as usize] = OWNED,
+                            FlowEvent::Move(local) | FlowEvent::Drop(local) => {
+                                state[*local as usize] = 0
+                            }
+                            _ => {}
+                        },
+                        Agenda::Read(read) => {
+                            let owned = state[read.local as usize] == OWNED;
+                            if !owned && self.tracks(read.local) && reported.insert((block, *index))
+                            {
+                                // The walk's former hard errors, in priority
+                                // order: a view whose owner moved, then a
+                                // plain use-after-move.
+                                if let Some(root) = self.view_root_of(read.local) {
+                                    if state[root as usize] != OWNED {
+                                        errors.push((
                                         entry_seq,
                                         BackendError::new(
                                             format!(
@@ -450,62 +519,62 @@ impl FunctionBuilder<'_, '_> {
                                             read.span,
                                         ),
                                     ));
-                                    continue;
+                                        continue;
+                                    }
                                 }
-                            }
-                            errors.push((
-                                entry_seq,
-                                BackendError::new(
-                                    format!("use of moved value `{}`", read.name),
-                                    read.span,
-                                ),
-                            ));
-                        } else if owned
-                            && let Some(loan) = loan_active(read.seq, block, *index, read.local)
-                                .filter(|l| l.exclusive)
-                            && loan.view != read.local
-                            && reported.insert((block, *index))
-                        {
-                            errors.push((
-                                entry_seq,
-                                BackendError::new(
-                                    format!(
-                                        "`{}` is already mutable borrowed as `{}`",
-                                        read.name, loan.view_name
+                                errors.push((
+                                    entry_seq,
+                                    BackendError::new(
+                                        format!("use of moved value `{}`", read.name),
+                                        read.span,
                                     ),
-                                    read.span,
-                                ),
-                            ));
+                                ));
+                            } else if owned
+                                && let Some(loan) = loan_active(read.seq, block, *index, read.local)
+                                    .filter(|l| l.exclusive)
+                                && loan.view != read.local
+                                && reported.insert((block, *index))
+                            {
+                                errors.push((
+                                    entry_seq,
+                                    BackendError::new(
+                                        format!(
+                                            "`{}` is already mutable borrowed as `{}`",
+                                            read.name, loan.view_name
+                                        ),
+                                        read.span,
+                                    ),
+                                ));
+                            }
                         }
-                    }
-                    Agenda::Site(site) => {
-                        let key = site.seq;
-                        let owned = state[site.local as usize] == OWNED;
-                        match &site.kind {
-                            SiteKind::Consume { forced } => {
-                                let live_after = live.after_site(site.seq);
-                                let donate = match forced {
-                                    Some(_) => {
-                                        if !owned && reported.insert((block, *index)) {
-                                            errors.push((entry_seq, BackendError::new(
+                        Agenda::Site(site) => {
+                            let key = site.seq;
+                            let owned = state[site.local as usize] == OWNED;
+                            match &site.kind {
+                                SiteKind::Consume { forced } => {
+                                    let live_after = live.after_site(site.seq);
+                                    let donate = match forced {
+                                        Some(_) => {
+                                            if !owned && reported.insert((block, *index)) {
+                                                errors.push((entry_seq, BackendError::new(
                                                 "use of moved value: consumed twice in one call"
                                                     .into(),
                                                 Span::SYNTHESIZED,
                                             )));
+                                            }
+                                            false
                                         }
-                                        false
-                                    }
-                                    None if !self.can_release(&site.ty) => false,
-                                    None => live_after || !owned,
-                                };
-                                if !donate
-                                    && owned
-                                    && let Some(loan) =
-                                        loan_active(site.seq, block, *index, site.local)
-                                            .filter(|l| l.exclusive)
-                                    && reported.insert((block, *index))
-                                {
-                                    errors.push((
+                                        None if !self.can_release(&site.ty) => false,
+                                        None => live_after || !owned,
+                                    };
+                                    if !donate
+                                        && owned
+                                        && let Some(loan) =
+                                            loan_active(site.seq, block, *index, site.local)
+                                                .filter(|l| l.exclusive)
+                                        && reported.insert((block, *index))
+                                    {
+                                        errors.push((
                                         entry_seq,
                                         BackendError::new(
                                             format!(
@@ -515,32 +584,51 @@ impl FunctionBuilder<'_, '_> {
                                             Span::SYNTHESIZED,
                                         ),
                                     ));
-                                }
-                                if decided.insert(key) {
-                                    if donate {
-                                        let respend = !owned;
-                                        let retain = self.realize_retain(
-                                            Operand::Local(site.local),
-                                            &site.ty,
-                                            site.span,
-                                        );
-                                        match retain {
-                                            Ok(insts) => insertions.push(Insertion {
-                                                block,
-                                                index: *index,
-                                                insts,
-                                            }),
-                                            Err(error) => errors.push((entry_seq, error)),
-                                        }
-                                        if respend {
-                                            new_events.push((
-                                                site.seq,
-                                                FlowRecord {
+                                    }
+                                    if decided.insert(key) {
+                                        if donate {
+                                            let respend = !owned;
+                                            let retain = self.realize_retain(
+                                                Operand::Borrow(site.local),
+                                                &site.ty,
+                                                site.span,
+                                            );
+                                            match retain {
+                                                Ok(insts) => insertions.push(Insertion {
                                                     block,
                                                     index: *index,
-                                                    event: FlowEvent::Def(site.local),
-                                                },
-                                            ));
+                                                    insts,
+                                                }),
+                                                Err(error) => errors.push((entry_seq, error)),
+                                            }
+                                            if respend {
+                                                new_events.push((
+                                                    site.seq,
+                                                    FlowRecord {
+                                                        block,
+                                                        index: *index,
+                                                        event: FlowEvent::Def(site.local),
+                                                    },
+                                                ));
+                                                new_events.push((
+                                                    site.seq,
+                                                    FlowRecord {
+                                                        block,
+                                                        index: *index,
+                                                        event: FlowEvent::Move(site.local),
+                                                    },
+                                                ));
+                                            } else {
+                                                new_events.push((
+                                                    site.seq,
+                                                    FlowRecord {
+                                                        block,
+                                                        index: *index,
+                                                        event: FlowEvent::Use(site.local),
+                                                    },
+                                                ));
+                                            }
+                                        } else {
                                             new_events.push((
                                                 site.seq,
                                                 FlowRecord {
@@ -549,55 +637,93 @@ impl FunctionBuilder<'_, '_> {
                                                     event: FlowEvent::Move(site.local),
                                                 },
                                             ));
+                                        }
+                                    }
+                                    if !donate {
+                                        state[site.local as usize] = 0;
+                                    }
+                                }
+                                SiteKind::Displace => {
+                                    if !owned {
+                                        continue;
+                                    }
+                                    let view_live = live.view_live_site(site.seq);
+                                    if decided.insert(key) {
+                                        if view_live {
+                                            let displaced = self.mint_displaced(&site.ty);
+                                            insertions.push(Insertion {
+                                                block,
+                                                index: *index,
+                                                insts: vec![Inst::Copy {
+                                                    dest: displaced,
+                                                    src: Operand::Borrow(site.local),
+                                                }],
+                                            });
+                                            new_events.push((
+                                                site.seq,
+                                                FlowRecord {
+                                                    block,
+                                                    index: *index,
+                                                    event: FlowEvent::Move(site.local),
+                                                },
+                                            ));
+                                            new_events.push((
+                                                site.seq,
+                                                FlowRecord {
+                                                    block,
+                                                    index: *index,
+                                                    event: FlowEvent::Def(displaced),
+                                                },
+                                            ));
                                         } else {
                                             new_events.push((
                                                 site.seq,
                                                 FlowRecord {
                                                     block,
                                                     index: *index,
-                                                    event: FlowEvent::Use(site.local),
+                                                    event: FlowEvent::Drop(site.local),
                                                 },
                                             ));
+                                            match self.realize_drop(site.local, &site.ty, site.span)
+                                            {
+                                                Ok(insts) => insertions.push(Insertion {
+                                                    block,
+                                                    index: *index,
+                                                    insts,
+                                                }),
+                                                Err(error) => errors.push((entry_seq, error)),
+                                            }
                                         }
-                                    } else {
-                                        new_events.push((
-                                            site.seq,
-                                            FlowRecord {
-                                                block,
-                                                index: *index,
-                                                event: FlowEvent::Move(site.local),
-                                            },
-                                        ));
                                     }
-                                }
-                                if !donate {
                                     state[site.local as usize] = 0;
                                 }
-                            }
-                            SiteKind::Displace => {
-                                if !owned {
-                                    continue;
-                                }
-                                let view_live = live.view_live_site(site.seq);
-                                if decided.insert(key) {
-                                    if view_live {
+                                SiteKind::Writeback => {
+                                    if !owned {
+                                        continue;
+                                    }
+                                    let view_live = live.view_live_site(site.seq);
+                                    if decided.insert(key) && view_live {
+                                        let mut insts = match self.realize_retain(
+                                            Operand::Borrow(site.local),
+                                            &site.ty,
+                                            site.span,
+                                        ) {
+                                            Ok(insts) => insts,
+                                            Err(error) => {
+                                                errors.push((entry_seq, error));
+                                                Vec::new()
+                                            }
+                                        };
                                         let displaced = self.mint_displaced(&site.ty);
+                                        insts.push(Inst::Copy {
+                                            dest: displaced,
+                                            src: Operand::Borrow(site.local),
+                                        });
                                         insertions.push(Insertion {
                                             block,
                                             index: *index,
-                                            insts: vec![Inst::Copy {
-                                                dest: displaced,
-                                                src: Operand::Local(site.local),
-                                            }],
+                                            insts,
                                         });
-                                        new_events.push((
-                                            site.seq,
-                                            FlowRecord {
-                                                block,
-                                                index: *index,
-                                                event: FlowEvent::Move(site.local),
-                                            },
-                                        ));
                                         new_events.push((
                                             site.seq,
                                             FlowRecord {
@@ -606,68 +732,40 @@ impl FunctionBuilder<'_, '_> {
                                                 event: FlowEvent::Def(displaced),
                                             },
                                         ));
-                                    } else {
-                                        new_events.push((
-                                            site.seq,
-                                            FlowRecord {
-                                                block,
-                                                index: *index,
-                                                event: FlowEvent::Drop(site.local),
-                                            },
-                                        ));
-                                        match self.realize_drop(site.local, &site.ty, site.span) {
-                                            Ok(insts) => insertions.push(Insertion {
-                                                block,
-                                                index: *index,
-                                                insts,
-                                            }),
-                                            Err(error) => errors.push((entry_seq, error)),
-                                        }
                                     }
-                                }
-                                state[site.local as usize] = 0;
-                            }
-                            SiteKind::Writeback => {
-                                if !owned {
-                                    continue;
-                                }
-                                let view_live = live.view_live_site(site.seq);
-                                if decided.insert(key) && view_live {
-                                    let mut insts = match self.realize_retain(
-                                        Operand::Local(site.local),
-                                        &site.ty,
-                                        site.span,
-                                    ) {
-                                        Ok(insts) => insts,
-                                        Err(error) => {
-                                            errors.push((entry_seq, error));
-                                            Vec::new()
-                                        }
-                                    };
-                                    let displaced = self.mint_displaced(&site.ty);
-                                    insts.push(Inst::Copy {
-                                        dest: displaced,
-                                        src: Operand::Local(site.local),
-                                    });
-                                    insertions.push(Insertion {
-                                        block,
-                                        index: *index,
-                                        insts,
-                                    });
-                                    new_events.push((
-                                        site.seq,
-                                        FlowRecord {
-                                            block,
-                                            index: *index,
-                                            event: FlowEvent::Def(displaced),
-                                        },
-                                    ));
                                 }
                             }
                         }
                     }
                 }
+                if trap {
+                    continue;
+                }
+                let mut released = Vec::new();
+                for local in (0..state.len()).rev() {
+                    let local = local as LocalId;
+                    if state[usize::from(local)] == OWNED
+                        && self
+                            .frame
+                            .get(usize::from(local))
+                            .and_then(|entry| entry.declared.as_ref())
+                            .is_some_and(|ty| contains_source_deinit(self.program_builder, ty))
+                        && !deferred_to_join.contains(&local)
+                        && !live.any_live_at(block, point, local)
+                    {
+                        state[usize::from(local)] = 0;
+                        released.push(local);
+                    }
+                }
+                if !released.is_empty() {
+                    placed.push(DropPoint {
+                        block,
+                        index: point,
+                        locals: released,
+                    });
+                }
             }
+            drop_points[block] = placed;
 
             // Propagate to successors (any-path owned: a join where one
             // path moved is settled by the release planner's edge
@@ -683,8 +781,11 @@ impl FunctionBuilder<'_, '_> {
                     Some(existing) => {
                         let mut changed = false;
                         for (have, new) in existing.iter_mut().zip(&state) {
-                            if *new == OWNED && *have != OWNED {
-                                *have = OWNED;
+                            if *have == *new || *have == super::verify::CONFLICT {
+                                continue;
+                            }
+                            if *have == OWNED || *new == OWNED || *new == super::verify::CONFLICT {
+                                *have = super::verify::CONFLICT;
                                 changed = true;
                             }
                         }
@@ -694,42 +795,16 @@ impl FunctionBuilder<'_, '_> {
                     }
                 }
             };
-            for inst in &self.blocks[block].insts {
-                if let Inst::Call {
-                    unwind: Some(target),
-                    ..
-                }
-                | Inst::CallIndirect {
-                    unwind: Some(target),
-                    ..
-                } = inst
-                {
-                    push(*target, &mut in_states, &mut worklist);
-                }
-            }
-            match &self.blocks[block].term {
-                Some(Term::Goto(target, _)) => push(*target, &mut in_states, &mut worklist),
-                Some(Term::Branch {
-                    then_block,
-                    else_block,
-                    ..
-                }) => {
-                    push(*then_block, &mut in_states, &mut worklist);
-                    push(*else_block, &mut in_states, &mut worklist);
-                }
-                Some(Term::Switch {
-                    targets, default, ..
-                }) => {
-                    for target in targets.iter().copied().chain(std::iter::once(*default)) {
-                        push(target, &mut in_states, &mut worklist);
-                    }
-                }
-                _ => {}
+            for target in &cfg.successors[block] {
+                push(*target, &mut in_states, &mut worklist);
             }
         }
 
-        // --- Realization: insert decided instructions, remap indices.
-        self.apply_insertions(insertions, new_events, sites.event_seqs);
+        // --- Realization: insert decided instructions, remap indices, then
+        // split blocks at first-dead points and emit their structural drops.
+        let mut drops: Vec<DropPoint> = drop_points.into_iter().flatten().collect();
+        self.apply_insertions(insertions, new_events, sites.event_seqs, &mut drops);
+        self.realize_placement(drops);
         // The drain surfaces the LAST pushed error; the walk's abort
         // semantics surfaced the FIRST violation, so push reversed.
         errors.sort_by_key(|(seq, _)| *seq);
@@ -737,11 +812,61 @@ impl FunctionBuilder<'_, '_> {
             .extend(errors.into_iter().rev().map(|(_, error)| error));
     }
 
+    fn realize_placement(&mut self, drops: Vec<DropPoint>) {
+        let mut by_block: FxHashMap<BlockId, Vec<DropPoint>> = FxHashMap::default();
+        for drop in drops {
+            by_block.entry(drop.block).or_default().push(drop);
+        }
+        let mut blocks: Vec<BlockId> = by_block.keys().copied().collect();
+        blocks.sort_unstable();
+        for block in blocks {
+            let mut points = by_block.remove(&block).unwrap_or_default();
+            points.sort_by_key(|point| std::cmp::Reverse(point.index));
+            for point in points {
+                let continuation = self.split_block(block, point.index);
+                self.switch_to(block);
+                for local in point.locals {
+                    self.generated_origin = self.cleanup_origin(super::CleanupKind::LastUse, local);
+                    self.release_planned(local);
+                }
+                self.terminate(Term::Goto(continuation, Vec::new()));
+            }
+        }
+    }
+
+    fn split_block(&mut self, block: BlockId, index: u32) -> BlockId {
+        let continuation = self.new_block();
+        let at = index as usize;
+        let data = &mut self.blocks[block];
+        let tail: Vec<Inst> = data.insts.drain(at..).collect();
+        let term = data.term.take();
+        let origins = data.debug.as_mut().map(|debug| {
+            debug
+                .origins
+                .drain(at.min(debug.origins.len())..)
+                .collect::<Vec<_>>()
+        });
+        let continuation_data = &mut self.blocks[continuation];
+        continuation_data.insts = tail;
+        continuation_data.term = term;
+        if let (Some(debug), Some(origins)) = (continuation_data.debug.as_mut(), origins) {
+            debug.origins = origins;
+        }
+        for record in &mut self.flow_events {
+            if record.block == block && record.index > index {
+                record.block = continuation;
+                record.index -= index;
+            }
+        }
+        continuation
+    }
+
     fn apply_insertions(
         &mut self,
         mut insertions: Vec<Insertion>,
         new_events: Vec<(u32, FlowRecord)>,
         seqs: Vec<u32>,
+        drops: &mut [DropPoint],
     ) {
         // Splice the decided events into walk order: the planner and the
         // verifier replay same-index events in stream order, and a
@@ -822,62 +947,121 @@ impl FunctionBuilder<'_, '_> {
                         .unwrap_or_else(|| shifted.last().unwrap_or(&record.index));
                 }
             }
+            for point in drops.iter_mut() {
+                if point.block == block {
+                    let old_index = point.index as usize;
+                    point.index = *shifted
+                        .get(old_index)
+                        .unwrap_or_else(|| shifted.last().unwrap_or(&point.index));
+                }
+            }
         }
     }
 }
 
-/// Backward liveness over the recorded USE EVENTS (source-level reads,
-/// consumes, loans) — not raw instruction operands: lowering
-/// structurally re-reads consumed registers (match settling, repacks),
-/// and those reads must not extend a value's source liveness. `Def`
-/// events kill backward — a rebinding starts a new incarnation, so the
-/// old value's liveness stops at the definition. Views fold into roots
-/// at their use points. Computed per site during one backward CFG
-/// fixpoint.
+struct DropPoint {
+    block: BlockId,
+    index: u32,
+    locals: Vec<LocalId>,
+}
+
+/// One backward CFG fixpoint with two facets. Source liveness decides
+/// donate versus move and borrow exclusivity. Any-use liveness places a
+/// release at the first point where an owned value and every managed view of
+/// it are dead.
 struct Liveness {
-    /// Per consume-site seq: is the local live after the site?
+    words: usize,
+    any_at: Vec<Vec<Vec<u64>>>,
     live_after: FxHashMap<u32, bool>,
-    /// Per displace/writeback-site seq: is any view of the local live?
     view_live_at: FxHashMap<u32, bool>,
 }
 
 enum PointKind {
+    Inst(u32),
     Use(LocalId),
     Def(LocalId),
-    /// A consume site: records live-after, then acts as a use.
     Consume(u32, LocalId),
-    /// Displace/writeback: records whether any listed view is live.
     ViewQuery(u32, Vec<LocalId>),
+    Settled(LocalId),
 }
 
 impl Liveness {
     #[allow(clippy::too_many_arguments)]
     fn compute(
+        cfg: &Cfg,
         blocks: &[super::BlockData],
         n_locals: usize,
         view_edges: &FxHashMap<LocalId, LocalId>,
+        projection_roots: &FxHashMap<LocalId, LocalId>,
         sites: &OwnershipSites,
         event_seqs: &[u32],
         flow_events: &[FlowRecord],
     ) -> Liveness {
         let words = n_locals.div_ceil(64).max(1);
+        let tracked: FxHashSet<LocalId> = flow_events
+            .iter()
+            .filter_map(|record| match record.event {
+                FlowEvent::Def(local)
+                | FlowEvent::Use(local)
+                | FlowEvent::Move(local)
+                | FlowEvent::Drop(local) => Some(local),
+                _ => None,
+            })
+            .collect();
+        let writeback_slots: FxHashSet<LocalId> = sites
+            .sites
+            .iter()
+            .filter_map(|site| matches!(site.kind, SiteKind::Writeback).then_some(site.local))
+            .collect();
         let mut views_of: FxHashMap<LocalId, Vec<LocalId>> = FxHashMap::default();
         for (view, root) in view_edges {
             views_of.entry(*root).or_default().push(*view);
         }
+        let mut roots = projection_roots.clone();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            let required: FxHashSet<LocalId> = roots.values().copied().collect();
+            for block in blocks {
+                for inst in &block.insts {
+                    let Inst::Copy {
+                        dest,
+                        src: Operand::Borrow(source),
+                    } = inst
+                    else {
+                        continue;
+                    };
+                    if !required.contains(dest) || roots.contains_key(dest) {
+                        continue;
+                    }
+                    if let Some(root) = roots.get(source).copied() {
+                        roots.insert(*dest, root);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        let mut kept_alive: FxHashMap<LocalId, Vec<LocalId>> = FxHashMap::default();
+        for (view, root) in view_edges {
+            kept_alive.entry(*view).or_default().push(*root);
+        }
+        for (local, root) in &roots {
+            if !tracked.contains(local) && local != root {
+                let roots = kept_alive.entry(*local).or_default();
+                if !roots.contains(root) {
+                    roots.push(*root);
+                }
+            }
+        }
 
-        // Build each block's point list in walk order (seq).
-        let mut points: Vec<Vec<(u32, PointKind)>> = Vec::new();
-        points.resize_with(blocks.len(), Vec::new);
+        let mut points: Vec<Vec<((u32, u32, u8), PointKind)>> =
+            (0..blocks.len()).map(|_| Vec::new()).collect();
         for read in &sites.reads {
-            points[read.block].push((read.seq, PointKind::Use(read.local)));
+            points[read.block].push(((read.index, read.seq, 1), PointKind::Use(read.local)));
         }
         for loan in &sites.loans {
-            // Borrowing mentions the root (a source occurrence) and
-            // BIRTHS the view: the view's liveness cannot extend above
-            // its creation.
-            points[loan.block].push((loan.seq, PointKind::Def(loan.view)));
-            points[loan.block].push((loan.seq + 1, PointKind::Use(loan.root)));
+            points[loan.block].push(((loan.index, loan.seq, 0), PointKind::Def(loan.view)));
+            points[loan.block].push(((loan.index, loan.seq, 1), PointKind::Use(loan.root)));
         }
         let mut loan_views_of: FxHashMap<LocalId, Vec<LocalId>> = FxHashMap::default();
         for loan in &sites.loans {
@@ -885,121 +1069,189 @@ impl Liveness {
         }
         for read in &sites.reads {
             if let Some(views) = loan_views_of.get(&read.local) {
-                points[read.block].push((read.seq, PointKind::ViewQuery(read.seq, views.clone())));
+                points[read.block].push((
+                    (read.index, read.seq, 0),
+                    PointKind::ViewQuery(read.seq, views.clone()),
+                ));
             }
         }
         for site in &sites.sites {
             match site.kind {
                 SiteKind::Consume { .. } => {
-                    points[site.block].push((site.seq, PointKind::Consume(site.seq, site.local)));
+                    points[site.block].push((
+                        (site.index, site.seq, 1),
+                        PointKind::Consume(site.seq, site.local),
+                    ));
                     if let Some(views) = loan_views_of.get(&site.local) {
-                        points[site.block]
-                            .push((site.seq, PointKind::ViewQuery(site.seq, views.clone())));
+                        points[site.block].push((
+                            (site.index, site.seq, 0),
+                            PointKind::ViewQuery(site.seq, views.clone()),
+                        ));
                     }
                 }
                 SiteKind::Displace | SiteKind::Writeback => {
                     let views = views_of.get(&site.local).cloned().unwrap_or_default();
-                    points[site.block].push((site.seq, PointKind::ViewQuery(site.seq, views)));
+                    points[site.block].push((
+                        (site.index, site.seq, 0),
+                        PointKind::ViewQuery(site.seq, views),
+                    ));
                 }
             }
         }
         for (position, record) in flow_events.iter().enumerate() {
             let seq = event_seqs.get(position).copied().unwrap_or(u32::MAX);
             if let FlowEvent::Def(local) = record.event {
-                points[record.block].push((seq, PointKind::Def(local)));
+                points[record.block].push(((record.index, seq, 1), PointKind::Def(local)));
             }
         }
-        for bucket in &mut points {
-            bucket.sort_by_key(|(seq, _)| *seq);
+        for projection in &sites.projections {
+            points[projection.block].push((
+                (projection.index, projection.seq, 0),
+                PointKind::Settled(projection.owner),
+            ));
         }
 
-        let set = |bits: &mut [u64], local: LocalId| {
-            bits[usize::from(local) / 64] |= 1u64 << (usize::from(local) % 64)
-        };
-        let clear = |bits: &mut [u64], local: LocalId| {
-            bits[usize::from(local) / 64] &= !(1u64 << (usize::from(local) % 64))
-        };
-        let get = |bits: &[u64], local: LocalId| {
-            bits[usize::from(local) / 64] & (1u64 << (usize::from(local) % 64)) != 0
-        };
-
-        // Successor map (unwind edges included).
-        let mut successors: Vec<Vec<BlockId>> = vec![Vec::new(); blocks.len()];
-        for (id, block) in blocks.iter().enumerate() {
-            for inst in &block.insts {
-                if let Inst::Call {
-                    unwind: Some(target),
-                    ..
-                }
-                | Inst::CallIndirect {
-                    unwind: Some(target),
-                    ..
-                } = inst
-                {
-                    successors[id].push(*target);
-                }
+        let mut operands: Vec<Vec<(Vec<LocalId>, Vec<LocalId>)>> = Vec::new();
+        for (block, data) in blocks.iter().enumerate() {
+            let mut block_operands = Vec::new();
+            for (index, inst) in data.insts.iter().enumerate() {
+                points[block].push(((index as u32, u32::MAX, 2), PointKind::Inst(index as u32)));
+                let mut probe = inst.clone();
+                let mut defs = Vec::new();
+                let mut uses = Vec::new();
+                super::visit_inst(&mut probe, &mut |slot, local| match slot {
+                    super::Slot::Def => defs.push(*local),
+                    super::Slot::Use(_) => uses.push(*local),
+                });
+                block_operands.push((defs, uses));
             }
-            match &block.term {
-                Some(Term::Goto(target, _)) => successors[id].push(*target),
-                Some(Term::Branch {
-                    then_block,
-                    else_block,
-                    ..
-                }) => successors[id].extend([*then_block, *else_block]),
-                Some(Term::Switch {
-                    targets, default, ..
-                }) => {
-                    successors[id].extend(targets.iter().copied());
-                    successors[id].push(*default);
-                }
-                _ => {}
-            }
+            points[block].sort_by_key(|(position, _)| *position);
+            operands.push(block_operands);
         }
 
-        let mut block_entry: Vec<Vec<u64>> = vec![vec![0; words]; blocks.len()];
-        // (block_entry is the fixpoint state; per-site answers are what
-        // the replay consumes.)
-        let mut live_after: FxHashMap<u32, bool> = FxHashMap::default();
-        let mut view_live_at: FxHashMap<u32, bool> = FxHashMap::default();
-        let mut changed = true;
-        while changed {
-            changed = false;
-            for (id, _) in blocks.iter().enumerate().rev() {
-                // live-out = union of successors' entries.
-                let mut live = vec![0u64; words];
-                for target in &successors[id] {
-                    or_into(&mut live, &block_entry[*target]);
-                }
-                // Apply this block's points in reverse walk order.
-                for (seq, point) in points[id].iter().rev() {
-                    match point {
-                        PointKind::Def(local) => clear(&mut live, *local),
-                        PointKind::Use(local) => {
-                            set(&mut live, *local);
-                            // A view use keeps its root's value pinned.
-                            // (Roots fold in for donation decisions.)
+        let term_uses: Vec<Vec<LocalId>> = blocks
+            .iter()
+            .map(|block| {
+                let mut uses = Vec::new();
+                if let Some(term) = &block.term {
+                    let mut probe = term.clone();
+                    super::visit_term(&mut probe, &mut |slot, local| {
+                        if slot.is_use() {
+                            uses.push(*local);
                         }
-                        PointKind::Consume(site_seq, local) => {
-                            live_after.insert(*site_seq, get(&live, *local));
-                            set(&mut live, *local);
-                            let _ = seq;
+                    });
+                }
+                uses
+            })
+            .collect();
+
+        let ordered: Vec<Vec<PointKind>> = points
+            .into_iter()
+            .map(|points| points.into_iter().map(|(_, point)| point).collect())
+            .collect();
+        let mut any_at: Vec<Vec<Vec<u64>>> = blocks
+            .iter()
+            .map(|block| vec![Vec::new(); block.insts.len() + 1])
+            .collect();
+        let mut live_after = FxHashMap::default();
+        let mut view_live_at = FxHashMap::default();
+
+        cfg.backward_bits(words * 2, |block, live| {
+            let (any, source) = live.split_at_mut(words);
+            for local in &term_uses[block] {
+                Self::use_with_roots(any, *local, &kept_alive, n_locals);
+            }
+            any_at[block][blocks[block].insts.len()] = any.to_vec();
+            for point in ordered[block].iter().rev() {
+                match point {
+                    PointKind::Inst(index) => {
+                        let (defs, uses) = &operands[block][*index as usize];
+                        for local in defs {
+                            if usize::from(*local) < n_locals {
+                                // Tracked mutable slots publish replacement through
+                                // ownership sites; clearing them here would make the old
+                                // and writeback incarnations look like a gap.
+                                if !writeback_slots.contains(local) {
+                                    bits::clear(any, *local);
+                                }
+                                if view_edges.contains_key(local) {
+                                    bits::clear(source, *local);
+                                }
+                            }
                         }
-                        PointKind::ViewQuery(site_seq, views) => {
-                            view_live_at
-                                .insert(*site_seq, views.iter().any(|view| get(&live, *view)));
+                        for local in uses {
+                            Self::use_with_roots(any, *local, &kept_alive, n_locals);
+                        }
+                        any_at[block][*index as usize] = any.to_vec();
+                    }
+                    PointKind::Use(local) => {
+                        Self::use_with_roots(any, *local, &kept_alive, n_locals);
+                        if usize::from(*local) < n_locals {
+                            bits::set(source, *local);
                         }
                     }
-                }
-                if live != block_entry[id] {
-                    block_entry[id] = live;
-                    changed = true;
+                    PointKind::Def(local) => {
+                        if usize::from(*local) < n_locals {
+                            bits::clear(source, *local);
+                        }
+                    }
+                    PointKind::Consume(seq, local) => {
+                        live_after.insert(
+                            *seq,
+                            usize::from(*local) < n_locals && bits::get(source, *local),
+                        );
+                        Self::use_with_roots(any, *local, &kept_alive, n_locals);
+                        if usize::from(*local) < n_locals {
+                            bits::set(source, *local);
+                        }
+                    }
+                    PointKind::ViewQuery(seq, views) => {
+                        view_live_at.insert(
+                            *seq,
+                            views.iter().any(|view| {
+                                usize::from(*view) < n_locals && bits::get(source, *view)
+                            }),
+                        );
+                    }
+                    PointKind::Settled(local) => {
+                        Self::use_with_roots(any, *local, &kept_alive, n_locals);
+                    }
                 }
             }
-        }
+            for param in &blocks[block].params {
+                if usize::from(*param) < n_locals {
+                    bits::clear(any, *param);
+                    bits::clear(source, *param);
+                }
+            }
+        });
 
         Liveness {
+            words,
+            any_at,
             live_after,
             view_live_at,
+        }
+    }
+
+    fn use_with_roots(
+        live: &mut [u64],
+        local: LocalId,
+        kept_alive: &FxHashMap<LocalId, Vec<LocalId>>,
+        n_locals: usize,
+    ) {
+        let mut pending = vec![local];
+        let mut seen = FxHashSet::default();
+        while let Some(current) = pending.pop() {
+            if !seen.insert(current) {
+                continue;
+            }
+            if usize::from(current) < n_locals {
+                bits::set(live, current);
+            }
+            if let Some(roots) = kept_alive.get(&current) {
+                pending.extend(roots.iter().copied());
+            }
         }
     }
 
@@ -1010,10 +1262,15 @@ impl Liveness {
     fn view_live_site(&self, seq: u32) -> bool {
         self.view_live_at.get(&seq).copied().unwrap_or(false)
     }
-}
 
-fn or_into(dest: &mut [u64], src: &[u64]) {
-    for (d, s) in dest.iter_mut().zip(src) {
-        *d |= *s;
+    fn any_live_at(&self, block: BlockId, point: u32, local: LocalId) -> bool {
+        let Some(set) = self
+            .any_at
+            .get(block)
+            .and_then(|points| points.get(point as usize))
+        else {
+            return false;
+        };
+        set.len() == self.words && usize::from(local) < self.words * 64 && bits::get(set, local)
     }
 }

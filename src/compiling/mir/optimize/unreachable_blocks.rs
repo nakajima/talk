@@ -1,6 +1,7 @@
 //! Remove MIR blocks that cannot be entered from the function entry.
 
 use crate::compiling::mir::build::{BlockData, Function, Inst, Term};
+use crate::compiling::mir::cfg::Cfg;
 
 use super::PassResult;
 
@@ -14,56 +15,19 @@ impl Reachability {
         if blocks.is_empty() {
             return Self { reachable };
         }
+        let cfg = Cfg::new(blocks);
         let mut pending = vec![0usize];
         while let Some(block) = pending.pop() {
             if reachable[block] {
                 continue;
             }
             reachable[block] = true;
-            for inst in &blocks[block].insts {
-                match inst {
-                    Inst::Call {
-                        unwind: Some(target),
-                        ..
-                    }
-                    | Inst::CallIndirect {
-                        unwind: Some(target),
-                        ..
-                    }
-                    | Inst::Suspend {
-                        unwind: Some(target),
-                        ..
-                    } if !reachable[*target] => pending.push(*target),
-                    _ => {}
-                }
-            }
-            match blocks[block].term {
-                Some(Term::Goto(target, _)) if !reachable[target] => pending.push(target),
-                Some(Term::Branch {
-                    then_block,
-                    else_block,
-                    ..
-                }) => {
-                    if !reachable[then_block] {
-                        pending.push(then_block);
-                    }
-                    if !reachable[else_block] {
-                        pending.push(else_block);
-                    }
-                }
-                Some(Term::Switch {
-                    ref targets,
-                    default,
-                    ..
-                }) => {
-                    for target in targets.iter().copied().chain(std::iter::once(default)) {
-                        if !reachable[target] {
-                            pending.push(target);
-                        }
-                    }
-                }
-                _ => {}
-            }
+            pending.extend(
+                cfg.successors[block]
+                    .iter()
+                    .copied()
+                    .filter(|target| !reachable[*target]),
+            );
         }
         Self { reachable }
     }

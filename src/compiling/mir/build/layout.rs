@@ -763,11 +763,11 @@ pub(crate) fn local_layouts(
                 },
                 Inst::Copy {
                     dest,
-                    src: Operand::Local(src),
+                    src: Operand::Borrow(src),
                 } => defs.push(Def::Propagate(*dest, *src)),
                 Inst::Field {
                     dest,
-                    src: Operand::Local(src),
+                    src: Operand::Borrow(src),
                     member,
                     ..
                 } => defs.push(Def::Field(*dest, *src, *member)),
@@ -775,7 +775,7 @@ pub(crate) fn local_layouts(
                 // in a native struct: its source must stay uniform.
                 Inst::GetElement {
                     dest,
-                    src: Operand::Local(src),
+                    src: Operand::Borrow(src),
                     ..
                 } => {
                     defs.push(Def::Uniform(*src));
@@ -794,7 +794,7 @@ pub(crate) fn local_layouts(
         if let Some(Term::Goto(target, args)) = &block.term {
             for (param, arg) in function.blocks[*target].params.iter().zip(args) {
                 match arg {
-                    Operand::Local(src) => defs.push(Def::Propagate(*param, *src)),
+                    Operand::Borrow(src) => defs.push(Def::Propagate(*param, *src)),
                     _ => defs.push(Def::Uniform(*param)),
                 }
             }
@@ -1434,16 +1434,16 @@ mod tests {
                     },
                     Inst::Copy {
                         dest: 2,
-                        src: Operand::Local(1),
+                        src: Operand::Borrow(1),
                     },
                 ],
-                term: Some(Term::Goto(1, vec![Operand::Local(2)])),
+                term: Some(Term::Goto(1, vec![Operand::Borrow(2)])),
             },
             BlockData {
                 debug: None,
                 params: vec![3],
                 insts: Vec::new(),
-                term: Some(Term::Return(Operand::Local(3))),
+                term: Some(Term::Return(Operand::Borrow(3))),
             },
         ];
         let derived = local_layouts(&function(4, blocks), &table(), &[]);
@@ -1470,7 +1470,7 @@ mod tests {
                     unwind: None,
                 },
             ],
-            term: Some(Term::Return(Operand::Local(1))),
+            term: Some(Term::Return(Operand::Borrow(1))),
         }];
         let derived = local_layouts(&function(2, blocks), &table(), &[]);
         assert_eq!(derived, vec![None, None]);
@@ -1488,7 +1488,7 @@ mod tests {
                 layout: 1,
                 args: Vec::new(),
             }],
-            term: Some(Term::Return(Operand::Local(1))),
+            term: Some(Term::Return(Operand::Borrow(1))),
         }];
         let derived = local_layouts(&function(2, blocks), &table(), &[]);
         assert_eq!(derived, vec![None, None]);
@@ -1525,7 +1525,7 @@ mod tests {
                 args: Vec::new(),
                 unwind: None,
             }],
-            term: Some(Term::Return(Operand::Local(1))),
+            term: Some(Term::Return(Operand::Borrow(1))),
         }];
         let mut f = function(2, blocks);
         f.param_reprs = vec![ParamRepr::Borrow(0)];
@@ -1551,12 +1551,12 @@ mod tests {
                 },
                 Inst::GetElement {
                     dest: 3,
-                    src: Operand::Local(1),
+                    src: Operand::Borrow(1),
                     element: LayoutId::MAX,
-                    index: Operand::Local(2),
+                    index: Operand::Borrow(2),
                 },
             ],
-            term: Some(Term::Return(Operand::Local(3))),
+            term: Some(Term::Return(Operand::Borrow(3))),
         }];
         let derived = local_layouts(&function(4, blocks), &table(), &[]);
         assert_eq!(derived, vec![None, None, None, None]);

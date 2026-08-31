@@ -9,7 +9,7 @@ fn0 script (arity 0, locals 8)
     GlobalStore { global: 1, src: Local(1) }
     GlobalLoad { dest: 6, global: 1 }
     Call { dest: 7, func: 1, args: [Local(6)], unwind: None }
-    -> Return(Local(7))
+    -> Return(Consume(7))
   b2:
     StringLit { dest: 3, bytes: [122, 101, 114, 111], layout: 1, storage_layout: 0 }
     -> Goto(1, [Local(3)])
@@ -28,7 +28,7 @@ fn1 print (arity 1, locals 7, params [&L1] -> L2)
     Field { dest: 5, src: Local(1), container: 1, offset: 0, member: Some(0) }
     Field { dest: 6, src: Local(1), container: 1, offset: 0, member: None }
     Free { src: Local(6) }
-    -> Return(Local(2))
+    -> Return(Consume(2))
   b1:
     Field { dest: 3, src: Local(1), container: 1, offset: 0, member: Some(0) }
     Field { dest: 4, src: Local(1), container: 1, offset: 0, member: None }
@@ -51,8 +51,8 @@ fn2 _with_host (arity 1, locals 12, params [L2] -> L2)
     MakeCont { dest: 9 }
     MakeClosure { dest: 10, func: 30, env: [Local(9)] }
     PushHandler { effect: @Effect(1:31), clause: Local(10), cont: Local(9), binds: false }
-    Call { dest: 11, func: 31, args: [Local(0)], unwind: None }
-    -> Return(Local(11))
+    Call { dest: 11, func: 31, args: [Consume(0)], unwind: None }
+    -> Return(Consume(11))
 fn3 _with_blocking_host (arity 1, locals 12, params [L2] -> L2)
   b0:
     MakeCont { dest: 1 }
@@ -71,7 +71,7 @@ fn3 _with_blocking_host (arity 1, locals 12, params [L2] -> L2)
     MakeClosure { dest: 10, func: 13, env: [Local(9)] }
     PushHandler { effect: @Effect(1:31), clause: Local(10), cont: Local(9), binds: false }
     CallIndirect { dest: 11, callee: Local(0), args: [], unwind: None }
-    -> Return(Local(11))
+    -> Return(Consume(11))
 fn4 entry_body (arity 0, locals 1)
   b0:
     Call { dest: 0, func: 0, args: [], unwind: None }
@@ -86,13 +86,13 @@ fn5 script_main (arity 0, locals 6)
     Field { dest: 4, src: Local(3), container: 1, offset: 0, member: Some(0) }
     Field { dest: 5, src: Local(3), container: 1, offset: 0, member: None }
     Free { src: Local(5) }
-    -> Return(Local(0))
+    -> Return(Consume(0))
 fn6 handler_clause (arity 1, locals 5)
   b0:
     EnvGet { dest: 1, index: 0 }
     Call { dest: 2, func: 7, args: [Local(0)], unwind: Some(1) }
     Call { dest: 4, func: 8, args: [Local(0)], unwind: None }
-    -> Return(Local(2))
+    -> Return(Consume(2))
   b1:
     Call { dest: 3, func: 8, args: [Local(0)], unwind: None }
     -> UnwindRet
@@ -102,7 +102,7 @@ fn7 _io_host (arity 1, locals 169, params [&L3] -> L2)
     Scalar { dest: 3, op: IntCmp(Eq), a: Local(2), b: Some(Const(Int(0))) }
     -> Branch { cond: Local(3), then_block: 4, else_block: 3 }
   b1:
-    -> Return(Local(1))
+    -> Return(Consume(1))
   b2:
     Io { dest: 10, op: 0, a: Local(7), b: Local(8), c: Local(9) }
     -> Goto(1, [Local(10)])
@@ -543,7 +543,7 @@ fn12 write_string (arity 2, locals 6, params [L2, &L1] -> L2)
     Field { dest: 4, src: Local(1), container: 1, offset: 0, member: None }
     Field { dest: 5, src: Local(1), container: 1, offset: 1, member: None }
     Io { dest: 2, op: 1, a: Local(0), b: Local(4), c: Local(5) }
-    -> Return(Local(2))
+    -> Return(Consume(2))
 fn13 handler_clause (arity 1, locals 5)
   b0:
     EnvGet { dest: 1, index: 0 }
@@ -559,10 +559,10 @@ fn14 _block_wait (arity 1, locals 61, params [&L5] -> L2)
     -> Goto(1, [])
   b1:
     Field { dest: 2, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 3, func: 18, args: [Local(1), Local(2)], unwind: None }
+    Call { dest: 3, func: 18, args: [Consume(1), Consume(2)], unwind: None }
     -> Branch { cond: Local(3), then_block: 2, else_block: 3 }
   b2:
-    Call { dest: 4, func: 21, args: [Local(0), Local(1)], unwind: None }
+    Call { dest: 4, func: 21, args: [Local(0), Consume(1)], unwind: None }
     GetTag { dest: 6, src: Local(4) }
     Scalar { dest: 7, op: IntCmp(Eq), a: Local(6), b: Some(Const(Int(0))) }
     -> Branch { cond: Local(7), then_block: 8, else_block: 7 }
@@ -574,7 +574,7 @@ fn14 _block_wait (arity 1, locals 61, params [&L5] -> L2)
     Copy { dest: 32, src: Const(Int(0)) }
     -> Goto(21, [])
   b5:
-    Call { dest: 28, func: 20, args: [Local(1), Const(Int(1))], unwind: None }
+    Call { dest: 28, func: 20, args: [Consume(1), Const(Int(1))], unwind: None }
     Copy { dest: 1, src: Local(28) }
     -> Goto(1, [])
   b6:
@@ -590,7 +590,7 @@ fn14 _block_wait (arity 1, locals 61, params [&L5] -> L2)
   b9:
     -> Goto(5, [Local(10)])
   b10:
-    Call { dest: 15, func: 22, args: [Local(14), Const(Int(4))], unwind: None }
+    Call { dest: 15, func: 22, args: [Consume(14), Const(Int(4))], unwind: None }
     Copy { dest: 16, src: Local(15) }
     -> Goto(9, [Const(Unit)])
   b11:
@@ -601,7 +601,7 @@ fn14 _block_wait (arity 1, locals 61, params [&L5] -> L2)
     Copy { dest: 14, src: Local(13) }
     -> Goto(10, [])
   b13:
-    Call { dest: 20, func: 22, args: [Local(19), Const(Int(11))], unwind: None }
+    Call { dest: 20, func: 22, args: [Consume(19), Const(Int(11))], unwind: None }
     Copy { dest: 21, src: Local(20) }
     -> Goto(9, [Const(Unit)])
   b14:
@@ -613,7 +613,7 @@ fn14 _block_wait (arity 1, locals 61, params [&L5] -> L2)
     -> Goto(13, [])
   b16:
     Call { dest: 25, func: 23, args: [Local(24)], unwind: None }
-    Call { dest: 26, func: 22, args: [Local(25), Const(Int(14))], unwind: None }
+    Call { dest: 26, func: 22, args: [Consume(25), Const(Int(14))], unwind: None }
     Copy { dest: 27, src: Local(26) }
     -> Goto(9, [Const(Unit)])
   b17:
@@ -628,10 +628,10 @@ fn14 _block_wait (arity 1, locals 61, params [&L5] -> L2)
     -> Trap("unmatched value")
   b21:
     Field { dest: 33, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 34, func: 18, args: [Local(32), Local(33)], unwind: None }
+    Call { dest: 34, func: 18, args: [Consume(32), Consume(33)], unwind: None }
     -> Branch { cond: Local(34), then_block: 22, else_block: 23 }
   b22:
-    Call { dest: 35, func: 21, args: [Local(0), Local(32)], unwind: None }
+    Call { dest: 35, func: 21, args: [Local(0), Consume(32)], unwind: None }
     GetTag { dest: 37, src: Local(35) }
     Scalar { dest: 38, op: IntCmp(Eq), a: Local(37), b: Some(Const(Int(0))) }
     -> Branch { cond: Local(38), then_block: 28, else_block: 27 }
@@ -640,7 +640,7 @@ fn14 _block_wait (arity 1, locals 61, params [&L5] -> L2)
   b24:
     -> Return(Const(Unit))
   b25:
-    Call { dest: 59, func: 20, args: [Local(32), Const(Int(1))], unwind: None }
+    Call { dest: 59, func: 20, args: [Consume(32), Const(Int(1))], unwind: None }
     Copy { dest: 32, src: Local(59) }
     -> Goto(21, [])
   b26:
@@ -656,7 +656,7 @@ fn14 _block_wait (arity 1, locals 61, params [&L5] -> L2)
   b29:
     -> Goto(25, [Local(41)])
   b30:
-    Call { dest: 46, func: 22, args: [Local(45), Const(Int(5))], unwind: None }
+    Call { dest: 46, func: 22, args: [Consume(45), Const(Int(5))], unwind: None }
     Copy { dest: 47, src: Local(46) }
     -> Goto(29, [Const(Unit)])
   b31:
@@ -667,7 +667,7 @@ fn14 _block_wait (arity 1, locals 61, params [&L5] -> L2)
     Copy { dest: 45, src: Local(44) }
     -> Goto(30, [])
   b33:
-    Call { dest: 51, func: 22, args: [Local(50), Const(Int(12))], unwind: None }
+    Call { dest: 51, func: 22, args: [Consume(50), Const(Int(12))], unwind: None }
     Copy { dest: 52, src: Local(51) }
     -> Goto(29, [Const(Unit)])
   b34:
@@ -679,7 +679,7 @@ fn14 _block_wait (arity 1, locals 61, params [&L5] -> L2)
     -> Goto(33, [])
   b36:
     Call { dest: 56, func: 23, args: [Local(55)], unwind: None }
-    Call { dest: 57, func: 22, args: [Local(56), Const(Int(15))], unwind: None }
+    Call { dest: 57, func: 22, args: [Consume(56), Const(Int(15))], unwind: None }
     Copy { dest: 58, src: Local(57) }
     -> Goto(29, [Const(Unit)])
   b37:
@@ -703,27 +703,27 @@ fn16 deinit (arity 1, locals 16, params [L5] -> L2)
   b0:
     Field { dest: 1, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 2, src: Local(0), container: 5, offset: 0, member: None }
-    Call { dest: 3, func: 17, args: [Local(2)], unwind: None }
+    Call { dest: 3, func: 17, args: [Consume(2)], unwind: None }
     -> Branch { cond: Local(3), then_block: 1, else_block: 3 }
   b1:
     Copy { dest: 5, src: Const(Int(0)) }
     -> Goto(4, [])
   b2:
-    -> Return(Local(4))
+    -> Return(Consume(4))
   b3:
     -> Goto(2, [Const(Unit)])
   b4:
     Field { dest: 6, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 7, func: 18, args: [Local(5), Local(6)], unwind: None }
+    Call { dest: 7, func: 18, args: [Consume(5), Consume(6)], unwind: None }
     -> Branch { cond: Local(7), then_block: 5, else_block: 6 }
   b5:
     Field { dest: 9, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 10, src: Local(0), container: 5, offset: 0, member: None }
     PtrAdd { dest: 8, ptr: Local(10), offset: Local(5), size: 8 }
     Copy { dest: 11, src: Local(8) }
-    Call { dest: 12, func: 19, args: [Local(11)], unwind: None }
+    Call { dest: 12, func: 19, args: [Consume(11)], unwind: None }
     Copy { dest: 13, src: Local(12) }
-    Call { dest: 14, func: 20, args: [Local(5), Const(Int(1))], unwind: None }
+    Call { dest: 14, func: 20, args: [Consume(5), Const(Int(1))], unwind: None }
     Copy { dest: 5, src: Local(14) }
     -> Goto(4, [])
   b6:
@@ -733,22 +733,22 @@ fn16 deinit (arity 1, locals 16, params [L5] -> L2)
 fn17 _is_unique (arity 1, locals 2, params [L2] -> L2)
   b0:
     IsUnique { dest: 1, src: Local(0) }
-    -> Return(Local(1))
+    -> Return(Consume(1))
 fn18 lt (arity 2, locals 3, params [L2, L2] -> L2)
   b0:
     Scalar { dest: 2, op: IntCmp(Lt), a: Local(0), b: Some(Local(1)) }
-    -> Return(Local(2))
+    -> Return(Consume(2))
 fn19 _load (arity 1, locals 2, params [L2] -> L7)
   b0:
     Load { dest: 1, ptr: Local(0), kind: Value }
-    -> Return(Local(1))
+    -> Return(Consume(1))
 fn20 add (arity 2, locals 3, params [L2, L2] -> L2)
   b0:
     Scalar { dest: 2, op: IntAdd, a: Local(0), b: Some(Local(1)) }
-    -> Return(Local(2))
+    -> Return(Consume(2))
 fn21 _index_iterable_get (arity 2, locals 12, params [&L5, L2] -> L8)
   b0:
-    Call { dest: 2, func: 18, args: [Local(1), Const(Int(0))], unwind: None }
+    Call { dest: 2, func: 18, args: [Consume(1), Const(Int(0))], unwind: None }
     Scalar { dest: 4, op: BoolCmp(Eq), a: Local(2), b: Some(Const(Bool(true))) }
     -> Branch { cond: Local(4), then_block: 2, else_block: 3 }
   b1:
@@ -760,45 +760,45 @@ fn21 _index_iterable_get (arity 2, locals 12, params [&L5, L2] -> L8)
     -> Branch { cond: Local(5), then_block: 4, else_block: 5 }
   b4:
     Field { dest: 6, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 7, func: 24, args: [Local(1), Local(6)], unwind: None }
+    Call { dest: 7, func: 24, args: [Consume(1), Consume(6)], unwind: None }
     -> Goto(1, [Local(7)])
   b5:
     -> Trap("unmatched value")
   b6:
     Aggregate { dest: 9, tag: 1, layout: L8, args: [] }
-    -> Return(Local(9))
+    -> Return(Consume(9))
   b7:
-    Call { dest: 10, func: 25, args: [Local(0), Local(1)], unwind: None }
+    Call { dest: 10, func: 25, args: [Local(0), Consume(1)], unwind: None }
     Aggregate { dest: 11, tag: 0, layout: L8, args: [Local(10)] }
-    -> Return(Local(11))
+    -> Return(Consume(11))
   b8:
     -> Goto(7, [Const(Unit)])
 fn22 _chan_ctl (arity 2, locals 3, params [L2, L2] -> L2)
   b0:
     ChanCtl { dest: 2, handle: Local(0), op: Local(1) }
-    -> Return(Local(2))
+    -> Return(Consume(2))
 fn23 _nanoseconds (arity 1, locals 2, params [&L6] -> L2)
   b0:
     Field { dest: 1, src: Local(0), container: 6, offset: 0, member: None }
-    -> Return(Local(1))
+    -> Return(Consume(1))
 fn24 gte (arity 2, locals 3, params [L2, L2] -> L2)
   b0:
     Scalar { dest: 2, op: IntCmp(Ge), a: Local(0), b: Some(Local(1)) }
-    -> Return(Local(2))
+    -> Return(Consume(2))
 fn25 _get_unchecked (arity 2, locals 7, params [&L5, L2] -> L2)
   b0:
     Field { dest: 3, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 4, src: Local(0), container: 5, offset: 0, member: None }
     PtrAdd { dest: 2, ptr: Local(4), offset: Local(1), size: 8 }
     Copy { dest: 5, src: Local(2) }
-    Call { dest: 6, func: 19, args: [Local(5)], unwind: None }
+    Call { dest: 6, func: 19, args: [Consume(5)], unwind: None }
     -> Return(Local(6))
 fn26 handler_clause (arity 1, locals 5)
   b0:
     EnvGet { dest: 1, index: 0 }
     Call { dest: 2, func: 7, args: [Local(0)], unwind: Some(1) }
     Call { dest: 4, func: 8, args: [Local(0)], unwind: None }
-    -> Return(Local(2))
+    -> Return(Consume(2))
   b1:
     Call { dest: 3, func: 8, args: [Local(0)], unwind: None }
     -> UnwindRet
@@ -849,12 +849,12 @@ fn30 handler_clause (arity 1, locals 5)
     -> UnwindRet
 fn31 _run_cooperative (arity 1, locals 7, params [L2] -> L2)
   b0:
-    Call { dest: 1, func: 32, args: [Local(0)], unwind: None }
+    Call { dest: 1, func: 32, args: [Consume(0)], unwind: None }
     GetTag { dest: 3, src: Local(1) }
     Scalar { dest: 4, op: IntCmp(Eq), a: Local(3), b: Some(Const(Int(0))) }
     -> Branch { cond: Local(4), then_block: 4, else_block: 3 }
   b1:
-    -> Return(Local(2))
+    -> Return(Consume(2))
   b2:
     -> Goto(1, [Const(Unit)])
   b3:
@@ -863,7 +863,7 @@ fn31 _run_cooperative (arity 1, locals 7, params [L2] -> L2)
   b4:
     -> Goto(2, [])
   b5:
-    Call { dest: 6, func: 33, args: [Local(5)], unwind: None }
+    Call { dest: 6, func: 33, args: [Consume(5)], unwind: None }
     -> Goto(1, [Local(6)])
   b6:
     -> Trap("unmatched value")
@@ -880,13 +880,13 @@ fn32 _drive_task (arity 1, locals 9, params [L2] -> L10)
     PushHandler { effect: @Effect(1:34), clause: Local(6), cont: Local(5), binds: true }
     CallIndirect { dest: 7, callee: Local(0), args: [], unwind: None }
     Aggregate { dest: 8, tag: 0, layout: L10, args: [] }
-    -> Return(Local(8))
+    -> Return(Consume(8))
 fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
   b0:
     Alloc { dest: 1, bytes: Const(Int(0)), kind: Value }
     Aggregate { dest: 2, tag: 0, layout: L4, args: [Local(1)] }
     Aggregate { dest: 3, tag: 0, layout: L5, args: [Local(2), Const(Int(0)), Const(Int(0))] }
-    Call { dest: 4, func: 34, args: [Local(3), Local(0)], unwind: Some(106) }
+    Call { dest: 4, func: 34, args: [Local(3), Consume(0)], unwind: Some(106) }
     Field { dest: 5, src: Local(4), container: 11, offset: 0, member: None }
     Field { dest: 6, src: Local(4), container: 11, offset: 1, member: Some(5) }
     Copy { dest: 3, src: Local(6) }
@@ -928,7 +928,7 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
     Call { dest: 178, func: 47, args: [Local(3)], unwind: Some(109) }
     Copy { dest: 3, src: Local(9) }
     Field { dest: 134, src: Local(3), container: 5, offset: 1, member: None }
-    Call { dest: 135, func: 39, args: [Local(134), Const(Int(0))], unwind: Some(111) }
+    Call { dest: 135, func: 39, args: [Consume(134), Const(Int(0))], unwind: Some(111) }
     -> Branch { cond: Local(135), then_block: 75, else_block: 77 }
   b9:
     -> Goto(5, [])
@@ -955,8 +955,8 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
   b17:
     Field { dest: 32, src: Local(24), container: 10, offset: 1, member: Some(9) }
     Copy { dest: 10, src: Const(Bool(true)) }
-    Call { dest: 33, func: 36, args: [Local(31), Const(Unit)], unwind: Some(109) }
-    Call { dest: 34, func: 34, args: [Local(9), Local(33)], unwind: Some(109) }
+    Call { dest: 33, func: 36, args: [Consume(31), Const(Unit)], unwind: Some(109) }
+    Call { dest: 34, func: 34, args: [Local(9), Consume(33)], unwind: Some(109) }
     Field { dest: 35, src: Local(34), container: 11, offset: 0, member: None }
     Field { dest: 36, src: Local(34), container: 11, offset: 1, member: Some(5) }
     Copy { dest: 9, src: Local(36) }
@@ -972,13 +972,13 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
     Field { dest: 42, src: Local(24), container: 10, offset: 1, member: None }
     Field { dest: 43, src: Local(24), container: 10, offset: 2, member: Some(9) }
     Copy { dest: 10, src: Const(Bool(true)) }
-    Call { dest: 44, func: 32, args: [Local(40)], unwind: Some(112) }
-    Call { dest: 45, func: 34, args: [Local(9), Local(44)], unwind: Some(112) }
+    Call { dest: 44, func: 32, args: [Consume(40)], unwind: Some(112) }
+    Call { dest: 45, func: 34, args: [Local(9), Consume(44)], unwind: Some(112) }
     Field { dest: 46, src: Local(45), container: 11, offset: 0, member: None }
     Field { dest: 47, src: Local(45), container: 11, offset: 1, member: Some(5) }
     Copy { dest: 9, src: Local(47) }
-    Call { dest: 48, func: 36, args: [Local(41), Const(Unit)], unwind: Some(109) }
-    Call { dest: 49, func: 34, args: [Local(9), Local(48)], unwind: Some(109) }
+    Call { dest: 48, func: 36, args: [Consume(41), Const(Unit)], unwind: Some(109) }
+    Call { dest: 49, func: 34, args: [Local(9), Consume(48)], unwind: Some(109) }
     Field { dest: 50, src: Local(49), container: 11, offset: 0, member: None }
     Field { dest: 51, src: Local(49), container: 11, offset: 1, member: Some(5) }
     Copy { dest: 9, src: Local(51) }
@@ -1012,10 +1012,10 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
     -> Goto(24, [])
   b28:
     Field { dest: 61, src: Local(55), container: 5, offset: 1, member: None }
-    Call { dest: 62, func: 18, args: [Local(60), Local(61)], unwind: Some(114) }
+    Call { dest: 62, func: 18, args: [Consume(60), Consume(61)], unwind: Some(114) }
     -> Branch { cond: Local(62), then_block: 29, else_block: 30 }
   b29:
-    Call { dest: 63, func: 37, args: [Local(55), Local(60)], unwind: Some(114) }
+    Call { dest: 63, func: 37, args: [Local(55), Consume(60)], unwind: Some(114) }
     GetTag { dest: 65, src: Local(63) }
     Scalar { dest: 66, op: IntCmp(Eq), a: Local(65), b: Some(Const(Int(0))) }
     -> Branch { cond: Local(66), then_block: 35, else_block: 34 }
@@ -1026,8 +1026,8 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
   b32:
     -> Branch { cond: Local(59), then_block: 51, else_block: 53 }
   b33:
-    Call { dest: 69, func: 22, args: [Local(68), Const(Int(0))], unwind: Some(114) }
-    Call { dest: 70, func: 38, args: [Local(69), Const(Int(1))], unwind: Some(114) }
+    Call { dest: 69, func: 22, args: [Consume(68), Const(Int(0))], unwind: Some(114) }
+    Call { dest: 70, func: 38, args: [Consume(69), Const(Int(1))], unwind: Some(114) }
     -> Branch { cond: Local(70), then_block: 36, else_block: 38 }
   b34:
     Scalar { dest: 72, op: IntCmp(Eq), a: Local(65), b: Some(Const(Int(1))) }
@@ -1044,8 +1044,8 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
   b38:
     -> Goto(37, [Const(Unit)])
   b39:
-    Call { dest: 75, func: 22, args: [Local(74), Const(Int(17))], unwind: Some(114) }
-    Call { dest: 76, func: 39, args: [Local(75), Const(Int(1))], unwind: Some(114) }
+    Call { dest: 75, func: 22, args: [Consume(74), Const(Int(17))], unwind: Some(114) }
+    Call { dest: 76, func: 39, args: [Consume(75), Const(Int(1))], unwind: Some(114) }
     -> Branch { cond: Local(76), then_block: 42, else_block: 44 }
   b40:
     Scalar { dest: 78, op: IntCmp(Eq), a: Local(65), b: Some(Const(Int(2))) }
@@ -1081,7 +1081,7 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
   b51:
     -> Goto(54, [])
   b52:
-    Call { dest: 85, func: 20, args: [Local(60), Const(Int(1))], unwind: Some(114) }
+    Call { dest: 85, func: 20, args: [Consume(60), Const(Int(1))], unwind: Some(114) }
     Copy { dest: 60, src: Local(85) }
     -> Goto(28, [])
   b53:
@@ -1090,8 +1090,8 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
     -> Goto(31, [Const(Unit)])
   b55:
     Copy { dest: 10, src: Const(Bool(true)) }
-    Call { dest: 88, func: 36, args: [Local(56), Const(Unit)], unwind: Some(113) }
-    Call { dest: 89, func: 34, args: [Local(9), Local(88)], unwind: Some(113) }
+    Call { dest: 88, func: 36, args: [Consume(56), Const(Unit)], unwind: Some(113) }
+    Call { dest: 89, func: 34, args: [Local(9), Consume(88)], unwind: Some(113) }
     Field { dest: 90, src: Local(89), container: 11, offset: 0, member: None }
     Field { dest: 91, src: Local(89), container: 11, offset: 1, member: Some(5) }
     Copy { dest: 9, src: Local(91) }
@@ -1103,10 +1103,10 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
     -> Goto(58, [])
   b58:
     Field { dest: 93, src: Local(55), container: 5, offset: 1, member: None }
-    Call { dest: 94, func: 18, args: [Local(92), Local(93)], unwind: Some(114) }
+    Call { dest: 94, func: 18, args: [Consume(92), Consume(93)], unwind: Some(114) }
     -> Branch { cond: Local(94), then_block: 59, else_block: 60 }
   b59:
-    Call { dest: 95, func: 37, args: [Local(55), Local(92)], unwind: Some(114) }
+    Call { dest: 95, func: 37, args: [Local(55), Consume(92)], unwind: Some(114) }
     GetTag { dest: 97, src: Local(95) }
     Scalar { dest: 98, op: IntCmp(Eq), a: Local(97), b: Some(Const(Int(0))) }
     -> Branch { cond: Local(98), then_block: 65, else_block: 64 }
@@ -1114,13 +1114,13 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
     -> Goto(61, [Const(Unit)])
   b61:
     Aggregate { dest: 128, tag: 1, layout: L10, args: [Local(55), Local(56)] }
-    Call { dest: 129, func: 34, args: [Local(9), Local(128)], unwind: Some(109) }
+    Call { dest: 129, func: 34, args: [Local(9), Consume(128)], unwind: Some(109) }
     Field { dest: 130, src: Local(129), container: 11, offset: 0, member: None }
     Field { dest: 131, src: Local(129), container: 11, offset: 1, member: Some(5) }
     Copy { dest: 9, src: Local(131) }
     -> Goto(56, [Local(130)])
   b62:
-    Call { dest: 126, func: 20, args: [Local(92), Const(Int(1))], unwind: Some(114) }
+    Call { dest: 126, func: 20, args: [Consume(92), Const(Int(1))], unwind: Some(114) }
     Copy { dest: 92, src: Local(126) }
     -> Goto(58, [])
   b63:
@@ -1128,7 +1128,7 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
     Field { dest: 102, src: Local(101), container: 11, offset: 0, member: None }
     Field { dest: 103, src: Local(101), container: 11, offset: 1, member: Some(5) }
     Copy { dest: 13, src: Local(103) }
-    Call { dest: 104, func: 42, args: [Local(16), Local(100)], unwind: Some(114) }
+    Call { dest: 104, func: 42, args: [Local(16), Consume(100)], unwind: Some(114) }
     Field { dest: 105, src: Local(104), container: 11, offset: 0, member: None }
     Field { dest: 106, src: Local(104), container: 11, offset: 1, member: Some(5) }
     Copy { dest: 16, src: Local(106) }
@@ -1145,7 +1145,7 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
     Field { dest: 111, src: Local(110), container: 11, offset: 0, member: None }
     Field { dest: 112, src: Local(110), container: 11, offset: 1, member: Some(5) }
     Copy { dest: 13, src: Local(112) }
-    Call { dest: 113, func: 42, args: [Local(16), Local(109)], unwind: Some(114) }
+    Call { dest: 113, func: 42, args: [Local(16), Consume(109)], unwind: Some(114) }
     Field { dest: 114, src: Local(113), container: 11, offset: 0, member: None }
     Field { dest: 115, src: Local(113), container: 11, offset: 1, member: Some(5) }
     Copy { dest: 16, src: Local(115) }
@@ -1163,7 +1163,7 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
     Field { dest: 121, src: Local(119), container: 11, offset: 1, member: Some(5) }
     Copy { dest: 13, src: Local(121) }
     Call { dest: 122, func: 23, args: [Local(118)], unwind: Some(114) }
-    Call { dest: 123, func: 42, args: [Local(16), Local(122)], unwind: Some(114) }
+    Call { dest: 123, func: 42, args: [Local(16), Consume(122)], unwind: Some(114) }
     Field { dest: 124, src: Local(123), container: 11, offset: 0, member: None }
     Field { dest: 125, src: Local(123), container: 11, offset: 1, member: Some(5) }
     Copy { dest: 16, src: Local(125) }
@@ -1199,14 +1199,14 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
     -> Goto(80, [Const(Unit)])
   b82:
     Field { dest: 140, src: Local(13), container: 5, offset: 1, member: None }
-    Call { dest: 141, func: 18, args: [Local(139), Local(140)], unwind: Some(111) }
+    Call { dest: 141, func: 18, args: [Consume(139), Consume(140)], unwind: Some(111) }
     -> Branch { cond: Local(141), then_block: 83, else_block: 84 }
   b83:
-    Call { dest: 142, func: 46, args: [Local(13), Local(139)], unwind: Some(111) }
+    Call { dest: 142, func: 46, args: [Local(13), Consume(139)], unwind: Some(111) }
     Copy { dest: 143, src: Local(142) }
-    Call { dest: 144, func: 46, args: [Local(16), Local(139)], unwind: Some(111) }
+    Call { dest: 144, func: 46, args: [Local(16), Consume(139)], unwind: Some(111) }
     Copy { dest: 145, src: Local(144) }
-    Call { dest: 146, func: 39, args: [Local(143), Const(Int(0))], unwind: Some(111) }
+    Call { dest: 146, func: 39, args: [Consume(143), Const(Int(0))], unwind: Some(111) }
     Scalar { dest: 148, op: BoolCmp(Eq), a: Local(146), b: Some(Const(Bool(true))) }
     -> Branch { cond: Local(148), then_block: 87, else_block: 88 }
   b84:
@@ -1218,9 +1218,9 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
     -> Goto(94, [])
   b86:
     Copy { dest: 152, src: Local(147) }
-    Call { dest: 153, func: 22, args: [Local(145), Local(152)], unwind: Some(111) }
+    Call { dest: 153, func: 22, args: [Consume(145), Consume(152)], unwind: Some(111) }
     Copy { dest: 154, src: Local(153) }
-    Call { dest: 155, func: 20, args: [Local(139), Const(Int(1))], unwind: Some(111) }
+    Call { dest: 155, func: 20, args: [Consume(139), Const(Int(1))], unwind: Some(111) }
     Copy { dest: 139, src: Local(155) }
     -> Goto(82, [])
   b87:
@@ -1229,7 +1229,7 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
     Scalar { dest: 149, op: BoolCmp(Eq), a: Local(146), b: Some(Const(Bool(false))) }
     -> Branch { cond: Local(149), then_block: 89, else_block: 90 }
   b89:
-    Call { dest: 150, func: 39, args: [Local(143), Const(Int(1))], unwind: Some(111) }
+    Call { dest: 150, func: 39, args: [Consume(143), Const(Int(1))], unwind: Some(111) }
     -> Branch { cond: Local(150), then_block: 91, else_block: 93 }
   b90:
     -> Trap("unmatched value")
@@ -1241,14 +1241,14 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
     -> Goto(92, [Const(Int(14))])
   b94:
     Field { dest: 160, src: Local(13), container: 5, offset: 1, member: None }
-    Call { dest: 161, func: 18, args: [Local(159), Local(160)], unwind: Some(111) }
+    Call { dest: 161, func: 18, args: [Consume(159), Consume(160)], unwind: Some(111) }
     -> Branch { cond: Local(161), then_block: 95, else_block: 96 }
   b95:
-    Call { dest: 162, func: 46, args: [Local(13), Local(159)], unwind: Some(111) }
+    Call { dest: 162, func: 46, args: [Local(13), Consume(159)], unwind: Some(111) }
     Copy { dest: 163, src: Local(162) }
-    Call { dest: 164, func: 46, args: [Local(16), Local(159)], unwind: Some(111) }
+    Call { dest: 164, func: 46, args: [Local(16), Consume(159)], unwind: Some(111) }
     Copy { dest: 165, src: Local(164) }
-    Call { dest: 166, func: 39, args: [Local(163), Const(Int(0))], unwind: Some(111) }
+    Call { dest: 166, func: 39, args: [Consume(163), Const(Int(0))], unwind: Some(111) }
     Scalar { dest: 168, op: BoolCmp(Eq), a: Local(166), b: Some(Const(Bool(true))) }
     -> Branch { cond: Local(168), then_block: 99, else_block: 100 }
   b96:
@@ -1257,9 +1257,9 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
     -> Goto(80, [Const(Unit)])
   b98:
     Copy { dest: 172, src: Local(167) }
-    Call { dest: 173, func: 22, args: [Local(165), Local(172)], unwind: Some(111) }
+    Call { dest: 173, func: 22, args: [Consume(165), Consume(172)], unwind: Some(111) }
     Copy { dest: 174, src: Local(173) }
-    Call { dest: 175, func: 20, args: [Local(159), Const(Int(1))], unwind: Some(111) }
+    Call { dest: 175, func: 20, args: [Consume(159), Const(Int(1))], unwind: Some(111) }
     Copy { dest: 159, src: Local(175) }
     -> Goto(94, [])
   b99:
@@ -1268,7 +1268,7 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
     Scalar { dest: 169, op: BoolCmp(Eq), a: Local(166), b: Some(Const(Bool(false))) }
     -> Branch { cond: Local(169), then_block: 101, else_block: 102 }
   b101:
-    Call { dest: 170, func: 39, args: [Local(163), Const(Int(1))], unwind: Some(111) }
+    Call { dest: 170, func: 39, args: [Consume(163), Const(Int(1))], unwind: Some(111) }
     -> Branch { cond: Local(170), then_block: 103, else_block: 105 }
   b102:
     -> Trap("unmatched value")
@@ -1313,14 +1313,14 @@ fn33 _drain_cooperative (arity 1, locals 192, params [L10] -> L2)
 fn34 push (arity 2, locals 28, params [&L5, L10] -> L11)
   b0:
     Field { dest: 2, src: Local(0), container: 5, offset: 2, member: None }
-    Call { dest: 3, func: 39, args: [Local(2), Const(Int(0))], unwind: Some(9) }
+    Call { dest: 3, func: 39, args: [Consume(2), Const(Int(0))], unwind: Some(9) }
     Scalar { dest: 5, op: BoolCmp(Eq), a: Local(3), b: Some(Const(Bool(true))) }
     -> Branch { cond: Local(5), then_block: 2, else_block: 3 }
   b1:
     Copy { dest: 9, src: Local(4) }
     Field { dest: 10, src: Local(0), container: 5, offset: 1, member: None }
     Field { dest: 11, src: Local(0), container: 5, offset: 2, member: None }
-    Call { dest: 12, func: 24, args: [Local(10), Local(11)], unwind: Some(9) }
+    Call { dest: 12, func: 24, args: [Consume(10), Consume(11)], unwind: Some(9) }
     -> Branch { cond: Local(12), then_block: 6, else_block: 8 }
   b2:
     -> Goto(1, [Const(Int(1))])
@@ -1329,12 +1329,12 @@ fn34 push (arity 2, locals 28, params [&L5, L10] -> L11)
     -> Branch { cond: Local(6), then_block: 4, else_block: 5 }
   b4:
     Field { dest: 7, src: Local(0), container: 5, offset: 2, member: None }
-    Call { dest: 8, func: 57, args: [Local(7), Const(Int(2))], unwind: Some(9) }
+    Call { dest: 8, func: 57, args: [Consume(7), Const(Int(2))], unwind: Some(9) }
     -> Goto(1, [Local(8)])
   b5:
     -> Trap("unmatched value")
   b6:
-    Call { dest: 14, func: 74, args: [Local(0), Local(9)], unwind: Some(9) }
+    Call { dest: 14, func: 74, args: [Local(0), Consume(9)], unwind: Some(9) }
     SetField { rec: 0, src: Local(9), container: 5, offset: 2, member: None }
     Field { dest: 15, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 16, src: Local(0), container: 5, offset: 0, member: None }
@@ -1343,14 +1343,14 @@ fn34 push (arity 2, locals 28, params [&L5, L10] -> L11)
     -> Goto(7, [Const(Unit)])
   b7:
     Field { dest: 20, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 21, func: 85, args: [Local(0), Local(20), Local(1)], unwind: None }
+    Call { dest: 21, func: 85, args: [Local(0), Consume(20), Consume(1)], unwind: None }
     Field { dest: 22, src: Local(21), container: 11, offset: 0, member: None }
     Field { dest: 23, src: Local(21), container: 11, offset: 1, member: Some(5) }
     Copy { dest: 0, src: Local(23) }
     Field { dest: 24, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 25, func: 20, args: [Local(24), Const(Int(1))], unwind: None }
+    Call { dest: 25, func: 20, args: [Consume(24), Const(Int(1))], unwind: None }
     SetField { rec: 0, src: Local(25), container: 5, offset: 1, member: None }
-    Aggregate { dest: 26, tag: 0, layout: L11, args: [Const(Unit), Local(0)] }
+    Aggregate { dest: 26, tag: 0, layout: L11, args: [Const(Unit), Consume(0)] }
     -> Return(Local(26))
   b8:
     Call { dest: 17, func: 72, args: [Local(0)], unwind: Some(9) }
@@ -1364,11 +1364,11 @@ fn34 push (arity 2, locals 28, params [&L5, L10] -> L11)
 fn35 pop (arity 1, locals 19, params [&L5] -> L12)
   b0:
     Field { dest: 1, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 2, func: 39, args: [Local(1), Const(Int(0))], unwind: None }
+    Call { dest: 2, func: 39, args: [Consume(1), Const(Int(0))], unwind: None }
     -> Branch { cond: Local(2), then_block: 1, else_block: 3 }
   b1:
     Aggregate { dest: 4, tag: 1, layout: L8, args: [] }
-    Aggregate { dest: 5, tag: 0, layout: L12, args: [Local(4), Local(0)] }
+    Aggregate { dest: 5, tag: 0, layout: L12, args: [Consume(4), Consume(0)] }
     -> Return(Local(5))
   b2:
     Call { dest: 6, func: 72, args: [Local(0)], unwind: None }
@@ -1376,27 +1376,27 @@ fn35 pop (arity 1, locals 19, params [&L5] -> L12)
     Field { dest: 8, src: Local(6), container: 11, offset: 1, member: Some(5) }
     Copy { dest: 0, src: Local(8) }
     Field { dest: 9, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 10, func: 73, args: [Local(9), Const(Int(1))], unwind: None }
+    Call { dest: 10, func: 73, args: [Consume(9), Const(Int(1))], unwind: None }
     Copy { dest: 11, src: Local(10) }
     Field { dest: 13, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 14, src: Local(0), container: 5, offset: 0, member: None }
     PtrAdd { dest: 12, ptr: Local(14), offset: Local(11), size: 8 }
     Copy { dest: 15, src: Local(12) }
-    Call { dest: 16, func: 52, args: [Local(15)], unwind: None }
+    Call { dest: 16, func: 52, args: [Consume(15)], unwind: None }
     SetField { rec: 0, src: Local(11), container: 5, offset: 1, member: None }
     Aggregate { dest: 17, tag: 0, layout: L8, args: [Local(16)] }
-    Aggregate { dest: 18, tag: 0, layout: L12, args: [Local(17), Local(0)] }
+    Aggregate { dest: 18, tag: 0, layout: L12, args: [Consume(17), Consume(0)] }
     -> Return(Local(18))
   b3:
     -> Goto(2, [Const(Unit)])
 fn36 resume (arity 2, locals 3, params [L9, &L2] -> L10)
   b0:
     Resume { dest: 2, cont: Local(0), value: Local(1) }
-    -> Return(Local(2))
+    -> Return(Consume(2))
 fn37 get (arity 2, locals 4, params [&L5, L2] -> L2)
   b0:
-    Call { dest: 2, func: 71, args: [Local(0), Local(1)], unwind: None }
-    Call { dest: 3, func: 25, args: [Local(0), Local(1)], unwind: None }
+    Call { dest: 2, func: 71, args: [Local(0), Consume(1)], unwind: None }
+    Call { dest: 3, func: 25, args: [Local(0), Consume(1)], unwind: None }
     -> Return(Local(3))
 fn38 notEquals (arity 2, locals 4, params [&L2, &L2] -> L2)
   b0:
@@ -1405,25 +1405,25 @@ fn38 notEquals (arity 2, locals 4, params [&L2, &L2] -> L2)
   b1:
     -> Goto(2, [Const(Bool(false))])
   b2:
-    -> Return(Local(3))
+    -> Return(Consume(3))
   b3:
     -> Goto(2, [Const(Bool(true))])
 fn39 equals (arity 2, locals 3, params [L2, L2] -> L2)
   b0:
     Scalar { dest: 2, op: IntCmp(Eq), a: Local(0), b: Some(Local(1)) }
-    -> Return(Local(2))
+    -> Return(Consume(2))
 fn40 now (arity 0, locals 2, params [] -> L6)
   b0:
     Call { dest: 0, func: 69, args: [], unwind: None }
     Aggregate { dest: 1, tag: 0, layout: L6, args: [Local(0)] }
-    -> Return(Local(1))
+    -> Return(Consume(1))
 fn41 gte (arity 2, locals 7, params [&L6, &L6] -> L2)
   b0:
     Call { dest: 2, func: 66, args: [Local(0), Local(1)], unwind: None }
     Scalar { dest: 4, op: BoolCmp(Eq), a: Local(2), b: Some(Const(Bool(true))) }
     -> Branch { cond: Local(4), then_block: 2, else_block: 3 }
   b1:
-    -> Return(Local(3))
+    -> Return(Consume(3))
   b2:
     -> Goto(1, [Const(Bool(true))])
   b3:
@@ -1437,14 +1437,14 @@ fn41 gte (arity 2, locals 7, params [&L6, &L6] -> L2)
 fn42 push (arity 2, locals 27, params [&L5, L2] -> L11)
   b0:
     Field { dest: 2, src: Local(0), container: 5, offset: 2, member: None }
-    Call { dest: 3, func: 39, args: [Local(2), Const(Int(0))], unwind: None }
+    Call { dest: 3, func: 39, args: [Consume(2), Const(Int(0))], unwind: None }
     Scalar { dest: 5, op: BoolCmp(Eq), a: Local(3), b: Some(Const(Bool(true))) }
     -> Branch { cond: Local(5), then_block: 2, else_block: 3 }
   b1:
     Copy { dest: 9, src: Local(4) }
     Field { dest: 10, src: Local(0), container: 5, offset: 1, member: None }
     Field { dest: 11, src: Local(0), container: 5, offset: 2, member: None }
-    Call { dest: 12, func: 24, args: [Local(10), Local(11)], unwind: None }
+    Call { dest: 12, func: 24, args: [Consume(10), Consume(11)], unwind: None }
     -> Branch { cond: Local(12), then_block: 6, else_block: 8 }
   b2:
     -> Goto(1, [Const(Int(1))])
@@ -1453,12 +1453,12 @@ fn42 push (arity 2, locals 27, params [&L5, L2] -> L11)
     -> Branch { cond: Local(6), then_block: 4, else_block: 5 }
   b4:
     Field { dest: 7, src: Local(0), container: 5, offset: 2, member: None }
-    Call { dest: 8, func: 57, args: [Local(7), Const(Int(2))], unwind: None }
+    Call { dest: 8, func: 57, args: [Consume(7), Const(Int(2))], unwind: None }
     -> Goto(1, [Local(8)])
   b5:
     -> Trap("unmatched value")
   b6:
-    Call { dest: 14, func: 58, args: [Local(0), Local(9)], unwind: None }
+    Call { dest: 14, func: 58, args: [Local(0), Consume(9)], unwind: None }
     SetField { rec: 0, src: Local(9), container: 5, offset: 2, member: None }
     Field { dest: 15, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 16, src: Local(0), container: 5, offset: 0, member: None }
@@ -1467,14 +1467,14 @@ fn42 push (arity 2, locals 27, params [&L5, L2] -> L11)
     -> Goto(7, [Const(Unit)])
   b7:
     Field { dest: 20, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 21, func: 60, args: [Local(0), Local(20), Local(1)], unwind: None }
+    Call { dest: 21, func: 60, args: [Local(0), Consume(20), Consume(1)], unwind: None }
     Field { dest: 22, src: Local(21), container: 11, offset: 0, member: None }
     Field { dest: 23, src: Local(21), container: 11, offset: 1, member: Some(5) }
     Copy { dest: 0, src: Local(23) }
     Field { dest: 24, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 25, func: 20, args: [Local(24), Const(Int(1))], unwind: None }
+    Call { dest: 25, func: 20, args: [Consume(24), Const(Int(1))], unwind: None }
     SetField { rec: 0, src: Local(25), container: 5, offset: 1, member: None }
-    Aggregate { dest: 26, tag: 0, layout: L11, args: [Const(Unit), Local(0)] }
+    Aggregate { dest: 26, tag: 0, layout: L11, args: [Const(Unit), Consume(0)] }
     -> Return(Local(26))
   b8:
     Call { dest: 17, func: 59, args: [Local(0)], unwind: None }
@@ -1511,11 +1511,11 @@ fn44 shared_drop (arity 1, locals 5, params [L10] -> uniform)
 fn45 not (arity 1, locals 2, params [L2] -> L2)
   b0:
     Scalar { dest: 1, op: BoolCmp(Eq), a: Local(0), b: Some(Const(Bool(false))) }
-    -> Return(Local(1))
+    -> Return(Consume(1))
 fn46 get (arity 2, locals 4, params [&L5, L2] -> L2)
   b0:
-    Call { dest: 2, func: 53, args: [Local(0), Local(1)], unwind: None }
-    Call { dest: 3, func: 54, args: [Local(0), Local(1)], unwind: None }
+    Call { dest: 2, func: 53, args: [Local(0), Consume(1)], unwind: None }
+    Call { dest: 3, func: 54, args: [Local(0), Consume(1)], unwind: None }
     -> Return(Local(3))
 fn47 shared_drop (arity 1, locals 4, params [L5] -> uniform)
   b0:
@@ -1528,26 +1528,26 @@ fn48 deinit (arity 1, locals 17, params [L5] -> L2)
   b0:
     Field { dest: 1, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 2, src: Local(0), container: 5, offset: 0, member: None }
-    Call { dest: 3, func: 17, args: [Local(2)], unwind: None }
+    Call { dest: 3, func: 17, args: [Consume(2)], unwind: None }
     -> Branch { cond: Local(3), then_block: 1, else_block: 3 }
   b1:
     Copy { dest: 5, src: Const(Int(0)) }
     -> Goto(4, [])
   b2:
-    -> Return(Local(4))
+    -> Return(Consume(4))
   b3:
     -> Goto(2, [Const(Unit)])
   b4:
     Field { dest: 6, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 7, func: 18, args: [Local(5), Local(6)], unwind: None }
+    Call { dest: 7, func: 18, args: [Consume(5), Consume(6)], unwind: None }
     -> Branch { cond: Local(7), then_block: 5, else_block: 6 }
   b5:
     Field { dest: 9, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 10, src: Local(0), container: 5, offset: 0, member: None }
     PtrAdd { dest: 8, ptr: Local(10), offset: Local(5), size: 8 }
     Copy { dest: 11, src: Local(8) }
-    Call { dest: 12, func: 52, args: [Local(11)], unwind: None }
-    Call { dest: 13, func: 20, args: [Local(5), Const(Int(1))], unwind: Some(8) }
+    Call { dest: 12, func: 52, args: [Consume(11)], unwind: None }
+    Call { dest: 13, func: 20, args: [Consume(5), Const(Int(1))], unwind: Some(8) }
     Copy { dest: 5, src: Local(13) }
     -> Goto(9, [])
   b6:
@@ -1571,27 +1571,27 @@ fn50 deinit (arity 1, locals 16, params [L5] -> L2)
   b0:
     Field { dest: 1, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 2, src: Local(0), container: 5, offset: 0, member: None }
-    Call { dest: 3, func: 17, args: [Local(2)], unwind: None }
+    Call { dest: 3, func: 17, args: [Consume(2)], unwind: None }
     -> Branch { cond: Local(3), then_block: 1, else_block: 3 }
   b1:
     Copy { dest: 5, src: Const(Int(0)) }
     -> Goto(4, [])
   b2:
-    -> Return(Local(4))
+    -> Return(Consume(4))
   b3:
     -> Goto(2, [Const(Unit)])
   b4:
     Field { dest: 6, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 7, func: 18, args: [Local(5), Local(6)], unwind: None }
+    Call { dest: 7, func: 18, args: [Consume(5), Consume(6)], unwind: None }
     -> Branch { cond: Local(7), then_block: 5, else_block: 6 }
   b5:
     Field { dest: 9, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 10, src: Local(0), container: 5, offset: 0, member: None }
     PtrAdd { dest: 8, ptr: Local(10), offset: Local(5), size: 8 }
     Copy { dest: 11, src: Local(8) }
-    Call { dest: 12, func: 51, args: [Local(11)], unwind: None }
+    Call { dest: 12, func: 51, args: [Consume(11)], unwind: None }
     Copy { dest: 13, src: Local(12) }
-    Call { dest: 14, func: 20, args: [Local(5), Const(Int(1))], unwind: None }
+    Call { dest: 14, func: 20, args: [Consume(5), Const(Int(1))], unwind: None }
     Copy { dest: 5, src: Local(14) }
     -> Goto(4, [])
   b6:
@@ -1601,14 +1601,14 @@ fn50 deinit (arity 1, locals 16, params [L5] -> L2)
 fn51 _load (arity 1, locals 2, params [L2] -> L2)
   b0:
     Load { dest: 1, ptr: Local(0), kind: Int }
-    -> Return(Local(1))
+    -> Return(Consume(1))
 fn52 _load (arity 1, locals 2, params [L2] -> L10)
   b0:
     Load { dest: 1, ptr: Local(0), kind: Value }
-    -> Return(Local(1))
+    -> Return(Consume(1))
 fn53 _check_index (arity 2, locals 19, params [&L5, L2] -> L2)
   b0:
-    Call { dest: 2, func: 18, args: [Local(1), Const(Int(0))], unwind: None }
+    Call { dest: 2, func: 18, args: [Consume(1), Const(Int(0))], unwind: None }
     Scalar { dest: 4, op: BoolCmp(Eq), a: Local(2), b: Some(Const(Bool(true))) }
     -> Branch { cond: Local(4), then_block: 2, else_block: 3 }
   b1:
@@ -1620,7 +1620,7 @@ fn53 _check_index (arity 2, locals 19, params [&L5, L2] -> L2)
     -> Branch { cond: Local(5), then_block: 4, else_block: 5 }
   b4:
     Field { dest: 6, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 7, func: 24, args: [Local(1), Local(6)], unwind: None }
+    Call { dest: 7, func: 24, args: [Consume(1), Consume(6)], unwind: None }
     -> Goto(1, [Local(7)])
   b5:
     -> Trap("unmatched value")
@@ -1630,7 +1630,7 @@ fn53 _check_index (arity 2, locals 19, params [&L5, L2] -> L2)
     FindHandler { clause: 11, cont: 12, index: 13, binds: 14, effect: @Effect(1:33) }
     -> Branch { cond: Local(14), then_block: 9, else_block: 11 }
   b7:
-    -> Return(Local(8))
+    -> Return(Consume(8))
   b8:
     -> Goto(7, [Const(Unit)])
   b9:
@@ -1650,7 +1650,7 @@ fn54 _get_unchecked (arity 2, locals 7, params [&L5, L2] -> L2)
     Field { dest: 4, src: Local(0), container: 5, offset: 0, member: None }
     PtrAdd { dest: 2, ptr: Local(4), offset: Local(1), size: 8 }
     Copy { dest: 5, src: Local(2) }
-    Call { dest: 6, func: 51, args: [Local(5)], unwind: None }
+    Call { dest: 6, func: 51, args: [Consume(5)], unwind: None }
     -> Return(Local(6))
 fn55 shared_retain (arity 1, locals 3, params [L1] -> uniform)
   b0:
@@ -1665,20 +1665,20 @@ fn56 shared_retain (arity 1, locals 2, params [L0] -> uniform)
 fn57 multiply (arity 2, locals 3, params [L2, L2] -> L2)
   b0:
     Scalar { dest: 2, op: IntMul, a: Local(0), b: Some(Local(1)) }
-    -> Return(Local(2))
+    -> Return(Consume(2))
 fn58 allocate_with_capacity (arity 2, locals 28, params [&L5, L2] -> L4)
   b0:
-    Call { dest: 2, func: 39, args: [Local(1), Const(Int(0))], unwind: None }
+    Call { dest: 2, func: 39, args: [Consume(1), Const(Int(0))], unwind: None }
     -> Branch { cond: Local(2), then_block: 1, else_block: 3 }
   b1:
     Copy { dest: 1, src: Const(Int(1)) }
     -> Goto(2, [Const(Unit)])
   b2:
-    Call { dest: 4, func: 62, args: [Local(1)], unwind: None }
+    Call { dest: 4, func: 62, args: [Consume(1)], unwind: None }
     Field { dest: 5, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 6, src: Local(0), container: 5, offset: 0, member: None }
-    Call { dest: 7, func: 17, args: [Local(6)], unwind: Some(11) }
-    Call { dest: 8, func: 63, args: [Local(7), Const(Bool(false))], unwind: Some(11) }
+    Call { dest: 7, func: 17, args: [Consume(6)], unwind: Some(11) }
+    Call { dest: 8, func: 63, args: [Consume(7), Const(Bool(false))], unwind: Some(11) }
     Copy { dest: 9, src: Local(8) }
     Copy { dest: 10, src: Const(Int(0)) }
     -> Goto(4, [])
@@ -1686,7 +1686,7 @@ fn58 allocate_with_capacity (arity 2, locals 28, params [&L5, L2] -> L4)
     -> Goto(2, [Const(Unit)])
   b4:
     Field { dest: 11, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 12, func: 18, args: [Local(10), Local(11)], unwind: Some(11) }
+    Call { dest: 12, func: 18, args: [Consume(10), Consume(11)], unwind: Some(11) }
     -> Branch { cond: Local(12), then_block: 5, else_block: 6 }
   b5:
     Field { dest: 14, src: Local(0), container: 5, offset: 0, member: Some(4) }
@@ -1700,15 +1700,15 @@ fn58 allocate_with_capacity (arity 2, locals 28, params [&L5, L2] -> L4)
   b6:
     -> Goto(7, [Const(Unit)])
   b7:
-    -> Return(Local(4))
+    -> Return(Consume(4))
   b8:
-    Call { dest: 21, func: 46, args: [Local(0), Local(10)], unwind: Some(11) }
+    Call { dest: 21, func: 46, args: [Local(0), Consume(10)], unwind: Some(11) }
     Call { dest: 22, func: 64, args: [Local(21)], unwind: Some(11) }
     -> Goto(9, [Local(22)])
   b9:
-    Call { dest: 23, func: 51, args: [Local(16)], unwind: Some(11) }
-    Call { dest: 24, func: 61, args: [Local(19), Local(23)], unwind: Some(11) }
-    Call { dest: 25, func: 20, args: [Local(10), Const(Int(1))], unwind: Some(11) }
+    Call { dest: 23, func: 51, args: [Consume(16)], unwind: Some(11) }
+    Call { dest: 24, func: 61, args: [Consume(19), Consume(23)], unwind: Some(11) }
+    Call { dest: 25, func: 20, args: [Consume(10), Const(Int(1))], unwind: Some(11) }
     Copy { dest: 10, src: Local(25) }
     -> Goto(4, [])
   b10:
@@ -1721,24 +1721,24 @@ fn59 uniqued_storage (arity 1, locals 14, params [&L5] -> L11)
   b0:
     Field { dest: 1, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 2, src: Local(0), container: 5, offset: 0, member: None }
-    Call { dest: 3, func: 17, args: [Local(2)], unwind: None }
+    Call { dest: 3, func: 17, args: [Consume(2)], unwind: None }
     -> Branch { cond: Local(3), then_block: 1, else_block: 3 }
   b1:
     Field { dest: 5, src: Local(0), container: 5, offset: 0, member: Some(4) }
-    Aggregate { dest: 6, tag: 0, layout: L11, args: [Local(5), Local(0)] }
+    Aggregate { dest: 6, tag: 0, layout: L11, args: [Local(5), Consume(0)] }
     -> Return(Local(6))
   b2:
-    Aggregate { dest: 13, tag: 0, layout: L11, args: [Local(4), Local(0)] }
+    Aggregate { dest: 13, tag: 0, layout: L11, args: [Local(4), Consume(0)] }
     -> Return(Local(13))
   b3:
     Field { dest: 7, src: Local(0), container: 5, offset: 2, member: None }
-    Call { dest: 8, func: 58, args: [Local(0), Local(7)], unwind: None }
+    Call { dest: 8, func: 58, args: [Local(0), Consume(7)], unwind: None }
     Field { dest: 9, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 10, src: Local(0), container: 5, offset: 0, member: None }
     Free { src: Local(10) }
     SetField { rec: 0, src: Local(8), container: 5, offset: 0, member: Some(4) }
     Field { dest: 11, src: Local(0), container: 5, offset: 0, member: Some(4) }
-    Aggregate { dest: 12, tag: 0, layout: L11, args: [Local(11), Local(0)] }
+    Aggregate { dest: 12, tag: 0, layout: L11, args: [Local(11), Consume(0)] }
     -> Return(Local(12))
 fn60 _init_slot (arity 3, locals 9, params [&L5, L2, L2] -> L11)
   b0:
@@ -1746,8 +1746,8 @@ fn60 _init_slot (arity 3, locals 9, params [&L5, L2, L2] -> L11)
     Field { dest: 5, src: Local(0), container: 5, offset: 0, member: None }
     PtrAdd { dest: 3, ptr: Local(5), offset: Local(1), size: 8 }
     Copy { dest: 6, src: Local(3) }
-    Call { dest: 7, func: 61, args: [Local(6), Local(2)], unwind: None }
-    Aggregate { dest: 8, tag: 0, layout: L11, args: [Local(7), Local(0)] }
+    Call { dest: 7, func: 61, args: [Consume(6), Consume(2)], unwind: None }
+    Aggregate { dest: 8, tag: 0, layout: L11, args: [Consume(7), Consume(0)] }
     -> Return(Local(8))
 fn61 _store (arity 2, locals 3, params [L2, L2] -> L2)
   b0:
@@ -1755,13 +1755,13 @@ fn61 _store (arity 2, locals 3, params [L2, L2] -> L2)
     -> Return(Const(Unit))
 fn62 _storage (arity 1, locals 3, params [L2] -> L4)
   b0:
-    Call { dest: 1, func: 65, args: [Local(0)], unwind: None }
+    Call { dest: 1, func: 65, args: [Consume(0)], unwind: None }
     Aggregate { dest: 2, tag: 0, layout: L4, args: [Local(1)] }
-    -> Return(Local(2))
+    -> Return(Consume(2))
 fn63 equals (arity 2, locals 3, params [L2, L2] -> L2)
   b0:
     Scalar { dest: 2, op: BoolCmp(Eq), a: Local(0), b: Some(Local(1)) }
-    -> Return(Local(2))
+    -> Return(Consume(2))
 fn64 _retain (arity 1, locals 2, params [&L2] -> L2)
   b0:
     -> Return(Const(Unit))
@@ -1769,23 +1769,23 @@ fn65 _alloc (arity 1, locals 3, params [L2] -> L2)
   b0:
     Scalar { dest: 2, op: IntMul, a: Local(0), b: Some(Const(Int(8))) }
     Alloc { dest: 1, bytes: Local(2), kind: Int }
-    -> Return(Local(1))
+    -> Return(Consume(1))
 fn66 gt (arity 2, locals 5, params [&L6, &L6] -> L2)
   b0:
     Field { dest: 2, src: Local(0), container: 6, offset: 0, member: None }
     Field { dest: 3, src: Local(1), container: 6, offset: 0, member: None }
-    Call { dest: 4, func: 68, args: [Local(2), Local(3)], unwind: None }
-    -> Return(Local(4))
+    Call { dest: 4, func: 68, args: [Consume(2), Consume(3)], unwind: None }
+    -> Return(Consume(4))
 fn67 equals (arity 2, locals 5, params [&L6, &L6] -> L2)
   b0:
     Field { dest: 2, src: Local(0), container: 6, offset: 0, member: None }
     Field { dest: 3, src: Local(1), container: 6, offset: 0, member: None }
-    Call { dest: 4, func: 39, args: [Local(2), Local(3)], unwind: None }
-    -> Return(Local(4))
+    Call { dest: 4, func: 39, args: [Consume(2), Consume(3)], unwind: None }
+    -> Return(Consume(4))
 fn68 gt (arity 2, locals 3, params [L2, L2] -> L2)
   b0:
     Scalar { dest: 2, op: IntCmp(Gt), a: Local(0), b: Some(Local(1)) }
-    -> Return(Local(2))
+    -> Return(Consume(2))
 fn69 _io_monotonic_nanos (arity 0, locals 9, params [] -> L2)
   b0:
     Aggregate { dest: 0, tag: 28, layout: L3, args: [] }
@@ -1795,7 +1795,7 @@ fn69 _io_monotonic_nanos (arity 0, locals 9, params [] -> L2)
     Suspend { dest: 6, effect: @Effect(1:32), args: [Local(0)], entry: Local(3), unwind: None }
     -> Goto(2, [Local(6)])
   b2:
-    -> Return(Local(5))
+    -> Return(Consume(5))
   b3:
     GetFloor { dest: 7 }
     SetFloor { src: Local(3) }
@@ -1805,10 +1805,10 @@ fn69 _io_monotonic_nanos (arity 0, locals 9, params [] -> L2)
 fn70 equals (arity 2, locals 3, params [L2, L2] -> L2)
   b0:
     Scalar { dest: 2, op: IntCmp(Eq), a: Local(0), b: Some(Local(1)) }
-    -> Return(Local(2))
+    -> Return(Consume(2))
 fn71 _check_index (arity 2, locals 19, params [&L5, L2] -> L2)
   b0:
-    Call { dest: 2, func: 18, args: [Local(1), Const(Int(0))], unwind: None }
+    Call { dest: 2, func: 18, args: [Consume(1), Const(Int(0))], unwind: None }
     Scalar { dest: 4, op: BoolCmp(Eq), a: Local(2), b: Some(Const(Bool(true))) }
     -> Branch { cond: Local(4), then_block: 2, else_block: 3 }
   b1:
@@ -1820,7 +1820,7 @@ fn71 _check_index (arity 2, locals 19, params [&L5, L2] -> L2)
     -> Branch { cond: Local(5), then_block: 4, else_block: 5 }
   b4:
     Field { dest: 6, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 7, func: 24, args: [Local(1), Local(6)], unwind: None }
+    Call { dest: 7, func: 24, args: [Consume(1), Consume(6)], unwind: None }
     -> Goto(1, [Local(7)])
   b5:
     -> Trap("unmatched value")
@@ -1830,7 +1830,7 @@ fn71 _check_index (arity 2, locals 19, params [&L5, L2] -> L2)
     FindHandler { clause: 11, cont: 12, index: 13, binds: 14, effect: @Effect(1:33) }
     -> Branch { cond: Local(14), then_block: 9, else_block: 11 }
   b7:
-    -> Return(Local(8))
+    -> Return(Consume(8))
   b8:
     -> Goto(7, [Const(Unit)])
   b9:
@@ -1848,42 +1848,42 @@ fn72 uniqued_storage (arity 1, locals 14, params [&L5] -> L11)
   b0:
     Field { dest: 1, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 2, src: Local(0), container: 5, offset: 0, member: None }
-    Call { dest: 3, func: 17, args: [Local(2)], unwind: None }
+    Call { dest: 3, func: 17, args: [Consume(2)], unwind: None }
     -> Branch { cond: Local(3), then_block: 1, else_block: 3 }
   b1:
     Field { dest: 5, src: Local(0), container: 5, offset: 0, member: Some(4) }
-    Aggregate { dest: 6, tag: 0, layout: L11, args: [Local(5), Local(0)] }
+    Aggregate { dest: 6, tag: 0, layout: L11, args: [Local(5), Consume(0)] }
     -> Return(Local(6))
   b2:
-    Aggregate { dest: 13, tag: 0, layout: L11, args: [Local(4), Local(0)] }
+    Aggregate { dest: 13, tag: 0, layout: L11, args: [Local(4), Consume(0)] }
     -> Return(Local(13))
   b3:
     Field { dest: 7, src: Local(0), container: 5, offset: 2, member: None }
-    Call { dest: 8, func: 74, args: [Local(0), Local(7)], unwind: None }
+    Call { dest: 8, func: 74, args: [Local(0), Consume(7)], unwind: None }
     Field { dest: 9, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 10, src: Local(0), container: 5, offset: 0, member: None }
     Free { src: Local(10) }
     SetField { rec: 0, src: Local(8), container: 5, offset: 0, member: Some(4) }
     Field { dest: 11, src: Local(0), container: 5, offset: 0, member: Some(4) }
-    Aggregate { dest: 12, tag: 0, layout: L11, args: [Local(11), Local(0)] }
+    Aggregate { dest: 12, tag: 0, layout: L11, args: [Local(11), Consume(0)] }
     -> Return(Local(12))
 fn73 minus (arity 2, locals 3, params [L2, L2] -> L2)
   b0:
     Scalar { dest: 2, op: IntSub, a: Local(0), b: Some(Local(1)) }
-    -> Return(Local(2))
+    -> Return(Consume(2))
 fn74 allocate_with_capacity (arity 2, locals 28, params [&L5, L2] -> L4)
   b0:
-    Call { dest: 2, func: 39, args: [Local(1), Const(Int(0))], unwind: None }
+    Call { dest: 2, func: 39, args: [Consume(1), Const(Int(0))], unwind: None }
     -> Branch { cond: Local(2), then_block: 1, else_block: 3 }
   b1:
     Copy { dest: 1, src: Const(Int(1)) }
     -> Goto(2, [Const(Unit)])
   b2:
-    Call { dest: 4, func: 75, args: [Local(1)], unwind: None }
+    Call { dest: 4, func: 75, args: [Consume(1)], unwind: None }
     Field { dest: 5, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 6, src: Local(0), container: 5, offset: 0, member: None }
-    Call { dest: 7, func: 17, args: [Local(6)], unwind: Some(11) }
-    Call { dest: 8, func: 63, args: [Local(7), Const(Bool(false))], unwind: Some(11) }
+    Call { dest: 7, func: 17, args: [Consume(6)], unwind: Some(11) }
+    Call { dest: 8, func: 63, args: [Consume(7), Const(Bool(false))], unwind: Some(11) }
     Copy { dest: 9, src: Local(8) }
     Copy { dest: 10, src: Const(Int(0)) }
     -> Goto(4, [])
@@ -1891,7 +1891,7 @@ fn74 allocate_with_capacity (arity 2, locals 28, params [&L5, L2] -> L4)
     -> Goto(2, [Const(Unit)])
   b4:
     Field { dest: 11, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 12, func: 18, args: [Local(10), Local(11)], unwind: Some(11) }
+    Call { dest: 12, func: 18, args: [Consume(10), Consume(11)], unwind: Some(11) }
     -> Branch { cond: Local(12), then_block: 5, else_block: 6 }
   b5:
     Field { dest: 14, src: Local(0), container: 5, offset: 0, member: Some(4) }
@@ -1905,15 +1905,15 @@ fn74 allocate_with_capacity (arity 2, locals 28, params [&L5, L2] -> L4)
   b6:
     -> Goto(7, [Const(Unit)])
   b7:
-    -> Return(Local(4))
+    -> Return(Consume(4))
   b8:
-    Call { dest: 21, func: 76, args: [Local(0), Local(10)], unwind: Some(11) }
+    Call { dest: 21, func: 76, args: [Local(0), Consume(10)], unwind: Some(11) }
     Call { dest: 22, func: 77, args: [Local(21)], unwind: Some(11) }
     -> Goto(9, [Local(22)])
   b9:
-    Call { dest: 23, func: 52, args: [Local(16)], unwind: Some(11) }
-    Call { dest: 24, func: 78, args: [Local(19), Local(23)], unwind: Some(11) }
-    Call { dest: 25, func: 20, args: [Local(10), Const(Int(1))], unwind: Some(11) }
+    Call { dest: 23, func: 52, args: [Consume(16)], unwind: Some(11) }
+    Call { dest: 24, func: 78, args: [Consume(19), Consume(23)], unwind: Some(11) }
+    Call { dest: 25, func: 20, args: [Consume(10), Const(Int(1))], unwind: Some(11) }
     Copy { dest: 10, src: Local(25) }
     -> Goto(4, [])
   b10:
@@ -1924,13 +1924,13 @@ fn74 allocate_with_capacity (arity 2, locals 28, params [&L5, L2] -> L4)
     -> UnwindRet
 fn75 _storage (arity 1, locals 3, params [L2] -> L4)
   b0:
-    Call { dest: 1, func: 84, args: [Local(0)], unwind: None }
+    Call { dest: 1, func: 84, args: [Consume(0)], unwind: None }
     Aggregate { dest: 2, tag: 0, layout: L4, args: [Local(1)] }
-    -> Return(Local(2))
+    -> Return(Consume(2))
 fn76 get (arity 2, locals 4, params [&L5, L2] -> L2)
   b0:
-    Call { dest: 2, func: 82, args: [Local(0), Local(1)], unwind: None }
-    Call { dest: 3, func: 83, args: [Local(0), Local(1)], unwind: None }
+    Call { dest: 2, func: 82, args: [Local(0), Consume(1)], unwind: None }
+    Call { dest: 3, func: 83, args: [Local(0), Consume(1)], unwind: None }
     -> Return(Local(3))
 fn77 _retain (arity 1, locals 3, params [&L10] -> L2)
   b0:
@@ -1965,7 +1965,7 @@ fn81 shared_retain (arity 1, locals 2, params [L4] -> uniform)
     -> Return(Const(Unit))
 fn82 _check_index (arity 2, locals 19, params [&L5, L2] -> L2)
   b0:
-    Call { dest: 2, func: 18, args: [Local(1), Const(Int(0))], unwind: None }
+    Call { dest: 2, func: 18, args: [Consume(1), Const(Int(0))], unwind: None }
     Scalar { dest: 4, op: BoolCmp(Eq), a: Local(2), b: Some(Const(Bool(true))) }
     -> Branch { cond: Local(4), then_block: 2, else_block: 3 }
   b1:
@@ -1977,7 +1977,7 @@ fn82 _check_index (arity 2, locals 19, params [&L5, L2] -> L2)
     -> Branch { cond: Local(5), then_block: 4, else_block: 5 }
   b4:
     Field { dest: 6, src: Local(0), container: 5, offset: 1, member: None }
-    Call { dest: 7, func: 24, args: [Local(1), Local(6)], unwind: None }
+    Call { dest: 7, func: 24, args: [Consume(1), Consume(6)], unwind: None }
     -> Goto(1, [Local(7)])
   b5:
     -> Trap("unmatched value")
@@ -1987,7 +1987,7 @@ fn82 _check_index (arity 2, locals 19, params [&L5, L2] -> L2)
     FindHandler { clause: 11, cont: 12, index: 13, binds: 14, effect: @Effect(1:33) }
     -> Branch { cond: Local(14), then_block: 9, else_block: 11 }
   b7:
-    -> Return(Local(8))
+    -> Return(Consume(8))
   b8:
     -> Goto(7, [Const(Unit)])
   b9:
@@ -2007,41 +2007,41 @@ fn83 _get_unchecked (arity 2, locals 7, params [&L5, L2] -> L2)
     Field { dest: 4, src: Local(0), container: 5, offset: 0, member: None }
     PtrAdd { dest: 2, ptr: Local(4), offset: Local(1), size: 8 }
     Copy { dest: 5, src: Local(2) }
-    Call { dest: 6, func: 52, args: [Local(5)], unwind: None }
+    Call { dest: 6, func: 52, args: [Consume(5)], unwind: None }
     -> Return(Local(6))
 fn84 _alloc (arity 1, locals 3, params [L2] -> L2)
   b0:
     Scalar { dest: 2, op: IntMul, a: Local(0), b: Some(Const(Int(8))) }
     Alloc { dest: 1, bytes: Local(2), kind: Value }
-    -> Return(Local(1))
+    -> Return(Consume(1))
 fn85 _init_slot (arity 3, locals 9, params [&L5, L2, L10] -> L11)
   b0:
     Field { dest: 4, src: Local(0), container: 5, offset: 0, member: Some(4) }
     Field { dest: 5, src: Local(0), container: 5, offset: 0, member: None }
     PtrAdd { dest: 3, ptr: Local(5), offset: Local(1), size: 8 }
     Copy { dest: 6, src: Local(3) }
-    Call { dest: 7, func: 78, args: [Local(6), Local(2)], unwind: None }
-    Aggregate { dest: 8, tag: 0, layout: L11, args: [Local(7), Local(0)] }
+    Call { dest: 7, func: 78, args: [Consume(6), Consume(2)], unwind: None }
+    Aggregate { dest: 8, tag: 0, layout: L11, args: [Consume(7), Consume(0)] }
     -> Return(Local(8))
 fn86 handler_clause (arity 2, locals 4)
   b0:
     Aggregate { dest: 2, tag: 0, layout: L9, args: [Local(1)] }
     Aggregate { dest: 3, tag: 1, layout: L10, args: [Local(0), Local(2)] }
-    -> Return(Local(3))
+    -> Return(Consume(3))
 fn87 handler_clause (arity 1, locals 3)
   b0:
     Aggregate { dest: 1, tag: 0, layout: L9, args: [Local(0)] }
     Aggregate { dest: 2, tag: 2, layout: L10, args: [Local(1)] }
-    -> Return(Local(2))
+    -> Return(Consume(2))
 fn88 handler_clause (arity 2, locals 4)
   b0:
     Aggregate { dest: 2, tag: 0, layout: L9, args: [Local(1)] }
     Aggregate { dest: 3, tag: 3, layout: L10, args: [Local(0), Local(2)] }
-    -> Return(Local(3))
+    -> Return(Consume(3))
 fn89 show (arity 1, locals 2, params [&L1] -> L1)
   b0:
     Call { dest: 1, func: 91, args: [Local(0)], unwind: None }
-    -> Return(Local(1))
+    -> Return(Consume(1))
 fn90 _print_line (arity 1, locals 14, params [&L1] -> L2)
   b0:
     Field { dest: 2, src: Local(0), container: 1, offset: 0, member: Some(0) }
@@ -2062,22 +2062,22 @@ fn90 _print_line (arity 1, locals 14, params [&L1] -> L2)
 fn91 to_string (arity 1, locals 13, params [&L1] -> L1)
   b0:
     Field { dest: 1, src: Local(0), container: 1, offset: 1, member: None }
-    Call { dest: 2, func: 92, args: [Local(1)], unwind: None }
+    Call { dest: 2, func: 92, args: [Consume(1)], unwind: None }
     Copy { dest: 3, src: Local(2) }
     Field { dest: 4, src: Local(0), container: 1, offset: 0, member: Some(0) }
     Field { dest: 5, src: Local(0), container: 1, offset: 0, member: None }
     Field { dest: 6, src: Local(0), container: 1, offset: 1, member: None }
-    Call { dest: 7, func: 93, args: [Local(5), Local(3), Local(6)], unwind: None }
+    Call { dest: 7, func: 93, args: [Consume(5), Consume(3), Consume(6)], unwind: None }
     Aggregate { dest: 8, tag: 0, layout: L0, args: [Local(3)] }
     Field { dest: 9, src: Local(0), container: 1, offset: 1, member: None }
     Field { dest: 10, src: Local(0), container: 1, offset: 1, member: None }
     Blank { dest: 11, layout: L1 }
     Call { dest: 12, func: 94, args: [Local(11), Local(8), Local(9), Local(10)], unwind: None }
-    -> Return(Local(12))
+    -> Return(Consume(12))
 fn92 _alloc (arity 1, locals 2, params [L2] -> L2)
   b0:
     Alloc { dest: 1, bytes: Local(0), kind: Byte }
-    -> Return(Local(1))
+    -> Return(Consume(1))
 fn93 _copy (arity 3, locals 4, params [L2, L2, L2] -> L2)
   b0:
     MemCopy { from: Local(0), to: Local(1), len: Local(2) }
@@ -2088,7 +2088,7 @@ fn94 init (arity 4, locals 5, params [uniform, L0, L2, L2] -> L1)
     Field { dest: 4, src: Local(0), container: 1, offset: 0, member: Some(0) }
     SetField { rec: 0, src: Local(2), container: 1, offset: 1, member: None }
     SetField { rec: 0, src: Local(3), container: 1, offset: 2, member: None }
-    -> Return(Local(0))
+    -> Return(Consume(0))
 layout table:
   L0: inline @Struct(1:6) width 1, fields [0:ptr], kinds [ptr]
   L1: inline @Struct(1:4294967263) width 3, fields [0:L0, 1:int, 2:int], kinds [ptr, int, int]

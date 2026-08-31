@@ -1251,12 +1251,12 @@ workstreams requires an explicit amendment to this plan before implementation.
 
 ### Regression specifications
 
-- [ ] Last-use destruction is pinned on VM and C.
-- [ ] Borrowed projection owner lifetime is pinned.
-- [ ] Clone settlement before source release is pinned.
-- [ ] Suspension cancellation cleanup is pinned on VM and C.
-- [ ] Borrowed static-call adaptation is pinned.
-- [ ] Generic global mutable writeback is pinned.
+- [x] Last-use destruction is pinned on VM and C.
+- [x] Borrowed projection owner lifetime is pinned.
+- [x] Clone settlement before source release is pinned.
+- [x] Suspension cancellation cleanup is pinned on VM and C.
+- [x] Borrowed static-call adaptation is pinned.
+- [x] Generic global mutable writeback is pinned.
 
 ### Phase-owned Core
 
@@ -1269,13 +1269,13 @@ workstreams requires an explicit amendment to this plan before implementation.
 
 ### CFG ownership
 
-- [ ] All local operands are consume, borrow, or copy.
-- [ ] One CFG serves all analyses.
-- [ ] One backward liveness pass remains.
+- [x] All local operands are consume, borrow, or copy.
+- [x] One CFG serves all analyses.
+- [x] One backward liveness pass remains.
 - [ ] One forward ownership-placement pass remains.
 - [ ] Construct-specific ownership merges and parallel event streams are
       deleted.
-- [ ] Debug balance verification passes.
+- [x] Debug balance verification passes.
 
 ### LSP semantics
 

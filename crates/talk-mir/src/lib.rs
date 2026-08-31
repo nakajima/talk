@@ -24,10 +24,75 @@ pub enum Constant {
     Float(f64),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum Operand {
-    Local(LocalId),
+    Consume(LocalId),
+    Borrow(LocalId),
+    Copy(LocalId),
     Const(Constant),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OperandMode {
+    Consume,
+    Borrow,
+    Copy,
+}
+
+impl std::fmt::Debug for Operand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Consume(local) => write!(f, "Consume({local})"),
+            Self::Borrow(local) => write!(f, "Local({local})"),
+            Self::Copy(local) => write!(f, "Copy({local})"),
+            Self::Const(constant) => write!(f, "Const({constant:?})"),
+        }
+    }
+}
+
+impl Operand {
+    pub fn local(self) -> Option<LocalId> {
+        match self {
+            Self::Consume(local) | Self::Borrow(local) | Self::Copy(local) => Some(local),
+            Self::Const(_) => None,
+        }
+    }
+
+    pub fn mode(self) -> Option<OperandMode> {
+        match self {
+            Self::Consume(_) => Some(OperandMode::Consume),
+            Self::Borrow(_) => Some(OperandMode::Borrow),
+            Self::Copy(_) => Some(OperandMode::Copy),
+            Self::Const(_) => None,
+        }
+    }
+
+    pub fn with_mode(self, mode: OperandMode) -> Self {
+        let Some(local) = self.local() else {
+            return self;
+        };
+        match mode {
+            OperandMode::Consume => Self::Consume(local),
+            OperandMode::Borrow => Self::Borrow(local),
+            OperandMode::Copy => Self::Copy(local),
+        }
+    }
+
+    pub fn erase_mode(self) -> Self {
+        match self.local() {
+            Some(local) => Self::Borrow(local),
+            None => self,
+        }
+    }
+
+    pub fn map_local(self, map: impl FnOnce(LocalId) -> LocalId) -> Self {
+        match self {
+            Self::Consume(local) => Self::Consume(map(local)),
+            Self::Borrow(local) => Self::Borrow(map(local)),
+            Self::Copy(local) => Self::Copy(map(local)),
+            Self::Const(_) => self,
+        }
+    }
 }
 
 /// Executable identity carried by finalized MIR instructions: the only
@@ -362,7 +427,9 @@ pub enum Inst {
     },
     /// ADR 0064: cancel a stored resumption, unwinding its captured
     /// frames through their cleanup entries (ADR 0027's machinery).
-    Cancel { cont: Operand },
+    Cancel {
+        cont: Operand,
+    },
     /// Allocate a `'heap` object (its own fresh region, one claim).
     ObjectNew {
         dest: LocalId,
@@ -500,6 +567,17 @@ pub enum Inst {
     },
 }
 
+impl Inst {
+    pub fn unwind_target(&self) -> Option<BlockId> {
+        match self {
+            Self::Call { unwind, .. }
+            | Self::CallIndirect { unwind, .. }
+            | Self::Suspend { unwind, .. } => *unwind,
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Term {
     /// Jump to a block, passing one argument per block parameter
@@ -549,6 +627,7 @@ pub enum DebugOrigin {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CleanupKind {
     Unwind,
+    LastUse,
     BlockExit,
     Edge,
 }
@@ -557,6 +636,7 @@ impl CleanupKind {
     fn description(self) -> &'static str {
         match self {
             Self::Unwind => "effect-unwind cleanup",
+            Self::LastUse => "last-use cleanup",
             Self::BlockExit => "block-exit cleanup",
             Self::Edge => "control-flow-edge cleanup",
         }
@@ -1117,17 +1197,17 @@ mod tests {
                         },
                         Inst::Copy {
                             dest: 1,
-                            src: Operand::Local(0),
+                            src: Operand::Borrow(0),
                         },
                         Inst::Free {
-                            src: Operand::Local(1),
+                            src: Operand::Borrow(1),
                         },
                         Inst::Copy {
                             dest: 0,
                             src: Operand::Const(Constant::Int(2)),
                         },
                     ],
-                    term: Some(Term::Return(Operand::Local(0))),
+                    term: Some(Term::Return(Operand::Borrow(0))),
                 }],
             }],
             entry: 0,

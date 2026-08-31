@@ -106,7 +106,7 @@ mod tests {
                     debug: None,
                     params: vec![1, 2],
                     insts: Vec::new(),
-                    term: Some(Term::Return(Operand::Local(1))),
+                    term: Some(Term::Return(Operand::Borrow(1))),
                 },
             ],
         };

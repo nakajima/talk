@@ -25,7 +25,7 @@ impl MatchSwitch<'_> {
     fn comparison(&self, block: BlockId) -> Option<Comparison> {
         let data = self.blocks.get(block)?;
         let Term::Branch {
-            cond: Operand::Local(cond),
+            cond: Operand::Borrow(cond),
             then_block,
             else_block,
         } = data.term.as_ref()?
@@ -35,7 +35,7 @@ impl MatchSwitch<'_> {
         let Inst::Scalar {
             dest,
             op: ScalarOp::IntCmp(CmpKind::Eq),
-            a: Operand::Local(tag),
+            a: Operand::Borrow(tag),
             b: Some(Operand::Const(Constant::Int(value))),
         } = data.insts.last()?
         else {
@@ -111,7 +111,7 @@ impl MatchSwitch<'_> {
             targets[value] = target;
         }
         Some(Term::Switch {
-            tag: Operand::Local(tag),
+            tag: Operand::Borrow(tag),
             targets,
             default: current,
         })
@@ -176,11 +176,11 @@ mod tests {
             insts: vec![Inst::Scalar {
                 dest: cond,
                 op: ScalarOp::IntCmp(CmpKind::Eq),
-                a: Operand::Local(tag),
+                a: Operand::Borrow(tag),
                 b: Some(Operand::Const(Constant::Int(value))),
             }],
             term: Some(Term::Branch {
-                cond: Operand::Local(cond),
+                cond: Operand::Borrow(cond),
                 then_block: matched,
                 else_block: failed,
             }),
@@ -203,7 +203,7 @@ mod tests {
             0,
             Inst::GetTag {
                 dest: 0,
-                src: Operand::Local(5),
+                src: Operand::Borrow(5),
             },
         );
         let mut function = Function {
@@ -226,7 +226,7 @@ mod tests {
         assert_eq!(run(&mut function).applied, 1);
         assert!(matches!(
             &function.blocks[0].term,
-            Some(Term::Switch { tag: Operand::Local(0), targets, default: 2 })
+            Some(Term::Switch { tag: Operand::Borrow(0), targets, default: 2 })
                 if targets == &[3, 2, 4]
         ));
         assert!(matches!(function.blocks[1].term, Some(Term::Branch { .. })));
@@ -254,14 +254,14 @@ mod tests {
             0,
             Inst::GetTag {
                 dest: 0,
-                src: Operand::Local(3),
+                src: Operand::Borrow(3),
             },
         );
         function.blocks[1].insts.insert(
             0,
             Inst::GetTag {
                 dest: 3,
-                src: Operand::Local(3),
+                src: Operand::Borrow(3),
             },
         );
         assert_eq!(run(&mut function).applied, 2);

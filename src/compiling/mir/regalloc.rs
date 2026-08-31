@@ -22,49 +22,10 @@ use rustc_hash::FxHashMap;
 
 use super::build::layout::{Layout, LayoutId, local_layouts};
 use super::build::{
-    BlockData, DebugOrigin, Function, GeneratedMir, Inst, LocalId, Operand, Slot, Term, visit_inst,
+    BlockData, DebugOrigin, Function, GeneratedMir, Inst, LocalId, Slot, Term, visit_inst,
     visit_term,
 };
-
-/// A block's successors in the flow graph, unwind cleanup entries
-/// included.
-fn successors(block: &BlockData) -> Vec<usize> {
-    let mut out = Vec::new();
-    for inst in &block.insts {
-        match inst {
-            Inst::Call {
-                unwind: Some(cleanup),
-                ..
-            }
-            | Inst::CallIndirect {
-                unwind: Some(cleanup),
-                ..
-            } => out.push(*cleanup),
-            _ => {}
-        }
-    }
-    match block.term {
-        Some(Term::Goto(target, _)) => out.push(target),
-        Some(Term::Branch {
-            then_block,
-            else_block,
-            ..
-        }) => {
-            out.push(then_block);
-            out.push(else_block);
-        }
-        Some(Term::Switch {
-            ref targets,
-            default,
-            ..
-        }) => {
-            out.extend(targets.iter().copied());
-            out.push(default);
-        }
-        _ => {}
-    }
-    out
-}
+use super::cfg::Cfg;
 
 /// Renumber `function`'s locals in place onto reusable registers.
 /// Fuse `inst t = …; Copy v ← t` pairs where `t` dies at the copy: the
@@ -104,8 +65,8 @@ fn fuse_adjacent_copies(function: &mut Function) {
                 && uses.get(dest).copied().unwrap_or(0) == 0
                 && !param_locals.contains(dest)
             {
-                if let Operand::Local(source) = src
-                    && let Some(count) = uses.get_mut(source)
+                if let Some(source) = src.local()
+                    && let Some(count) = uses.get_mut(&source)
                 {
                     *count -= 1;
                 }
@@ -114,10 +75,8 @@ fn fuse_adjacent_copies(function: &mut Function) {
             }
             // Def-copy fusion with the immediately following copy.
             if i + 1 < block.insts.len()
-                && let Inst::Copy {
-                    dest: fused,
-                    src: Operand::Local(temp),
-                } = block.insts[i + 1]
+                && let Inst::Copy { dest: fused, src } = block.insts[i + 1]
+                && let Some(temp) = src.local()
                 && temp >= arity
                 && uses.get(&temp).copied().unwrap_or(0) == 1
                 && !param_locals.contains(&temp)
@@ -161,7 +120,7 @@ fn layout_blocks(function: &mut Function) {
     // earlier in the final layout than its else-arm — keeping each
     // path's uses linearly close to the path's own blocks.
     let entry_succ = {
-        let mut succ = successors(&function.blocks[0]);
+        let mut succ = Cfg::block_successors(&function.blocks[0]);
         succ.reverse();
         succ
     };
@@ -173,7 +132,7 @@ fn layout_blocks(function: &mut Function) {
             *cursor += 1;
             if state[next] == 0 {
                 state[next] = 1;
-                let mut next_succ = successors(&function.blocks[next]);
+                let mut next_succ = Cfg::block_successors(&function.blocks[next]);
                 next_succ.reverse();
                 stack.push((next, next_succ, 0));
             }
@@ -210,7 +169,9 @@ fn layout_blocks(function: &mut Function) {
     for block in &mut function.blocks {
         for inst in &mut block.insts {
             match inst {
-                Inst::Call { unwind, .. } | Inst::CallIndirect { unwind, .. } => {
+                Inst::Call { unwind, .. }
+                | Inst::CallIndirect { unwind, .. }
+                | Inst::Suspend { unwind, .. } => {
                     if let Some(cleanup) = unwind {
                         *cleanup = position[*cleanup];
                     }
@@ -275,7 +236,7 @@ pub(crate) fn reuse_locals(
     let block_count = function.blocks.len();
     let words = n_locals.div_ceil(64);
     let mut live_in: Vec<Vec<u64>> = vec![vec![0u64; words]; block_count];
-    let succ: Vec<Vec<usize>> = function.blocks.iter().map(successors).collect();
+    let succ: Vec<Vec<usize>> = function.blocks.iter().map(Cfg::block_successors).collect();
     let set = |bits: &mut [u64], local: LocalId| {
         bits[usize::from(local) / 64] |= 1u64 << (usize::from(local) % 64);
     };
@@ -418,21 +379,19 @@ pub(crate) fn reuse_locals(
     };
     for block in &function.blocks {
         for inst in &block.insts {
-            if let Inst::Copy {
-                dest,
-                src: Operand::Local(src),
-            } = inst
+            if let Inst::Copy { dest, src } = inst
+                && let Some(src) = src.local()
                 && usize::from(*dest) >= arity
             {
-                join_group(&mut affinity, *dest, *src);
+                join_group(&mut affinity, *dest, src);
             }
         }
         if let Some(Term::Goto(target, edge_args)) = &block.term {
             for (param, arg) in function.blocks[*target].params.iter().zip(edge_args) {
-                if let Operand::Local(source) = arg
+                if let Some(source) = arg.local()
                     && usize::from(*param) >= arity
                 {
-                    join_group(&mut affinity, *param, *source);
+                    join_group(&mut affinity, *param, source);
                 }
             }
         }
@@ -631,7 +590,7 @@ pub(crate) fn reuse_locals(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiling::mir::build::{BlockData, CmpKind, Constant, ScalarOp};
+    use crate::compiling::mir::build::{BlockData, CmpKind, Constant, Operand, ScalarOp};
 
     fn copy(dest: LocalId, src: Operand) -> Inst {
         Inst::Copy { dest, src }
@@ -647,7 +606,7 @@ mod tests {
     }
 
     fn local(id: LocalId) -> Operand {
-        Operand::Local(id)
+        Operand::Borrow(id)
     }
 
     fn int(value: i64) -> Operand {
@@ -776,7 +735,7 @@ mod tests {
         assert_eq!(sorted.len(), usize::from(width), "live registers collided");
         for k in 0..usize::from(width) {
             let Inst::Scalar {
-                a: Operand::Local(read),
+                a: Operand::Borrow(read),
                 ..
             } = &f.blocks[0].insts[usize::from(width) + k]
             else {
@@ -817,7 +776,7 @@ mod tests {
             panic!("copy changed shape");
         };
         assert_eq!(
-            Operand::Local(*dest),
+            Operand::Borrow(*dest),
             *src,
             "copy source and destination should share a register"
         );
@@ -885,7 +844,7 @@ mod tests {
         };
         assert_eq!(
             edge_args[0],
-            Operand::Local(f.blocks[1].params[0]),
+            Operand::Borrow(f.blocks[1].params[0]),
             "edge argument and parameter should share a register"
         );
     }
@@ -955,7 +914,7 @@ mod tests {
             panic!("loop inst changed shape");
         };
         assert_ne!(
-            Operand::Local(*dest),
+            Operand::Borrow(*dest),
             *a,
             "loop temp clobbered the loop-carried value"
         );
@@ -1000,7 +959,7 @@ mod tests {
             panic!("cleanup changed shape");
         };
         assert_ne!(
-            Operand::Local(*dest),
+            Operand::Borrow(*dest),
             *src,
             "call result reused the register of a cleanup-live value"
         );
@@ -1040,10 +999,10 @@ mod tests {
                         layout: 0,
                         args: Vec::new(),
                     },
-                    copy(2, Operand::Local(1)),
+                    copy(2, Operand::Borrow(1)),
                     copy(3, Operand::Const(Constant::Unit)),
                 ],
-                term: Some(Term::Return(Operand::Local(3))),
+                term: Some(Term::Return(Operand::Borrow(3))),
             }],
         };
         let record_register = |f: &Function| {

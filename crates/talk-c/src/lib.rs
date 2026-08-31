@@ -123,16 +123,21 @@ fn translate(program: &Program, library: bool) -> Result<Translation<'_>, Error>
     let closures_suspend = program.functions.iter().any(|function| {
         function.blocks.iter().any(|block| {
             block.insts.iter().any(|inst| match inst {
-                Inst::MakeClosure { func, .. } => {
-                    resumable.get(*func).copied().unwrap_or(false)
-                }
+                Inst::MakeClosure { func, .. } => resumable.get(*func).copied().unwrap_or(false),
                 _ => false,
             })
         })
     });
     let mut bodies = String::new();
     for (id, function) in program.functions.iter().enumerate() {
-        emitter.function(&mut bodies, id, function, &facts, &resumable, closures_suspend)?;
+        emitter.function(
+            &mut bodies,
+            id,
+            function,
+            &facts,
+            &resumable,
+            closures_suspend,
+        )?;
     }
     emit_dispatch(&mut bodies, program, &facts);
     // Built after the bodies (they record which layouts went native) but
@@ -517,14 +522,7 @@ impl Emitter {
         let identified = needs_identity(function) || is_resumable;
         let sig = &facts.sigs[id];
         if is_resumable {
-            return self.resumable_function(
-                out,
-                id,
-                function,
-                facts,
-                resumable,
-                closures_suspend,
-            );
+            return self.resumable_function(out, id, function, facts, resumable, closures_suspend);
         }
         let _ = writeln!(
             out,
@@ -654,7 +652,14 @@ impl Emitter {
             let _ = writeln!(out, "b{index}:");
             for (instruction_index, inst) in block.insts.iter().enumerate() {
                 let frame_slot = storage.get(&(index, instruction_index)).copied();
-                self.inst(out, inst, identified, frame_slot, &frame, &mut SusCtx::inert())?;
+                self.inst(
+                    out,
+                    inst,
+                    identified,
+                    frame_slot,
+                    &frame,
+                    &mut SusCtx::inert(),
+                )?;
             }
             let term = block
                 .term
@@ -784,7 +789,10 @@ static TalkValue {}_impl(TalkResumeFrame *fr);",
         for k in 1..sus.next_rpc {
             let _ = writeln!(out, "    case {k}: goto r{k};");
         }
-        let _ = writeln!(out, "    default: talk_trap(\"resume into an unknown state\");");
+        let _ = writeln!(
+            out,
+            "    default: talk_trap(\"resume into an unknown state\");"
+        );
         let _ = writeln!(out, "    }}");
         out.push_str(&body);
         let _ = writeln!(out, "}}");
@@ -808,16 +816,16 @@ static TalkValue {}_impl(TalkResumeFrame *fr);",
                     // The derivation only classes a local when every
                     // definition agrees, so a native destination's source
                     // is a native local of the same layout.
-                    let Operand::Local(src) = src else {
+                    let Some(src) = src.local() else {
                         return Err(internal("a native local copied from a constant"));
                     };
-                    if frame.class_of(*src) != Some(layout) {
+                    if frame.class_of(src) != Some(layout) {
                         return Err(internal("a native local copied across layout classes"));
                     }
-                    if dest != src {
+                    if *dest != src {
                         let _ = writeln!(out, "    x{dest} = x{src};");
                     }
-                } else if !matches!(src, Operand::Local(src) if src == dest) {
+                } else if src.local() != Some(*dest) {
                     let _ = writeln!(out, "    l[{dest}] = {};", frame.value(*src)?);
                 }
             }
@@ -845,7 +853,7 @@ static TalkValue {}_impl(TalkResumeFrame *fr);",
                     let index = u16::try_from(index).unwrap_or(u16::MAX);
                     rendered.push(match sig.param(index) {
                         Some(layout) => match (frame.class(*arg), arg) {
-                            (Some(class), Operand::Local(id)) if class == layout => {
+                            (Some(class), Operand::Borrow(id)) if class == layout => {
                                 format!("x{id}")
                             }
                             _ => format!("talk_unbox_l{layout}({})", frame.value(*arg)?),
@@ -1260,7 +1268,10 @@ static TalkValue {}_impl(TalkResumeFrame *fr);",
                 let _ = writeln!(out, "    fr->rpc = {k};");
                 let _ = writeln!(out, "    talk_suspend_link(fr);");
                 let _ = writeln!(out, "    if (talk_suspend_is_mine(frame_id)) {{");
-                let _ = writeln!(out, "        TalkValue sr = talk_suspend_finish(frame_depth);");
+                let _ = writeln!(
+                    out,
+                    "        TalkValue sr = talk_suspend_finish(frame_depth);"
+                );
                 let _ = writeln!(out, "        talk_leave();");
                 let _ = writeln!(out, "        talk_frame_detached = 1;");
                 let _ = writeln!(out, "        return sr;");
@@ -1275,7 +1286,7 @@ static TalkValue {}_impl(TalkResumeFrame *fr);",
                 let _ = writeln!(out, "    if (talk_unwinding) {{");
                 match unwind {
                     Some(block) => {
-                        let _ = writeln!(out, "        goto b{block};");
+                        let _ = writeln!(out, "        talk_unwind_suspend(); goto b{block};");
                     }
                     None => {
                         let _ = writeln!(out, "        talk_leave();");
@@ -1445,7 +1456,7 @@ static TalkValue {}_impl(TalkResumeFrame *fr);",
                 member,
             } => {
                 match (frame.class(*src), src) {
-                    (Some(layout), Operand::Local(src)) => {
+                    (Some(layout), Operand::Borrow(src)) => {
                         let kinds = frame.shape(layout)?.kinds();
                         match member {
                             None => {
@@ -1615,7 +1626,7 @@ static TalkValue {}_impl(TalkResumeFrame *fr);",
                 }
             }
             Inst::GetTag { dest, src } => match (frame.class(*src), src) {
-                (Some(layout), Operand::Local(src)) => {
+                (Some(layout), Operand::Borrow(src)) => {
                     if !matches!(frame.shape(layout)?, Shape::Sum { .. }) {
                         return Err(internal("a tag read on a native product"));
                     }
@@ -1655,7 +1666,7 @@ static TalkValue {}_impl(TalkResumeFrame *fr);",
                         }
                         Some(child) if frame.facts.width_of(*child)? == 0 => {}
                         Some(child) if frame.class(*src) == Some(*child) => {
-                            let Operand::Local(src) = src else {
+                            let Some(src) = src.local() else {
                                 unreachable!()
                             };
                             let span = frame.facts.width_of(*child)?;
@@ -1721,7 +1732,7 @@ static TalkValue {}_impl(TalkResumeFrame *fr);",
                                 );
                             }
                             Some(child) if frame.class(*src) == Some(*child) => {
-                                let Operand::Local(src) = src else {
+                                let Some(src) = src.local() else {
                                     unreachable!()
                                 };
                                 for slot in 0..span {
@@ -2008,7 +2019,7 @@ impl Frame<'_> {
 
     fn class(&self, operand: Operand) -> Option<LayoutId> {
         match operand {
-            Operand::Local(id) => self.class_of(id),
+            Operand::Consume(id) | Operand::Borrow(id) | Operand::Copy(id) => self.class_of(id),
             Operand::Const(_) => None,
         }
     }
@@ -2030,7 +2041,7 @@ impl Frame<'_> {
     fn return_value(&self, op: Operand) -> Result<String, Error> {
         match self.ret {
             Some(ret) => match (self.class(op), op) {
-                (Some(class), Operand::Local(id)) if class == ret => Ok(format!("x{id}")),
+                (Some(class), Operand::Borrow(id)) if class == ret => Ok(format!("x{id}")),
                 _ => Ok(format!("talk_unbox_l{ret}({})", self.value(op)?)),
             },
             None => self.value(op),
@@ -2056,9 +2067,7 @@ impl Frame<'_> {
     fn value(&self, op: Operand) -> Result<String, Error> {
         match self.class(op) {
             Some(layout) => {
-                let Operand::Local(id) = op else {
-                    unreachable!()
-                };
+                let Some(id) = op.local() else { unreachable!() };
                 if self.buffered.get(usize::from(id)).copied().unwrap_or(false) {
                     Ok(format!("talk_box_l{layout}_in(fx{id}, x{id})"))
                 } else {
@@ -2140,7 +2149,10 @@ fn emit_suspend_stub(out: &mut String, k: u32) {
     // landing path nests arbitrary execution inside talk_suspend_finish,
     // and a flag set earlier would be consumed by an inner invoker.
     let _ = writeln!(out, "        if (talk_suspend_is_mine(frame_id)) {{");
-    let _ = writeln!(out, "            TalkValue sr = talk_suspend_finish(frame_depth);");
+    let _ = writeln!(
+        out,
+        "            TalkValue sr = talk_suspend_finish(frame_depth);"
+    );
     let _ = writeln!(out, "            talk_leave();");
     let _ = writeln!(out, "            talk_frame_detached = 1;");
     let _ = writeln!(out, "            return sr;");
@@ -2154,6 +2166,10 @@ fn emit_suspend_stub(out: &mut String, k: u32) {
 /// After any call, an in-flight unwind either ends at this frame or keeps
 /// going through this frame's cleanup block.
 fn emit_unwind_check(out: &mut String, unwind: Option<usize>, identified: bool, frame: &Frame) {
+    if !identified && let Some(block) = unwind {
+        let _ = writeln!(out, "    if (talk_unwind_cleanup()) goto b{block};");
+        return;
+    }
     let _ = writeln!(out, "    if (talk_unwinding) {{");
     if identified {
         let _ = writeln!(
@@ -2285,7 +2301,7 @@ fn emit_construction(
                         continue;
                     }
                     if frame.class(*arg) == Some(*child) {
-                        let Operand::Local(arg) = arg else {
+                        let Some(arg) = arg.local() else {
                             unreachable!()
                         };
                         let child_kinds = frame.facts.shape_of(*child)?.kinds().to_vec();
@@ -2370,7 +2386,7 @@ fn emit_construction(
                     continue;
                 }
                 if frame.class(*arg) == Some(*child) {
-                    let Operand::Local(arg) = arg else {
+                    let Some(arg) = arg.local() else {
                         unreachable!()
                     };
                     for slot in 0..span {
@@ -2456,7 +2472,10 @@ fn emit_term(
         }
         // The end of a cleanup block: this frame is done, and the unwind
         // continues into the caller.
-        Term::UnwindRet => emit_return(out, &frame.unwind_value(), identified),
+        Term::UnwindRet => {
+            let _ = writeln!(out, "    talk_unwind_restore();");
+            emit_return(out, &frame.unwind_value(), identified);
+        }
     }
     Ok(())
 }
@@ -2490,10 +2509,10 @@ fn emit_goto(
     for (index, (arg, param)) in args.iter().zip(params).enumerate() {
         match frame.class_of(*param) {
             Some(layout) => {
-                let Operand::Local(src) = arg else {
+                let Some(src) = arg.local() else {
                     return Err(internal("a native block parameter fed a constant"));
                 };
-                if frame.class_of(*src) != Some(layout) {
+                if frame.class_of(src) != Some(layout) {
                     return Err(internal("a native block parameter crossed layout classes"));
                 }
                 let _ = writeln!(out, "        TalkL{layout} e{index} = x{src};");
@@ -2664,7 +2683,9 @@ static void talk_native_scan(TalkValue value, struct TalkObject ***out, size_t *
         else {
             return Err(internal("a representable layout without a shape"));
         };
-        let display = symbol.map(|symbol| self.interners.display_id(symbol)).unwrap_or(0);
+        let display = symbol
+            .map(|symbol| self.interners.display_id(symbol))
+            .unwrap_or(0);
         if facts.box_native[usize::try_from(id).unwrap_or(usize::MAX)] {
             return self.native_box_decl(out, id, display, shape);
         }
@@ -2878,7 +2899,7 @@ fn comparison(kind: CmpKind) -> &'static str {
 
 fn operand(operand: Operand) -> Result<String, Error> {
     Ok(match operand {
-        Operand::Local(id) => format!("l[{id}]"),
+        Operand::Consume(id) | Operand::Borrow(id) | Operand::Copy(id) => format!("l[{id}]"),
         Operand::Const(Constant::Unit) => "talk_unit()".to_string(),
         Operand::Const(Constant::Bool(value)) => format!("talk_bool({})", i32::from(value)),
         Operand::Const(Constant::Int(value)) => format!("talk_int({})", integer(value)),

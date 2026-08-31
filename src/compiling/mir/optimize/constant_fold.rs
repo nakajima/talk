@@ -20,7 +20,7 @@ impl ConstantFolder {
     }
 
     fn resolve(&self, operand: &mut Operand) -> bool {
-        let Operand::Local(local) = *operand else {
+        let Some(local) = operand.local() else {
             return false;
         };
         let Some(constant) = self.values.get(&local).copied() else {
@@ -176,11 +176,11 @@ mod tests {
                     Inst::Scalar {
                         dest: 1,
                         op: ScalarOp::IntAdd,
-                        a: Operand::Local(0),
+                        a: Operand::Borrow(0),
                         b: Some(Operand::Const(Constant::Int(22))),
                     },
                 ],
-                term: Some(Term::Return(Operand::Local(1))),
+                term: Some(Term::Return(Operand::Borrow(1))),
             }],
         };
 
@@ -219,7 +219,7 @@ mod tests {
                     a: Operand::Const(Constant::Int(i64::MAX)),
                     b: Some(Operand::Const(Constant::Int(1))),
                 }],
-                term: Some(Term::Return(Operand::Local(0))),
+                term: Some(Term::Return(Operand::Borrow(0))),
             }],
         };
 
@@ -248,7 +248,7 @@ mod tests {
                     a: Operand::Const(Constant::Int(1)),
                     b: Some(Operand::Const(Constant::Int(0))),
                 }],
-                term: Some(Term::Return(Operand::Local(0))),
+                term: Some(Term::Return(Operand::Borrow(0))),
             }],
         };
 

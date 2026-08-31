@@ -25,7 +25,7 @@ pub(super) fn run(function: &mut Function) -> PassResult {
                 ..
             }) if then_block == else_block => Some(Term::Goto(*then_block, Vec::new())),
             Some(Term::Branch {
-                cond: Operand::Local(cond),
+                cond: Operand::Borrow(cond),
                 then_block,
                 else_block,
             }) => block.insts.last().and_then(|inst| {
@@ -42,13 +42,13 @@ pub(super) fn run(function: &mut Function) -> PassResult {
                     return None;
                 }
                 let (source, expected) = match (*a, *b) {
-                    (source @ Operand::Local(_), Operand::Const(Constant::Bool(expected)))
-                    | (Operand::Const(Constant::Bool(expected)), source @ Operand::Local(_)) => {
+                    (source @ Operand::Borrow(_), Operand::Const(Constant::Bool(expected)))
+                    | (Operand::Const(Constant::Bool(expected)), source @ Operand::Borrow(_)) => {
                         (source, expected)
                     }
                     _ => return None,
                 };
-                if source == Operand::Local(*dest) {
+                if source == Operand::Borrow(*dest) {
                     return None;
                 }
                 let inverted = matches!(
@@ -192,9 +192,9 @@ mod tests {
             (CmpKind::Ne, false, true, 1, 2),
         ] {
             let (a, b) = if constant_first {
-                (Operand::Const(Constant::Bool(expected)), Operand::Local(0))
+                (Operand::Const(Constant::Bool(expected)), Operand::Borrow(0))
             } else {
-                (Operand::Local(0), Operand::Const(Constant::Bool(expected)))
+                (Operand::Borrow(0), Operand::Const(Constant::Bool(expected)))
             };
             let mut function = Function {
                 debug_names: None,
@@ -215,7 +215,7 @@ mod tests {
                             b: Some(b),
                         }],
                         term: Some(Term::Branch {
-                            cond: Operand::Local(1),
+                            cond: Operand::Borrow(1),
                             then_block: 1,
                             else_block: 2,
                         }),
@@ -239,7 +239,7 @@ mod tests {
             assert!(matches!(
                 function.blocks[0].term,
                 Some(Term::Branch {
-                    cond: Operand::Local(0),
+                    cond: Operand::Borrow(0),
                     then_block: actual_then,
                     else_block: actual_else,
                 }) if actual_then == then_block && actual_else == else_block
@@ -260,7 +260,7 @@ mod tests {
             params: Vec::new(),
             insts: Vec::new(),
             term: Some(Term::Branch {
-                cond: Operand::Local(0),
+                cond: Operand::Borrow(0),
                 then_block,
                 else_block,
             }),
@@ -311,7 +311,7 @@ mod tests {
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Branch {
-                        cond: Operand::Local(0),
+                        cond: Operand::Borrow(0),
                         then_block: 3,
                         else_block: 2,
                     }),
@@ -327,7 +327,7 @@ mod tests {
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Branch {
-                        cond: Operand::Local(0),
+                        cond: Operand::Borrow(0),
                         then_block: 3,
                         else_block: 4,
                     }),
@@ -372,7 +372,7 @@ mod tests {
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Branch {
-                        cond: Operand::Local(0),
+                        cond: Operand::Borrow(0),
                         then_block: 1,
                         else_block: 2,
                     }),
@@ -385,7 +385,7 @@ mod tests {
                         src: Operand::Const(Constant::Unit),
                     }],
                     term: Some(Term::Branch {
-                        cond: Operand::Local(0),
+                        cond: Operand::Borrow(0),
                         then_block: 3,
                         else_block: 4,
                     }),
@@ -395,7 +395,7 @@ mod tests {
                     params: vec![1],
                     insts: Vec::new(),
                     term: Some(Term::Branch {
-                        cond: Operand::Local(0),
+                        cond: Operand::Borrow(0),
                         then_block: 3,
                         else_block: 4,
                     }),
@@ -418,26 +418,26 @@ mod tests {
         assert_eq!(run(&mut function).applied, 0);
 
         function.blocks[0].term = Some(Term::Branch {
-            cond: Operand::Local(0),
+            cond: Operand::Borrow(0),
             then_block: 1,
             else_block: 3,
         });
         function.blocks[1].insts.clear();
         function.blocks[1].term = Some(Term::Branch {
-            cond: Operand::Local(1),
+            cond: Operand::Borrow(1),
             then_block: 3,
             else_block: 4,
         });
         assert_eq!(run(&mut function).applied, 0);
 
         function.blocks[0].term = Some(Term::Branch {
-            cond: Operand::Local(0),
+            cond: Operand::Borrow(0),
             then_block: 3,
             else_block: 2,
         });
         function.blocks[2].params.clear();
         function.blocks[2].term = Some(Term::Branch {
-            cond: Operand::Local(0),
+            cond: Operand::Borrow(0),
             then_block: 3,
             else_block: 0,
         });
@@ -461,11 +461,11 @@ mod tests {
                     insts: vec![Inst::Scalar {
                         dest: 1,
                         op: ScalarOp::BoolCmp(CmpKind::Eq),
-                        a: Operand::Local(0),
+                        a: Operand::Borrow(0),
                         b: Some(Operand::Const(Constant::Bool(false))),
                     }],
                     term: Some(Term::Branch {
-                        cond: Operand::Local(1),
+                        cond: Operand::Borrow(1),
                         then_block: 1,
                         else_block: 2,
                     }),
@@ -481,7 +481,7 @@ mod tests {
                     params: Vec::new(),
                     insts: Vec::new(),
                     term: Some(Term::Branch {
-                        cond: Operand::Local(0),
+                        cond: Operand::Borrow(0),
                         then_block: 3,
                         else_block: 4,
                     }),
@@ -505,7 +505,7 @@ mod tests {
         assert!(matches!(
             function.blocks[0].term,
             Some(Term::Branch {
-                cond: Operand::Local(0),
+                cond: Operand::Borrow(0),
                 then_block: 3,
                 else_block: 1,
             })
@@ -529,11 +529,11 @@ mod tests {
                     insts: vec![Inst::Scalar {
                         dest: 0,
                         op: ScalarOp::BoolCmp(CmpKind::Eq),
-                        a: Operand::Local(0),
+                        a: Operand::Borrow(0),
                         b: Some(Operand::Const(Constant::Bool(false))),
                     }],
                     term: Some(Term::Branch {
-                        cond: Operand::Local(0),
+                        cond: Operand::Borrow(0),
                         then_block: 1,
                         else_block: 2,
                     }),

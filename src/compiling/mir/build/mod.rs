@@ -27,13 +27,13 @@ pub(crate) use visit::{Escape, Slot, visit_inst, visit_term};
 /// inherited type parameter, its `(drop, retain)` witness locals.
 type WitnessPairs = Vec<(Symbol, (LocalId, LocalId))>;
 
-use crate::name_resolution::symbol::Symbol;
-use crate::node_kinds::call_arg::ArgMode;
-use crate::parsing::span::Span;
 use crate::core::{
     Block, Decl, DeclKind, Expr, ExprKind, Func, Literal, Node, Pattern, PatternKind,
     RecordFieldPattern, RecordFieldPatternKind, Stmt, StmtKind,
 };
+use crate::name_resolution::symbol::Symbol;
+use crate::node_kinds::call_arg::ArgMode;
+use crate::parsing::span::Span;
 use crate::types::ty::{ParamKind, Perm, ProtocolRef, StaticValue, Ty, TyFold};
 
 use super::BackendError;
@@ -323,6 +323,27 @@ fn contains_deinit(builder: &ProgramBuilder<'_>, ty: &Ty) -> bool {
         .insert(ty.clone(), computed);
     computed
 }
+
+/// Whether dropping the type can run a user-module Deinit hook. Core's
+/// resource-only hooks retain scope-exit timing; source-visible hooks use the
+/// liveness frontier where their ordering is observable.
+fn contains_source_deinit(builder: &ProgramBuilder<'_>, ty: &Ty) -> bool {
+    contains_guarded(builder, ty, &SOURCE_DEINIT_WALK, &mut Vec::new())
+}
+
+const SOURCE_DEINIT_WALK: ContainsWalk = ContainsWalk {
+    leaf: |builder, symbol| {
+        (symbol.module_id() != Some(crate::compiling::module::ModuleId::Core)
+            && builder
+                .catalog
+                .deinit_rows
+                .get(&symbol)
+                .is_some_and(|rows| !rows.is_empty()))
+        .then_some(true)
+    },
+    param_counts: false,
+    skip_borrowed_payloads: false,
+};
 
 const DEINIT_WALK: ContainsWalk = ContainsWalk {
     leaf: |builder, symbol| {
@@ -2251,7 +2272,7 @@ impl<'a> ProgramBuilder<'a> {
         self.show_glue.insert(ty.clone(), id);
         let mut fx = FunctionBuilder::new(self, 1, 0);
         fx.generated_origin = GeneratedMir::DerivedShow;
-        let result = fx.emit_show(Operand::Local(0), ty, protocol, span)?;
+        let result = fx.emit_show(Operand::Borrow(0), ty, protocol, span)?;
         let (n_locals, blocks, _return_repr, debug_names) = fx.finish(result)?;
         let layout = self.layouts.borrow_mut().id_of(ty);
         self.functions[id] = Function {
@@ -2282,7 +2303,8 @@ impl<'a> ProgramBuilder<'a> {
         self.equality_glue.insert(ty.clone(), id);
         let mut fx = FunctionBuilder::new(self, 2, 0);
         fx.generated_origin = GeneratedMir::DerivedEquality;
-        let result = fx.emit_equality(Operand::Local(0), Operand::Local(1), ty, protocol, span)?;
+        let result =
+            fx.emit_equality(Operand::Borrow(0), Operand::Borrow(1), ty, protocol, span)?;
         let (n_locals, blocks, _return_repr, debug_names) = fx.finish(result)?;
         let layout = self.layouts.borrow_mut().id_of(ty);
         self.functions[id] = Function {
@@ -2318,7 +2340,7 @@ impl<'a> ProgramBuilder<'a> {
             debug,
             params: Vec::new(),
             insts: Vec::new(),
-            term: Some(Term::Return(Operand::Local(0))),
+            term: Some(Term::Return(Operand::Borrow(0))),
         };
         let layout = self.layouts.borrow_mut().id_of(ty);
         self.functions[id] = Function {
@@ -2547,7 +2569,7 @@ impl<'a> ProgramBuilder<'a> {
         // An initializer returns its (fully assigned) receiver whether or
         // not the body ends with `self`.
         let value = match callable.body {
-            CallableBody::Init { .. } => Operand::Local(0),
+            CallableBody::Init { .. } => Operand::Borrow(0),
             CallableBody::Func(_) => value,
         };
         let (n_locals, blocks, return_repr, debug_names) = fx.finish(value)?;
@@ -2992,7 +3014,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             return;
         };
         self.record_flow(verify::FlowEvent::Drop(local));
-        self.drop_value(Operand::Local(local), &ty);
+        self.drop_value(Operand::Borrow(local), &ty);
     }
 
     /// Surface any error raised during drop emission (linearity).
@@ -3160,13 +3182,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// writeback.
     fn emit_return(&mut self, value: Operand) {
         if let Some(delimiter) = self.clause_delimiter {
-            self.emit_discontinue(Operand::Local(delimiter), value);
+            self.emit_discontinue(Operand::Borrow(delimiter), value);
         } else {
             self.emit_frame_return(value);
         }
     }
 
     fn emit_frame_return(&mut self, value: Operand) {
+        let mut value = value;
         // A bare `&T` return is the one value that cannot carry
         // ownership out of the frame: it has no owning representation
         // on the caller's side, so a loan of this frame's own data
@@ -3176,7 +3199,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // caught, not just direct bindings). Marked view nominals
         // donate instead and left this check behind.
         if self.returns_borrow
-            && let Operand::Local(view) = value
+            && let Operand::Borrow(view) = value
         {
             // Provenance is checked against named owned bindings only:
             // unnamed intermediates alias parameter interiors (core's
@@ -3246,12 +3269,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
         }
         self.in_return_consume = false;
+        if !self.returns_borrow {
+            value = value.with_mode(talk_mir::OperandMode::Consume);
+        }
         if !self.writeback_params.is_empty() {
             let mut args = vec![value];
             args.extend(
                 self.writeback_params
                     .iter()
-                    .map(|local| Operand::Local(*local)),
+                    .map(|local| Operand::Consume(*local)),
             );
             // The pairing tuple's element types: the declared return plus
             // each writeback param's evolved value — the borrow's pointee,
@@ -3290,7 +3316,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     self.record_flow(verify::FlowEvent::Move(local));
                 }
             }
-            self.terminate(Term::Return(Operand::Local(paired)));
+            self.terminate(Term::Return(Operand::Borrow(paired)));
             return;
         }
         let layout = self.return_ty.clone().map(|ret| self.layout_id(&ret));
@@ -3335,7 +3361,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         }
         // A cell handle owns its content, not the handle bits: releasing
         // it releases whatever the cell currently holds.
-        if let Operand::Local(local) = value
+        if let Operand::Borrow(local) = value
             && self.cell_handles.contains(&local)
         {
             let content = self.fresh_local();
@@ -3343,15 +3369,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 dest: content,
                 cell: value,
             });
-            self.drop_value(Operand::Local(content), ty);
+            self.drop_value(Operand::Borrow(content), ty);
             return;
         }
         // Strict linearity (OWN-03): a linear value reaching an implicit
         // drop point was not consumed on this path — except a consuming
         // method's own receiver, whose drop IS the consumption.
-        let sanctioned_param = matches!(value, Operand::Local(local) if local < self.param_floor)
+        let sanctioned_param = matches!(value, Operand::Borrow(local) if local < self.param_floor)
             && !matches!(ty, Ty::Borrow(_, _));
-        let consuming_own_receiver = self.consuming_receiver && matches!(value, Operand::Local(0));
+        let consuming_own_receiver = self.consuming_receiver && matches!(value, Operand::Borrow(0));
         if is_linear(self.program_builder, ty)
             && !consuming_own_receiver
             && !sanctioned_param
@@ -3443,8 +3469,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let dest = self.fresh_local();
                 self.push(Inst::CallIndirect {
                     dest,
-                    callee: Operand::Local(witness),
-                    args: vec![Operand::Local(payload)],
+                    callee: Operand::Borrow(witness),
+                    args: vec![Operand::Borrow(payload)],
                     unwind: None,
                 });
             }
@@ -3456,7 +3482,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     let dest = self.fresh_local();
                     self.push(Inst::CallIndirect {
                         dest,
-                        callee: Operand::Local(drop_witness),
+                        callee: Operand::Borrow(drop_witness),
                         args: vec![value],
                         unwind: None,
                     });
@@ -3591,7 +3617,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 u16::try_from(index).unwrap_or_default(),
                 None,
             );
-            visit(self, Operand::Local(member), member_ty)?;
+            visit(self, Operand::Borrow(member), member_ty)?;
         }
         Ok(())
     }
@@ -3642,7 +3668,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             let next = self.new_block();
             self.branch_if_equal(
                 ScalarOp::IntCmp(CmpKind::Eq),
-                Operand::Local(tag),
+                Operand::Borrow(tag),
                 Operand::Const(Constant::Int(
                     i64::try_from(variant_tag).unwrap_or_default(),
                 )),
@@ -3659,7 +3685,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     u16::try_from(index).unwrap_or_default(),
                     Some(u16::try_from(variant_tag).unwrap_or_default()),
                 );
-                visit(self, Operand::Local(payload), payload_ty)?;
+                visit(self, Operand::Borrow(payload), payload_ty)?;
             }
             self.terminate(Term::Goto(join, Vec::new()));
             self.switch_to(next);
@@ -3719,16 +3745,64 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
 
     /// Record a view's owner (call results with borrowed types).
     fn record_view(&mut self, result: Operand, source: Operand) {
-        if let (Operand::Local(result), Operand::Local(source)) = (result, source) {
+        if let (Operand::Borrow(result), Operand::Borrow(source)) = (result, source) {
             let root = self.borrow_root(source);
             self.borrow_roots.insert(result, root);
         }
     }
 
+    /// A managed projection from an owned aggregate settles as an independent
+    /// temporary in ownership placement. Projections from borrowed aggregates
+    /// remain views of their root.
+    fn record_projection(
+        &mut self,
+        projection: LocalId,
+        source: Operand,
+        source_ty: &Ty,
+        result_ty: &Ty,
+        span: Span,
+    ) {
+        let ty = self.resolved(result_ty);
+        if !self.needs_release(&ty) {
+            self.borrow_roots.remove(&projection);
+            return;
+        }
+        let settled_string = matches!(&ty, Ty::Nominal(symbol, _) if *symbol == Symbol::String);
+        let source_owned = source.local().is_some_and(|local| self.owns(local));
+        let source_is_parameter = source.local().is_some_and(|local| local < self.param_floor);
+        if borrow_classified(self.program_builder, source_ty)
+            || !source_owned
+            || source_is_parameter
+            || !settled_string
+        {
+            self.view_locals.insert(projection);
+            return;
+        }
+        let Some(owner) = self.borrow_roots.get(&projection).copied() else {
+            return;
+        };
+        let depth = self.loop_stack.len();
+        let entry = self.frame_entry(projection);
+        entry.owned = Some(ty.clone());
+        entry.loop_depth = depth;
+        let seq = self.next_ownership_seq();
+        self.ownership_sites
+            .projections
+            .push(ownership::ProjectionSite {
+                block: self.current,
+                seq,
+                index: self.blocks[self.current].insts.len() as u32,
+                owner,
+                projection,
+                ty,
+                span,
+            });
+    }
+
     /// Propagate provenance only when the source already carries some
     /// (containers wrapping views, binds of views).
     fn propagate_view(&mut self, result: Operand, source: Operand) {
-        if let (Operand::Local(_), Operand::Local(from)) = (result, source)
+        if let (Operand::Borrow(_), Operand::Borrow(from)) = (result, source)
             && self.borrow_roots.contains_key(&from)
         {
             self.record_view(result, source);
@@ -3785,6 +3859,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         self.ownership_sites.loans.push(ownership::LoanSite {
             block: self.current,
             seq,
+            index: self.blocks[self.current].insts.len() as u32,
             root,
             view,
             view_name,
@@ -3804,7 +3879,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// statement flush list, owned locals record a consume site for the
     /// elaborator's donate-vs-move decision (certain moves settle here).
     fn consume_operand(&mut self, operand: Operand) -> bool {
-        let Operand::Local(local) = operand else {
+        let Operand::Borrow(local) = operand else {
             return true;
         };
         if let Some(position) = self.stmt_temps.iter().position(|temp| *temp == local) {
@@ -3893,7 +3968,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         // (owning stored views).
         let resolved = self.resolved(ty);
         if matches!(resolved, Ty::Borrow(_, _)) {
-            if let Operand::Local(local) = operand
+            if let Operand::Borrow(local) = operand
                 && let Some(position) = self.stmt_temps.iter().position(|temp| *temp == local)
             {
                 self.stmt_temps.remove(position);
@@ -3944,7 +4019,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         span: Span,
     ) -> Result<(), BackendError> {
         if matches!(self.resolved(ty), Ty::Func(..))
-            && let Operand::Local(local) = operand
+            && let Operand::Borrow(local) = operand
         {
             self.record_flow(verify::FlowEvent::EscapeSink(local));
         }
@@ -3963,12 +4038,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     fn consume_owned_arguments(
         &mut self,
         params: &[Ty],
-        operands: &[Operand],
+        operands: &mut [Operand],
         span: Span,
     ) -> Result<(), BackendError> {
-        for (operand, param) in operands.iter().zip(params) {
-            if !matches!(param, Ty::Borrow(_, _)) {
+        for (operand, param) in operands.iter_mut().zip(params) {
+            if matches!(param, Ty::Borrow(_, _)) {
+                *operand = operand.with_mode(talk_mir::OperandMode::Borrow);
+            } else {
                 self.consume_call_argument_into(*operand, param, span)?;
+                *operand = operand.with_mode(talk_mir::OperandMode::Consume);
             }
         }
         Ok(())
@@ -4066,7 +4144,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             self.stmt_temps = arm.temps;
             self.consume_operand(arm.value);
             // The join value inherits any arm's borrow provenance.
-            self.propagate_view(Operand::Local(result), arm.value);
+            self.propagate_view(Operand::Borrow(result), arm.value);
             union.extend(self.moved.drain());
             self.terminate(Term::Goto(join, vec![arm.value]));
         }
@@ -4090,7 +4168,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// outer statement's operands) to their own boundaries.
     fn flush_stmt_temps_above(&mut self, floor: usize, keep: Option<Operand>) {
         let keep = match keep {
-            Some(Operand::Local(local)) => Some(local),
+            Some(Operand::Borrow(local)) => Some(local),
             _ => None,
         };
         let kept_was_temp = keep.is_some_and(|kept| {
@@ -4212,6 +4290,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 None
             }
         };
+        let mut view_source = None;
         match site {
             Some((offset, member)) => {
                 // Chain fold (ADR 0046 D5): reading a member out of a
@@ -4223,6 +4302,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let (src, container, offset) = self
                     .fold_chain(src, container, offset)
                     .unwrap_or((src, container, offset));
+                if member.is_some() {
+                    view_source = Some(src);
+                }
                 self.push(Inst::Field {
                     dest,
                     src,
@@ -4231,7 +4313,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     member,
                 });
             }
-            None => self.push(Inst::FieldIndex { dest, src, index }),
+            None => {
+                view_source = Some(src);
+                self.push(Inst::FieldIndex { dest, src, index });
+            }
+        }
+        if let Some(source) = view_source {
+            self.record_view(Operand::Borrow(dest), source);
         }
     }
 
@@ -4245,7 +4333,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         container: layout::LayoutId,
         offset: u16,
     ) -> Option<(Operand, layout::LayoutId, u16)> {
-        let Operand::Local(temp) = src else {
+        let Operand::Borrow(temp) = src else {
             return None;
         };
         if self.terminated() {
@@ -4494,7 +4582,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         dest: old,
                         global: slot,
                     });
-                    self.drop_value(Operand::Local(old), value_ty);
+                    self.drop_value(Operand::Borrow(old), value_ty);
                 }
                 if assign {
                     // Global slots own: a borrow-typed value donates
@@ -4540,12 +4628,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             if link.heap {
                 self.push(Inst::ObjectGet {
                     dest: child,
-                    src: Operand::Local(current),
+                    src: Operand::Borrow(current),
                     index: link.index,
                 });
             } else {
                 let layout = self.container_layout(&link.parent);
-                self.push_field(child, Operand::Local(current), layout, link.index, None);
+                self.push_field(child, Operand::Borrow(current), layout, link.index, None);
             }
             parents.push((current, link.clone()));
             current = child;
@@ -4570,17 +4658,17 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let old = self.fresh_local();
                 self.push(Inst::ObjectGet {
                     dest: old,
-                    src: Operand::Local(current),
+                    src: Operand::Borrow(current),
                     index: leaf.index,
                 });
-                self.drop_value(Operand::Local(old), &displaced_ty);
+                self.drop_value(Operand::Borrow(old), &displaced_ty);
             }
             if assign {
                 // Stored slots own (owning stored views).
                 self.consume_binding(value, &strip_borrows(leaf.field_ty.clone()), span)?;
             }
             self.push(Inst::ObjectSet {
-                obj: Operand::Local(current),
+                obj: Operand::Borrow(current),
                 src: value,
                 index: leaf.index,
             });
@@ -4594,9 +4682,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             {
                 let old = self.fresh_local();
                 let layout = self.container_layout(&leaf.parent);
-                self.push_field(old, Operand::Local(current), layout, leaf.index, None);
+                self.push_field(old, Operand::Borrow(current), layout, leaf.index, None);
                 let field_ty = leaf.field_ty.clone();
-                self.drop_value(Operand::Local(old), &field_ty);
+                self.drop_value(Operand::Borrow(old), &field_ty);
             }
             if assign {
                 // Stored slots own (owning stored views).
@@ -4607,7 +4695,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let rebuilt = self.rebuild_tuple(current, leaf.index, value, &parent);
                 self.push(Inst::Copy {
                     dest: current,
-                    src: Operand::Local(rebuilt),
+                    src: Operand::Borrow(rebuilt),
                 });
             } else {
                 let layout = self.container_layout(&leaf.parent.clone());
@@ -4620,22 +4708,22 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         for (parent, link) in parents.into_iter().rev() {
             if link.heap {
                 self.push(Inst::ObjectSet {
-                    obj: Operand::Local(parent),
-                    src: Operand::Local(updated),
+                    obj: Operand::Borrow(parent),
+                    src: Operand::Borrow(updated),
                     index: link.index,
                 });
                 return Ok(());
             }
             if matches!(link.parent, Ty::Tuple(_) | Ty::Record(_)) {
                 let rebuilt =
-                    self.rebuild_tuple(parent, link.index, Operand::Local(updated), &link.parent);
+                    self.rebuild_tuple(parent, link.index, Operand::Borrow(updated), &link.parent);
                 self.push(Inst::Copy {
                     dest: parent,
-                    src: Operand::Local(rebuilt),
+                    src: Operand::Borrow(rebuilt),
                 });
             } else {
                 let layout = self.container_layout(&link.parent);
-                self.push_set_field(parent, Operand::Local(updated), layout, link.index);
+                self.push_set_field(parent, Operand::Borrow(updated), layout, link.index);
             }
             updated = parent;
         }
@@ -4645,7 +4733,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         if let Some(slot) = chain.global_slot {
             self.push(Inst::GlobalStore {
                 global: slot,
-                src: Operand::Local(updated),
+                src: Operand::Borrow(updated),
             });
         }
         // A write into the blank init receiver: the top-level field's
@@ -4716,7 +4804,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
         };
         let layout = self.container_layout(&receiver_ty);
-        self.push_field(slot, Operand::Local(0), layout, index, None);
+        self.push_field(slot, Operand::Borrow(0), layout, index, None);
         self.moved.remove(&slot);
         self.own_local(slot, &field_ty);
     }
@@ -4757,11 +4845,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 dest: arity,
                 tag,
                 layout,
-                args: (0..arity).map(Operand::Local).collect(),
+                args: (0..arity).map(Operand::Borrow).collect(),
             },
             DebugOrigin::Generated(GeneratedMir::EnumConstructor),
         );
-        block.term = Some(Term::Return(Operand::Local(arity)));
+        block.term = Some(Term::Return(Operand::Borrow(arity)));
         self.program_builder.functions[id] = Function {
             debug_names: None,
             frame_sites: Default::default(),
@@ -4778,7 +4866,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             func: id,
             env: Vec::new(),
         });
-        Operand::Local(dest)
+        Operand::Borrow(dest)
     }
 
     /// A literal String value (immortal static bytes behind the core
@@ -4792,7 +4880,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             layout,
             storage_layout,
         });
-        Operand::Local(dest)
+        Operand::Borrow(dest)
     }
 
     /// The interned layouts of core String and its storage field, for
@@ -4865,7 +4953,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         });
         self.drop_value(left, &string_ty);
         self.drop_value(right, &string_ty);
-        Ok(Operand::Local(dest))
+        Ok(Operand::Borrow(dest))
     }
 
     /// Render one value: its real `show` conformance when one exists,
@@ -4905,7 +4993,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             args: vec![value],
             unwind: None,
         });
-        Ok(Operand::Local(dest))
+        Ok(Operand::Borrow(dest))
     }
 
     /// Structural equality of two operands of one type: real conformances
@@ -4958,7 +5046,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         args: vec![a, b],
                         unwind: None,
                     });
-                    return Ok(Operand::Local(dest));
+                    return Ok(Operand::Borrow(dest));
                 }
                 if let Some(payloads) = self.program_builder.variant_payloads(*symbol, args) {
                     return self.emit_enum_equality(a, b, &ty, payloads, protocol, span);
@@ -5024,8 +5112,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.push_field(fb, b, container, *index, None);
             }
             let equal = self.emit_equality(
-                Operand::Local(fa),
-                Operand::Local(fb),
+                Operand::Borrow(fa),
+                Operand::Borrow(fb),
                 field_ty,
                 protocol,
                 span,
@@ -5050,7 +5138,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         });
         self.terminate(Term::Goto(done, Vec::new()));
         self.switch_to(done);
-        Ok(Operand::Local(result))
+        Ok(Operand::Borrow(result))
     }
 
     /// Compile a call's arguments, recording the destination place for
@@ -5081,12 +5169,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     ty = *inner;
                 }
                 let dest = self.fresh_local();
-                self.push(Inst::Copy { dest, src: operand });
+                self.push(Inst::Copy {
+                    dest,
+                    src: operand.with_mode(talk_mir::OperandMode::Copy),
+                });
                 if donates(self.program_builder, &ty) {
-                    self.retain_value(Operand::Local(dest), &ty, arg.value.span)?;
+                    self.retain_value(Operand::Borrow(dest), &ty, arg.value.span)?;
                 }
                 self.produce_temp(dest, &ty);
-                operand = Operand::Local(dest);
+                operand = Operand::Borrow(dest);
             }
             operands.push(operand);
         }
@@ -5169,7 +5260,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     ) -> Result<Operand, BackendError> {
         if targets.is_empty() {
             self.produce_temp(dest, result_ty);
-            return Ok(Operand::Local(dest));
+            return Ok(Operand::Borrow(dest));
         }
         // The callee's `(result, finals…)` tuple, reconstructed from the
         // same signature facts the callee published it from.
@@ -5180,7 +5271,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         );
         let container = self.container_layout(&tuple_ty);
         let result = self.fresh_local();
-        self.push_field(result, Operand::Local(dest), container, 0, None);
+        self.push_field(result, Operand::Borrow(dest), container, 0, None);
         for (position, target) in targets.into_iter().enumerate() {
             let Some(target) = target else {
                 continue;
@@ -5188,14 +5279,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             let updated = self.fresh_local();
             self.push_field(
                 updated,
-                Operand::Local(dest),
+                Operand::Borrow(dest),
                 container,
                 u16::try_from(position + 1).unwrap_or_default(),
                 None,
             );
             match target {
                 WritebackTarget::Place(chain) => {
-                    self.write_place(&chain, Operand::Local(updated), &Ty::Error, span, false)?;
+                    self.write_place(&chain, Operand::Borrow(updated), &Ty::Error, span, false)?;
                 }
                 WritebackTarget::Repack {
                     chain,
@@ -5209,15 +5300,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     self.push(Inst::ExistentialPack {
                         dest: packed,
                         protocol: executable(protocol),
-                        payload: Operand::Local(updated),
+                        payload: Operand::Borrow(updated),
                         witnesses,
                     });
-                    self.write_place(&chain, Operand::Local(packed), &Ty::Error, span, false)?;
+                    self.write_place(&chain, Operand::Borrow(packed), &Ty::Error, span, false)?;
                 }
             }
         }
         self.produce_temp(result, result_ty);
-        Ok(Operand::Local(result))
+        Ok(Operand::Borrow(result))
     }
 
     /// Whether a protocol requirement is declared `mut func` — a
@@ -5254,8 +5345,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 continue;
             }
             let item = self.fresh_local();
-            self.push_field(item, Operand::Local(source), layout, index, None);
-            args.push(Operand::Local(item));
+            self.push_field(item, Operand::Borrow(source), layout, index, None);
+            args.push(Operand::Borrow(item));
         }
         let dest = self.fresh_local();
         self.push(Inst::Aggregate {
@@ -5315,8 +5406,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 span,
             ));
         };
-        operands.push(Operand::Local(drop_witness));
-        operands.push(Operand::Local(retain_witness));
+        operands.push(Operand::Borrow(drop_witness));
+        operands.push(Operand::Borrow(retain_witness));
         for protocol in self.program_builder.rigid_constraints(param) {
             let Some(locals) = self
                 .param_requirements
@@ -5329,7 +5420,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     span,
                 ));
             };
-            operands.extend(locals.into_iter().map(Operand::Local));
+            operands.extend(locals.into_iter().map(Operand::Borrow));
         }
         Ok(())
     }
@@ -5733,9 +5824,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     let snap = self.fresh_local();
                     self.push(Inst::Copy {
                         dest: snap,
-                        src: Operand::Local(local),
+                        src: Operand::Borrow(local),
                     });
-                    self.retain_value(Operand::Local(snap), &ty, span)?;
+                    self.retain_value(Operand::Borrow(snap), &ty, span)?;
                     self.own_local(snap, &ty);
                     overrides.insert(*symbol, snap);
                     anchored = true;
@@ -5761,7 +5852,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             let handle = self.fresh_local();
             self.push(Inst::CellNew {
                 dest: handle,
-                init: Operand::Local(local),
+                init: Operand::Borrow(local),
             });
             self.locals.insert(*symbol, handle);
             self.name_local(handle, name);
@@ -5823,9 +5914,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     let snap = self.fresh_local();
                     self.push(Inst::Copy {
                         dest: snap,
-                        src: Operand::Local(local),
+                        src: Operand::Borrow(local),
                     });
-                    self.retain_value(Operand::Local(snap), &ty, spec.span)?;
+                    self.retain_value(Operand::Borrow(snap), &ty, spec.span)?;
                     self.own_local(snap, &ty);
                     overrides.insert(symbol, snap);
                     anchored = true;
@@ -5837,7 +5928,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     let snap = self.fresh_local();
                     self.push(Inst::Copy {
                         dest: snap,
-                        src: Operand::Local(local),
+                        src: Operand::Borrow(local),
                     });
                     self.own_local(snap, &ty);
                     self.moved.insert(local);
@@ -5900,7 +5991,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let value = self.compile_nodes(&nodes)?;
 
         if !self.terminated()
-            && let Operand::Local(local) = value
+            && let Operand::Borrow(local) = value
             && self
                 .scopes
                 .last()
@@ -5956,9 +6047,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             decl.span,
                         ));
                     }
-                    let ty = self.resolved(
-                        lhs.ty.as_ref().map(|ty| ty.as_ty()).unwrap_or(&Ty::Error),
-                    );
+                    let ty =
+                        self.resolved(lhs.ty.as_ref().map(|ty| ty.as_ty()).unwrap_or(&Ty::Error));
                     let local = self.fresh_local();
                     self.locals.insert(*symbol, local);
                     self.name_local(local, bind_name);
@@ -5993,9 +6083,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         dest: local,
                         src: value,
                     });
-                    self.record_view(Operand::Local(local), value);
+                    self.record_view(Operand::Borrow(local), value);
                     self.view_locals.insert(local);
-                    if let Operand::Local(source) = value {
+                    if let Operand::Borrow(source) = value {
                         let root = self.borrow_root(source);
                         let _ = symbol;
                         self.record_loan(root, local, bind_name.clone(), *mutable);
@@ -6033,7 +6123,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         self.cell_handles.insert(handle);
                         let closure = self.compile_closure(func)?;
                         self.push(Inst::CellSet {
-                            cell: Operand::Local(handle),
+                            cell: Operand::Borrow(handle),
                             src: closure,
                         });
                         return Ok(Operand::Const(Constant::Unit));
@@ -6100,7 +6190,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // SSA construction, Braun et al., CC 2013). Only frame-
                 // owned temporaries alias; a parameter or another
                 // binding's local keeps its own storage.
-                let local = if let Operand::Local(source) = value
+                let local = if let Operand::Borrow(source) = value
                     && source >= self.param_floor
                     && self.stmt_temps.contains(&source)
                 {
@@ -6122,7 +6212,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // loans the slot's content), so it owns nothing whatever
                 // the source owns.
                 let value_ty = match value {
-                    Operand::Local(source) if !matches!(ty, Ty::Borrow(_, _)) => {
+                    Operand::Borrow(source) if !matches!(ty, Ty::Borrow(_, _)) => {
                         self.owned_ty(source).cloned()
                     }
                     _ => None,
@@ -6155,11 +6245,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     // the source carries no provenance of its own (a
                     // `mut` parameter is the root): displaced writes to
                     // the root must keep the referent alive for the view.
-                    self.record_view(Operand::Local(local), value);
+                    self.record_view(Operand::Borrow(local), value);
                 } else {
-                    self.propagate_view(Operand::Local(local), value);
+                    self.propagate_view(Operand::Borrow(local), value);
                 }
-                if let Operand::Local(source) = value
+                if let Operand::Borrow(source) = value
                     && self.borrow_roots.contains_key(&source)
                     && borrow_classified(self.program_builder, ty)
                     && let PatternKind::Bind(Name::Resolved(_, bind_name)) = &pattern.kind
@@ -6179,7 +6269,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             PatternKind::Tuple(elements) => {
                 let element_tys: Vec<Ty> = elements
                     .iter()
-                    .map(|element| self.resolved(element.ty.as_ref().map(|ty| ty.as_ty()).unwrap_or(&Ty::Error)))
+                    .map(|element| {
+                        self.resolved(
+                            element
+                                .ty
+                                .as_ref()
+                                .map(|ty| ty.as_ty())
+                                .unwrap_or(&Ty::Error),
+                        )
+                    })
                     .collect();
                 let container = self.container_layout(ty);
                 let extracted = self.extract_tuple(value, container, elements.len());
@@ -6188,7 +6286,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // a borrowed source keeps ownership and binds donate.
                 if self.consume_operand(value) {
                     for (operand, element_ty) in extracted.iter().zip(&element_tys) {
-                        if let Operand::Local(local) = operand {
+                        if let Operand::Borrow(local) = operand {
                             self.produce_temp(*local, element_ty);
                         }
                     }
@@ -6206,7 +6304,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let extracted = self.extract_tuple(value, container, cells.len());
                 if self.consume_operand(value) {
                     for (operand, cell) in extracted.iter().zip(&cells) {
-                        if let Operand::Local(local) = operand {
+                        if let Operand::Borrow(local) = operand {
                             self.produce_temp(*local, &cell.field_ty);
                         }
                     }
@@ -6235,12 +6333,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             dest: shared,
                             src: slot,
                         });
-                        self.retain_value(Operand::Local(shared), &cell.field_ty, pattern.span)?;
+                        self.retain_value(Operand::Borrow(shared), &cell.field_ty, pattern.span)?;
                         self.produce_temp(shared, &cell.field_ty);
                         self.bind_owned_pattern(&bind, slot, &cell.field_ty)?;
                         self.bind_owned_pattern(
                             &cell.pattern,
-                            Operand::Local(shared),
+                            Operand::Borrow(shared),
                             &cell.field_ty,
                         )?;
                         continue;
@@ -6269,12 +6367,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             index: u16::try_from(index).unwrap_or_default(),
                         });
                         if self.needs_release(&cell.field_ty) {
-                            self.retain_value(Operand::Local(slot), &cell.field_ty, pattern.span)?;
+                            self.retain_value(Operand::Borrow(slot), &cell.field_ty, pattern.span)?;
                             self.produce_temp(slot, &cell.field_ty);
                         }
                         self.bind_owned_pattern(
                             &cell.pattern,
-                            Operand::Local(slot),
+                            Operand::Borrow(slot),
                             &cell.field_ty,
                         )?;
                     }
@@ -6287,7 +6385,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let extracted = self.extract_struct_fields(value, container, false, cells.len());
                 if self.consume_operand(value) {
                     for (operand, cell) in extracted.iter().zip(&cells) {
-                        if let Operand::Local(local) = operand {
+                        if let Operand::Borrow(local) = operand {
                             self.produce_temp(*local, &cell.field_ty);
                         }
                     }
@@ -6409,7 +6507,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 if unified && let Some(ty) = result_ty {
                     self.produce_temp(result, &ty);
                 }
-                Ok(Operand::Local(result))
+                Ok(Operand::Borrow(result))
             }
             StmtKind::Loop(cond, body) => {
                 let header = self.new_block();
@@ -6550,7 +6648,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                     dest: old,
                                     global: slot,
                                 });
-                                self.drop_value(Operand::Local(old), &ty);
+                                self.drop_value(Operand::Borrow(old), &ty);
                             }
                             self.consume_binding(value, &ty, rhs.span)?;
                             self.push(Inst::GlobalStore {
@@ -6578,13 +6676,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 let old = self.fresh_local();
                                 self.push(Inst::CellGet {
                                     dest: old,
-                                    cell: Operand::Local(local),
+                                    cell: Operand::Borrow(local),
                                 });
-                                self.drop_value(Operand::Local(old), &content_ty);
+                                self.drop_value(Operand::Borrow(old), &content_ty);
                                 self.consume_binding(value, &content_ty, rhs.span)?;
                             }
                             self.push(Inst::CellSet {
-                                cell: Operand::Local(local),
+                                cell: Operand::Borrow(local),
                                 src: value,
                             });
                             return Ok(Operand::Const(Constant::Unit));
@@ -6679,9 +6777,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 while let Ty::Borrow(_, inner) = retained {
                     retained = *inner;
                 }
-                self.retain_value(Operand::Local(dest), &retained, expr.span)?;
+                self.retain_value(Operand::Borrow(dest), &retained, expr.span)?;
                 self.produce_temp(dest, &retained);
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
         }
         Ok(operand)
@@ -6720,7 +6818,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let dest = self.fresh_local();
                 // A container wrapping a view inherits its provenance.
                 for arg in &args {
-                    self.propagate_view(Operand::Local(dest), *arg);
+                    self.propagate_view(Operand::Borrow(dest), *arg);
                 }
                 let layout = self.layout_id(&ty);
                 self.push(Inst::Aggregate {
@@ -6730,7 +6828,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     args,
                 });
                 self.produce_temp(dest, &ty);
-                Ok(Operand::Local(dest))
+                Ok(Operand::Borrow(dest))
             }
             ExprKind::Con {
                 enum_symbol,
@@ -6761,7 +6859,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
                 let dest = self.fresh_local();
                 for operand in &compiled {
-                    self.propagate_view(Operand::Local(dest), *operand);
+                    self.propagate_view(Operand::Borrow(dest), *operand);
                 }
                 let layout = self.construction_layout(&ty, Some(enum_symbol));
                 self.push(Inst::Aggregate {
@@ -6771,7 +6869,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     args: compiled,
                 });
                 self.produce_temp(dest, &ty);
-                Ok(Operand::Local(dest))
+                Ok(Operand::Borrow(dest))
             }
             ExprKind::Proj(base, _, field) => {
                 let base_ty = self.resolved(&base.ty);
@@ -6820,17 +6918,21 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
                 // Field reads carry their owner's provenance so views
                 // derived from fields track the whole value.
-                self.record_view(Operand::Local(dest), src);
-                Ok(Operand::Local(dest))
+                self.record_view(Operand::Borrow(dest), src);
+                self.record_projection(dest, src, &base.ty, &expr.ty, expr.span);
+                Ok(Operand::Borrow(dest))
             }
             ExprKind::Member(Some(receiver), crate::label::Label::Positional(index)) => {
                 let layout = self.container_layout(&self.resolved(&receiver.ty));
+                let source_ty = receiver.ty.clone();
                 let src = self.compile_expr(receiver)?;
                 let index = u16::try_from(*index)
                     .map_err(|_| BackendError::new("tuple index out of range".into(), expr.span))?;
                 let dest = self.fresh_local();
                 self.push_field(dest, src, layout, index, None);
-                Ok(Operand::Local(dest))
+                self.record_view(Operand::Borrow(dest), src);
+                self.record_projection(dest, src, &source_ty, &expr.ty, expr.span);
+                Ok(Operand::Borrow(dest))
             }
             // A record field read: the label's position in the row is its
             // slot (rows keep fields label-sorted, fixing the layout).
@@ -6863,6 +6965,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         )
                     })?;
                 let layout = self.container_layout(&self.resolved(&receiver.ty));
+                let source_ty = receiver.ty.clone();
                 let src = self.compile_expr(receiver)?;
                 let dest = self.fresh_local();
                 self.push_field(
@@ -6872,7 +6975,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     u16::try_from(index).unwrap_or_default(),
                     None,
                 );
-                Ok(Operand::Local(dest))
+                self.record_view(Operand::Borrow(dest), src);
+                self.record_projection(dest, src, &source_ty, &expr.ty, expr.span);
+                Ok(Operand::Borrow(dest))
             }
             ExprKind::Variable(Name::Resolved(symbol, name)) => {
                 if let Some(local) = self.locals.get(symbol).copied() {
@@ -6901,11 +7006,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         let dest = self.fresh_local();
                         self.push(Inst::CellGet {
                             dest,
-                            cell: Operand::Local(local),
+                            cell: Operand::Borrow(local),
                         });
-                        return Ok(Operand::Local(dest));
+                        return Ok(Operand::Borrow(dest));
                     }
-                    Ok(Operand::Local(local))
+                    Ok(Operand::Borrow(local))
                 } else if let Some(slot) = self.program_builder.global_slots.get(symbol).copied() {
                     let global_ty = self
                         .program_builder
@@ -6919,7 +7024,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     let dest = self.fresh_local();
                     self.push(Inst::GlobalLoad { dest, global: slot });
                     self.global_loads.insert(dest, slot);
-                    Ok(Operand::Local(dest))
+                    Ok(Operand::Borrow(dest))
                 } else if let Some(value) =
                     self.subst.get(symbol).or_else(|| self.subst.get(&*symbol))
                 {
@@ -6962,7 +7067,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 layout,
                                 args: Vec::new(),
                             });
-                            Ok(Operand::Local(dest))
+                            Ok(Operand::Borrow(dest))
                         }
                         // A rigid instance (TALK_CHECK_ALL compiles every
                         // callable generically; rigid demands stay rigid
@@ -6992,7 +7097,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                         layout,
                                         args: Vec::new(),
                                     });
-                                    Ok(Operand::Local(dest))
+                                    Ok(Operand::Borrow(dest))
                                 }
                                 _ => Err(BackendError::new(
                                     format!(
@@ -7061,7 +7166,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         func,
                         env: Vec::new(),
                     });
-                    Ok(Operand::Local(dest))
+                    Ok(Operand::Borrow(dest))
                 } else if let Some((initializer, _)) =
                     self.program_builder.globals.get(&*symbol).copied()
                 {
@@ -7101,7 +7206,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // semantics.
                 let owning = self.consume_operand(value);
                 let result = self.compile_match(value, &scrutinee_ty, arms, owning)?;
-                if let Operand::Local(local) = result {
+                if let Operand::Borrow(local) = result {
                     self.produce_temp(local, &ty);
                 }
                 Ok(result)
@@ -7156,7 +7261,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         args: values,
                     });
                     self.produce_temp(dest, &ty);
-                    return Ok(Operand::Local(dest));
+                    return Ok(Operand::Borrow(dest));
                 }
                 if *array_symbol != Symbol::Array {
                     return Err(BackendError::new(
@@ -7194,14 +7299,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     let slot = self.fresh_local();
                     self.push(Inst::PtrAdd {
                         dest: slot,
-                        ptr: Operand::Local(base),
+                        ptr: Operand::Borrow(base),
                         offset: Operand::Const(Constant::Int(
                             i64::try_from(index).unwrap_or_default(),
                         )),
                         size: layout::element_stride(element),
                     });
                     self.push(Inst::Store {
-                        ptr: Operand::Local(slot),
+                        ptr: Operand::Borrow(slot),
                         src: value,
                         kind: element,
                     });
@@ -7216,7 +7321,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     tag: 0,
                     dest: storage,
                     layout: storage_layout,
-                    args: vec![Operand::Local(base)],
+                    args: vec![Operand::Borrow(base)],
                 });
                 let dest = self.fresh_local();
                 let layout = self.layout_id(&ty);
@@ -7225,13 +7330,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     dest,
                     layout,
                     args: vec![
-                        Operand::Local(storage),
+                        Operand::Borrow(storage),
                         Operand::Const(Constant::Int(count)),
                         Operand::Const(Constant::Int(count)),
                     ],
                 });
                 self.produce_temp(dest, &ty);
-                Ok(Operand::Local(dest))
+                Ok(Operand::Borrow(dest))
             }
             ExprKind::Func(func) => self.compile_closure(func),
             ExprKind::Clone(source) => {
@@ -7254,10 +7359,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     while let Ty::Borrow(_, inner) = retained {
                         retained = *inner;
                     }
-                    self.retain_value(Operand::Local(dest), &retained, expr.span)?;
+                    self.retain_value(Operand::Borrow(dest), &retained, expr.span)?;
                 }
                 self.produce_temp(dest, &ty);
-                Ok(Operand::Local(dest))
+                Ok(Operand::Borrow(dest))
             }
             ExprKind::CallEffect {
                 effect_name,
@@ -7362,7 +7467,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     let join = self.new_block();
                     let call_arm = self.new_block();
                     self.terminate(Term::Branch {
-                        cond: Operand::Local(binds),
+                        cond: Operand::Borrow(binds),
                         then_block: bind_arm,
                         else_block: call_arm,
                     });
@@ -7376,13 +7481,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         dest: suspended,
                         effect: effect_identity,
                         args: operands.clone(),
-                        entry: Operand::Local(index),
+                        entry: Operand::Borrow(index),
                         unwind: None,
                     });
                     self.produce_temp(suspended, &ty);
                     arm_ends.push(ArmEnd {
                         block: self.current,
-                        value: Operand::Local(suspended),
+                        value: Operand::Borrow(suspended),
                         moved: std::mem::take(&mut self.moved),
                         temps: std::mem::take(&mut self.stmt_temps),
                     });
@@ -7393,29 +7498,29 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     let saved_floor = self.fresh_local();
                     self.push(Inst::GetFloor { dest: saved_floor });
                     self.push(Inst::SetFloor {
-                        src: Operand::Local(index),
+                        src: Operand::Borrow(index),
                     });
                     let called = self.fresh_local();
                     self.push(Inst::CallIndirect {
                         dest: called,
-                        callee: Operand::Local(clause),
+                        callee: Operand::Borrow(clause),
                         args: operands,
                         unwind: None,
                     });
                     self.push(Inst::SetFloor {
-                        src: Operand::Local(saved_floor),
+                        src: Operand::Borrow(saved_floor),
                     });
                     self.produce_temp(called, &ty);
                     arm_ends.push(ArmEnd {
                         block: self.current,
-                        value: Operand::Local(called),
+                        value: Operand::Borrow(called),
                         moved: std::mem::take(&mut self.moved),
                         temps: std::mem::take(&mut self.stmt_temps),
                     });
 
                     self.merge_arms(arm_ends, result, join, temps_before, moved_before);
                     self.produce_temp(result, &ty);
-                    return Ok(Operand::Local(result));
+                    return Ok(Operand::Borrow(result));
                 }
                 // Writeback targets align against the declared parameters
                 // before the witness blocks are appended.
@@ -7465,8 +7570,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 expr.span,
                             ));
                         };
-                        operands.push(Operand::Local(drop_witness));
-                        operands.push(Operand::Local(retain_witness));
+                        operands.push(Operand::Borrow(drop_witness));
+                        operands.push(Operand::Borrow(retain_witness));
                         for protocol in self.program_builder.rigid_constraints(*generic) {
                             let Some(locals) = self
                                 .param_requirements
@@ -7479,7 +7584,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                     expr.span,
                                 ));
                             };
-                            operands.extend(locals.into_iter().map(Operand::Local));
+                            operands.extend(locals.into_iter().map(Operand::Borrow));
                         }
                     } else {
                         // Concrete or compound: glue closures capture any
@@ -7518,18 +7623,18 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let saved_floor = self.fresh_local();
                 self.push(Inst::GetFloor { dest: saved_floor });
                 self.push(Inst::SetFloor {
-                    src: Operand::Local(index),
+                    src: Operand::Borrow(index),
                 });
                 let dest = self.fresh_local();
                 let unwind = None;
                 self.push(Inst::CallIndirect {
                     dest,
-                    callee: Operand::Local(clause),
+                    callee: Operand::Borrow(clause),
                     args: operands,
                     unwind,
                 });
                 self.push(Inst::SetFloor {
-                    src: Operand::Local(saved_floor),
+                    src: Operand::Borrow(saved_floor),
                 });
                 self.apply_writebacks(dest, targets, writeback_tys, &ty, expr.span)
             }
@@ -7579,7 +7684,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     args,
                 });
                 self.produce_temp(dest, &record_ty);
-                Ok(Operand::Local(dest))
+                Ok(Operand::Borrow(dest))
             }
             ExprKind::Constructor(Name::Resolved(symbol, _))
                 if self.program_builder.variant_tag(*symbol).is_some() =>
@@ -7662,7 +7767,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     layout,
                     storage_layout,
                 });
-                Ok(Operand::Local(dest))
+                Ok(Operand::Borrow(dest))
             }
             Literal::Character(text) => {
                 // A character literal is a borrowed grapheme view over
@@ -7685,7 +7790,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     tag: 0,
                     dest: storage,
                     layout: storage_layout,
-                    args: vec![Operand::Local(ptr)],
+                    args: vec![Operand::Borrow(ptr)],
                 });
                 let dest = self.fresh_local();
                 let layout = self.construction_layout(
@@ -7697,12 +7802,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     dest,
                     layout,
                     args: vec![
-                        Operand::Local(storage),
+                        Operand::Borrow(storage),
                         Operand::Const(Constant::Int(0)),
                         Operand::Const(Constant::Int(len)),
                     ],
                 });
-                Ok(Operand::Local(dest))
+                Ok(Operand::Borrow(dest))
             }
         }
     }
@@ -7766,7 +7871,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
 
         self.merge_arms(arm_ends, result, join, temps_before, moved_before);
         self.match_tag_cache = outer_tag_cache;
-        Ok(Operand::Local(result))
+        Ok(Operand::Borrow(result))
     }
 
     /// The backend view of a GADT arm's refinement: a variant with
@@ -7861,7 +7966,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     // Without the retain the arm's drop releases the
                     // lender's reference — the tuple-match double free.
                     if through_borrow {
-                        self.retain_value(Operand::Local(local), &ty, pattern.span)?;
+                        self.retain_value(Operand::Borrow(local), &ty, pattern.span)?;
                     }
                     self.produce_temp(local, &ty);
                 }
@@ -7884,7 +7989,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             PatternKind::Tuple(elements) => {
                 let element_tys: Vec<Ty> = elements
                     .iter()
-                    .map(|element| self.resolved(element.ty.as_ref().map(|ty| ty.as_ty()).unwrap_or(&Ty::Error)))
+                    .map(|element| {
+                        self.resolved(
+                            element
+                                .ty
+                                .as_ref()
+                                .map(|ty| ty.as_ty())
+                                .unwrap_or(&Ty::Error),
+                        )
+                    })
                     .collect();
                 let container = self.container_layout(&ty);
                 for (index, (element, element_ty)) in elements.iter().zip(&element_tys).enumerate()
@@ -7902,7 +8015,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     );
                     self.settle_owned_match(
                         element,
-                        Operand::Local(extracted),
+                        Operand::Borrow(extracted),
                         element_ty,
                         through_borrow,
                     )?;
@@ -7935,7 +8048,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     );
                     self.settle_owned_match(
                         field,
-                        Operand::Local(extracted),
+                        Operand::Borrow(extracted),
                         payload_ty,
                         through_borrow,
                     )?;
@@ -7957,7 +8070,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     return Ok(());
                 }
                 let tag_value = match scrutinee {
-                    Operand::Local(local) => {
+                    Operand::Consume(local) | Operand::Borrow(local) | Operand::Copy(local) => {
                         if let Some(&cached) = self.match_tag_cache.get(&local) {
                             cached
                         } else {
@@ -8009,7 +8122,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     let rest = self.new_block();
                     self.branch_if_equal(
                         ScalarOp::IntCmp(CmpKind::Eq),
-                        Operand::Local(tag_value),
+                        Operand::Borrow(tag_value),
                         Operand::Const(Constant::Int(i64::from(tag))),
                         this_alternative,
                         rest,
@@ -8040,7 +8153,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             {
                                 if through_borrow {
                                     self.retain_value(
-                                        Operand::Local(local),
+                                        Operand::Borrow(local),
                                         &cell.field_ty,
                                         pattern.span,
                                     )?;
@@ -8058,7 +8171,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 );
                                 self.settle_owned_match(
                                     &cell.pattern,
-                                    Operand::Local(extracted),
+                                    Operand::Borrow(extracted),
                                     &cell.field_ty,
                                     true,
                                 )?;
@@ -8081,7 +8194,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     );
                     self.settle_owned_match(
                         &cell.pattern,
-                        Operand::Local(extracted),
+                        Operand::Borrow(extracted),
                         &cell.field_ty,
                         through_borrow,
                     )?;
@@ -8122,7 +8235,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     }
                     self.settle_owned_match(
                         &cell.pattern,
-                        Operand::Local(extracted),
+                        Operand::Borrow(extracted),
                         &cell.field_ty,
                         through_borrow || heap,
                     )?;
@@ -8338,7 +8451,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 } else {
                     self.push_field(dest, scrutinee, container, index, None);
                 }
-                Operand::Local(dest)
+                Operand::Borrow(dest)
             })
             .collect()
     }
@@ -8487,7 +8600,15 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             PatternKind::Tuple(elements) => {
                 let element_tys: Vec<Ty> = elements
                     .iter()
-                    .map(|element| self.resolved(element.ty.as_ref().map(|ty| ty.as_ty()).unwrap_or(&Ty::Error)))
+                    .map(|element| {
+                        self.resolved(
+                            element
+                                .ty
+                                .as_ref()
+                                .map(|ty| ty.as_ty())
+                                .unwrap_or(&Ty::Error),
+                        )
+                    })
                     .collect();
                 let container = self.container_layout(scrutinee_ty);
                 let extracted = self.extract_tuple(scrutinee, container, elements.len());
@@ -8508,7 +8629,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     ));
                 };
                 let tag_value = match scrutinee {
-                    Operand::Local(local) => {
+                    Operand::Consume(local) | Operand::Borrow(local) | Operand::Copy(local) => {
                         if let Some(&cached) = self.match_tag_cache.get(&local) {
                             cached
                         } else {
@@ -8533,7 +8654,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let payloads = self.new_block();
                 self.branch_if_equal(
                     ScalarOp::IntCmp(CmpKind::Eq),
-                    Operand::Local(tag_value),
+                    Operand::Borrow(tag_value),
                     Operand::Const(Constant::Int(i64::from(tag))),
                     payloads,
                     failed,
@@ -8550,7 +8671,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             u16::try_from(index).unwrap_or_default(),
                             Some(tag),
                         );
-                        Operand::Local(dest)
+                        Operand::Borrow(dest)
                     })
                     .collect();
                 self.test_all(fields, &extracted, &payload_tys, matched, failed)
@@ -8669,7 +8790,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             let value = self.fresh_local();
             self.push_field(value, scrutinee, container, 0, None);
             head_ty = Ty::Nominal(Symbol::String, Vec::new());
-            Operand::Local(value)
+            Operand::Borrow(value)
         } else {
             scrutinee
         };
@@ -8707,7 +8828,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let count_ok = self.new_block();
         self.branch_if_equal(
             ScalarOp::IntCmp(CmpKind::Eq),
-            Operand::Local(count),
+            Operand::Borrow(count),
             Operand::Const(Constant::Int(len)),
             count_ok,
             failed,
@@ -8725,7 +8846,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             Symbol::Storage,
             vec![Ty::Nominal(Symbol::Byte, Vec::new())],
         ));
-        self.push_field(base, Operand::Local(storage), storage_container, 0, None);
+        self.push_field(base, Operand::Borrow(storage), storage_container, 0, None);
         let base = if let Some(start_index) = start_index {
             // A view (Substring) offsets into its shared storage.
             let start = self.fresh_local();
@@ -8733,8 +8854,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             let offset = self.fresh_local();
             self.push(Inst::PtrAdd {
                 dest: offset,
-                ptr: Operand::Local(base),
-                offset: Operand::Local(start),
+                ptr: Operand::Borrow(base),
+                offset: Operand::Borrow(start),
                 size: 1,
             });
             offset
@@ -8761,11 +8882,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         self.push(Inst::Scalar {
             dest: in_range,
             op: ScalarOp::IntCmp(CmpKind::Lt),
-            a: Operand::Local(index),
+            a: Operand::Borrow(index),
             b: Some(Operand::Const(Constant::Int(len))),
         });
         self.terminate(Term::Branch {
-            cond: Operand::Local(in_range),
+            cond: Operand::Borrow(in_range),
             then_block: body,
             else_block: matched,
         });
@@ -8774,34 +8895,34 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let lhs_ptr = self.fresh_local();
         self.push(Inst::PtrAdd {
             dest: lhs_ptr,
-            ptr: Operand::Local(base),
-            offset: Operand::Local(index),
+            ptr: Operand::Borrow(base),
+            offset: Operand::Borrow(index),
             size: 1,
         });
         let rhs_ptr = self.fresh_local();
         self.push(Inst::PtrAdd {
             dest: rhs_ptr,
-            ptr: Operand::Local(literal),
-            offset: Operand::Local(index),
+            ptr: Operand::Borrow(literal),
+            offset: Operand::Borrow(index),
             size: 1,
         });
         let lhs = self.fresh_local();
         self.push(Inst::Load {
             dest: lhs,
-            ptr: Operand::Local(lhs_ptr),
+            ptr: Operand::Borrow(lhs_ptr),
             kind: layout::SlotKind::Byte,
         });
         let rhs = self.fresh_local();
         self.push(Inst::Load {
             dest: rhs,
-            ptr: Operand::Local(rhs_ptr),
+            ptr: Operand::Borrow(rhs_ptr),
             kind: layout::SlotKind::Byte,
         });
         let advance = self.new_block();
         self.branch_if_equal(
             ScalarOp::ByteCmp(CmpKind::Eq),
-            Operand::Local(lhs),
-            Operand::Local(rhs),
+            Operand::Borrow(lhs),
+            Operand::Borrow(rhs),
             advance,
             failed,
         );
@@ -8810,12 +8931,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         self.push(Inst::Scalar {
             dest: bumped,
             op: ScalarOp::IntAdd,
-            a: Operand::Local(index),
+            a: Operand::Borrow(index),
             b: Some(Operand::Const(Constant::Int(1))),
         });
         self.push(Inst::Copy {
             dest: index,
-            src: Operand::Local(bumped),
+            src: Operand::Borrow(bumped),
         });
         self.terminate(Term::Goto(header, Vec::new()));
         Ok(())
@@ -8838,7 +8959,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     u16::try_from(index).unwrap_or_default(),
                     None,
                 );
-                Operand::Local(dest)
+                Operand::Borrow(dest)
             })
             .collect()
     }
@@ -8895,7 +9016,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             b: Some(b),
         });
         self.terminate(Term::Branch {
-            cond: Operand::Local(cond),
+            cond: Operand::Borrow(cond),
             then_block: matched,
             else_block: failed,
         });
@@ -8927,7 +9048,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let callee_ty = self.resolved(&callee.ty);
         if let Ty::Func(params, _, _) = &callee_ty {
             // Left-aligned: witness blocks trail the declared arguments.
-            self.consume_owned_arguments(params, &operands, expr.span)?;
+            self.consume_owned_arguments(params, &mut operands, expr.span)?;
         }
         let (targets, writeback_tys) =
             self.writeback_targets(&callee_ty, operands.len(), None, &mut_arg_places, args, 0)?;
@@ -8982,11 +9103,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     let dest = self.fresh_local();
                     self.push(Inst::CellGet {
                         dest,
-                        cell: Operand::Local(local),
+                        cell: Operand::Borrow(local),
                     });
-                    Operand::Local(dest)
+                    Operand::Borrow(dest)
                 } else {
-                    Operand::Local(local)
+                    Operand::Borrow(local)
                 };
                 return self.compile_indirect_call(callee_value, expr, callee, args);
             }
@@ -9002,7 +9123,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     dest: loaded,
                     global: slot,
                 });
-                return self.compile_indirect_call(Operand::Local(loaded), expr, callee, args);
+                return self.compile_indirect_call(Operand::Borrow(loaded), expr, callee, args);
             }
             // Rigid `T(args)`: the frontend resolved the construction
             // through a bound's init requirement; this instance's
@@ -9089,7 +9210,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                     // releases like any statement temp.
                                     let value = self.compile_expr(receiver)?;
                                     let base = match value {
-                                        Operand::Local(local) => local,
+                                        Operand::Consume(local)
+                                        | Operand::Borrow(local)
+                                        | Operand::Copy(local) => local,
                                         Operand::Const(_) => {
                                             let temp = self.fresh_local();
                                             self.push(Inst::Copy {
@@ -9105,7 +9228,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                             global_slot: None,
                                             links: Vec::new(),
                                         }),
-                                        Some(Operand::Local(base)),
+                                        Some(Operand::Borrow(base)),
                                     )
                                 }
                             }
@@ -9142,7 +9265,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                         src: value,
                                         index: u16::try_from(slot).unwrap_or_default(),
                                     });
-                                    witnesses.push(Operand::Local(entry));
+                                    witnesses.push(Operand::Borrow(entry));
                                 }
                                 Some((
                                     Some(WritebackTarget::Repack {
@@ -9155,7 +9278,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             }
                             None => None,
                         };
-                        let mut operands = vec![Operand::Local(payload)];
+                        let mut operands = vec![Operand::Borrow(payload)];
                         let mut mut_arg_places: Vec<(usize, PlaceChain)> = Vec::new();
                         self.compile_call_args(args, &mut operands, &mut mut_arg_places)?;
                         let callee_ty = self.resolved(&callee.ty);
@@ -9163,7 +9286,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         // receiver at the front.
                         if let Ty::Func(params, _, _) = &callee_ty {
                             let offset = operands.len().saturating_sub(params.len());
-                            self.consume_owned_arguments(params, &operands[offset..], expr.span)?;
+                            self.consume_owned_arguments(
+                                params,
+                                &mut operands[offset..],
+                                expr.span,
+                            )?;
                         }
                         let (targets, writeback_tys) = self.writeback_targets(
                             &callee_ty,
@@ -9177,7 +9304,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         let unwind = None;
                         self.push(Inst::CallIndirect {
                             dest,
-                            callee: Operand::Local(witness),
+                            callee: Operand::Borrow(witness),
                             args: operands,
                             unwind,
                         });
@@ -9297,7 +9424,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                         // the existential twin above).
                                         let value = self.compile_expr(receiver)?;
                                         let base = match value {
-                                            Operand::Local(local) => local,
+                                            Operand::Consume(local)
+                                            | Operand::Borrow(local)
+                                            | Operand::Copy(local) => local,
                                             Operand::Const(_) => {
                                                 let temp = self.fresh_local();
                                                 self.push(Inst::Copy {
@@ -9313,7 +9442,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                                 global_slot: None,
                                                 links: Vec::new(),
                                             })),
-                                            Some(Operand::Local(base)),
+                                            Some(Operand::Borrow(base)),
                                         ))
                                     }
                                 }
@@ -9346,7 +9475,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                 let offset = operands.len().saturating_sub(params.len());
                                 self.consume_owned_arguments(
                                     params,
-                                    &operands[offset..],
+                                    &mut operands[offset..],
                                     expr.span,
                                 )?;
                             }
@@ -9363,7 +9492,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             let unwind = None;
                             self.push(Inst::CallIndirect {
                                 dest,
-                                callee: Operand::Local(implementation),
+                                callee: Operand::Borrow(implementation),
                                 args: operands,
                                 unwind,
                             });
@@ -9462,7 +9591,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                                     let dest = self.fresh_local();
                                     self.push_call(dest, glue, operands);
                                     self.produce_temp(dest, &self.resolved(&expr.ty));
-                                    return Ok(Operand::Local(dest));
+                                    return Ok(Operand::Borrow(dest));
                                 }
                             }
                         }
@@ -9504,8 +9633,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         if let Ty::Func(params, _, _) = &self.resolved(&callee.ty) {
             let params = params.clone();
             let offset = operands.len().saturating_sub(params.len());
-            let window = operands[offset..].to_vec();
-            self.consume_owned_arguments(&params, &window, expr.span)?;
+            self.consume_owned_arguments(&params, &mut operands[offset..], expr.span)?;
             if offset == 1
                 && self
                     .program_builder
@@ -9521,6 +9649,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let receiver = operands[0];
                 let receiver_ty = value_receiver_ty.clone().unwrap_or(Ty::Error);
                 self.consume_into(receiver, &receiver_ty, expr.span)?;
+                operands[0] = receiver.with_mode(talk_mir::OperandMode::Consume);
             }
         }
         let mut_receiver = self
@@ -9559,7 +9688,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // whatever the call moved out (`join_all(...).pop()`
                 // freeing the popped element under the caller).
                 None => match operands.first() {
-                    Some(Operand::Local(base)) => Some(WritebackTarget::Place(PlaceChain {
+                    Some(Operand::Borrow(base)) => Some(WritebackTarget::Place(PlaceChain {
                         base: *base,
                         global_slot: None,
                         links: Vec::new(),
@@ -9635,7 +9764,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             && let Some(first) = first_operand
         {
             self.record_view(result, first);
-            if let Operand::Local(view) = result {
+            if let Operand::Borrow(view) = result {
                 self.view_locals.insert(view);
             }
         }
@@ -9696,8 +9825,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     expr.span,
                 ));
             };
-            let mut witnesses = vec![Operand::Local(drop_witness), Operand::Local(retain_witness)];
-            witnesses.extend(requirements.into_iter().map(Operand::Local));
+            let mut witnesses = vec![
+                Operand::Borrow(drop_witness),
+                Operand::Borrow(retain_witness),
+            ];
+            witnesses.extend(requirements.into_iter().map(Operand::Borrow));
             self.consume_operand(payload);
             let dest = self.fresh_local();
             self.push(Inst::ExistentialPack {
@@ -9707,7 +9839,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 witnesses,
             });
             self.produce_temp(dest, &existential_ty);
-            return Ok(Operand::Local(dest));
+            return Ok(Operand::Borrow(dest));
         }
 
         // `glue_closure` captures the witness blocks for any rigid
@@ -9743,7 +9875,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             witnesses,
         });
         self.produce_temp(dest, &existential_ty);
-        Ok(Operand::Local(dest))
+        Ok(Operand::Borrow(dest))
     }
 
     /// Install a deep handler: reify the delimiter (this frame's return),
@@ -9850,7 +9982,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     dest: wrapped,
                     tag: 0,
                     layout,
-                    args: vec![Operand::Local(local)],
+                    args: vec![Operand::Borrow(local)],
                 });
                 fx.frame_entry(local).declared = Some(Ty::Nominal(Symbol::Int, Vec::new()));
                 fx.frame_entry(wrapped).declared = Some(ty.clone());
@@ -9978,7 +10110,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // A clause that finishes without `continue` discontinues:
                 // its value becomes the delimiter frame's return
                 // (CHG-03), after this clause's own cleanup.
-                Some(delimiter) => fx.emit_discontinue(Operand::Local(delimiter), value),
+                Some(delimiter) => fx.emit_discontinue(Operand::Borrow(delimiter), value),
                 // A resumption-binding clause holds the installer's outward
                 // linkage: completing IS the abort, by plain return.
                 None => fx.emit_frame_return(value),
@@ -10002,13 +10134,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let mut env = if binds {
             Vec::new()
         } else {
-            vec![Operand::Local(cont)]
+            vec![Operand::Borrow(cont)]
         };
         env.extend(
             captured
                 .iter()
                 .filter_map(|symbol| self.locals.get(symbol).copied())
-                .map(Operand::Local),
+                .map(Operand::Borrow),
         );
         env.extend(inherited_env);
         let clause = self.fresh_local();
@@ -10019,8 +10151,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         });
         self.push(Inst::PushHandler {
             effect,
-            clause: Operand::Local(clause),
-            cont: Operand::Local(cont),
+            clause: Operand::Borrow(clause),
+            cont: Operand::Borrow(cont),
             binds,
         });
         Ok(())
@@ -10067,12 +10199,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     .copied()
                     .or_else(|| self.locals.get(symbol).copied())
             })
-            .map(Operand::Local)
+            .map(Operand::Borrow)
             .collect();
         let inherited = self.sorted_witnesses();
         for (param, (drop_witness, retain_witness)) in &inherited {
-            env.push(Operand::Local(*drop_witness));
-            env.push(Operand::Local(*retain_witness));
+            env.push(Operand::Borrow(*drop_witness));
+            env.push(Operand::Borrow(*retain_witness));
             for protocol in self.program_builder.rigid_constraints(*param) {
                 let Some(locals) = self.param_requirements.get(&(*param, protocol.protocol)) else {
                     return Err(BackendError::unsupported(
@@ -10081,7 +10213,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         Span::SYNTHESIZED,
                     ));
                 };
-                env.extend(locals.iter().map(|local| Operand::Local(*local)));
+                env.extend(locals.iter().map(|local| Operand::Borrow(*local)));
             }
         }
         Ok((env, inherited))
@@ -10239,7 +10371,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         if anchored {
             self.record_flow(verify::FlowEvent::Anchor(dest));
         }
-        Ok(Operand::Local(dest))
+        Ok(Operand::Borrow(dest))
     }
 
     /// A `Type(args…)` construction: build the fresh value and, when the
@@ -10379,11 +10511,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         env: Vec::new(),
                     });
                     self.push(Inst::SetFinalizer {
-                        obj: Operand::Local(obj),
-                        closure: Operand::Local(thunk),
+                        obj: Operand::Borrow(obj),
+                        closure: Operand::Borrow(thunk),
                     });
                 }
-                let mut call_args = vec![Operand::Local(obj)];
+                let mut call_args = vec![Operand::Borrow(obj)];
                 call_args.extend(operands);
                 let func = self.program_builder.demand(init, subst, expr.span)?;
                 self.program_builder
@@ -10393,7 +10525,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let dest = self.fresh_local();
                 self.push_call(dest, func, call_args);
                 self.produce_temp(dest, &ty);
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
             if operands.len() != field_count {
                 return Err(BackendError::new(
@@ -10418,8 +10550,8 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     env: Vec::new(),
                 });
                 self.push(Inst::SetFinalizer {
-                    obj: Operand::Local(dest),
-                    closure: Operand::Local(thunk),
+                    obj: Operand::Borrow(dest),
+                    closure: Operand::Borrow(thunk),
                 });
             }
             for operand in &operands {
@@ -10428,7 +10560,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             for (index, (operand, operand_ty)) in operands.iter().zip(&operand_tys).enumerate() {
                 let index = u16::try_from(index).unwrap_or_default();
                 self.push(Inst::ObjectSet {
-                    obj: Operand::Local(dest),
+                    obj: Operand::Borrow(dest),
                     src: *operand,
                     index,
                 });
@@ -10437,7 +10569,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 }
             }
             self.produce_temp(dest, &ty);
-            return Ok(Operand::Local(dest));
+            return Ok(Operand::Borrow(dest));
         }
 
         let Some(init) = init else {
@@ -10499,7 +10631,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 dest: fresh,
                 layout,
             });
-            let mut call_args = vec![Operand::Local(fresh)];
+            let mut call_args = vec![Operand::Borrow(fresh)];
             call_args.extend(operands.iter().copied());
             let func = self.program_builder.demand(init, subst, expr.span)?;
             // Constructions never unpack writeback tuples; the validator
@@ -10512,10 +10644,10 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             self.push_call(dest, func, call_args);
             // The construction inherits any argument's provenance.
             for operand in &operands {
-                self.propagate_view(Operand::Local(dest), *operand);
+                self.propagate_view(Operand::Borrow(dest), *operand);
             }
             self.produce_temp(dest, &ty);
-            Ok(Operand::Local(dest))
+            Ok(Operand::Borrow(dest))
         } else {
             // Memberwise: arguments are the fields in declaration order.
             if operands.len() != field_count {
@@ -10543,7 +10675,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             }
             let dest = self.fresh_local();
             for operand in &operands {
-                self.propagate_view(Operand::Local(dest), *operand);
+                self.propagate_view(Operand::Borrow(dest), *operand);
             }
             let layout = self.construction_layout(&ty, Some(struct_symbol));
             self.push(Inst::Aggregate {
@@ -10553,7 +10685,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 args: operands,
             });
             self.produce_temp(dest, &ty);
-            Ok(Operand::Local(dest))
+            Ok(Operand::Borrow(dest))
         }
     }
 
@@ -10587,14 +10719,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             layout::element_stride(element),
                         )))),
                     });
-                    Operand::Local(scaled)
+                    Operand::Borrow(scaled)
                 };
                 self.push(Inst::Alloc {
                     dest,
                     bytes,
                     kind: element,
                 });
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
             K::Free { ptr } => {
                 let ptr = self.ir_value(instruction, ptr)?;
@@ -10612,7 +10744,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             K::IsUnique { ptr } => {
                 let ptr = self.ir_value(instruction, ptr)?;
                 self.push(Inst::IsUnique { dest, src: ptr });
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
             K::Load { ty, addr } => {
                 let element = self.resolved(ty);
@@ -10625,7 +10757,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // Borrowed-classified result donates a view retain the
                 // vacated slot never gets back.
                 self.produce_temp(dest, &element);
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
             K::Store { ty, value, addr } => {
                 let kind = layout::scalar_kind(&self.resolved(ty));
@@ -10659,12 +10791,12 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 });
                 self.push(Inst::Store {
                     ptr: first,
-                    src: Operand::Local(from_second),
+                    src: Operand::Borrow(from_second),
                     kind,
                 });
                 self.push(Inst::Store {
                     ptr: second,
-                    src: Operand::Local(from_first),
+                    src: Operand::Borrow(from_first),
                     kind,
                 });
                 return Ok(Operand::Const(Constant::Unit));
@@ -10680,14 +10812,14 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // The take moved the content out of the source place:
                 // mark it so a later overwrite does not drop a value the
                 // result already carries.
-                if let Operand::Local(local) = value
+                if let Operand::Borrow(local) = value
                     && self.owns(local)
                     && !self.moved.contains(&local)
                 {
                     self.moved.insert(local);
                     self.record_flow(verify::FlowEvent::Move(local));
                 }
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
             K::MemCopy { from, to, length } => {
                 let from = self.ir_value(instruction, from)?;
@@ -10710,7 +10842,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     element,
                     index,
                 });
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
             K::Gep { elem, addr, offset } => {
                 let element = layout::scalar_kind(&self.resolved(elem));
@@ -10722,7 +10854,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     offset,
                     size: layout::element_stride(element),
                 });
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
             K::TaskSpawn { arg, worker } => {
                 let arg = self.ir_value(instruction, arg)?;
@@ -10733,7 +10865,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.consume_operand(arg);
                 self.consume_operand(worker);
                 self.push(Inst::TaskSpawn { dest, arg, worker });
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
             K::TaskJoin { ty, handle } => {
                 let handle = self.ir_value(instruction, handle)?;
@@ -10741,11 +10873,11 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // The join transfers ownership of the worker's output.
                 let owned = self.resolved(ty);
                 self.produce_temp(dest, &owned);
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
             K::TaskWidth => {
                 self.push(Inst::TaskWidth { dest });
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
             K::ChanSend { handle, value } => {
                 let handle = self.ir_value(instruction, handle)?;
@@ -10760,13 +10892,13 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 self.push(Inst::ChanTake { dest, handle });
                 let owned = self.resolved(ty);
                 self.produce_temp(dest, &owned);
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
             K::ChanCtl { handle, op } => {
                 let handle = self.ir_value(instruction, handle)?;
                 let op = self.ir_value(instruction, op)?;
                 self.push(Inst::ChanCtl { dest, handle, op });
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
             K::Resume { ty, cont, value } => {
                 let cont = self.ir_value(instruction, cont)?;
@@ -10779,7 +10911,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 // The extent's answer transfers to the resumer.
                 let owned = self.resolved(ty);
                 self.produce_temp(dest, &owned);
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
             K::Cancel { cont } => {
                 let cont = self.ir_value(instruction, cont)?;
@@ -10798,7 +10930,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     b,
                     c,
                 });
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
             K::Scalar {
                 op: IrScalarOp::PtrAdd,
@@ -10816,7 +10948,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     offset,
                     size: 1,
                 });
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
             K::Scalar { op, a, b } => {
                 let a = self.ir_value(instruction, a)?;
@@ -10826,7 +10958,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 };
                 let op = scalar_op(*op);
                 self.push(Inst::Scalar { dest, op, a, b });
-                return Ok(Operand::Local(dest));
+                return Ok(Operand::Borrow(dest));
             }
         }
     }
@@ -10841,7 +10973,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     ) -> Result<Operand, BackendError> {
         use crate::types::output::IrOperand;
         match value {
-            IrOperand::Reg(index) => Ok(Operand::Local(*index)),
+            IrOperand::Reg(index) => Ok(Operand::Borrow(*index)),
             IrOperand::Bind(index) => self.compile_expr(&instruction.binds[usize::from(*index)]),
             IrOperand::Int(value) => Ok(Operand::Const(Constant::Int(*value))),
             IrOperand::Float(value) => Ok(Operand::Const(Constant::Float(*value))),

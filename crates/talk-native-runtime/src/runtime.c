@@ -844,6 +844,9 @@ static _Thread_local int talk_unwinding = 0;
 static _Thread_local size_t talk_unwind_depth = 0;
 static _Thread_local uint32_t talk_unwind_frame = 0;
 static _Thread_local TalkValue talk_unwind_value;
+static _Thread_local int talk_unwind_parked = 0;
+static _Thread_local uint32_t talk_parked_unwind_frame = 0;
+static _Thread_local TalkValue talk_parked_unwind_value;
 
 typedef struct {
     uint32_t effect;
@@ -900,15 +903,60 @@ static inline int talk_frame_live(size_t depth, uint32_t frame_id) {
     return depth < talk_depth && talk_frames[depth] == frame_id;
 }
 
-/* Whether the in-flight unwind ends at this frame, in which case the frame
- * returns the delivered value instead of propagating. */
+static inline void talk_unwind_suspend(void);
+
+/* Whether the in-flight unwind ends at this frame. A non-target frame parks
+ * the token before entering generated cleanup, so identified call sites need
+ * no separate suspend operation. */
 static inline int talk_unwind_targets(size_t depth, uint32_t frame_id) {
-    return talk_unwinding && talk_unwind_depth == depth && talk_unwind_frame == frame_id;
+    int targets =
+        talk_unwinding && talk_unwind_depth == depth && talk_unwind_frame == frame_id;
+    if (!targets) {
+        talk_unwind_suspend();
+    }
+    return targets;
 }
 
 static inline TalkValue talk_unwind_take(void) {
     talk_unwinding = 0;
     return talk_unwind_value;
+}
+
+/* Cleanup runs as ordinary code. The runtime owns the parked unwind token,
+ * so generated frames need no shadow copy. An unwind started by cleanup is
+ * rejected rather than replacing the parked outer unwind. */
+static inline void talk_unwind_suspend(void) {
+    if (!talk_unwinding) {
+        return;
+    }
+    if (talk_unwind_parked) {
+        talk_trap("abort during abort unwinding");
+    }
+    talk_unwind_parked = 1;
+    talk_parked_unwind_frame = talk_unwind_frame;
+    talk_parked_unwind_value = talk_unwind_value;
+    talk_unwinding = 0;
+}
+
+static inline void talk_unwind_restore(void) {
+    if (!talk_unwind_parked) {
+        return;
+    }
+    if (talk_unwinding) {
+        talk_trap("abort during abort unwinding");
+    }
+    talk_unwinding = 1;
+    talk_unwind_frame = talk_parked_unwind_frame;
+    talk_unwind_value = talk_parked_unwind_value;
+    talk_unwind_parked = 0;
+}
+
+static inline int talk_unwind_cleanup(void) {
+    if (!talk_unwinding) {
+        return 0;
+    }
+    talk_unwind_suspend();
+    return 1;
 }
 
 static void talk_push_handler(uint32_t effect, TalkValue clause, TalkValue cont, int binds,
@@ -2551,6 +2599,9 @@ static void talk_lib_reset(void) {
     talk_unwind_depth = 0;
     talk_unwind_frame = 0;
     talk_unwind_value = talk_unit();
+    talk_unwind_parked = 0;
+    talk_parked_unwind_frame = 0;
+    talk_parked_unwind_value = talk_unit();
     talk_handler_floor = SIZE_MAX;
     talk_lib_boundary_armed = 0;
 }

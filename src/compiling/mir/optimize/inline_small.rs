@@ -161,10 +161,13 @@ fn candidate(function: &Function) -> Option<Candidate> {
 }
 
 fn remap(op: Operand, args: &[Operand], base: u16, arity: u16) -> Operand {
-    match op {
-        Operand::Local(local) if local < arity => args[usize::from(local)],
-        Operand::Local(local) => Operand::Local(base + (local - arity)),
-        constant => constant,
+    let Some(local) = op.local() else {
+        return op;
+    };
+    if local < arity {
+        args[usize::from(local)].with_mode(op.mode().unwrap_or(talk_mir::OperandMode::Borrow))
+    } else {
+        op.map_local(|local| base + (local - arity))
     }
 }
 
@@ -373,7 +376,7 @@ mod tests {
     use crate::compiling::mir::build::{BlockData, Constant, ScalarOp};
 
     fn local(id: LocalId) -> Operand {
-        Operand::Local(id)
+        Operand::Borrow(id)
     }
 
     fn int(value: i64) -> Operand {

@@ -35,6 +35,7 @@
 
 use super::verify::{self, FlowEvent, FlowRecord, OWNED};
 use super::{BlockData, BlockId, Inst, LocalId, Term};
+use crate::compiling::mir::cfg::{Cfg, EdgePosition};
 
 /// Where a function's releases belong. Blocks index `end_of_block`.
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -148,33 +149,20 @@ pub(super) fn plan(blocks: &[BlockData], records: &[FlowRecord]) -> Plan {
     // Equalization: a join must not receive a value owned on one edge
     // and gone on another. Gather each block's terminator predecessors;
     // where ownership disagrees, the owned edges release on the way in.
-    let mut pred_edges: Vec<Vec<(BlockId, usize)>> = vec![Vec::new(); blocks.len()];
-    for (id, block) in blocks.iter().enumerate() {
-        match &block.term {
-            Some(Term::Goto(target, _)) => pred_edges[*target].push((id, 0)),
-            Some(Term::Branch {
-                then_block,
-                else_block,
-                ..
-            }) => {
-                pred_edges[*then_block].push((id, 0));
-                pred_edges[*else_block].push((id, 1));
-            }
-            Some(Term::Switch {
-                targets, default, ..
-            }) => {
-                for (position, target) in targets
-                    .iter()
-                    .copied()
-                    .chain(std::iter::once(*default))
-                    .enumerate()
-                {
-                    pred_edges[target].push((id, position));
-                }
-            }
-            _ => {}
-        }
-    }
+    let cfg = Cfg::new(blocks);
+    let pred_edges: Vec<Vec<(BlockId, usize)>> = cfg
+        .predecessors
+        .iter()
+        .map(|predecessors| {
+            predecessors
+                .iter()
+                .filter_map(|predecessor| match predecessor.position {
+                    EdgePosition::Terminator(position) => Some((predecessor.block, position)),
+                    EdgePosition::Unwind(_) => None,
+                })
+                .collect()
+        })
+        .collect();
     let mut edge_keys: Vec<(BlockId, usize)> = Vec::new();
     let mut edge_releases: Vec<Vec<LocalId>> = Vec::new();
     for (target, preds) in pred_edges.iter().enumerate() {
@@ -314,7 +302,7 @@ mod tests {
                     src: Operand::Const(Constant::Unit),
                 }],
                 term: Some(Term::Branch {
-                    cond: Operand::Local(9),
+                    cond: Operand::Borrow(9),
                     then_block: 1,
                     else_block: 2,
                 }),
@@ -324,7 +312,7 @@ mod tests {
                 params: Vec::new(),
                 insts: vec![Inst::Copy {
                     dest: 2,
-                    src: Operand::Local(1),
+                    src: Operand::Borrow(1),
                 }],
                 term: Some(Term::Goto(3, Vec::new())),
             },
@@ -383,7 +371,7 @@ mod tests {
                 params: Vec::new(),
                 insts: Vec::new(),
                 term: Some(Term::Branch {
-                    cond: Operand::Local(9),
+                    cond: Operand::Borrow(9),
                     then_block: 2,
                     else_block: 3,
                 }),
@@ -425,7 +413,7 @@ mod tests {
                 params: Vec::new(),
                 insts: Vec::new(),
                 term: Some(Term::Branch {
-                    cond: Operand::Local(9),
+                    cond: Operand::Borrow(9),
                     then_block: 2,
                     else_block: 3,
                 }),
@@ -435,7 +423,7 @@ mod tests {
                 params: Vec::new(),
                 insts: vec![Inst::Copy {
                     dest: 2,
-                    src: Operand::Local(1),
+                    src: Operand::Borrow(1),
                 }],
                 term: Some(Term::Goto(1, Vec::new())),
             },

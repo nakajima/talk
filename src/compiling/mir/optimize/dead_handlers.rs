@@ -64,8 +64,8 @@ pub(super) fn run(program: &mut Program) -> PassResult {
                         },
                         Inst::PushHandler {
                             effect,
-                            clause: Operand::Local(pushed_clause),
-                            cont: Operand::Local(pushed_cont),
+                            clause: Operand::Borrow(pushed_clause),
+                            cont: Operand::Borrow(pushed_cont),
                             ..
                         },
                     ) => {
@@ -78,7 +78,7 @@ pub(super) fn run(program: &mut Program) -> PassResult {
                             // a capture-free one has an empty env.
                             // Either shape owns nothing, so the triple
                             // erases cleanly.
-                            && (env.as_slice() == [Operand::Local(*cont)]
+                            && (env.as_slice() == [Operand::Borrow(*cont)]
                                 || env.is_empty())
                             && (uses.get(cont) == Some(&2)
                                 || (env.is_empty() && uses.get(cont) == Some(&1)))
@@ -140,8 +140,8 @@ mod tests {
             },
             Inst::PushHandler {
                 effect,
-                clause: Operand::Local(1),
-                cont: Operand::Local(0),
+                clause: Operand::Borrow(1),
+                cont: Operand::Borrow(0),
                 binds: false,
             },
         ]
@@ -165,7 +165,7 @@ mod tests {
     #[test]
     fn removes_captureless_setup_for_an_unrequested_effect() {
         let mut program = program(vec![
-            function(setup(EFFECT, vec![Operand::Local(0)])),
+            function(setup(EFFECT, vec![Operand::Borrow(0)])),
             function(Vec::new()),
         ]);
 
@@ -177,7 +177,7 @@ mod tests {
 
     #[test]
     fn keeps_setup_when_the_effect_is_requested_anywhere() {
-        let mut requester = setup(EFFECT, vec![Operand::Local(0)]);
+        let mut requester = setup(EFFECT, vec![Operand::Borrow(0)]);
         requester.push(Inst::FindHandler {
             clause: 2,
             cont: 3,
@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn keeps_setup_that_captures_a_user_value() {
         let mut program = program(vec![
-            function(setup(EFFECT, vec![Operand::Local(0), Operand::Local(2)])),
+            function(setup(EFFECT, vec![Operand::Borrow(0), Operand::Borrow(2)])),
             function(Vec::new()),
         ]);
 
@@ -208,10 +208,10 @@ mod tests {
 
     #[test]
     fn keeps_setup_values_used_after_installation() {
-        let mut insts = setup(EFFECT, vec![Operand::Local(0)]);
+        let mut insts = setup(EFFECT, vec![Operand::Borrow(0)]);
         insts.push(Inst::Copy {
             dest: 2,
-            src: Operand::Local(1),
+            src: Operand::Borrow(1),
         });
         let mut program = program(vec![function(insts), function(Vec::new())]);
 
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn removes_only_effects_absent_from_the_module() {
         let requested_effect = MirSymbol { local: 2, ..EFFECT };
-        let mut requested = setup(requested_effect, vec![Operand::Local(0)]);
+        let mut requested = setup(requested_effect, vec![Operand::Borrow(0)]);
         requested.push(Inst::FindHandler {
             clause: 2,
             cont: 3,
@@ -233,7 +233,7 @@ mod tests {
             effect: requested_effect,
         });
         let mut program = program(vec![
-            function(setup(EFFECT, vec![Operand::Local(0)])),
+            function(setup(EFFECT, vec![Operand::Borrow(0)])),
             function(Vec::new()),
             function(requested),
         ]);

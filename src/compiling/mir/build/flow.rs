@@ -13,6 +13,7 @@ use rustc_hash::FxHashSet;
 
 use super::verify::{FlowEvent, FlowRecord};
 use super::{BackendError, BlockData, BlockId, Inst, LocalId, Operand, Term, anchored_escape};
+use crate::compiling::mir::cfg::Cfg;
 use crate::span::Span;
 
 /// Every violation the recorded events and the CFG prove, in block/
@@ -59,7 +60,9 @@ fn anchored_escapes(
         return;
     }
     let events = buckets(blocks, records);
-    let hits = |set: &FxHashSet<LocalId>, op: &Operand| matches!(op, Operand::Local(local) if set.contains(local));
+    let hits = |set: &FxHashSet<LocalId>, op: &Operand| {
+        op.local().is_some_and(|local| set.contains(&local))
+    };
 
     let mut in_states: Vec<Option<FxHashSet<LocalId>>> = vec![None; blocks.len()];
     in_states[0] = Some(FxHashSet::default());
@@ -157,16 +160,8 @@ fn anchored_escapes(
                 _ => {}
             }
             // Unwind edges carry the taint at the call.
-            if let Inst::Call {
-                unwind: Some(target),
-                ..
-            }
-            | Inst::CallIndirect {
-                unwind: Some(target),
-                ..
-            } = inst
-            {
-                join(*target, &taint, &mut in_states, &mut worklist);
+            if let Some(target) = Cfg::unwind_target(inst) {
+                join(target, &taint, &mut in_states, &mut worklist);
             }
         }
         while cursor < bucket.len() {
@@ -196,19 +191,8 @@ fn anchored_escapes(
                 }
                 join(*target, &incoming, &mut in_states, &mut worklist);
             }
-            Some(Term::Branch {
-                then_block,
-                else_block,
-                ..
-            }) => {
-                for target in [*then_block, *else_block] {
-                    join(target, &taint, &mut in_states, &mut worklist);
-                }
-            }
-            Some(Term::Switch {
-                targets, default, ..
-            }) => {
-                for target in targets.iter().copied().chain(std::iter::once(*default)) {
+            Some(term @ (Term::Branch { .. } | Term::Switch { .. })) => {
+                for target in Cfg::term_successors(Some(term)) {
                     join(target, &taint, &mut in_states, &mut worklist);
                 }
             }
@@ -296,24 +280,8 @@ fn global_moves(
                 }
             };
         };
-        match &blocks[block].term {
-            Some(Term::Goto(target, _)) => join(*target),
-            Some(Term::Branch {
-                then_block,
-                else_block,
-                ..
-            }) => {
-                join(*then_block);
-                join(*else_block);
-            }
-            Some(Term::Switch {
-                targets, default, ..
-            }) => {
-                for target in targets.iter().copied().chain(std::iter::once(*default)) {
-                    join(target);
-                }
-            }
-            _ => {}
+        for target in Cfg::term_successors(blocks[block].term.as_ref()) {
+            join(target);
         }
     }
 }
@@ -347,7 +315,7 @@ mod tests {
 
     #[test]
     fn anchored_closure_returned_is_an_escape() {
-        let blocks = vec![block(vec![], Term::Return(Operand::Local(3)))];
+        let blocks = vec![block(vec![], Term::Return(Operand::Borrow(3)))];
         let records = vec![record(0, 0, FlowEvent::Anchor(3))];
         let errors = check(&blocks, &records, |_| String::new());
         assert_eq!(errors.len(), 1, "{errors:?}");
@@ -361,16 +329,16 @@ mod tests {
             block(
                 vec![Inst::Copy {
                     dest: 2,
-                    src: Operand::Local(1),
+                    src: Operand::Borrow(1),
                 }],
-                Term::Goto(1, vec![Operand::Local(2)]),
+                Term::Goto(1, vec![Operand::Borrow(2)]),
             ),
             BlockData {
                 debug: None,
                 params: vec![5],
                 insts: vec![Inst::GlobalStore {
                     global: 0,
-                    src: Operand::Local(5),
+                    src: Operand::Borrow(5),
                 }],
                 term: Some(ret()),
             },
@@ -385,7 +353,7 @@ mod tests {
         let blocks = vec![block(
             vec![Inst::GlobalStore {
                 global: 0,
-                src: Operand::Local(1),
+                src: Operand::Borrow(1),
             }],
             ret(),
         )];
@@ -451,7 +419,7 @@ mod tests {
             block(
                 vec![],
                 Term::Branch {
-                    cond: Operand::Local(0),
+                    cond: Operand::Borrow(0),
                     then_block: 2,
                     else_block: 3,
                 },
