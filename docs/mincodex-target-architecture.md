@@ -2,7 +2,7 @@
 
 Status: approved design reference
 
-This document defines the destination recovered from the `mincodex` quarry. It
+This document defines the destination recovered from the `mincodex` branch. It
 is intentionally not an implementation plan. Ordered implementation tickets,
 current-tree owners, gates, and status live in
 [`mincodex-salvage-plan.md`](mincodex-salvage-plan.md).
