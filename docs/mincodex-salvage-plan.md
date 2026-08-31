@@ -682,7 +682,7 @@ Only the next unfinished step may be `ready`.
 
 | Step | State | Green commit | Evidence |
 | --- | --- | --- | --- |
-| B0 | complete | pending | [`mincodex-baseline.md`](mincodex-baseline.md) |
+| B0 | complete | `303381ca` | [`mincodex-baseline.md`](mincodex-baseline.md) |
 | B1 | ready | - | baseline evidence landed |
 | P1-P6 | blocked | - | waits for feasibility and numeric predecessor |
 | C1-C7 | blocked | - | waits for pattern decisions and numeric predecessor |
