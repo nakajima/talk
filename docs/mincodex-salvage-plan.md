@@ -405,6 +405,7 @@ crates/talk-front/src/types/output.rs
 crates/talk-front/src/types/generate/mod.rs
 crates/talk-front/src/types/generate/artifacts.rs
 crates/talk-front/src/types/generate/finalize.rs
+crates/talk-front/src/types/generate/stmt.rs
 pattern-specific frontend tests
 ```
 

@@ -60,8 +60,11 @@ consumer of the old recursion.
 ### Replacement owner
 
 `types/patterns.rs` owns `MatchReport` and the one checked matrix recursion.
-P1 collects pending match syntax in `generate::Artifacts`, then finalization
-supplies finalized occurrence types and retains the report in `Elaboration`.
+P1 collects pending source and propagation match syntax in
+`generate::Artifacts`; `generate/stmt.rs` also mints the identity and pending
+matrix for each synthesized `for` match while its source pattern is available.
+Finalization supplies finalized occurrence types and retains every report in
+`Elaboration`.
 The old checker remains the production diagnostic through P5. P6 switches the
 diagnostic conversion and `all_missing_patterns` consumer to the new owner.
 
