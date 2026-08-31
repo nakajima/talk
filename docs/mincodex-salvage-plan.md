@@ -691,7 +691,7 @@ Only the next unfinished step may be `ready`.
 | Step | State | Green commit | Evidence |
 | --- | --- | --- | --- |
 | B0 | complete | `303381ca` | [`mincodex-baseline.md`](mincodex-baseline.md) |
-| B1 | complete | pending | [`mincodex-feasibility.md`](mincodex-feasibility.md) |
+| B1 | complete | `9f4b665c` | [`mincodex-feasibility.md`](mincodex-feasibility.md) |
 | P1 | ready | - | feasibility and finalization handoff proved |
 | P2-P6 | blocked | - | waits for numeric predecessor |
 | C1-C7 | blocked | - | waits for pattern decisions and numeric predecessor |
