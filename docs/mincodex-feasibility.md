@@ -9,12 +9,12 @@ file changed during this inspection.
 ## Decision
 
 The critical path is feasible without VM, formatting, highlighting, artifact,
-or LSP-semantic work. All required current facts exist before MIR. One seam in
-the original ticket permissions was too narrow: a finalization-owned pattern
-product cannot be introduced by editing only `patterns.rs`, `types/mod.rs`, and
-`generate/mod.rs`. The P1/P2 permissions are amended in the execution plan so
-finalization can own and retain the single product. This is a plan correction,
-not a new prerequisite or a compatibility architecture.
+or LSP-semantic work. All required current facts exist before MIR. P1-P3 own a
+checked matrix input model in `types/patterns.rs`; they do not fabricate Core
+matches or retain syntax for constructs that have not been elaborated yet.
+P1's current-checker adapter exercises the report recursion. P4 adapts each
+actual checked Core match occurrence, including synthesized matches, and
+stores that invocation's one product.
 
 The current pattern diagnostic gate was run as the existing corpus oracle:
 
@@ -59,14 +59,12 @@ consumer of the old recursion.
 
 ### Replacement owner
 
-`types/patterns.rs` owns `MatchReport` and the one checked matrix recursion.
-P1 collects pending source and propagation match syntax in
-`generate::Artifacts`; `generate/stmt.rs` also mints the identity and pending
-matrix for each synthesized `for` match while its source pattern is available.
-Finalization supplies finalized occurrence types and retains every report in
-`Elaboration`.
-The old checker remains the production diagnostic through P5. P6 switches the
-diagnostic conversion and `all_missing_patterns` consumer to the new owner.
+`types/patterns.rs` owns `MatchReport`, a checked matrix input, and the one
+matrix recursion. P1 adapts current source matches to that input only to run the
+report differential. P4 adapts actual checked Core matches after all semantic
+elaboration, so source and synthesized matches follow the same path. The old
+checker remains the production diagnostic through P5. P6 switches diagnostic
+conversion and the `all_missing_patterns` consumer to reports stored on Core.
 
 ### Oracle and renderer
 
@@ -220,13 +218,14 @@ catalog payload declarations.
 
 ### Replacement owner
 
-Finalization passes finalized `pattern_tys`, finalized struct/record slots,
-the finalized scrutinee type, and the committed catalog to `patterns`. The
+The checked matrix model carries occurrence types, struct/record slots, the
+scrutinee type, and constructor identity. P3's focused tests pin these fields;
+P4's Core adapter fills them from the finalized checked occurrence. The
 pattern compiler performs the existing `collect_case_skolems` plus
 result-matching operation once and stores the substitution on the arm leaf.
-MIR's reconstruction is deleted at P6. Associated projections use
-finalization's normalized occurrence type; catalog declarations are used only
-to identify constructor shape and relate declared case parameters.
+MIR's reconstruction is deleted at P6. Associated projections use the Core
+occurrence type; catalog declarations only identify constructor shape and
+relate declared case parameters.
 
 ### Oracle and renderer
 
@@ -270,10 +269,8 @@ only handoff. Clean files consume every relevant entry through
 | `struct_pattern_slots` | `NodeID -> Vec<(Ty, Option<NodeID>)>` | Core declaration-order struct slots |
 | `record_pattern_slots` | `NodeID -> Vec<(Ty, Option<NodeID>)>` | Core finalized row-layout slots |
 
-P1 adds only the finalization-owned pending/report handoff needed for the
-single pattern product. P2 replaces the report handoff with `PatternResult`.
-P4 consumes that field into the match occurrence; it does not invoke a second
-compiler.
+P1-P3 do not change `Elaboration`. P4 invokes the compiler once for each
+checked Core match and stores `PatternResult` directly on that occurrence.
 
 ### `TypeOutput`
 
@@ -490,7 +487,5 @@ is the existing corpus oracle.
 ## Path closure
 
 Every input comes from type checking/finalization, checked Core, pre-final MIR,
-or the shared CFG. The only permission correction is the pattern
-finalization handoff described above. No deferred workstream supplies a type,
-identity, formatter, artifact, VM, or editor prerequisite. B1 is green once
-this report and the amended ticket permissions land.
+or the shared CFG. No deferred workstream supplies a type, identity, formatter,
+artifact, VM, or editor prerequisite.

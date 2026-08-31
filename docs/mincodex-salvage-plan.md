@@ -401,20 +401,14 @@ Allowed files:
 ```text
 crates/talk-front/src/types/patterns.rs
 crates/talk-front/src/types/mod.rs
-crates/talk-front/src/types/output.rs
 crates/talk-front/src/types/generate/mod.rs
-crates/talk-front/src/types/generate/artifacts.rs
-crates/talk-front/src/types/generate/finalize.rs
-crates/talk-front/src/types/generate/stmt.rs
 pattern-specific frontend tests
 ```
 
 Forbidden: Core and MIR files.
 
-Implement only `MatchReport`. Collect pending match syntax before finalization,
-run the new report owner over finalized occurrence facts, and retain its report
-in `Elaboration`. Run old and new report owners in debug differential mode over
-the complete frontend suite. Production remains old.
+Implement only `MatchReport`. Run old and new report owners in debug
+differential mode over the complete frontend suite. Production remains old.
 
 Gate: pattern diagnostic gate with zero differences in missing cases,
 unreachable arms, ordering, or source ids.
@@ -423,12 +417,10 @@ unreachable arms, ordering, or source ids.
 
 State: blocked on P1
 
-Allowed files: `patterns.rs`, `types/output.rs`, `types/generate/finalize.rs`,
-and pattern tests only.
+Allowed files: `patterns.rs` and pattern tests only.
 
-Extend the report recursion to return control flow and replace the retained
-report with `PatternResult`. Do not add another recursive compiler. Add a
-deterministic renderer and pin booleans, enums,
+Extend the report recursion to return control flow. Do not add another
+recursive compiler. Add a deterministic renderer and pin booleans, enums,
 GADTs, tuples, records, structs, literals, or-patterns, guards, and source
 ordering.
 
@@ -470,9 +462,10 @@ crates/talk-front/src/core/facts.rs
 core pattern tests
 ```
 
-Core consumes and stores finalization's one retained pattern result. It does
-not invoke a second compiler. MIR ignores it. Old production diagnostics and
-runtime remain unchanged.
+Core invokes the pattern compiler once for each checked match occurrence and
+stores the result. This naturally includes matches synthesized while building
+Core; no syntax or identity is fabricated for them earlier. MIR ignores the
+result. Old production diagnostics and runtime remain unchanged.
 
 Gate: pattern diagnostic gate, Core serialization round trip, and unchanged MIR
 goldens.
