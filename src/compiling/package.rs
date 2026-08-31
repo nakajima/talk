@@ -2098,7 +2098,7 @@ use std::rc::Rc;
 #[derive(Clone)]
 pub(crate) struct CompiledLibrary {
     pub(crate) module: Module,
-    pub(crate) typed: std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
+    pub(crate) typed: std::sync::Arc<crate::core::program::CoreProgram>,
     pub(crate) module_id: ModuleId,
     /// The canonical source paths the library's compile closure spanned
     /// — the redirect table a cached image hands to importing compiles
@@ -2137,14 +2137,14 @@ struct PackageCompileInputs {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct LibraryImage {
     module: Module,
-    typed: crate::compiling::typed_program::TypedProgram,
+    typed: crate::core::program::CoreProgram,
     files: Vec<PathBuf>,
 }
 
 #[derive(serde::Serialize)]
 struct LibraryImageRef<'a> {
     module: &'a Module,
-    typed: &'a crate::compiling::typed_program::TypedProgram,
+    typed: &'a crate::core::program::CoreProgram,
     files: &'a [PathBuf],
 }
 
@@ -2210,7 +2210,7 @@ fn collect_source_files(dir: &Path, files: &mut Vec<PathBuf>) {
 /// compiled and imported under (mirrors `DriverConfig::libraries`).
 type DependencyLibraries = Vec<(
     ModuleId,
-    std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
+    std::sync::Arc<crate::core::program::CoreProgram>,
 )>;
 
 /// The locked dependency graph as the package's own sources compile

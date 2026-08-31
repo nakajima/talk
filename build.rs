@@ -31,7 +31,7 @@ fn main() {
 
 /// The compiler content identity (CLEAN-05): a hash of every source
 /// file whose change can alter the cached parse/resolve/type products
-/// (core and stdlib `TypedProgram` + `Module` payloads) or their
+/// (core and stdlib `CoreProgram` + `Module` payloads) or their
 /// serialized layout. Cache keys use it instead of the executable's
 /// mtime and length, so relinking after an unrelated change (editor,
 /// CLI, MIR, VM) no longer invalidates frontend artifacts.
@@ -44,7 +44,7 @@ fn emit_compiler_content_stamp() -> String {
         "src/parsing",
         "src/types",
         "src/name_resolution",
-        "src/typed_ast",
+        "src/core",
         "src/desugar",
         "src/compiling",
         // The frontend crate owns the cached products' layout and
@@ -54,7 +54,7 @@ fn emit_compiler_content_stamp() -> String {
         "crates/talk-front/src",
     ];
     const STAMP_FILES: &[&str] = &["bootstrap/frontend.tbc", "bootstrap/frontend.abi"];
-    // The MIR crates feed on TypedProgram; they never change what the
+    // The MIR crates feed on CoreProgram; they never change what the
     // frontend cache stores, so mir/ stays out of the stamp.
     const SKIP_DIRS: &[&str] = &["src/compiling/mir"];
 

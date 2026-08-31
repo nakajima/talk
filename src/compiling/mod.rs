@@ -16,4 +16,3 @@ pub mod module_path;
 pub mod native_frontend;
 pub mod package;
 pub mod progress;
-pub mod typed_program;

@@ -1,6 +1,6 @@
-//! The typed compiler tree: an owned, desugared tree produced by the typed
-//! program builder. Flow and lowering consume this typed tree instead of the
-//! parser AST, so a single semantic representation serves both.
+//! Core's owned semantic node grammar. Elaboration produces these nodes and
+//! downstream phases preserve their source identity while making lowering
+//! decisions explicit.
 //!
 //! Design notes (see the staged plan):
 //! - **Owned, no lifetimes** — built once, freely shared/stored.
@@ -10,9 +10,6 @@
 //!   `Unary`/`Binary` (→ protocol calls), `For` (→ loop+match), `Incomplete`
 //!   (LSP-only), `Import` (resolved away), comments/trivia, and `*_span` fields
 //!   (a single `span` is kept for diagnostics).
-
-pub mod facts;
-
 
 use derive_visitor::{Drive, DriveMut};
 
@@ -60,6 +57,63 @@ pub enum Node {
 
 // ----- Expressions ---------------------------------------------------------
 
+/// A finalized value-kinded type. Effect rows and static values may occur as
+/// nominal arguments, but never at the root of an executable value.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct ValueTy(crate::types::ty::Ty);
+
+impl ValueTy {
+    pub fn new(ty: crate::types::ty::Ty) -> Result<Self, crate::types::ty::Ty> {
+        if matches!(
+            ty,
+            crate::types::ty::Ty::Eff(_) | crate::types::ty::Ty::Static(_)
+        ) {
+            Err(ty)
+        } else {
+            Ok(Self(ty))
+        }
+    }
+
+    #[expect(clippy::panic, reason = "a non-value type in Core is a compiler bug")]
+    pub fn from_finalized(ty: crate::types::ty::Ty) -> Self {
+        match Self::new(ty) {
+            Ok(ty) => ty,
+            Err(ty) => panic!("non-value type reached Core: {ty:?}"),
+        }
+    }
+
+    pub fn error() -> Self {
+        Self(crate::types::ty::Ty::Error)
+    }
+
+    pub fn as_ty(&self) -> &crate::types::ty::Ty {
+        &self.0
+    }
+
+    pub fn into_ty(self) -> crate::types::ty::Ty {
+        self.0
+    }
+
+    pub(crate) fn replace(&mut self, ty: crate::types::ty::Ty) {
+        *self = Self::from_finalized(ty);
+    }
+}
+
+impl std::ops::Deref for ValueTy {
+    type Target = crate::types::ty::Ty;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_ty()
+    }
+}
+
+impl From<ValueTy> for crate::types::ty::Ty {
+    fn from(ty: ValueTy) -> Self {
+        ty.into_ty()
+    }
+}
+
 /// Per-expression clone facts selected by type checking.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ExprOwnership {
@@ -82,7 +136,7 @@ pub struct Expr {
     /// at worst — so downstream stages read it here instead of a NodeID-keyed
     /// table.
     #[drive(skip)]
-    pub ty: crate::types::ty::Ty,
+    pub ty: ValueTy,
     /// How a member access / construction resolved (the checker's
     /// `member_resolutions`), baked on by the typed-program builder; `None`
     /// where the node is not a resolved member.
@@ -278,7 +332,7 @@ pub struct Pattern {
     /// type keeps the borrow it holds. `None` only on synthesized
     /// patterns, whose types come from their construction site.
     #[drive(skip)]
-    pub ty: Option<crate::types::ty::Ty>,
+    pub ty: Option<ValueTy>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
@@ -314,7 +368,7 @@ pub enum PatternKind {
         /// covering it. `None` for the whole table when the row stayed
         /// open or unresolved — lowering rejects those as unsupported.
         #[drive(skip)]
-        slots: Option<Vec<(crate::types::ty::Ty, Option<usize>)>>,
+        slots: Option<Vec<(ValueTy, Option<usize>)>>,
     },
     Struct {
         #[drive(skip)]
@@ -329,7 +383,7 @@ pub enum PatternKind {
         /// the written sub-pattern covering it (`None` = left to `..`,
         /// matched as a wildcard).
         #[drive(skip)]
-        slots: Vec<(crate::types::ty::Ty, Option<usize>)>,
+        slots: Vec<(ValueTy, Option<usize>)>,
     },
 }
 
@@ -342,7 +396,7 @@ pub struct RecordFieldPattern {
     /// bind a pun or `label: pattern` introduces. `None` only on
     /// synthesized fields.
     #[drive(skip)]
-    pub ty: Option<crate::types::ty::Ty>,
+    pub ty: Option<ValueTy>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Drive, DriveMut, serde::Serialize, serde::Deserialize)]
@@ -439,7 +493,7 @@ pub struct Parameter {
     #[drive(skip)]
     pub span: Span,
     #[drive(skip)]
-    pub ty: Option<crate::types::ty::Ty>,
+    pub ty: Option<ValueTy>,
 }
 
 // ----- Blocks and statements ----------------------------------------------

@@ -11,7 +11,7 @@
 // while Cargo enforces that frontend code cannot reach the toolchain.
 pub use talk_front::*;
 pub use talk_front::{
-    common, desugar, front, macro_expansion, name_resolution, parsing, typed_ast, types,
+    common, desugar, front, macro_expansion, name_resolution, parsing, core, types,
 };
 
 mod profile;

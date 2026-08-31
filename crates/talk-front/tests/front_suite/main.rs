@@ -18,7 +18,7 @@ pub mod name_resolver_tests;
 pub mod parser_tests;
 pub mod prepend_self_to_methods_tests;
 pub mod resolve_param_modes_tests;
-pub mod typed_ast_tests;
+pub mod core_tests;
 pub mod types_tests;
 
 /// `assert_eq_diff!`-shaped adapter over [`assert_fixture_eq`].

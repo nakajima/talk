@@ -311,8 +311,8 @@ impl ReplSession {
             .values()
             .flat_map(|file| file.roots.iter())
             .filter_map(|root| match root {
-                crate::typed_ast::Node::Stmt(crate::typed_ast::Stmt {
-                    kind: crate::typed_ast::StmtKind::Expr(expr),
+                crate::core::Node::Stmt(crate::core::Stmt {
+                    kind: crate::core::StmtKind::Expr(expr),
                     ..
                 }) => Some(&expr.ty),
                 _ => None,

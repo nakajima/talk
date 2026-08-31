@@ -9,7 +9,7 @@
 
 use rustc_hash::FxHashMap;
 
-use crate::compiling::typed_program::TypedProgram;
+use crate::core::program::CoreProgram;
 use crate::name::Name;
 mod entries;
 pub(crate) mod escape;
@@ -30,7 +30,7 @@ type WitnessPairs = Vec<(Symbol, (LocalId, LocalId))>;
 use crate::name_resolution::symbol::Symbol;
 use crate::node_kinds::call_arg::ArgMode;
 use crate::parsing::span::Span;
-use crate::typed_ast::{
+use crate::core::{
     Block, Decl, DeclKind, Expr, ExprKind, Func, Literal, Node, Pattern, PatternKind,
     RecordFieldPattern, RecordFieldPatternKind, Stmt, StmtKind,
 };
@@ -154,7 +154,7 @@ struct Callable<'a> {
 enum CallableBody<'a> {
     Func(&'a Func),
     Init {
-        params: &'a [crate::typed_ast::Parameter],
+        params: &'a [crate::core::Parameter],
         body: &'a Block,
     },
 }
@@ -185,7 +185,7 @@ impl<'a> CallableBody<'a> {
 /// One typed program in the reachable compilation graph, with the module
 /// identity importers see its symbols under.
 pub(crate) struct ProgramInput<'a> {
-    pub program: &'a TypedProgram,
+    pub program: &'a CoreProgram,
     pub module: crate::compiling::module::ModuleId,
 }
 
@@ -605,9 +605,14 @@ fn bind_env(
 /// nothing and stays frame-local.
 fn pattern_bindings_with_tys(pattern: &Pattern) -> Vec<(Symbol, Ty)> {
     match &pattern.kind {
-        PatternKind::Bind(Name::Resolved(symbol, _)) => {
-            vec![(*symbol, pattern.ty.clone().unwrap_or(Ty::Error))]
-        }
+        PatternKind::Bind(Name::Resolved(symbol, _)) => vec![(
+            *symbol,
+            pattern
+                .ty
+                .as_ref()
+                .map(|ty| ty.as_ty().clone())
+                .unwrap_or(Ty::Error),
+        )],
         PatternKind::Tuple(elements) => elements
             .iter()
             .flat_map(pattern_bindings_with_tys)
@@ -615,7 +620,11 @@ fn pattern_bindings_with_tys(pattern: &Pattern) -> Vec<(Symbol, Ty)> {
         PatternKind::Record { fields, .. } => fields
             .iter()
             .flat_map(|field| {
-                let slot_ty = field.ty.clone().unwrap_or(Ty::Error);
+                let slot_ty = field
+                    .ty
+                    .as_ref()
+                    .map(|ty| ty.as_ty().clone())
+                    .unwrap_or(Ty::Error);
                 match &field.kind {
                     RecordFieldPatternKind::Bind(name) => match name.symbol() {
                         Ok(symbol) => vec![(symbol, slot_ty)],
@@ -2476,7 +2485,7 @@ impl<'a> ProgramBuilder<'a> {
         for (ix, param) in params.iter().enumerate() {
             let local = u16::try_from(ix).unwrap_or_default();
             if let Some(ty) = &param.ty {
-                if matches!(ty, Ty::Unique(_)) {
+                if matches!(ty.as_ty(), Ty::Unique(_)) {
                     fx.unique_locals.insert(local);
                 }
                 let ty = fx.resolved(ty);
@@ -5048,7 +5057,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// each `mut` argument — the capture half of the writeback convention.
     fn compile_call_args(
         &mut self,
-        args: &[crate::typed_ast::CallArg],
+        args: &[crate::core::CallArg],
         operands: &mut Vec<Operand>,
         mut_arg_places: &mut Vec<(usize, PlaceChain)>,
     ) -> Result<(), BackendError> {
@@ -5097,7 +5106,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         operand_count: usize,
         receiver: Option<(Option<WritebackTarget>, Ty)>,
         mut_arg_places: &[(usize, PlaceChain)],
-        args: &[crate::typed_ast::CallArg],
+        args: &[crate::core::CallArg],
         args_operand_offset: usize,
     ) -> Result<(Vec<Option<WritebackTarget>>, Vec<Ty>), BackendError> {
         let mut targets: Vec<Option<WritebackTarget>> = Vec::new();
@@ -5738,7 +5747,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
 
     /// Re-bind celled parameters through cells (assignment conversion
     /// for parameters shared mutably with this frame's closures).
-    fn cell_celled_params(&mut self, params: &[crate::typed_ast::Parameter]) {
+    fn cell_celled_params(&mut self, params: &[crate::core::Parameter]) {
         for param in params {
             let Name::Resolved(symbol, name) = &param.name else {
                 continue;
@@ -5875,9 +5884,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// reach the join, so divergent tails need no Never case here.
     fn block_tail_ty(block: &Block) -> Ty {
         match block.body.last() {
-            Some(Node::Expr(expr)) => expr.ty.clone(),
+            Some(Node::Expr(expr)) => expr.ty.as_ty().clone(),
             Some(Node::Stmt(stmt)) => match &stmt.kind {
-                StmtKind::Expr(expr) => expr.ty.clone(),
+                StmtKind::Expr(expr) => expr.ty.as_ty().clone(),
                 StmtKind::If(_, then_block, Some(_)) => Self::block_tail_ty(then_block),
                 _ => Ty::unit(),
             },
@@ -5947,7 +5956,9 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                             decl.span,
                         ));
                     }
-                    let ty = self.resolved(&lhs.ty.clone().unwrap_or(Ty::Error));
+                    let ty = self.resolved(
+                        lhs.ty.as_ref().map(|ty| ty.as_ty()).unwrap_or(&Ty::Error),
+                    );
                     let local = self.fresh_local();
                     self.locals.insert(*symbol, local);
                     self.name_local(local, bind_name);
@@ -6168,7 +6179,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             PatternKind::Tuple(elements) => {
                 let element_tys: Vec<Ty> = elements
                     .iter()
-                    .map(|element| self.resolved(&element.ty.clone().unwrap_or(Ty::Error)))
+                    .map(|element| self.resolved(element.ty.as_ref().map(|ty| ty.as_ty()).unwrap_or(&Ty::Error)))
                     .collect();
                 let container = self.container_layout(ty);
                 let extracted = self.extract_tuple(value, container, elements.len());
@@ -6696,7 +6707,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                 let element_tys = tuple_element_tys(&ty, items.len());
                 for ((arg, item), element_ty) in args.iter().zip(items).zip(&element_tys) {
                     let dest_ty = if matches!(element_ty, Ty::Error) {
-                        item.ty.clone()
+                        item.ty.as_ty().clone()
                     } else {
                         // The slot owns whatever its declared borrows
                         // point at (owning stored views): strip so the
@@ -6745,7 +6756,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         .and_then(|tys| tys.get(index))
                         .cloned()
                         .map(strip_borrows)
-                        .unwrap_or_else(|| arg.ty.clone());
+                        .unwrap_or_else(|| arg.ty.as_ty().clone());
                     self.consume_binding(*operand, &dest_ty, arg.span)?;
                 }
                 let dest = self.fresh_local();
@@ -7702,7 +7713,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         &mut self,
         scrutinee: Operand,
         scrutinee_ty: &Ty,
-        arms: &[crate::typed_ast::MatchArm],
+        arms: &[crate::core::MatchArm],
         owning: bool,
     ) -> Result<Operand, BackendError> {
         let result = self.fresh_local();
@@ -7873,7 +7884,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             PatternKind::Tuple(elements) => {
                 let element_tys: Vec<Ty> = elements
                     .iter()
-                    .map(|element| self.resolved(&element.ty.clone().unwrap_or(Ty::Error)))
+                    .map(|element| self.resolved(element.ty.as_ref().map(|ty| ty.as_ty()).unwrap_or(&Ty::Error)))
                     .collect();
                 let container = self.container_layout(&ty);
                 for (index, (element, element_ty)) in elements.iter().zip(&element_tys).enumerate()
@@ -8185,7 +8196,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         &self,
         pattern: &Pattern,
         fields: &[RecordFieldPattern],
-        slots: &Option<Vec<(Ty, Option<usize>)>>,
+        slots: &Option<Vec<(crate::core::ValueTy, Option<usize>)>>,
     ) -> Result<Vec<RecordCell>, BackendError> {
         // Cells come from the pattern's published slot table (ADR 0038):
         // row-layout order, slot types, and the covering written fields.
@@ -8201,7 +8212,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         slots
             .iter()
             .map(|(field_ty, sub)| {
-                let field_ty = self.resolved(field_ty);
+                let field_ty = self.resolved(field_ty.as_ty());
                 let cell = sub.and_then(|index| fields.get(index)).map(|field| {
                     match &field.kind {
                         RecordFieldPatternKind::Bind(name) => RecordCell {
@@ -8269,7 +8280,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         &self,
         pattern: &Pattern,
         fields: &[Pattern],
-        slots: &[(Ty, Option<usize>)],
+        slots: &[(crate::core::ValueTy, Option<usize>)],
         scrutinee_ty: &Ty,
     ) -> Result<(bool, Vec<RecordCell>), BackendError> {
         // Cells come from the pattern's published slots (ADR 0038):
@@ -8289,7 +8300,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         let cells = slots
             .iter()
             .map(|(field_ty, sub)| RecordCell {
-                field_ty: self.resolved(field_ty),
+                field_ty: self.resolved(field_ty.as_ty()),
                 pattern: sub
                     .and_then(|index| fields.get(index).cloned())
                     .unwrap_or(Pattern {
@@ -8476,7 +8487,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
             PatternKind::Tuple(elements) => {
                 let element_tys: Vec<Ty> = elements
                     .iter()
-                    .map(|element| self.resolved(&element.ty.clone().unwrap_or(Ty::Error)))
+                    .map(|element| self.resolved(element.ty.as_ref().map(|ty| ty.as_ty()).unwrap_or(&Ty::Error)))
                     .collect();
                 let container = self.container_layout(scrutinee_ty);
                 let extracted = self.extract_tuple(scrutinee, container, elements.len());
@@ -8898,7 +8909,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         callee_value: Operand,
         expr: &Expr,
         callee: &Expr,
-        args: &[crate::typed_ast::CallArg],
+        args: &[crate::core::CallArg],
     ) -> Result<Operand, BackendError> {
         let mut operands = Vec::new();
         let mut mut_arg_places: Vec<(usize, PlaceChain)> = Vec::new();
@@ -8941,7 +8952,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         &mut self,
         expr: &Expr,
         callee: &Expr,
-        args: &[crate::typed_ast::CallArg],
+        args: &[crate::core::CallArg],
     ) -> Result<Operand, BackendError> {
         // A generic callee monomorphizes against the frontend's recorded
         // instantiation, resolved through this instance's own substitution.
@@ -10240,7 +10251,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
         &mut self,
         expr: &Expr,
         callee: &Expr,
-        args: &[crate::typed_ast::CallArg],
+        args: &[crate::core::CallArg],
         subst: Vec<(Symbol, Ty)>,
     ) -> Result<Operand, BackendError> {
         // Under an existential coercion the node's type is the coercion
@@ -10348,7 +10359,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                         let borrowed = param
                             .ty
                             .as_ref()
-                            .is_some_and(|param_ty| matches!(param_ty, Ty::Borrow(_, _)));
+                            .is_some_and(|param_ty| matches!(param_ty.as_ty(), Ty::Borrow(_, _)));
                         if !borrowed {
                             self.consume_into(*operand, operand_ty, expr.span)?;
                         }
@@ -10473,7 +10484,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
                     let borrowed = param
                         .ty
                         .as_ref()
-                        .is_some_and(|param_ty| matches!(param_ty, Ty::Borrow(_, _)));
+                        .is_some_and(|param_ty| matches!(param_ty.as_ty(), Ty::Borrow(_, _)));
                     if !borrowed {
                         // Like a call argument: an operand this frame
                         // does not own (a field read) donates a
@@ -10555,7 +10566,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     fn compile_inline_ir(
         &mut self,
         expr: &Expr,
-        instruction: &crate::typed_ast::InlineIRInstruction,
+        instruction: &crate::core::InlineIRInstruction,
     ) -> Result<Operand, BackendError> {
         use crate::types::output::{CheckedIrKind as K, IrScalarOp};
 
@@ -10825,7 +10836,7 @@ impl<'p, 'a> FunctionBuilder<'p, 'a> {
     /// (index-checked by typing), immediates carry their value.
     fn ir_value(
         &mut self,
-        instruction: &crate::typed_ast::InlineIRInstruction,
+        instruction: &crate::core::InlineIRInstruction,
         value: &crate::types::output::IrOperand,
     ) -> Result<Operand, BackendError> {
         use crate::types::output::IrOperand;

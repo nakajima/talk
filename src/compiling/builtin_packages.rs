@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use crate::compiling::module::{Module, ModuleEnvironment, ModuleId};
-use crate::compiling::typed_program::TypedProgram;
+use crate::core::program::CoreProgram;
 
 struct BuiltinPackage {
     name: &'static str,
@@ -232,7 +232,7 @@ const BUILTIN_PACKAGES: &[BuiltinPackage] = &[
 
 struct CompiledBuiltin {
     module: Arc<Module>,
-    typed: Arc<TypedProgram>,
+    typed: Arc<CoreProgram>,
     /// The library's disk-cache key: dependents close their keys over
     /// it (ADR 0056). `None` when the cache is unavailable.
     cache_key: Option<[u8; 32]>,
@@ -335,7 +335,7 @@ pub(crate) fn package_roots() -> impl Iterator<Item = (&'static str, &'static Pa
 /// the name or its sources do not compile cleanly right now, so parse
 /// discovery degrades to ordinary unresolved-import diagnostics.
 /// Failures are not memoized; a later call retries.
-pub(crate) fn try_compiled(name: &str) -> Option<(ModuleId, Arc<Module>, Arc<TypedProgram>)> {
+pub(crate) fn try_compiled(name: &str) -> Option<(ModuleId, Arc<Module>, Arc<CoreProgram>)> {
     let (package, compiled) = try_entry(name)?;
     Some((
         ModuleId::WellKnown(package.slot),

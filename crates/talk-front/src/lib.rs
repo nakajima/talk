@@ -24,5 +24,5 @@ pub mod desugar;
 pub mod front;
 pub mod macro_expansion;
 pub mod name_resolution;
-pub mod typed_ast;
+pub mod core;
 pub mod types;

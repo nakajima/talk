@@ -51,7 +51,7 @@ pub struct Workspace {
     /// Per-node facts collected from the typed tree (ADR 0057): hover,
     /// completion, occurrences, and code actions resolve source NodeIDs
     /// against this index into the one authority.
-    pub facts: crate::typed_ast::facts::NodeFacts,
+    pub facts: crate::core::facts::NodeFacts,
     pub diagnostics: FxHashMap<DocumentId, Vec<Diagnostic>>,
     pub stdlib_module_ids: FxHashMap<ModuleId, String>,
     pub importable_modules: FxHashMap<String, Vec<(String, Symbol)>>,

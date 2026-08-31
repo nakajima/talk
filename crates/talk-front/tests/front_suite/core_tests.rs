@@ -1,21 +1,18 @@
 use talk::compiling::driver::{Driver, DriverConfig, Source};
+use talk_front::core;
 use talk_front::node::Node;
 use talk_front::node_id::NodeID;
-use talk_front::typed_ast;
 
-/// Type-check `source` and pair each file's AST roots with the typed tree the
+/// Type-check `source` and pair each file's AST roots with the Core tree the
 /// type checker produced.
-fn lower(source: &str) -> Vec<(Vec<Node>, Vec<typed_ast::Node>)> {
-    let resolved = Driver::new_bare(
-        vec![Source::from(source)],
-        DriverConfig::new("TypedAstTest"),
-    )
-    .parse()
-    .expect("parse")
-    .resolve_names()
-    .expect("resolve");
-    // `type_check` consumes the AST into the typed compiler tree, so capture the AST roots here
-    // to pair them against the typed compiler tree roots.
+fn lower(source: &str) -> Vec<(Vec<Node>, Vec<core::Node>)> {
+    let resolved = Driver::new_bare(vec![Source::from(source)], DriverConfig::new("CoreTest"))
+        .parse()
+        .expect("parse")
+        .resolve_names()
+        .expect("resolve");
+    // Type checking consumes the AST into Core, so retain roots for the
+    // source-identity comparison.
     let asts = resolved.phase.asts.clone();
     let typed = resolved.type_check();
     assert!(
@@ -35,22 +32,22 @@ fn lower(source: &str) -> Vec<(Vec<Node>, Vec<typed_ast::Node>)> {
         .collect()
 }
 
-/// Every typed expression id, recursively.
-fn hir_expr_ids(nodes: &[typed_ast::Node]) -> Vec<NodeID> {
+/// Every Core expression id, recursively.
+fn core_expr_ids(nodes: &[core::Node]) -> Vec<NodeID> {
     let mut ids = Vec::new();
     for node in nodes {
         match node {
-            typed_ast::Node::Expr(e) => collect_expr(e, &mut ids),
-            typed_ast::Node::Stmt(s) => collect_stmt(s, &mut ids),
-            typed_ast::Node::Decl(d) => collect_decl(d, &mut ids),
+            core::Node::Expr(e) => collect_expr(e, &mut ids),
+            core::Node::Stmt(s) => collect_stmt(s, &mut ids),
+            core::Node::Decl(d) => collect_decl(d, &mut ids),
         }
     }
     ids
 }
 
-fn collect_expr(e: &typed_ast::Expr, ids: &mut Vec<NodeID>) {
+fn collect_expr(e: &core::Expr, ids: &mut Vec<NodeID>) {
     ids.push(e.id);
-    use typed_ast::ExprKind as K;
+    use core::ExprKind as K;
     match &e.kind {
         K::InlineIR(ir) => ir.binds.iter().for_each(|b| collect_expr(b, ids)),
         K::CallEffect { args, .. } => args.iter().for_each(|a| collect_expr(&a.value, ids)),
@@ -83,8 +80,8 @@ fn collect_expr(e: &typed_ast::Expr, ids: &mut Vec<NodeID>) {
     }
 }
 
-fn collect_stmt(s: &typed_ast::Stmt, ids: &mut Vec<NodeID>) {
-    use typed_ast::StmtKind as K;
+fn collect_stmt(s: &core::Stmt, ids: &mut Vec<NodeID>) {
+    use core::StmtKind as K;
     match &s.kind {
         K::Expr(e) => collect_expr(e, ids),
         K::If(c, t, e2) => {
@@ -114,12 +111,12 @@ fn collect_stmt(s: &typed_ast::Stmt, ids: &mut Vec<NodeID>) {
     }
 }
 
-fn collect_block(b: &typed_ast::Block, ids: &mut Vec<NodeID>) {
-    ids.extend(hir_expr_ids(&b.body));
+fn collect_block(b: &core::Block, ids: &mut Vec<NodeID>) {
+    ids.extend(core_expr_ids(&b.body));
 }
 
-fn collect_decl(d: &typed_ast::Decl, ids: &mut Vec<NodeID>) {
-    use typed_ast::DeclKind as K;
+fn collect_decl(d: &core::Decl, ids: &mut Vec<NodeID>) {
+    use core::DeclKind as K;
     match &d.kind {
         K::Let { rhs: Some(rhs), .. } => collect_expr(rhs, ids),
         K::Init { body, .. } => collect_block(body, ids),
@@ -171,7 +168,7 @@ fn functions_carry_their_finalized_effect_scheme() {
     let source = "// no-core\neffect 'a() -> ()\nfunc f() 'a -> () { () }";
     let mut effect_counts = vec![];
     for (_, hir_nodes) in lower(source) {
-        let mut collect = derive_visitor::visitor_enter_fn(|func: &typed_ast::Func| {
+        let mut collect = derive_visitor::visitor_enter_fn(|func: &core::Func| {
             if func.name.name_str() == "f"
                 && let talk_front::types::ty::Ty::Func(_, _, effects) = &func.scheme.ty
             {
@@ -186,11 +183,30 @@ fn functions_carry_their_finalized_effect_scheme() {
 }
 
 #[test]
+fn program_owns_nested_core() {
+    let typed = Driver::new_bare(
+        vec![Source::from("let value = 1\nvalue")],
+        DriverConfig::new("NestedCoreTest"),
+    )
+    .parse()
+    .expect("parse")
+    .resolve_names()
+    .expect("resolve")
+    .type_check();
+    assert!(
+        !typed.has_errors(),
+        "unexpected errors: {:?}",
+        typed.diagnostics()
+    );
+    let _: &core::Core<core::Nested> = typed.phase.program.core();
+}
+
+#[test]
 fn preserves_node_ids_one_to_one() {
     let source = "func f(x: Int) -> Int {\n\tlet y = x\n\ty\n}\nf(x: 2)";
     for (ast_roots, hir_nodes) in lower(source) {
         let mut ast_ids = ast_expr_ids(&ast_roots);
-        let mut hir_ids = hir_expr_ids(&hir_nodes);
+        let mut hir_ids = core_expr_ids(&hir_nodes);
         ast_ids.sort();
         hir_ids.sort();
         assert_eq!(
@@ -208,8 +224,8 @@ fn or_pattern_binders_collect_once() {
     let source = "enum E {\n\tcase a(Int)\n\tcase b(Int)\n}\nfunc f(e: E) -> Int {\n\tmatch e {\n\t\t.a(s) | .b(s) -> s,\n\t}\n}";
     let mut or_binders = None;
     for (_, hir_nodes) in lower(source) {
-        visit_patterns(&hir_nodes, &mut |pattern: &typed_ast::Pattern| {
-            if matches!(pattern.kind, typed_ast::PatternKind::Or(_)) {
+        visit_patterns(&hir_nodes, &mut |pattern: &core::Pattern| {
+            if matches!(pattern.kind, core::PatternKind::Or(_)) {
                 or_binders = Some(pattern.collect_binders());
             }
         });
@@ -232,8 +248,8 @@ fn literals_carry_canonical_values() {
     let source = "// no-core\nlet n = 1_000\nlet f = 2_5.5\nlet s = \"a\\nb\"\n()";
     let mut literals = vec![];
     for (_, hir_nodes) in lower(source) {
-        let mut collect = derive_visitor::visitor_enter_fn(|expr: &typed_ast::Expr| {
-            if let typed_ast::ExprKind::Lit(literal) = &expr.kind {
+        let mut collect = derive_visitor::visitor_enter_fn(|expr: &core::Expr| {
+            if let core::ExprKind::Lit(literal) = &expr.kind {
                 literals.push(literal.clone());
             }
         });
@@ -242,15 +258,15 @@ fn literals_carry_canonical_values() {
         }
     }
     assert!(
-        literals.contains(&typed_ast::Literal::Int(1000)),
+        literals.contains(&core::Literal::Int(1000)),
         "expected the checked integer value: {literals:?}"
     );
     assert!(
-        literals.contains(&typed_ast::Literal::Float(typed_ast::FloatValue(25.5))),
+        literals.contains(&core::Literal::Float(core::FloatValue(25.5))),
         "expected the checked float value: {literals:?}"
     );
     assert!(
-        literals.contains(&typed_ast::Literal::String("a\nb".into())),
+        literals.contains(&core::Literal::String("a\nb".into())),
         "expected the unescaped string value: {literals:?}"
     );
 }
@@ -261,8 +277,8 @@ fn pattern_literals_carry_canonical_values() {
         "// no-core\nfunc f(n: Int) -> Int {\n\tmatch n {\n\t\t1_0 -> 1,\n\t\t_ -> 0,\n\t}\n}";
     let mut ints = vec![];
     for (_, hir_nodes) in lower(source) {
-        visit_patterns(&hir_nodes, &mut |pattern: &typed_ast::Pattern| {
-            if let typed_ast::PatternKind::LiteralInt(value) = &pattern.kind {
+        visit_patterns(&hir_nodes, &mut |pattern: &core::Pattern| {
+            if let core::PatternKind::LiteralInt(value) = &pattern.kind {
                 ints.push(*value);
             }
         });
@@ -280,8 +296,8 @@ fn handler_clause_binders_carry_their_checked_types() {
     let source = "// no-core\neffect 'ask(question: Int) -> Int\n#handle 'ask { q in\n\t'continue q\n}\n'ask(question: 1)\n()";
     let mut clause_param_tys = vec![];
     for (_, hir_nodes) in lower(source) {
-        let mut collect = derive_visitor::visitor_enter_fn(|stmt: &typed_ast::Stmt| {
-            if let typed_ast::StmtKind::Handling { body, .. } = &stmt.kind {
+        let mut collect = derive_visitor::visitor_enter_fn(|stmt: &core::Stmt| {
+            if let core::StmtKind::Handling { body, .. } = &stmt.kind {
                 clause_param_tys.extend(body.args.iter().map(|param| param.ty.clone()));
             }
         });
@@ -306,8 +322,8 @@ fn record_patterns_carry_row_layout_slots() {
         "// no-core\nlet rec = { b: true, a: 1 }\nlet n = match rec {\n\t{ a, .. } -> a,\n}\n()";
     let mut slot_sets = vec![];
     for (_, hir_nodes) in lower(source) {
-        visit_patterns(&hir_nodes, &mut |pattern: &typed_ast::Pattern| {
-            if let typed_ast::PatternKind::Record { slots, .. } = &pattern.kind {
+        visit_patterns(&hir_nodes, &mut |pattern: &core::Pattern| {
+            if let core::PatternKind::Record { slots, .. } = &pattern.kind {
                 slot_sets.push(slots.clone());
             }
         });
@@ -334,8 +350,8 @@ fn struct_patterns_carry_declaration_order_slots() {
     let source = "// no-core\nstruct P {\n\tlet x: Int\n\tlet y: Bool\n}\nfunc f(p: P) -> Bool {\n\tmatch p {\n\t\tP { y: flag, .. } -> flag,\n\t}\n}";
     let mut slot_sets = vec![];
     for (_, hir_nodes) in lower(source) {
-        visit_patterns(&hir_nodes, &mut |pattern: &typed_ast::Pattern| {
-            if let typed_ast::PatternKind::Struct { slots, .. } = &pattern.kind {
+        visit_patterns(&hir_nodes, &mut |pattern: &core::Pattern| {
+            if let core::PatternKind::Struct { slots, .. } = &pattern.kind {
                 slot_sets.push(slots.clone());
             }
         });
@@ -361,8 +377,8 @@ fn patterns_carry_their_checked_occurrence_types() {
     let source = "// no-core\nlet (a, b) = (1, true)\n()";
     let mut bind_tys = vec![];
     for (_, hir_nodes) in lower(source) {
-        visit_patterns(&hir_nodes, &mut |pattern: &typed_ast::Pattern| {
-            if matches!(pattern.kind, typed_ast::PatternKind::Bind(_)) {
+        visit_patterns(&hir_nodes, &mut |pattern: &core::Pattern| {
+            if matches!(pattern.kind, core::PatternKind::Bind(_)) {
                 bind_tys.push(pattern.ty.clone());
             }
         });
@@ -393,13 +409,13 @@ fn effect_sites_carry_their_contracts() {
     let mut call_contracts = vec![];
     let mut handler_contracts = vec![];
     for (_, hir_nodes) in lower(source) {
-        let mut collect_calls = derive_visitor::visitor_enter_fn(|expr: &typed_ast::Expr| {
-            if let typed_ast::ExprKind::CallEffect { contract, .. } = &expr.kind {
+        let mut collect_calls = derive_visitor::visitor_enter_fn(|expr: &core::Expr| {
+            if let core::ExprKind::CallEffect { contract, .. } = &expr.kind {
                 call_contracts.push(contract.clone());
             }
         });
-        let mut collect_handlers = derive_visitor::visitor_enter_fn(|stmt: &typed_ast::Stmt| {
-            if let typed_ast::StmtKind::Handling { contract, .. } = &stmt.kind {
+        let mut collect_handlers = derive_visitor::visitor_enter_fn(|stmt: &core::Stmt| {
+            if let core::StmtKind::Handling { contract, .. } = &stmt.kind {
                 handler_contracts.push(contract.clone());
             }
         });
@@ -430,8 +446,8 @@ fn variant_patterns_carry_their_resolution() {
     let source = "enum E {\n\tcase a(Int)\n\tcase b(Int)\n}\nfunc f(e: E) -> Int {\n\tmatch e {\n\t\t.a(s) -> s,\n\t\t.b(s) -> s,\n\t}\n}";
     let mut resolutions = vec![];
     for (_, hir_nodes) in lower(source) {
-        visit_patterns(&hir_nodes, &mut |pattern: &typed_ast::Pattern| {
-            if let typed_ast::PatternKind::Variant { resolved, .. } = &pattern.kind {
+        visit_patterns(&hir_nodes, &mut |pattern: &core::Pattern| {
+            if let core::PatternKind::Variant { resolved, .. } = &pattern.kind {
                 resolutions.push(*resolved);
             }
         });
@@ -453,7 +469,7 @@ fn frame_roots_carry_capture_and_cell_facts() {
     let source = "// no-core\nfunc outer() -> Int {\n\tlet x = 1\n\tlet bump = func() -> () {\n\t\tx = x\n\t}\n\tbump()\n\tx\n}";
     let mut frames = vec![];
     for (_, hir_nodes) in lower(source) {
-        let mut collect = derive_visitor::visitor_enter_fn(|func: &typed_ast::Func| {
+        let mut collect = derive_visitor::visitor_enter_fn(|func: &core::Func| {
             frames.push((func.name.name_str(), func.body.frame.clone()));
         });
         for node in &hir_nodes {
@@ -490,14 +506,14 @@ fn frame_roots_carry_capture_and_cell_facts() {
     );
 }
 
-fn visit_patterns(nodes: &[typed_ast::Node], f: &mut impl FnMut(&typed_ast::Pattern)) {
+fn visit_patterns(nodes: &[core::Node], f: &mut impl FnMut(&core::Pattern)) {
     use derive_visitor::{Drive, Visitor};
 
     struct Collect<'a, F>(&'a mut F);
-    impl<F: FnMut(&typed_ast::Pattern)> Visitor for Collect<'_, F> {
+    impl<F: FnMut(&core::Pattern)> Visitor for Collect<'_, F> {
         fn visit(&mut self, item: &dyn std::any::Any, event: derive_visitor::Event) {
             if matches!(event, derive_visitor::Event::Enter)
-                && let Some(pattern) = item.downcast_ref::<typed_ast::Pattern>()
+                && let Some(pattern) = item.downcast_ref::<core::Pattern>()
             {
                 (self.0)(pattern);
             }

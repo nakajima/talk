@@ -84,15 +84,15 @@ pub mod tests {
     /// Every expression node of the typed tree, cloned out for
     /// assertions on baked per-node facts (the tree is the one authority
     /// for these since ADR 0057; the checker publishes no NodeID tables).
-    pub fn typed_exprs(driver: &Driver<Typed>) -> Vec<talk_front::typed_ast::Expr> {
+    pub fn typed_exprs(driver: &Driver<Typed>) -> Vec<talk_front::core::Expr> {
         use derive_visitor::{Drive, Visitor};
         #[derive(Visitor)]
-        #[visitor(talk_front::typed_ast::Expr(enter))]
+        #[visitor(talk_front::core::Expr(enter))]
         struct All {
-            found: Vec<talk_front::typed_ast::Expr>,
+            found: Vec<talk_front::core::Expr>,
         }
         impl All {
-            fn enter_expr(&mut self, e: &talk_front::typed_ast::Expr) {
+            fn enter_expr(&mut self, e: &talk_front::core::Expr) {
                 self.found.push(e.clone());
             }
         }
@@ -2171,7 +2171,7 @@ pub mod tests {
         impl Visitor for Binders {
             fn visit(&mut self, item: &dyn std::any::Any, event: derive_visitor::Event) {
                 if matches!(event, derive_visitor::Event::Enter)
-                    && let Some(pattern) = item.downcast_ref::<talk_front::typed_ast::Pattern>()
+                    && let Some(pattern) = item.downcast_ref::<talk_front::core::Pattern>()
                 {
                     self.found.extend(pattern.collect_binders());
                 }
@@ -4264,7 +4264,7 @@ pub mod tests {
         // (ADR 0038): the declared receiver mode, and the binding symbol
         // the top-level `let f = <func>` desugar aliases — lowering
         // reads them, it never re-recognizes declaration shapes.
-        use talk_front::typed_ast::{DeclKind, ExprKind, Node, PatternKind};
+        use talk_front::core::{DeclKind, ExprKind, Node, PatternKind};
         let t = check(
             "// no-core\nstruct S {\n\tlet v: Int\n\tmut func bump() -> Void { () }\n}\nfunc top() -> Int { 1 }",
         );
@@ -4312,7 +4312,7 @@ pub mod tests {
     }
 
     #[test]
-    fn typed_program_files_come_in_initialization_order() {
+    fn core_program_files_come_in_initialization_order() {
         // LINK-02: a file's local imports initialize before it. Program
         // assembly publishes the order — `files()` iterates
         // dependency-first — so the backend never re-derives the import

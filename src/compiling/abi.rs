@@ -6,7 +6,7 @@
 //! symbol ids it records are the record/variant identities the compiled
 //! artifact's runtime values carry.
 
-use crate::compiling::typed_program::TypedProgram;
+use crate::core::program::CoreProgram;
 use crate::name_resolution::symbol::Symbol;
 use crate::types::ty::Ty;
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -269,9 +269,9 @@ fn parse_ty(text: &str) -> Result<AbiTy, String> {
 /// `String`) render as leaf names; `[T]` and `T?` render as their sugar.
 /// Anything the schema cannot carry across the ABI — functions, borrows,
 /// open rows — fails closed.
-pub fn describe(program: &TypedProgram, root: &str) -> Result<String, String> {
+pub fn describe(program: &CoreProgram, root: &str) -> Result<String, String> {
     let catalog = &program.types().catalog;
-    let core = crate::compiling::core::typed_program();
+    let core = crate::compiling::core::core_program();
 
     let mut names: HashMap<Symbol, String> = HashMap::new();
     for (symbol, name) in core.symbol_names() {

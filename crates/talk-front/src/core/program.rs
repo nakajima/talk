@@ -1,40 +1,84 @@
-pub(crate) mod build;
-
 use indexmap::IndexMap;
 use rustc_hash::FxHashSet;
 
 use crate::ast::AST;
-use crate::compiling::driver::Source;
+use crate::diagnostic::{AnyDiagnostic, Severity};
+use crate::front::module::{ModuleEnvironment, ModuleId};
+use crate::front::source::{SharedCatalog, Source};
 use crate::name_resolution::name_resolver::ResolvedNames;
-use crate::name_resolution::symbol::Symbol;
+use crate::name_resolution::symbol::{Symbol, Symbols};
 use crate::node_id::FileID;
 use crate::parsing::ast::NameResolved;
 use crate::types::TypeOutput;
 
-/// The checked program tree and checked semantic facts for one module.
-///
-/// Compiler phases after type checking receive this artifact instead of a
-/// loose `TypeOutput` plus a separately-owned compiler tree phase. The current typed tree
-/// representation is still backed by `typed_ast` nodes, but ownership of that tree is
-/// local to this module-facing product; callers go through `TypedProgram`.
+/// Type-check resolved sources into the frontend's one checked output.
+#[allow(clippy::too_many_arguments)]
+pub fn check_program(
+    asts: IndexMap<Source, AST<NameResolved>>,
+    symbols: &mut Symbols,
+    resolved_names: ResolvedNames,
+    modules: &ModuleEnvironment,
+    module_id: ModuleId,
+    shared: &mut SharedCatalog,
+    diagnostics: &mut Vec<AnyDiagnostic>,
+    file_dependencies: Vec<(FileID, FileID)>,
+) -> CoreProgram {
+    let (types, elaboration, type_diagnostics) = crate::types::generate::check_types(
+        &asts,
+        symbols,
+        &resolved_names,
+        modules,
+        module_id,
+        shared,
+    );
+    diagnostics.extend(type_diagnostics);
+    let blocked_files = error_diagnostic_files(diagnostics);
+    CoreProgram::from_checked_asts(
+        asts,
+        resolved_names,
+        types,
+        elaboration,
+        &blocked_files,
+        file_dependencies,
+    )
+}
+
+pub fn error_diagnostic_files(diagnostics: &[AnyDiagnostic]) -> FxHashSet<FileID> {
+    diagnostics
+        .iter()
+        .filter_map(|diagnostic| {
+            let (id, severity) = match diagnostic {
+                AnyDiagnostic::Parsing(diagnostic) => (diagnostic.id, &diagnostic.severity),
+                AnyDiagnostic::Macro(diagnostic) => (diagnostic.id, &diagnostic.severity),
+                AnyDiagnostic::NameResolution(diagnostic) => (diagnostic.id, &diagnostic.severity),
+                AnyDiagnostic::Types(diagnostic) => (diagnostic.id, &diagnostic.severity),
+            };
+            (*severity == Severity::Error && id.0 != FileID::SYNTHESIZED).then_some(id.0)
+        })
+        .collect()
+}
+
+/// The phase-owned checked program and program-level semantic facts for one
+/// module. Compiler phases after type checking receive this artifact instead
+/// of a loose type output and separately owned tree.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub struct TypedProgram {
-    files: IndexMap<Source, crate::typed_ast::TypedFile>,
+pub struct CoreProgram {
+    core: crate::core::Core<crate::core::Nested>,
     resolved_names: ResolvedNames,
     types: TypeOutput,
     /// Editor facts for files blocked from the tree build by errors —
     /// those files have no typed tree, so their per-node facts keep index
-    /// form here (one home per file; see `typed_ast::facts`).
+    /// form here (one home per file; see `core::facts`).
     #[serde(default)]
-    blocked_facts: crate::typed_ast::facts::NodeFacts,
+    blocked_facts: crate::core::facts::NodeFacts,
     /// Canonical local import edges (importer, imported) recorded
     /// during parse discovery (CLEAN-03).
     #[serde(default)]
     file_dependencies: Vec<(FileID, FileID)>,
 }
 
-impl TypedProgram {
-    pub(crate) fn from_checked_asts(
+impl CoreProgram {
+    fn from_checked_asts(
         asts: IndexMap<Source, AST<NameResolved>>,
         resolved_names: ResolvedNames,
         types: TypeOutput,
@@ -47,15 +91,15 @@ impl TypedProgram {
             if blocked_files.contains(&ast.file_id) {
                 continue;
             }
-            let file = build::build_file(&ast, &types, &elaboration);
+            let file = super::build::build_file(&ast, &types, &elaboration);
             files.insert(source, file);
         }
-        let blocked_facts = crate::typed_ast::facts::NodeFacts::from_blocked_elaboration(
-            &elaboration,
-            blocked_files,
-        );
+        let blocked_facts =
+            crate::core::facts::NodeFacts::from_blocked_elaboration(&elaboration, blocked_files);
+        let core = crate::core::Core::new(in_initialization_order(files, &file_dependencies));
+        core.assert_lint();
         Self {
-            files: in_initialization_order(files, &file_dependencies),
+            core,
             resolved_names,
             types,
             blocked_facts,
@@ -83,16 +127,22 @@ impl TypedProgram {
         &self.resolved_names
     }
 
-    pub fn files(&self) -> &IndexMap<Source, crate::typed_ast::TypedFile> {
-        &self.files
+    /// Compatibility view for callers that iterate files. Semantic passes
+    /// should preserve the phase marker through [`Self::core`].
+    pub fn files(&self) -> &IndexMap<Source, crate::core::TypedFile> {
+        self.core.files()
+    }
+
+    pub fn core(&self) -> &crate::core::Core<crate::core::Nested> {
+        &self.core
     }
 
     /// The per-node facts index collected from the typed tree — the same
     /// view [`Self::into_semantic_parts`] hands the editor layer, for
     /// tests that keep the program whole.
     #[cfg(any(test, feature = "test-access"))]
-    pub fn node_facts(&self) -> crate::typed_ast::facts::NodeFacts {
-        let mut facts = crate::typed_ast::facts::NodeFacts::collect(self.files.values());
+    pub fn node_facts(&self) -> crate::core::facts::NodeFacts {
+        let mut facts = crate::core::facts::NodeFacts::collect(self.core.files().values());
         facts.extend(self.blocked_facts.clone());
         facts
     }
@@ -101,14 +151,8 @@ impl TypedProgram {
     /// the checker's program-level residue, and the per-node facts index
     /// collected from the typed tree (the tree is the one authority for
     /// per-occurrence facts; the index is rebuilt with it, ADR 0057).
-    pub(crate) fn into_semantic_parts(
-        self,
-    ) -> (
-        ResolvedNames,
-        TypeOutput,
-        crate::typed_ast::facts::NodeFacts,
-    ) {
-        let mut facts = crate::typed_ast::facts::NodeFacts::collect(self.files.values());
+    pub fn into_semantic_parts(self) -> (ResolvedNames, TypeOutput, crate::core::facts::NodeFacts) {
+        let mut facts = crate::core::facts::NodeFacts::collect(self.core.files().values());
         facts.extend(self.blocked_facts);
         (self.resolved_names, self.types, facts)
     }
@@ -121,9 +165,9 @@ impl TypedProgram {
 /// local references alike); files without edges keep their discovery
 /// order, and a cycle falls back to discovery order for the remainder.
 fn in_initialization_order(
-    files: IndexMap<Source, crate::typed_ast::TypedFile>,
+    files: IndexMap<Source, crate::core::TypedFile>,
     file_dependencies: &[(FileID, FileID)],
-) -> IndexMap<Source, crate::typed_ast::TypedFile> {
+) -> IndexMap<Source, crate::core::TypedFile> {
     use rustc_hash::FxHashMap;
 
     let position: FxHashMap<FileID, usize> = files
@@ -163,7 +207,7 @@ fn in_initialization_order(
     for index in 0..files.len() {
         visit(index, &deps, &mut state, &mut indexes);
     }
-    let mut entries: Vec<Option<(Source, crate::typed_ast::TypedFile)>> =
+    let mut entries: Vec<Option<(Source, crate::core::TypedFile)>> =
         files.into_iter().map(Some).collect();
     indexes
         .into_iter()

@@ -71,17 +71,15 @@ impl NodeFacts {
     }
     pub fn collect<'a>(files: impl Iterator<Item = &'a super::TypedFile>) -> Self {
         #[derive(Visitor)]
-        #[visitor(
-            super::Expr(enter),
-            super::Pattern(enter),
-            super::Parameter(enter)
-        )]
+        #[visitor(super::Expr(enter), super::Pattern(enter), super::Parameter(enter))]
         struct Collect {
             facts: NodeFacts,
         }
         impl Collect {
             fn enter_expr(&mut self, expr: &super::Expr) {
-                self.facts.node_types.insert(expr.id, expr.ty.clone());
+                self.facts
+                    .node_types
+                    .insert(expr.id, expr.ty.clone().into());
                 if let Some(resolution) = &expr.member_resolution {
                     self.facts
                         .member_resolutions
@@ -111,7 +109,7 @@ impl NodeFacts {
             }
             fn enter_parameter(&mut self, param: &super::Parameter) {
                 if let Some(ty) = &param.ty {
-                    self.facts.node_types.insert(param.id, ty.clone());
+                    self.facts.node_types.insert(param.id, ty.clone().into());
                 }
             }
         }

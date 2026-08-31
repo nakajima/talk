@@ -19,7 +19,7 @@ use crate::{
     },
 };
 use indexmap::IndexMap;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
 use std::hash::Hash;
 use std::sync::Arc;
@@ -74,7 +74,7 @@ impl DriverPhase for Typed {}
 pub struct Typed {
     /// The final frontend artifact: a checked typed program and its semantic
     /// facts. The frontend performs no ownership analysis or code generation.
-    pub program: crate::compiling::typed_program::TypedProgram,
+    pub program: crate::core::program::CoreProgram,
     pub diagnostics: Vec<AnyDiagnostic>,
     pub procedural_macros: Option<crate::procedural_macros::ProceduralMacroArtifact>,
 }
@@ -118,7 +118,7 @@ pub struct DriverConfig {
     /// reachable source graph as one unit from these.
     pub libraries: Vec<(
         ModuleId,
-        std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
+        std::sync::Arc<crate::core::program::CoreProgram>,
     )>,
     /// Local imports resolving to these canonical source paths bind
     /// against the named precompiled module's exports instead of
@@ -985,29 +985,6 @@ fn has_error_diagnostics(diagnostics: &[AnyDiagnostic]) -> bool {
     })
 }
 
-fn error_diagnostic_files(diagnostics: &[AnyDiagnostic]) -> FxHashSet<FileID> {
-    let mut files = FxHashSet::default();
-    for diag in diagnostics {
-        let (id, severity) = match diag {
-            AnyDiagnostic::Parsing(diagnostic) => (diagnostic.id, &diagnostic.severity),
-            AnyDiagnostic::Macro(diagnostic) => (diagnostic.id, &diagnostic.severity),
-            AnyDiagnostic::NameResolution(diagnostic) => (diagnostic.id, &diagnostic.severity),
-            AnyDiagnostic::Types(diagnostic) => (diagnostic.id, &diagnostic.severity),
-        };
-        if *severity != Severity::Error {
-            continue;
-        }
-        // A synthesized-id diagnostic names no file: it blocks nothing
-        // rather than everything (typed-program building tolerates the odd
-        // hole — a missing node type bakes as `Ty::Error`).
-        if id.0 == FileID::SYNTHESIZED {
-            continue;
-        }
-        files.insert(id.0);
-    }
-    files
-}
-
 impl Driver<NameResolved> {
     pub fn has_errors(&self) -> bool {
         has_error_diagnostics(&self.phase.diagnostics)
@@ -1048,23 +1025,15 @@ impl Driver<NameResolved> {
             docs: _,
         } = self.phase;
 
-        let (types, elaboration, type_diagnostics) = crate::types::generate::check_types(
-            &asts,
+        crate::compiling::progress::report(crate::compiling::progress::Phase::BuildingCoreProgram);
+        let program = crate::core::program::check_program(
+            asts,
             &mut symbols,
-            &resolved_names,
+            resolved_names,
             &self.config.modules,
             self.config.module_id,
             &mut self.config.catalog.borrow_mut(),
-        );
-        diagnostics.extend(type_diagnostics);
-        let blocked_files = error_diagnostic_files(&diagnostics);
-        crate::compiling::progress::report(crate::compiling::progress::Phase::BuildingTypedProgram);
-        let program = crate::compiling::typed_program::TypedProgram::from_checked_asts(
-            asts,
-            resolved_names,
-            types,
-            elaboration,
-            &blocked_files,
+            &mut diagnostics,
             file_dependencies,
         );
 
@@ -1202,7 +1171,7 @@ impl Driver<Typed> {
             crate::compiling::mir::Entry<'_>,
         ) -> R,
     ) -> R {
-        let core = crate::compiling::core::typed_program();
+        let core = crate::compiling::core::core_program();
         // Builtin packages the program imported itself already ride in
         // `config.libraries` (parse discovery pushes them). Bodies can
         // be owed two other ways: a module registered without its
@@ -1220,7 +1189,7 @@ impl Driver<Typed> {
             .collect();
         let mut builtins: Vec<(
             ModuleId,
-            std::sync::Arc<crate::compiling::typed_program::TypedProgram>,
+            std::sync::Arc<crate::core::program::CoreProgram>,
         )> = Vec::new();
         let mut pending: Vec<ModuleId> = self
             .config
@@ -1859,7 +1828,7 @@ pub mod tests {
             mismatch(NodeID::SYNTHESIZED),
             mismatch(NodeID(FileID(1), 7)),
         ];
-        let blocked = error_diagnostic_files(&diagnostics);
+        let blocked = crate::core::program::error_diagnostic_files(&diagnostics);
         assert!(blocked.contains(&FileID(1)));
         assert!(
             !blocked.contains(&FileID(0)),

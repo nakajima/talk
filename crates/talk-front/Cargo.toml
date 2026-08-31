@@ -27,3 +27,6 @@ num-bigint = { version = "0.5.1", features = ["serde"] }
 talk = { path = "../..", features = ["test-access"] }
 prettydiff = "0.8.0"
 talk-vm = { path = "../talk-vm" }
+
+[features]
+test-access = []

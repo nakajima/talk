@@ -30,7 +30,7 @@ pub struct CompletionAnalysis<'a> {
     pub all_asts: Option<&'a [Option<AST<NameResolved>>]>,
     pub resolved_names: &'a ResolvedNames,
     pub types: &'a TypeOutput,
-    pub facts: &'a crate::typed_ast::facts::NodeFacts,
+    pub facts: &'a crate::core::facts::NodeFacts,
 }
 
 impl CompletionAnalysis<'_> {
@@ -971,7 +971,7 @@ mod tests {
         pub(crate) ast: AST<NameResolved>,
         pub(crate) resolved_names: ResolvedNames,
         pub(crate) types: TypeOutput,
-        pub(crate) facts: crate::typed_ast::facts::NodeFacts,
+        pub(crate) facts: crate::core::facts::NodeFacts,
     }
 
     pub(crate) fn analyze(code: &str) -> Analyzed {

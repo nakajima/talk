@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 // indexes stripped).
 // 3: ADR 0057 — TypeOutput sheds its NodeID tables (facts bake onto the
 // typed tree; blocked-file facts and graft aliases travel with
-// TypedProgram; Expr carries selected_callable).
+// CoreProgram; Expr carries selected_callable).
 pub const FORMAT_VERSION: u64 = 3;
 
 /// How many stamped versions of one stem to retain. Compiler builds

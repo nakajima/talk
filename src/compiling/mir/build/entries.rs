@@ -687,7 +687,7 @@ impl<'a> ProgramBuilder<'a> {
                         param
                             .ty
                             .as_ref()
-                            .is_some_and(|ty| matches!(ty, Ty::Borrow(Perm::Exclusive, _)))
+                            .is_some_and(|ty| matches!(ty.as_ty(), Ty::Borrow(Perm::Exclusive, _)))
                     }) {
                         return Err(BackendError::new(
                             format!("exported function `{name}` may not take `mut` parameters"),

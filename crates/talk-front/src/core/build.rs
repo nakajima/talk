@@ -5,11 +5,11 @@
 //! dropped surface forms (`Unary`/`Binary`/`For`/`Incomplete`) must not appear —
 //! they panic loudly if they somehow do.
 
+use crate::core;
 use crate::name_resolution::symbol::Symbol;
 use crate::node::Node;
 use crate::node_kinds::{decl, expr, pattern, stmt};
 use crate::parsing::ast::{AST, NameResolved};
-use crate::typed_ast;
 use crate::types::TypeOutput;
 
 /// Lower one name-resolved, type-checked source file to a `TypedFile`.
@@ -17,7 +17,7 @@ pub fn build_file(
     ast: &AST<NameResolved>,
     types: &TypeOutput,
     elaboration: &crate::types::output::Elaboration,
-) -> typed_ast::TypedFile {
+) -> core::TypedFile {
     // Elaborated-node ids continue below the checker's descending mint
     // (`synthetic_floors`), so neither range meets the parser's.
     let floor = elaboration
@@ -42,14 +42,14 @@ struct TypedTreeBuilder<'a> {
     /// Descending id mint for elaborated nodes (`elaborate_for`).
     synthetic_next: std::cell::Cell<u32>,
     /// (inner, wrapper) id pairs recorded at graft sites — see
-    /// [`typed_ast::TypedFile::grafted`].
+    /// [`core::TypedFile::grafted`].
     grafted: std::cell::RefCell<Vec<(crate::node_id::NodeID, crate::node_id::NodeID)>>,
 }
 
 /// The checked float value. The lexer only produces parseable float
 /// spellings, so this cannot fail on a checked tree.
-fn float_literal(text: &str) -> typed_ast::FloatValue {
-    typed_ast::FloatValue(
+fn float_literal(text: &str) -> core::FloatValue {
+    core::FloatValue(
         text.replace('_', "")
             .parse()
             .expect("lexed float literal parses as f64"),
@@ -79,17 +79,17 @@ fn is_frame_local(symbol: &Symbol) -> bool {
 /// unique per binder, so a symbol bound anywhere in the frame's subtree
 /// (including a hoisted func-valued `let` used before its declaration)
 /// is not free.
-fn frame_facts(block: &typed_ast::Block, params: &[typed_ast::Parameter]) -> typed_ast::FrameFacts {
+fn frame_facts(block: &core::Block, params: &[core::Parameter]) -> core::FrameFacts {
+    use core::{DeclKind, ExprKind, PatternKind};
     use derive_visitor::{Drive, Visitor};
-    use typed_ast::{DeclKind, ExprKind, PatternKind};
 
     #[derive(Visitor)]
     #[visitor(
-        typed_ast::Expr(enter, exit),
-        typed_ast::Decl(enter, exit),
-        typed_ast::Stmt(enter),
-        typed_ast::Pattern(enter),
-        typed_ast::Parameter(enter)
+        core::Expr(enter, exit),
+        core::Decl(enter, exit),
+        core::Stmt(enter),
+        core::Pattern(enter),
+        core::Parameter(enter)
     )]
     struct Scan {
         depth: usize,
@@ -99,7 +99,7 @@ fn frame_facts(block: &typed_ast::Block, params: &[typed_ast::Parameter]) -> typ
         nested: rustc_hash::FxHashSet<Symbol>,
     }
     impl Scan {
-        fn enter_expr(&mut self, expr: &typed_ast::Expr) {
+        fn enter_expr(&mut self, expr: &core::Expr) {
             match &expr.kind {
                 ExprKind::Func(_) => self.depth += 1,
                 ExprKind::Variable(crate::name::Name::Resolved(symbol, _)) => {
@@ -113,36 +113,36 @@ fn frame_facts(block: &typed_ast::Block, params: &[typed_ast::Parameter]) -> typ
                 _ => {}
             }
         }
-        fn exit_expr(&mut self, expr: &typed_ast::Expr) {
+        fn exit_expr(&mut self, expr: &core::Expr) {
             if matches!(expr.kind, ExprKind::Func(_)) {
                 self.depth -= 1;
             }
         }
-        fn enter_decl(&mut self, decl: &typed_ast::Decl) {
+        fn enter_decl(&mut self, decl: &core::Decl) {
             // A named local function is a nested frame like a func
             // expression (its recursion reference counts as nested).
             if matches!(decl.kind, DeclKind::Func(_)) {
                 self.depth += 1;
             }
         }
-        fn exit_decl(&mut self, decl: &typed_ast::Decl) {
+        fn exit_decl(&mut self, decl: &core::Decl) {
             if matches!(decl.kind, DeclKind::Func(_)) {
                 self.depth -= 1;
             }
         }
-        fn enter_stmt(&mut self, stmt: &typed_ast::Stmt) {
-            if let typed_ast::StmtKind::Assignment(lhs, _) = &stmt.kind
+        fn enter_stmt(&mut self, stmt: &core::Stmt) {
+            if let core::StmtKind::Assignment(lhs, _) = &stmt.kind
                 && let ExprKind::Variable(crate::name::Name::Resolved(symbol, _)) = &lhs.kind
             {
                 self.assigned.insert(*symbol);
             }
         }
-        fn enter_pattern(&mut self, pattern: &typed_ast::Pattern) {
+        fn enter_pattern(&mut self, pattern: &core::Pattern) {
             if let PatternKind::Bind(crate::name::Name::Resolved(symbol, _)) = &pattern.kind {
                 self.bound.insert(*symbol);
             }
         }
-        fn enter_parameter(&mut self, param: &typed_ast::Parameter) {
+        fn enter_parameter(&mut self, param: &core::Parameter) {
             if let crate::name::Name::Resolved(symbol, _) = &param.name {
                 self.bound.insert(*symbol);
             }
@@ -163,7 +163,7 @@ fn frame_facts(block: &typed_ast::Block, params: &[typed_ast::Parameter]) -> typ
     }
     block.drive(&mut scan);
 
-    typed_ast::FrameFacts {
+    core::FrameFacts {
         captured: scan
             .used
             .into_iter()
@@ -186,30 +186,30 @@ impl TypedTreeBuilder<'_> {
         }
     }
 
-    fn file(&self, ast: &AST<NameResolved>) -> typed_ast::TypedFile {
+    fn file(&self, ast: &AST<NameResolved>) -> core::TypedFile {
         let roots = self.roots(&ast.roots);
-        typed_ast::TypedFile {
+        core::TypedFile {
             file_id: ast.file_id,
             roots,
             grafted: self.grafted.take(),
         }
     }
 
-    fn roots(&self, roots: &[Node]) -> Vec<typed_ast::Node> {
-        let mut built: Vec<typed_ast::Node> = roots.iter().map(|n| self.node(n)).collect();
+    fn roots(&self, roots: &[Node]) -> Vec<core::Node> {
+        let mut built: Vec<core::Node> = roots.iter().map(|n| self.node(n)).collect();
         // A top-level `func name` declaration desugars to `let name =
         // <func>`; stamp the binding as the callable's identity
         // (ADR 0038) so lowering reads the fact instead of
         // re-recognizing the declaration shape.
         for node in &mut built {
-            if let typed_ast::Node::Decl(decl) = node
-                && let typed_ast::DeclKind::Let {
+            if let core::Node::Decl(decl) = node
+                && let core::DeclKind::Let {
                     lhs,
                     rhs: Some(rhs),
                     ..
                 } = &mut decl.kind
-                && let typed_ast::PatternKind::Bind(name) = &lhs.kind
-                && let typed_ast::ExprKind::Func(func) = &mut rhs.kind
+                && let core::PatternKind::Bind(name) = &lhs.kind
+                && let core::ExprKind::Func(func) = &mut rhs.kind
             {
                 func.bound_as = name.symbol().ok();
             }
@@ -217,18 +217,18 @@ impl TypedTreeBuilder<'_> {
         built
     }
 
-    fn node(&self, node: &Node) -> typed_ast::Node {
+    fn node(&self, node: &Node) -> core::Node {
         match node {
-            Node::Decl(d) => typed_ast::Node::Decl(self.decl(d)),
-            Node::Stmt(s) => typed_ast::Node::Stmt(self.stmt(s)),
-            Node::Expr(e) => typed_ast::Node::Expr(self.expr(e)),
+            Node::Decl(d) => core::Node::Decl(self.decl(d)),
+            Node::Stmt(s) => core::Node::Stmt(self.stmt(s)),
+            Node::Expr(e) => core::Node::Expr(self.expr(e)),
             other => unreachable!("unexpected node in typed-program lowering position: {other:?}"),
         }
     }
 
     // ----- Expressions -----------------------------------------------------
 
-    fn expr(&self, e: &expr::Expr) -> typed_ast::Expr {
+    fn expr(&self, e: &expr::Expr) -> core::Expr {
         let built = self.expr_unconverted(e);
         self.apply_into_coercion(e.id, built)
     }
@@ -238,30 +238,26 @@ impl TypedTreeBuilder<'_> {
     /// of a different monotype and typing committed the one declared
     /// row. The wrapper is an ordinary member call at fresh elaborated
     /// ids — MIR dispatches it exactly like a source-written `.into()`.
-    fn apply_into_coercion(
-        &self,
-        id: crate::node_id::NodeID,
-        built: typed_ast::Expr,
-    ) -> typed_ast::Expr {
+    fn apply_into_coercion(&self, id: crate::node_id::NodeID, built: core::Expr) -> core::Expr {
         let Some(coercion) = self.elaboration.into_coercions.get(&id) else {
             return built;
         };
         let span = built.span;
         let file = id.0;
         let target = coercion.target.erase_eff_args();
-        let callee = typed_ast::Expr {
+        let callee = core::Expr {
             id: self.syn_id(file),
-            kind: typed_ast::ExprKind::Member(
+            kind: core::ExprKind::Member(
                 Some(Box::new(built)),
                 crate::label::Label::Named("into".into()),
             ),
             span,
             ownership: Default::default(),
-            ty: crate::types::ty::Ty::Func(
+            ty: core::ValueTy::from_finalized(crate::types::ty::Ty::Func(
                 vec![],
                 Box::new(target.clone()),
                 crate::types::ty::EffectRow::pure(),
-            ),
+            )),
             member_resolution: Some(coercion.resolution.clone()),
             specialization: None,
             witness_layout: None,
@@ -269,16 +265,16 @@ impl TypedTreeBuilder<'_> {
             existential_pack: None,
             selected_callable: None,
         };
-        typed_ast::Expr {
+        core::Expr {
             id: self.syn_id(file),
-            kind: typed_ast::ExprKind::Call {
+            kind: core::ExprKind::Call {
                 callee: Box::new(callee),
                 type_args: vec![],
                 args: vec![],
             },
             span,
             ownership: Default::default(),
-            ty: target,
+            ty: core::ValueTy::from_finalized(target),
             member_resolution: None,
             specialization: None,
             witness_layout: None,
@@ -288,7 +284,7 @@ impl TypedTreeBuilder<'_> {
         }
     }
 
-    fn expr_unconverted(&self, e: &expr::Expr) -> typed_ast::Expr {
+    fn expr_unconverted(&self, e: &expr::Expr) -> core::Expr {
         // Coercion erasure: `inner as T` did its work in the checker; the
         // value is the inner expression. Likewise a parenthesized
         // expression, which parses as a 1-tuple. The outer node's
@@ -321,7 +317,7 @@ impl TypedTreeBuilder<'_> {
                 {
                     let mut built = self.expr_with_kind(
                         e,
-                        typed_ast::ExprKind::Con {
+                        core::ExprKind::Con {
                             enum_symbol,
                             tag,
                             variant_symbol,
@@ -356,7 +352,7 @@ impl TypedTreeBuilder<'_> {
                 {
                     return self.expr_with_kind(
                         e,
-                        typed_ast::ExprKind::Con {
+                        core::ExprKind::Con {
                             enum_symbol,
                             tag,
                             variant_symbol,
@@ -392,17 +388,17 @@ impl TypedTreeBuilder<'_> {
         None
     }
 
-    fn plain_expr(&self, e: &expr::Expr) -> typed_ast::Expr {
+    fn plain_expr(&self, e: &expr::Expr) -> core::Expr {
         self.expr_with_kind(e, self.expr_kind(e))
     }
 
-    fn expr_with_kind(&self, e: &expr::Expr, kind: typed_ast::ExprKind) -> typed_ast::Expr {
-        let explicit_clone = matches!(kind, typed_ast::ExprKind::Clone(_));
-        typed_ast::Expr {
+    fn expr_with_kind(&self, e: &expr::Expr, kind: core::ExprKind) -> core::Expr {
+        let explicit_clone = matches!(kind, core::ExprKind::Clone(_));
+        core::Expr {
             id: e.id,
             kind,
             span: e.span,
-            ownership: typed_ast::ExprOwnership {
+            ownership: core::ExprOwnership {
                 auto_clone: explicit_clone || self.elaboration.coerce_clones.contains(&e.id),
             },
             // The type checker assigns every expression a type; a hole can
@@ -410,13 +406,14 @@ impl TypedTreeBuilder<'_> {
             // blocks the file, but an unattributed solver error blocks
             // nothing), so it bakes as the poison type rather than a panic.
             // `erase_eff_args`: effect args on nominal heads are
-            // type-checker internals and are not part of TypedProgram.
-            ty: self
-                .elaboration
-                .node_types
-                .get(&e.id)
-                .map(|ty| ty.erase_eff_args())
-                .unwrap_or(crate::types::ty::Ty::Error),
+            // type-checker internals and are not part of CoreProgram.
+            ty: core::ValueTy::from_finalized(
+                self.elaboration
+                    .node_types
+                    .get(&e.id)
+                    .map(|ty| ty.erase_eff_args())
+                    .unwrap_or(crate::types::ty::Ty::Error),
+            ),
             member_resolution: self.elaboration.member_resolutions.get(&e.id).cloned(),
             specialization: self.elaboration.field_specializations.get(&e.id).cloned(),
             witness_layout: self.elaboration.witness_layouts.get(&e.id).cloned(),
@@ -426,7 +423,7 @@ impl TypedTreeBuilder<'_> {
         }
     }
 
-    fn boxed(&self, e: &expr::Expr) -> Box<typed_ast::Expr> {
+    fn boxed(&self, e: &expr::Expr) -> Box<core::Expr> {
         Box::new(self.expr(e))
     }
 
@@ -439,14 +436,14 @@ impl TypedTreeBuilder<'_> {
 
     /// Build `inner` in place of the erased wrapper `e`, overlaying the
     /// wrapper's annotations (they describe the same value).
-    fn graft(&self, e: &expr::Expr, inner: &expr::Expr) -> typed_ast::Expr {
+    fn graft(&self, e: &expr::Expr, inner: &expr::Expr) -> core::Expr {
         let mut built = self.expr(inner);
         self.grafted.borrow_mut().push((built.id, e.id));
         built.id = e.id;
         built.span = e.span;
         built.ownership.auto_clone |= self.elaboration.coerce_clones.contains(&e.id);
         if let Some(ty) = self.elaboration.node_types.get(&e.id) {
-            built.ty = ty.erase_eff_args();
+            built.ty.replace(ty.erase_eff_args());
         }
         if let Some(pack) = self.elaboration.existential_packs.get(&e.id) {
             built.existential_pack = Some(pack.clone());
@@ -454,7 +451,7 @@ impl TypedTreeBuilder<'_> {
         built
     }
 
-    fn expr_kind(&self, e: &expr::Expr) -> typed_ast::ExprKind {
+    fn expr_kind(&self, e: &expr::Expr) -> core::ExprKind {
         match &e.kind {
             expr::ExprKind::Unreachable => {
                 unreachable!("unreachable expressions are desugared to the panic effect")
@@ -471,7 +468,7 @@ impl TypedTreeBuilder<'_> {
                     .get(&e.id)
                     .expect("typed facts invariant: inline IR carries its checked operation")
                     .clone();
-                typed_ast::ExprKind::InlineIR(typed_ast::InlineIRInstruction {
+                core::ExprKind::InlineIR(core::InlineIRInstruction {
                     id: ir.id,
                     span: ir.span,
                     binds: ir.binds.iter().map(|b| self.expr(b)).collect(),
@@ -486,7 +483,7 @@ impl TypedTreeBuilder<'_> {
                 type_args,
                 args,
                 ..
-            } => typed_ast::ExprKind::CallEffect {
+            } => core::ExprKind::CallEffect {
                 effect_name: effect_name.clone(),
                 type_args: type_args.clone(),
                 args: args.iter().map(|a| self.call_arg(a)).collect(),
@@ -498,29 +495,27 @@ impl TypedTreeBuilder<'_> {
                     .clone(),
             },
             expr::ExprKind::LiteralArray(items) => {
-                typed_ast::ExprKind::LiteralArray(items.iter().map(|i| self.expr(i)).collect())
+                core::ExprKind::LiteralArray(items.iter().map(|i| self.expr(i)).collect())
             }
             expr::ExprKind::LiteralInt(_) => {
-                typed_ast::ExprKind::Lit(typed_ast::Literal::Int(self.int_literal(e.id)))
+                core::ExprKind::Lit(core::Literal::Int(self.int_literal(e.id)))
             }
             expr::ExprKind::LiteralFloat(s) => {
-                typed_ast::ExprKind::Lit(typed_ast::Literal::Float(float_literal(s)))
+                core::ExprKind::Lit(core::Literal::Float(float_literal(s)))
             }
-            expr::ExprKind::LiteralTrue => typed_ast::ExprKind::Lit(typed_ast::Literal::Bool(true)),
-            expr::ExprKind::LiteralFalse => {
-                typed_ast::ExprKind::Lit(typed_ast::Literal::Bool(false))
-            }
+            expr::ExprKind::LiteralTrue => core::ExprKind::Lit(core::Literal::Bool(true)),
+            expr::ExprKind::LiteralFalse => core::ExprKind::Lit(core::Literal::Bool(false)),
             expr::ExprKind::LiteralString(s) => {
-                typed_ast::ExprKind::Lit(typed_ast::Literal::String(unescape(s)))
+                core::ExprKind::Lit(core::Literal::String(unescape(s)))
             }
             expr::ExprKind::LiteralCharacter(s) => {
-                typed_ast::ExprKind::Lit(typed_ast::Literal::Character(unescape(s)))
+                core::ExprKind::Lit(core::Literal::Character(unescape(s)))
             }
             expr::ExprKind::Tuple(items) => {
-                typed_ast::ExprKind::Tuple(items.iter().map(|i| self.expr(i)).collect())
+                core::ExprKind::Tuple(items.iter().map(|i| self.expr(i)).collect())
             }
-            expr::ExprKind::Block(block) => typed_ast::ExprKind::Block(self.block(block)),
-            expr::ExprKind::Unsafe(block) => typed_ast::ExprKind::Unsafe(self.block(block)),
+            expr::ExprKind::Block(block) => core::ExprKind::Block(self.block(block)),
+            expr::ExprKind::Unsafe(block) => core::ExprKind::Unsafe(self.block(block)),
             expr::ExprKind::Call {
                 callee,
                 type_args,
@@ -539,9 +534,9 @@ impl TypedTreeBuilder<'_> {
                     && trailing_block.is_none()
                     && let expr::ExprKind::Member(Some(receiver), _, _) = &callee.kind
                 {
-                    typed_ast::ExprKind::Clone(self.boxed(receiver))
+                    core::ExprKind::Clone(self.boxed(receiver))
                 } else {
-                    typed_ast::ExprKind::Call {
+                    core::ExprKind::Call {
                         callee: self.boxed(callee),
                         type_args: type_args.clone(),
                         args: args.iter().map(|a| self.call_arg(a)).collect(),
@@ -558,18 +553,18 @@ impl TypedTreeBuilder<'_> {
                         self.elaboration.member_resolutions.get(&e.id),
                     )
                 {
-                    typed_ast::ExprKind::Proj(self.boxed(receiver), label.clone(), field)
+                    core::ExprKind::Proj(self.boxed(receiver), label.clone(), field)
                 } else {
-                    typed_ast::ExprKind::Member(recv.as_ref().map(|r| self.boxed(r)), label.clone())
+                    core::ExprKind::Member(recv.as_ref().map(|r| self.boxed(r)), label.clone())
                 }
             }
-            expr::ExprKind::Func(func) => typed_ast::ExprKind::Func(Box::new(self.func(func))),
-            expr::ExprKind::Variable(name) => typed_ast::ExprKind::Variable(name.clone()),
-            expr::ExprKind::Constructor(name, ..) => typed_ast::ExprKind::Constructor(name.clone()),
+            expr::ExprKind::Func(func) => core::ExprKind::Func(Box::new(self.func(func))),
+            expr::ExprKind::Variable(name) => core::ExprKind::Variable(name.clone()),
+            expr::ExprKind::Constructor(name, ..) => core::ExprKind::Constructor(name.clone()),
             expr::ExprKind::If(..) => {
                 unreachable!("if expressions are desugared to match before typed-program build")
             }
-            expr::ExprKind::Match(scrut, arms) => typed_ast::ExprKind::Match(
+            expr::ExprKind::Match(scrut, arms) => core::ExprKind::Match(
                 self.boxed(scrut),
                 arms.iter().map(|a| self.match_arm(a)).collect(),
             ),
@@ -590,9 +585,9 @@ impl TypedTreeBuilder<'_> {
                         .zip(fields.iter())
                         .all(|((label, _), f)| f.label.name_str() == label.to_string())
                 {
-                    typed_ast::ExprKind::Tuple(fields.iter().map(|f| self.expr(&f.value)).collect())
+                    core::ExprKind::Tuple(fields.iter().map(|f| self.expr(&f.value)).collect())
                 } else {
-                    typed_ast::ExprKind::RecordLiteral {
+                    core::ExprKind::RecordLiteral {
                         fields: fields.iter().map(|f| self.record_field(f)).collect(),
                         spread: spread.as_ref().map(|s| self.boxed(s)),
                     }
@@ -619,8 +614,8 @@ impl TypedTreeBuilder<'_> {
         }
     }
 
-    fn call_arg(&self, a: &crate::node_kinds::call_arg::CallArg) -> typed_ast::CallArg {
-        typed_ast::CallArg {
+    fn call_arg(&self, a: &crate::node_kinds::call_arg::CallArg) -> core::CallArg {
+        core::CallArg {
             id: a.id,
             label: a.label.clone(),
             value: self.expr(&a.value),
@@ -628,19 +623,16 @@ impl TypedTreeBuilder<'_> {
         }
     }
 
-    fn record_field(
-        &self,
-        f: &crate::node_kinds::record_field::RecordField,
-    ) -> typed_ast::RecordField {
-        typed_ast::RecordField {
+    fn record_field(&self, f: &crate::node_kinds::record_field::RecordField) -> core::RecordField {
+        core::RecordField {
             id: f.id,
             label: f.label.clone(),
             value: self.expr(&f.value),
         }
     }
 
-    fn match_arm(&self, arm: &crate::node_kinds::match_arm::MatchArm) -> typed_ast::MatchArm {
-        typed_ast::MatchArm {
+    fn match_arm(&self, arm: &crate::node_kinds::match_arm::MatchArm) -> core::MatchArm {
+        core::MatchArm {
             id: arm.id,
             pattern: self.pattern(&arm.pattern),
             body: self.block(&arm.body),
@@ -649,7 +641,7 @@ impl TypedTreeBuilder<'_> {
 
     // ----- Patterns --------------------------------------------------------
 
-    fn pattern(&self, p: &pattern::Pattern) -> typed_ast::Pattern {
+    fn pattern(&self, p: &pattern::Pattern) -> core::Pattern {
         // The occurrence type: recorded per pattern node during checking;
         // plain `let` binders skip `check_pattern` (they bind through the
         // monomorphic environment or a top-level scheme), so a bare Bind
@@ -669,38 +661,36 @@ impl TypedTreeBuilder<'_> {
                     .cloned()
                     .or_else(|| self.types.schemes.get(&symbol).map(|s| s.ty.clone()))
             });
-        typed_ast::Pattern {
+        core::Pattern {
             id: p.id,
             kind: self.pattern_kind(p),
             span: p.span,
-            ty,
+            ty: ty.map(core::ValueTy::from_finalized),
         }
     }
 
-    fn pattern_kind(&self, p: &pattern::Pattern) -> typed_ast::PatternKind {
+    fn pattern_kind(&self, p: &pattern::Pattern) -> core::PatternKind {
         match &p.kind {
             pattern::PatternKind::LiteralInt(_) => {
-                typed_ast::PatternKind::LiteralInt(self.int_literal(p.id))
+                core::PatternKind::LiteralInt(self.int_literal(p.id))
             }
             pattern::PatternKind::LiteralFloat(s) => {
-                typed_ast::PatternKind::LiteralFloat(float_literal(s))
+                core::PatternKind::LiteralFloat(float_literal(s))
             }
             pattern::PatternKind::LiteralCharacter(s) => {
-                typed_ast::PatternKind::LiteralCharacter(unescape(s))
+                core::PatternKind::LiteralCharacter(unescape(s))
             }
-            pattern::PatternKind::LiteralString(s) => {
-                typed_ast::PatternKind::LiteralString(unescape(s))
-            }
-            pattern::PatternKind::LiteralTrue => typed_ast::PatternKind::LiteralTrue,
-            pattern::PatternKind::LiteralFalse => typed_ast::PatternKind::LiteralFalse,
-            pattern::PatternKind::Bind(name) => typed_ast::PatternKind::Bind(name.clone()),
+            pattern::PatternKind::LiteralString(s) => core::PatternKind::LiteralString(unescape(s)),
+            pattern::PatternKind::LiteralTrue => core::PatternKind::LiteralTrue,
+            pattern::PatternKind::LiteralFalse => core::PatternKind::LiteralFalse,
+            pattern::PatternKind::Bind(name) => core::PatternKind::Bind(name.clone()),
             pattern::PatternKind::Tuple(ps) => {
-                typed_ast::PatternKind::Tuple(ps.iter().map(|p| self.pattern(p)).collect())
+                core::PatternKind::Tuple(ps.iter().map(|p| self.pattern(p)).collect())
             }
             pattern::PatternKind::Or(ps) => {
-                typed_ast::PatternKind::Or(ps.iter().map(|p| self.pattern(p)).collect())
+                core::PatternKind::Or(ps.iter().map(|p| self.pattern(p)).collect())
             }
-            pattern::PatternKind::Wildcard => typed_ast::PatternKind::Wildcard,
+            pattern::PatternKind::Wildcard => core::PatternKind::Wildcard,
             pattern::PatternKind::MacroCall { .. } => {
                 unreachable!("macro invocations are expanded before typed-program build")
             }
@@ -709,7 +699,7 @@ impl TypedTreeBuilder<'_> {
                 variant_name,
                 fields,
                 ..
-            } => typed_ast::PatternKind::Variant {
+            } => core::PatternKind::Variant {
                 enum_name: enum_name.clone(),
                 variant_name: variant_name.clone(),
                 resolved: match self.elaboration.member_resolutions.get(&p.id) {
@@ -719,7 +709,7 @@ impl TypedTreeBuilder<'_> {
                 fields: fields.iter().map(|p| self.pattern(p)).collect(),
             },
             pattern::PatternKind::Record { fields } => {
-                let built: Vec<typed_ast::RecordFieldPattern> = fields
+                let built: Vec<core::RecordFieldPattern> = fields
                     .iter()
                     .map(|f| self.record_field_pattern(f))
                     .collect();
@@ -735,11 +725,11 @@ impl TypedTreeBuilder<'_> {
                             .map(|(ty, sub)| {
                                 let index = sub
                                     .and_then(|id| built.iter().position(|field| field.id == id));
-                                (ty.clone(), index)
+                                (core::ValueTy::from_finalized(ty.clone()), index)
                             })
                             .collect()
                     });
-                typed_ast::PatternKind::Record {
+                core::PatternKind::Record {
                     fields: built,
                     slots,
                 }
@@ -752,7 +742,7 @@ impl TypedTreeBuilder<'_> {
                 // Explicit head args are consumed by the checker.
                 struct_generics: _,
             } => {
-                let built: Vec<typed_ast::Pattern> = fields
+                let built: Vec<core::Pattern> = fields
                     .iter()
                     .map(|n| match n {
                         Node::Pattern(p) => self.pattern(p),
@@ -771,12 +761,12 @@ impl TypedTreeBuilder<'_> {
                             .map(|(ty, sub)| {
                                 let index = sub
                                     .and_then(|id| built.iter().position(|field| field.id == id));
-                                (ty.clone(), index)
+                                (core::ValueTy::from_finalized(ty.clone()), index)
                             })
                             .collect()
                     })
                     .unwrap_or_default();
-                typed_ast::PatternKind::Struct {
+                core::PatternKind::Struct {
                     struct_name: struct_name.clone(),
                     fields: built,
                     field_names: field_names.clone(),
@@ -787,33 +777,35 @@ impl TypedTreeBuilder<'_> {
         }
     }
 
-    fn record_field_pattern(
-        &self,
-        f: &pattern::RecordFieldPattern,
-    ) -> typed_ast::RecordFieldPattern {
+    fn record_field_pattern(&self, f: &pattern::RecordFieldPattern) -> core::RecordFieldPattern {
         let kind = match &f.kind {
             pattern::RecordFieldPatternKind::Bind(name) => {
-                typed_ast::RecordFieldPatternKind::Bind(name.clone())
+                core::RecordFieldPatternKind::Bind(name.clone())
             }
             pattern::RecordFieldPatternKind::Equals { name, value, .. } => {
-                typed_ast::RecordFieldPatternKind::Equals {
+                core::RecordFieldPatternKind::Equals {
                     name: name.clone(),
                     value: self.pattern(value),
                 }
             }
-            pattern::RecordFieldPatternKind::Rest => typed_ast::RecordFieldPatternKind::Rest,
+            pattern::RecordFieldPatternKind::Rest => core::RecordFieldPatternKind::Rest,
         };
-        typed_ast::RecordFieldPattern {
+        core::RecordFieldPattern {
             id: f.id,
             kind,
-            ty: self.elaboration.pattern_tys.get(&f.id).cloned(),
+            ty: self
+                .elaboration
+                .pattern_tys
+                .get(&f.id)
+                .cloned()
+                .map(core::ValueTy::from_finalized),
         }
     }
 
     // ----- Blocks and statements -------------------------------------------
 
-    fn block(&self, b: &crate::node_kinds::block::Block) -> typed_ast::Block {
-        typed_ast::Block {
+    fn block(&self, b: &crate::node_kinds::block::Block) -> core::Block {
+        core::Block {
             id: b.id,
             args: self.params(&b.args),
             body: self.roots(&b.body),
@@ -829,50 +821,42 @@ impl TypedTreeBuilder<'_> {
     fn frame_block(
         &self,
         b: &crate::node_kinds::block::Block,
-        params: &[typed_ast::Parameter],
-    ) -> typed_ast::Block {
+        params: &[core::Parameter],
+    ) -> core::Block {
         let mut block = self.block(b);
         block.frame = Some(frame_facts(&block, params));
         block
     }
 
-    fn stmt(&self, s: &stmt::Stmt) -> typed_ast::Stmt {
-        typed_ast::Stmt {
+    fn stmt(&self, s: &stmt::Stmt) -> core::Stmt {
+        core::Stmt {
             id: s.id,
             kind: self.stmt_kind(s.id, &s.kind),
             span: s.span,
         }
     }
 
-    fn stmt_kind(
-        &self,
-        stmt_id: crate::node_id::NodeID,
-        k: &stmt::StmtKind,
-    ) -> typed_ast::StmtKind {
+    fn stmt_kind(&self, stmt_id: crate::node_id::NodeID, k: &stmt::StmtKind) -> core::StmtKind {
         match k {
-            stmt::StmtKind::Expr(e) => typed_ast::StmtKind::Expr(self.expr(e)),
-            stmt::StmtKind::If(cond, then, els) => typed_ast::StmtKind::If(
+            stmt::StmtKind::Expr(e) => core::StmtKind::Expr(self.expr(e)),
+            stmt::StmtKind::If(cond, then, els) => core::StmtKind::If(
                 self.expr(cond),
                 self.block(then),
                 els.as_ref().map(|b| self.block(b)),
             ),
-            stmt::StmtKind::Return(e) => {
-                typed_ast::StmtKind::Return(e.as_ref().map(|e| self.expr(e)))
-            }
-            stmt::StmtKind::Break => typed_ast::StmtKind::Break,
+            stmt::StmtKind::Return(e) => core::StmtKind::Return(e.as_ref().map(|e| self.expr(e))),
+            stmt::StmtKind::Break => core::StmtKind::Break,
             stmt::StmtKind::Assignment(lhs, rhs) => {
-                typed_ast::StmtKind::Assignment(self.boxed(lhs), self.boxed(rhs))
+                core::StmtKind::Assignment(self.boxed(lhs), self.boxed(rhs))
             }
             stmt::StmtKind::Loop(cond, body) => {
-                typed_ast::StmtKind::Loop(cond.as_ref().map(|e| self.expr(e)), self.block(body))
+                core::StmtKind::Loop(cond.as_ref().map(|e| self.expr(e)), self.block(body))
             }
-            stmt::StmtKind::Continue => typed_ast::StmtKind::Continue,
-            stmt::StmtKind::Resume(e) => {
-                typed_ast::StmtKind::Resume(e.as_ref().map(|e| self.expr(e)))
-            }
+            stmt::StmtKind::Continue => core::StmtKind::Continue,
+            stmt::StmtKind::Resume(e) => core::StmtKind::Resume(e.as_ref().map(|e| self.expr(e))),
             stmt::StmtKind::Handling {
                 effect_name, body, ..
-            } => typed_ast::StmtKind::Handling {
+            } => core::StmtKind::Handling {
                 effect_name: effect_name.clone(),
                 // A clause is a frame; its parameters are the block's args.
                 body: self.frame_block(body, &[]),
@@ -888,7 +872,7 @@ impl TypedTreeBuilder<'_> {
     }
 
     /// Elaborate a first-class `for` into ordinary typed nodes once, so the
-    /// final TypedProgram contains its semantic form:
+    /// final CoreProgram contains its semantic form:
     ///
     /// ```text
     /// {                                       // scope: hidden locals die here
@@ -908,11 +892,7 @@ impl TypedTreeBuilder<'_> {
     /// instantiations bake on exactly like source-written calls. A `for`
     /// with no plan was rejected by typing, so only its source expression
     /// survives in the typed tree.
-    fn elaborate_for(
-        &self,
-        stmt_id: crate::node_id::NodeID,
-        k: &stmt::StmtKind,
-    ) -> typed_ast::StmtKind {
+    fn elaborate_for(&self, stmt_id: crate::node_id::NodeID, k: &stmt::StmtKind) -> core::StmtKind {
         use crate::node_kinds::call_arg::ArgMode;
         let stmt::StmtKind::For {
             iterable,
@@ -927,7 +907,7 @@ impl TypedTreeBuilder<'_> {
             unreachable!("elaborate_for on a non-for statement");
         };
         let Some(plan) = self.elaboration.for_plans.get(&stmt_id) else {
-            return typed_ast::StmtKind::Expr(self.expr(iterable));
+            return core::StmtKind::Expr(self.expr(iterable));
         };
         let span = iterable.span;
         let file = stmt_id.0;
@@ -941,7 +921,7 @@ impl TypedTreeBuilder<'_> {
             "iter"
         };
         let source = self.expr(iterable);
-        let mut nodes: Vec<typed_ast::Node> = vec![];
+        let mut nodes: Vec<core::Node> = vec![];
 
         // A named source is borrowed as written; an rvalue source — or a
         // `consume`-marked one — binds to the hidden source local so its
@@ -949,10 +929,10 @@ impl TypedTreeBuilder<'_> {
         // iteration borrows its source in place for the hidden iterator's
         // scope.
         let needs_bind =
-            consume || (!mutate && !matches!(source.kind, typed_ast::ExprKind::Variable(_)));
+            consume || (!mutate && !matches!(source.kind, core::ExprKind::Variable(_)));
         let iter_receiver = if needs_bind {
-            let source_ty = source.ty.clone();
-            nodes.push(typed_ast::Node::Decl(self.syn_let(
+            let source_ty = source.ty.as_ty().clone();
+            nodes.push(core::Node::Decl(self.syn_let(
                 file,
                 span,
                 hidden_source.clone(),
@@ -973,7 +953,7 @@ impl TypedTreeBuilder<'_> {
             iter_label,
             vec![],
         );
-        nodes.push(typed_ast::Node::Decl(self.syn_let(
+        nodes.push(core::Node::Decl(self.syn_let(
             file,
             span,
             hidden_iter.clone(),
@@ -1020,26 +1000,26 @@ impl TypedTreeBuilder<'_> {
                 span,
                 wb_receiver,
                 "_store_current",
-                vec![typed_ast::CallArg {
+                vec![core::CallArg {
                     id: plan.mut_store_arg_id,
                     label: crate::label::Label::Positional(0),
                     value: binder_read,
                     mode: None,
                 }],
             );
-            arm_body.body.push(typed_ast::Node::Stmt(typed_ast::Stmt {
+            arm_body.body.push(core::Node::Stmt(core::Stmt {
                 id: self.syn_id(file),
                 span,
-                kind: typed_ast::StmtKind::Expr(store_call),
+                kind: core::StmtKind::Expr(store_call),
             }));
         }
-        let some_arm = typed_ast::MatchArm {
+        let some_arm = core::MatchArm {
             id: self.syn_id(file),
-            pattern: typed_ast::Pattern {
+            pattern: core::Pattern {
                 id: self.syn_id(file),
                 span: pattern.span,
                 ty: None,
-                kind: typed_ast::PatternKind::Variant {
+                kind: core::PatternKind::Variant {
                     enum_name: None,
                     variant_name: "some".to_string(),
                     resolved: None,
@@ -1048,37 +1028,37 @@ impl TypedTreeBuilder<'_> {
             },
             body: arm_body,
         };
-        let none_arm = typed_ast::MatchArm {
+        let none_arm = core::MatchArm {
             id: self.syn_id(file),
-            pattern: typed_ast::Pattern {
+            pattern: core::Pattern {
                 id: self.syn_id(file),
                 span,
                 ty: None,
-                kind: typed_ast::PatternKind::Variant {
+                kind: core::PatternKind::Variant {
                     enum_name: None,
                     variant_name: "none".to_string(),
                     resolved: None,
                     fields: vec![],
                 },
             },
-            body: typed_ast::Block {
+            body: core::Block {
                 id: self.syn_id(file),
                 args: vec![],
                 span,
-                body: vec![typed_ast::Node::Stmt(typed_ast::Stmt {
+                body: vec![core::Node::Stmt(core::Stmt {
                     id: self.syn_id(file),
                     span,
-                    kind: typed_ast::StmtKind::Break,
+                    kind: core::StmtKind::Break,
                 })],
                 frame: None,
             },
         };
-        let match_expr = typed_ast::Expr {
+        let match_expr = core::Expr {
             id: self.syn_id(file),
-            kind: typed_ast::ExprKind::Match(Box::new(next_call), vec![some_arm, none_arm]),
+            kind: core::ExprKind::Match(Box::new(next_call), vec![some_arm, none_arm]),
             span,
             ownership: Default::default(),
-            ty: plan.body_ty.erase_eff_args(),
+            ty: core::ValueTy::from_finalized(plan.body_ty.erase_eff_args()),
             member_resolution: None,
             specialization: None,
             witness_layout: None,
@@ -1086,28 +1066,28 @@ impl TypedTreeBuilder<'_> {
             existential_pack: None,
             selected_callable: None,
         };
-        nodes.push(typed_ast::Node::Stmt(typed_ast::Stmt {
+        nodes.push(core::Node::Stmt(core::Stmt {
             id: self.syn_id(file),
             span,
-            kind: typed_ast::StmtKind::Loop(
+            kind: core::StmtKind::Loop(
                 None,
-                typed_ast::Block {
+                core::Block {
                     id: self.syn_id(file),
                     args: vec![],
                     span,
-                    body: vec![typed_ast::Node::Stmt(typed_ast::Stmt {
+                    body: vec![core::Node::Stmt(core::Stmt {
                         id: self.syn_id(file),
                         span,
-                        kind: typed_ast::StmtKind::Expr(match_expr),
+                        kind: core::StmtKind::Expr(match_expr),
                     })],
                     frame: None,
                 },
             ),
         }));
 
-        typed_ast::StmtKind::Expr(typed_ast::Expr {
+        core::StmtKind::Expr(core::Expr {
             id: self.syn_id(file),
-            kind: typed_ast::ExprKind::Block(typed_ast::Block {
+            kind: core::ExprKind::Block(core::Block {
                 id: self.syn_id(file),
                 args: vec![],
                 span,
@@ -1116,7 +1096,7 @@ impl TypedTreeBuilder<'_> {
             }),
             span,
             ownership: Default::default(),
-            ty: crate::types::ty::Ty::unit(),
+            ty: core::ValueTy::from_finalized(crate::types::ty::Ty::unit()),
             member_resolution: None,
             specialization: None,
             witness_layout: None,
@@ -1140,13 +1120,13 @@ impl TypedTreeBuilder<'_> {
         span: crate::span::Span,
         name: crate::name::Name,
         ty: crate::types::ty::Ty,
-    ) -> typed_ast::Expr {
-        typed_ast::Expr {
+    ) -> core::Expr {
+        core::Expr {
             id,
-            kind: typed_ast::ExprKind::Variable(name),
+            kind: core::ExprKind::Variable(name),
             span,
             ownership: Default::default(),
-            ty,
+            ty: core::ValueTy::from_finalized(ty),
             member_resolution: None,
             specialization: None,
             witness_layout: None,
@@ -1164,10 +1144,10 @@ impl TypedTreeBuilder<'_> {
         call_id: crate::node_id::NodeID,
         callee_id: crate::node_id::NodeID,
         span: crate::span::Span,
-        receiver: typed_ast::Expr,
+        receiver: core::Expr,
         label: &str,
-        args: Vec<typed_ast::CallArg>,
-    ) -> typed_ast::Expr {
+        args: Vec<core::CallArg>,
+    ) -> core::Expr {
         let baked_ty = |id: &crate::node_id::NodeID| {
             self.elaboration
                 .node_types
@@ -1175,15 +1155,15 @@ impl TypedTreeBuilder<'_> {
                 .map(|ty| ty.erase_eff_args())
                 .unwrap_or(crate::types::ty::Ty::Error)
         };
-        let callee = typed_ast::Expr {
+        let callee = core::Expr {
             id: callee_id,
-            kind: typed_ast::ExprKind::Member(
+            kind: core::ExprKind::Member(
                 Some(Box::new(receiver)),
                 crate::label::Label::Named(label.into()),
             ),
             span,
             ownership: Default::default(),
-            ty: baked_ty(&callee_id),
+            ty: core::ValueTy::from_finalized(baked_ty(&callee_id)),
             member_resolution: self.elaboration.member_resolutions.get(&callee_id).cloned(),
             specialization: None,
             witness_layout: None,
@@ -1191,16 +1171,16 @@ impl TypedTreeBuilder<'_> {
             existential_pack: None,
             selected_callable: self.elaboration.selected_callables.get(&callee_id).copied(),
         };
-        typed_ast::Expr {
+        core::Expr {
             id: call_id,
-            kind: typed_ast::ExprKind::Call {
+            kind: core::ExprKind::Call {
                 callee: Box::new(callee),
                 type_args: vec![],
                 args,
             },
             span,
             ownership: Default::default(),
-            ty: baked_ty(&call_id),
+            ty: core::ValueTy::from_finalized(baked_ty(&call_id)),
             member_resolution: self.elaboration.member_resolutions.get(&call_id).cloned(),
             specialization: None,
             witness_layout: None,
@@ -1215,18 +1195,18 @@ impl TypedTreeBuilder<'_> {
         file: crate::node_id::FileID,
         span: crate::span::Span,
         name: crate::name::Name,
-        rhs: typed_ast::Expr,
+        rhs: core::Expr,
         source_mode: Option<crate::node_kinds::call_arg::ArgMode>,
-    ) -> typed_ast::Decl {
-        typed_ast::Decl {
+    ) -> core::Decl {
+        core::Decl {
             id: self.syn_id(file),
             span,
             visibility: crate::node_kinds::decl::Visibility::Private,
-            kind: typed_ast::DeclKind::Let {
-                lhs: typed_ast::Pattern {
+            kind: core::DeclKind::Let {
+                lhs: core::Pattern {
                     id: self.syn_id(file),
                     span,
-                    kind: typed_ast::PatternKind::Bind(name),
+                    kind: core::PatternKind::Bind(name),
                     ty: None,
                 },
                 type_annotation: None,
@@ -1238,8 +1218,8 @@ impl TypedTreeBuilder<'_> {
 
     // ----- Functions and declarations --------------------------------------
 
-    fn param(&self, p: &crate::node_kinds::parameter::Parameter) -> typed_ast::Parameter {
-        typed_ast::Parameter {
+    fn param(&self, p: &crate::node_kinds::parameter::Parameter) -> core::Parameter {
+        core::Parameter {
             id: p.id,
             name: p.name.clone(),
             name_span: p.name_span,
@@ -1249,15 +1229,15 @@ impl TypedTreeBuilder<'_> {
                 .elaboration
                 .node_types
                 .get(&p.id)
-                .map(|ty| ty.erase_eff_args()),
+                .map(|ty| core::ValueTy::from_finalized(ty.erase_eff_args())),
         }
     }
 
-    fn params(&self, ps: &[crate::node_kinds::parameter::Parameter]) -> Vec<typed_ast::Parameter> {
+    fn params(&self, ps: &[crate::node_kinds::parameter::Parameter]) -> Vec<core::Parameter> {
         ps.iter().map(|p| self.param(p)).collect()
     }
 
-    fn func(&self, f: &crate::node_kinds::func::Func) -> typed_ast::Func {
+    fn func(&self, f: &crate::node_kinds::func::Func) -> core::Func {
         let scheme = f
             .name
             .symbol()
@@ -1281,7 +1261,7 @@ impl TypedTreeBuilder<'_> {
             .unwrap_or_else(|| crate::types::ty::Scheme::mono(crate::types::ty::Ty::Error));
         let params = self.params(&f.params);
         let body = self.frame_block(&f.body, &params);
-        typed_ast::Func {
+        core::Func {
             specialization: self.elaboration.field_specializations.get(&f.id).cloned(),
             id: f.id,
             name: f.name.clone(),
@@ -1299,16 +1279,16 @@ impl TypedTreeBuilder<'_> {
         }
     }
 
-    fn body(&self, b: &crate::node_kinds::body::Body) -> typed_ast::Body {
-        typed_ast::Body {
+    fn body(&self, b: &crate::node_kinds::body::Body) -> core::Body {
+        core::Body {
             id: b.id,
             decls: b.decls.iter().map(|d| self.decl(d)).collect(),
             span: b.span,
         }
     }
 
-    fn decl(&self, d: &decl::Decl) -> typed_ast::Decl {
-        typed_ast::Decl {
+    fn decl(&self, d: &decl::Decl) -> core::Decl {
+        core::Decl {
             id: d.id,
             kind: self.decl_kind(&d.kind),
             span: d.span,
@@ -1316,7 +1296,7 @@ impl TypedTreeBuilder<'_> {
         }
     }
 
-    fn decl_kind(&self, k: &decl::DeclKind) -> typed_ast::DeclKind {
+    fn decl_kind(&self, k: &decl::DeclKind) -> core::DeclKind {
         match k {
             decl::DeclKind::Macro { .. } => {
                 unreachable!("macro declarations are removed before typed-program build")
@@ -1327,7 +1307,7 @@ impl TypedTreeBuilder<'_> {
             decl::DeclKind::Wrapper { .. } => {
                 unreachable!("wrapper macros are expanded before typed-program build")
             }
-            decl::DeclKind::Import(import) => typed_ast::DeclKind::Import(import.clone()),
+            decl::DeclKind::Import(import) => core::DeclKind::Import(import.clone()),
             decl::DeclKind::Effect {
                 name,
                 generics,
@@ -1335,7 +1315,7 @@ impl TypedTreeBuilder<'_> {
                 params,
                 ret,
                 ..
-            } => typed_ast::DeclKind::Effect {
+            } => core::DeclKind::Effect {
                 name: name.clone(),
                 generics: generics.clone(),
                 where_clause: where_clause.clone(),
@@ -1348,7 +1328,7 @@ impl TypedTreeBuilder<'_> {
                 where_clause,
                 body,
                 ..
-            } => typed_ast::DeclKind::Struct {
+            } => core::DeclKind::Struct {
                 name: name.clone(),
                 generics: generics.clone(),
                 where_clause: where_clause.clone(),
@@ -1358,7 +1338,7 @@ impl TypedTreeBuilder<'_> {
                 lhs,
                 type_annotation,
                 rhs,
-            } => typed_ast::DeclKind::Let {
+            } => core::DeclKind::Let {
                 lhs: self.pattern(lhs),
                 type_annotation: type_annotation.clone(),
                 rhs: rhs.as_ref().map(|e| self.expr(e)),
@@ -1371,7 +1351,7 @@ impl TypedTreeBuilder<'_> {
                 body,
                 conformances,
                 ..
-            } => typed_ast::DeclKind::Protocol {
+            } => core::DeclKind::Protocol {
                 name: name.clone(),
                 generics: generics.clone(),
                 where_clause: where_clause.clone(),
@@ -1381,7 +1361,7 @@ impl TypedTreeBuilder<'_> {
             decl::DeclKind::Init { name, params, body } => {
                 let params = self.params(params);
                 let body = self.frame_block(body, &params);
-                typed_ast::DeclKind::Init {
+                core::DeclKind::Init {
                     name: name.clone(),
                     params,
                     body,
@@ -1393,7 +1373,7 @@ impl TypedTreeBuilder<'_> {
                 type_annotation,
                 default_value,
                 ..
-            } => typed_ast::DeclKind::Property {
+            } => core::DeclKind::Property {
                 name: name.clone(),
                 is_static: *is_static,
                 type_annotation: type_annotation.clone(),
@@ -1406,7 +1386,7 @@ impl TypedTreeBuilder<'_> {
             } => {
                 let mut func = self.func(func);
                 func.receiver = *receiver_mode;
-                typed_ast::DeclKind::Method {
+                core::DeclKind::Method {
                     func: Box::new(func),
                     is_static: *is_static,
                     receiver_mode: *receiver_mode,
@@ -1415,18 +1395,18 @@ impl TypedTreeBuilder<'_> {
             decl::DeclKind::Associated {
                 generic,
                 where_clause,
-            } => typed_ast::DeclKind::Associated {
+            } => core::DeclKind::Associated {
                 generic: generic.clone(),
                 where_clause: where_clause.clone(),
             },
-            decl::DeclKind::Func(func) => typed_ast::DeclKind::Func(self.func(func)),
+            decl::DeclKind::Func(func) => core::DeclKind::Func(self.func(func)),
             decl::DeclKind::Extend {
                 binders,
                 head,
                 conformances,
                 where_clause,
                 body,
-            } => typed_ast::DeclKind::Extend {
+            } => core::DeclKind::Extend {
                 binders: binders.clone(),
                 head: head.clone(),
                 conformances: conformances.clone(),
@@ -1439,7 +1419,7 @@ impl TypedTreeBuilder<'_> {
                 where_clause,
                 body,
                 ..
-            } => typed_ast::DeclKind::Enum {
+            } => core::DeclKind::Enum {
                 name: name.clone(),
                 generics: generics.clone(),
                 where_clause: where_clause.clone(),
@@ -1452,26 +1432,26 @@ impl TypedTreeBuilder<'_> {
                 payload_labels,
                 result,
                 ..
-            } => typed_ast::DeclKind::EnumVariant {
+            } => core::DeclKind::EnumVariant {
                 name: name.clone(),
                 generics: generics.clone(),
                 payloads: payloads.clone(),
                 payload_labels: payload_labels.clone(),
                 result: result.clone(),
             },
-            decl::DeclKind::FuncSignature(sig) => typed_ast::DeclKind::FuncSignature(sig.clone()),
+            decl::DeclKind::FuncSignature(sig) => core::DeclKind::FuncSignature(sig.clone()),
             decl::DeclKind::MethodRequirement {
                 signature,
                 receiver_mode,
-            } => typed_ast::DeclKind::MethodRequirement {
+            } => core::DeclKind::MethodRequirement {
                 signature: signature.clone(),
                 receiver_mode: *receiver_mode,
             },
-            decl::DeclKind::InitRequirement { signature } => typed_ast::DeclKind::InitRequirement {
+            decl::DeclKind::InitRequirement { signature } => core::DeclKind::InitRequirement {
                 signature: signature.clone(),
             },
             decl::DeclKind::TypeAlias(name, _span, ty) => {
-                typed_ast::DeclKind::TypeAlias(name.clone(), ty.clone())
+                core::DeclKind::TypeAlias(name.clone(), ty.clone())
             }
         }
     }

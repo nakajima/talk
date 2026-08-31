@@ -82,7 +82,7 @@ tracy-client = { version = "0.18.4", default-features = false, features = ["time
 default = ["cli"]
 # Test-only access to sealed frontend artifacts (used by talk-front's
 # dev-dependency cycle; never enabled in production builds).
-test-access = []
+test-access = ["talk-front/test-access"]
 cli = [
   "dep:clap",
   "dep:clap_complete",

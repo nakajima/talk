@@ -30,7 +30,7 @@ pub fn path_override() -> Option<PathBuf> {
 
 struct CoreArtifacts {
     module: Arc<Module>,
-    typed: Arc<crate::compiling::typed_program::TypedProgram>,
+    typed: Arc<crate::core::program::CoreProgram>,
 }
 
 static CORE: OnceLock<CoreArtifacts> = OnceLock::new();
@@ -42,7 +42,7 @@ pub fn compile() -> Arc<Module> {
 /// The typed bodies behind the core interface. The backend compiles the
 /// reachable source graph as one unit, so core callables supply their
 /// bodies from here.
-pub(crate) fn typed_program() -> Arc<crate::compiling::typed_program::TypedProgram> {
+pub(crate) fn core_program() -> Arc<crate::core::program::CoreProgram> {
     CORE.get_or_init(initialize).typed.clone()
 }
 
@@ -206,7 +206,7 @@ fn initialize() -> CoreArtifacts {
         "/bootstrap/core.bin.gz"
     ));
     let decoder = GzDecoder::new(compressed.as_slice());
-    let (module, typed): (Module, crate::compiling::typed_program::TypedProgram) =
+    let (module, typed): (Module, crate::core::program::CoreProgram) =
         bincode::deserialize_from(decoder)
             .unwrap_or_else(|error| panic!("invalid embedded core artifact: {error}"));
     CoreArtifacts {
@@ -322,7 +322,7 @@ fn load_cached() -> Option<CoreArtifacts> {
 fn load_cached_in(root: &std::path::Path) -> Option<CoreArtifacts> {
     let key = cache_key()?;
     let payload = super::cache::load_in(root, "core", &key)?;
-    let (module, typed): (Module, crate::compiling::typed_program::TypedProgram) =
+    let (module, typed): (Module, crate::core::program::CoreProgram) =
         bincode::deserialize(&payload).ok()?;
     Some(CoreArtifacts {
         module: Arc::new(module),
@@ -331,7 +331,7 @@ fn load_cached_in(root: &std::path::Path) -> Option<CoreArtifacts> {
 }
 
 #[cfg(not(target_family = "wasm"))]
-fn store_cached(module: &Module, typed: &crate::compiling::typed_program::TypedProgram) {
+fn store_cached(module: &Module, typed: &crate::core::program::CoreProgram) {
     let Some(root) = super::cache::cache_root() else {
         return;
     };
@@ -342,7 +342,7 @@ fn store_cached(module: &Module, typed: &crate::compiling::typed_program::TypedP
 fn store_cached_in(
     root: &std::path::Path,
     module: &Module,
-    typed: &crate::compiling::typed_program::TypedProgram,
+    typed: &crate::core::program::CoreProgram,
 ) {
     let Some(key) = cache_key() else { return };
     let payload = match bincode::serialize(&(module, typed)) {
